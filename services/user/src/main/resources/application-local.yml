@@ -1,0 +1,8 @@
+server:
+  port: 8083
+app:
+  services:
+    catalog-url: http://localhost:8081
+    booking-url: http://localhost:8082
+    user-url: http://localhost:8083
+    payment-url: http://localhost:8084

@@ -1,0 +1,27 @@
+openapi: 3.0.3
+info:
+  title: seatsac catalog API
+  version: "1.0"
+servers:
+  - url: /api
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT   # Cognito Access Token
+  schemas:
+    ErrorResponse:
+      $ref: "../schemas/error.v1.json"
+paths:
+
+  /movies:
+    get:
+      summary: CAT-01 영화 목록
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [NOW_SHOWING, COMING_SOON], default: NOW_SHOWING } }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        "200": { description: OK }
+  # TODO: /movies/{movieId}, /theaters, /screenings, /screenings/{id}, /auditoriums/{id}/layout, /admin/** — API 명세서 3장

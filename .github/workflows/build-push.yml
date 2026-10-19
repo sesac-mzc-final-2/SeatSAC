@@ -1,0 +1,33 @@
+# main 머지 → 바뀐 서비스만 이미지 빌드 → ECR → cinema-gitops 태그 커밋 (ArgoCD 가 sync)
+name: build-push
+on:
+  push:
+    branches: [main]
+    paths: ["services/**", "libs/**", "build-logic/**", "gradle/**"]
+  workflow_dispatch:      # 3.1.4(CI)에서 OIDC 역할을 만든 뒤 push: branches: [main] 으로 되돌림
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [gateway, catalog, booking, user, payment]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :services:${{ matrix.service }}:bootJar --no-daemon
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ap-northeast-2
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - run: |
+          IMG=${{ steps.ecr.outputs.registry }}/cinema/${{ matrix.service }}:${GITHUB_SHA::7}
+          docker build --platform linux/amd64 -t "$IMG" services/${{ matrix.service }}
+          docker push "$IMG"
+      # TODO: Trivy 스캔, 경로 필터로 바뀐 서비스만, cinema-gitops kustomize edit set image 커밋

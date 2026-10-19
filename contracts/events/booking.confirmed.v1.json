@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/booking.confirmed.v1.json",
+  "title": "BookingConfirmed",
+  "description": "SQS cinema-staging-notification-events. 발행자 booking만 (ADR-30). 메시지 속성 type·traceId.",
+  "type": "object",
+  "required": ["eventId", "type", "version", "occurredAt", "producer", "traceId", "payload"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "type": { "type": "string", "const": "booking.confirmed" },
+    "version": { "type": "integer", "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "producer": { "type": "string", "const": "booking" },
+    "traceId": { "type": "string" },
+    "payload": {
+      "type": "object",
+      "required": ["bookingId", "userId", "movieTitle", "theaterName", "auditoriumName", "startsAt", "seatLabels", "amount"],
+      "properties": {
+        "bookingId": { "type": "integer" },
+        "userId": { "type": "string", "description": "Cognito sub" },
+        "movieTitle": { "type": "string" },
+        "theaterName": { "type": "string" },
+        "auditoriumName": { "type": "string" },
+        "startsAt": { "type": "string", "format": "date-time" },
+        "seatLabels": { "type": "array", "items": { "type": "string" } },
+        "amount": { "type": "integer" }
+      }
+    }
+  }
+}

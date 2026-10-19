@@ -1,0 +1,17 @@
+[project]
+name = "seatsac-ai"
+version = "0.1.0"
+description = "AI 서비스 (NL2SQL·의미 캐시) — 아키텍처 v5에서는 제외, 범위 확정 시 사용"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+  "prometheus-client>=0.20",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
+
+[tool.ruff]
+line-length = 100

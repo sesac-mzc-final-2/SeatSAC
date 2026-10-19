@@ -1,0 +1,22 @@
+# 로컬 의존 서비스만 (앱은 ./gradlew bootRun / npm run dev). kind 없음 — 통합 검증은 EKS staging.
+services:
+  mysql:
+    image: mysql:8.4
+    ports: ["3306:3306"]
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    volumes:
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro   # 스키마·계정 생성 SQL (03a 2️⃣)
+      - mysql-data:/var/lib/mysql
+  valkey:
+    image: valkey/valkey:8.1
+    ports: ["6379:6379"]
+    command: ["valkey-server", "--notify-keyspace-events", "Ex", "--maxmemory-policy", "volatile-lru"]
+  elasticmq:
+    image: softwaremill/elasticmq-native:latest
+    ports: ["9324:9324", "9325:9325"]
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+volumes:
+  mysql-data:

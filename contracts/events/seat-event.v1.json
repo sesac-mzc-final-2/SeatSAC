@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/seat-event.v1.json",
+  "title": "SeatEvent",
+  "description": "Valkey Pub/Sub seat-events:{screeningId} → SSE. RDS 커밋 후 발행. 필드 추가만 허용.",
+  "type": "object",
+  "required": ["seq", "type", "screeningId", "seatIds", "occurredAt", "traceId"],
+  "properties": {
+    "seq": { "type": "integer", "description": "회차별 단조 증가 (seat-seq:{screeningId})" },
+    "type": { "type": "string", "enum": ["HELD", "RELEASED", "CONFIRMED", "EXPIRED"] },
+    "screeningId": { "type": "integer" },
+    "seatIds": { "type": "array", "items": { "type": "integer" }, "minItems": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "traceId": { "type": "string" }
+  }
+}

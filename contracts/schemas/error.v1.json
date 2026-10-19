@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/schemas/error.v1.json",
+  "title": "ErrorResponse",
+  "description": "모든 서비스(Java·Python·Gateway)의 오류 응답. API 명세서 1-4.",
+  "type": "object",
+  "required": ["code", "message", "traceId"],
+  "properties": {
+    "code": { "type": "string", "pattern": "^[A-Z_]+$" },
+    "message": { "type": "string" },
+    "traceId": { "type": ["string", "null"] },
+    "details": {}
+  },
+  "additionalProperties": false
+}

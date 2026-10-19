@@ -1,0 +1,24 @@
+# 의존성 버전은 여기서만 바꾼다. (버전은 2026-10-19 기준 제안값 — 팀에서 확정)
+[versions]
+java = "21"
+spring-boot = "3.5.6"
+spring-cloud = "2025.0.0"
+dependency-management = "1.1.7"
+resilience4j = "2.3.0"
+logstash-encoder = "8.1"
+testcontainers = "1.21.3"
+springdoc = "2.8.9"
+
+[libraries]
+spring-cloud-bom = { module = "org.springframework.cloud:spring-cloud-dependencies", version.ref = "spring-cloud" }
+resilience4j-spring-boot = { module = "io.github.resilience4j:resilience4j-spring-boot3", version.ref = "resilience4j" }
+logstash-encoder = { module = "net.logstash.logback:logstash-logback-encoder", version.ref = "logstash-encoder" }
+testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
+testcontainers-junit = { module = "org.testcontainers:junit-jupiter" }
+testcontainers-mysql = { module = "org.testcontainers:mysql" }
+springdoc-webmvc = { module = "org.springdoc:springdoc-openapi-starter-webmvc-api", version.ref = "springdoc" }
+resilience4j-bom = { module = "io.github.resilience4j:resilience4j-bom", version.ref = "resilience4j" }
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+dependency-management = { id = "io.spring.dependency-management", version.ref = "dependency-management" }

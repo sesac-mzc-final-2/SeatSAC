@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: user
+  profiles:
+    default: local
+server:
+  port: 8080            # 컨테이너·Service 포트. 로컬은 local 프로필에서 8083
+  shutdown: graceful
+spring.lifecycle.timeout-per-shutdown-phase: 20s   # preStop 5s + graceful 20s (ADR-35)
+management:
+  endpoints.web.exposure.include: health,prometheus,info
+  endpoint.health.probes.enabled: true
+  endpoint.health.show-details: never
+  metrics.tags.application: user
+logging:
+  config: classpath:logback-spring.xml
+
+# DB: 서비스별 스키마·계정. 비밀번호는 K8s Secret → 환경변수 (ADR-10)
+spring.datasource:
+  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/user_db?serverTimezone=UTC&characterEncoding=utf8}
+  username: ${SPRING_DATASOURCE_USERNAME:user_app}
+  password: ${SPRING_DATASOURCE_PASSWORD:local}
+  hikari.maximum-pool-size: 5
+spring.jpa:
+  open-in-view: false
+  hibernate.ddl-auto: validate
+  properties.hibernate.jdbc.time_zone: UTC
+spring.flyway:
+  enabled: ${APP_FLYWAY_ON_STARTUP:true}   # 클러스터에서는 PreSync Job이 돌리므로 false
+  user: ${SPRING_FLYWAY_USER:user_migrator}
+  password: ${SPRING_FLYWAY_PASSWORD:local}

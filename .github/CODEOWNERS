@@ -1,0 +1,16 @@
+# GitHub 아이디로 바꿔 커밋한다 (03b)
+/services/gateway/      @hanchaeyeon
+/services/catalog/      @hanchaeyeon
+/services/user/         @hanchaeyeon
+/services/booking/      @namgungil
+/services/payment/      @namgungil
+/services/ai/           @kimseohyun
+/frontend/              @hanchaeyeon @namgungil
+/contracts/             @hanchaeyeon @namgungil @kimseohyun
+/libs/                  @pinodo @hanchaeyeon @namgungil
+/build-logic/           @pinodo
+/gradle/                @pinodo
+/lambdas/               @pinodo
+/infra/                 @pinodo
+/.github/               @pinodo
+/tests/k6/              @pinodo

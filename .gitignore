@@ -1,0 +1,39 @@
+# Gradle / Java
+.gradle/
+build/
+out/
+*.class
+!gradle/wrapper/gradle-wrapper.jar
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+# Node
+frontend/node_modules/
+frontend/dist/
+# Python
+__pycache__/
+*.pyc
+.venv/
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.out
+crash.log
+.terraform.tfstate.lock.info
+*.auto.tfvars
+secret*.tfvars
+# 비밀·원본 데이터 (명세서 5장: 공개 금지)
+.env
+.env.*
+**/seed/
+**/raw/
+**/fixtures/private/
+# IDE(VS Code·Eclipse) 컴파일 결과
+bin/
+.classpath
+.project
+.settings/

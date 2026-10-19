@@ -1,0 +1,39 @@
+openapi: 3.0.3
+info:
+  title: seatsac booking API
+  version: "1.0"
+servers:
+  - url: /api
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT   # Cognito Access Token
+  schemas:
+    ErrorResponse:
+      $ref: "../schemas/error.v1.json"
+paths:
+
+  /seats/hold:
+    post:
+      summary: BKG-02 좌석 선점
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [screeningId, seatIds]
+              properties:
+                screeningId: { type: integer }
+                seatIds: { type: array, minItems: 1, maxItems: 4, items: { type: integer } }
+      responses:
+        "201": { description: PENDING 예매 }
+        "409":
+          description: SEAT_UNAVAILABLE · ACTIVE_HOLD_EXISTS · IDEMPOTENCY_KEY_CONFLICT
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+  # TODO: /screenings/{id}/seats, /screenings/{id}/seats/stream, /bookings/{id}, /bookings/{id}/hold, /bookings/{id}/pay, /bookings/{id}/cancel — API 명세서 4장

@@ -1,0 +1,24 @@
+openapi: 3.0.3
+info:
+  title: seatsac user API
+  version: "1.0"
+servers:
+  - url: /api
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT   # Cognito Access Token
+  schemas:
+    ErrorResponse:
+      $ref: "../schemas/error.v1.json"
+paths:
+
+  /users/me:
+    get:
+      summary: 프로필 (첫 호출 때 생성, Cognito sub)
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200": { description: OK }
+  # TODO: /users/me/bookings, /users/me/preferences — API 명세서 5장

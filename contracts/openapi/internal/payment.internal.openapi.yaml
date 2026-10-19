@@ -1,0 +1,27 @@
+openapi: 3.0.3
+info:
+  title: seatsac payment internal API
+  version: "1.0"
+servers:
+  - url: http://payment:8080
+paths:
+  /internal/payments:
+    post:
+      summary: PAY-01 모의 결제 승인 (호출자 booking만, paymentId는 booking 발급)
+      responses:
+        "200": { description: APPROVED 또는 FAILED }
+        "409": { description: PAYMENT_CONFLICT }
+  /internal/payments/{paymentId}:
+    get:
+      summary: 결제 상태 조회
+      parameters: [ { name: paymentId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: OK }
+        "404": { description: NOT_FOUND }
+  /internal/payments/{paymentId}/cancel:
+    post:
+      summary: PAY-03 취소 (멱등)
+      parameters: [ { name: paymentId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: CANCELED }
+        "409": { description: PAYMENT_NOT_APPROVED }

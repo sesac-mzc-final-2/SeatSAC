@@ -1,0 +1,38 @@
+# PR에 terraform plan 결과를 코멘트로 남긴다. apply는 하지 않는다 (03b).
+# 사전 조건: GitHub OIDC 역할 (cinema-staging-gha-terraform, ReadOnly + state 버킷 읽기) — 3.1.10 이후 활성화
+name: infra-plan
+on:
+  pull_request:
+    paths: ["infra/terraform/**"]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          aws-region: ap-northeast-2
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend-config=backend.hcl -input=false
+      - run: terraform validate
+      - id: plan
+        run: terraform plan -var-file=staging.tfvars -no-color -input=false 2>&1 | tail -n 200 > plan.txt
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = '```\n' + fs.readFileSync('infra/terraform/envs/staging/plan.txt', 'utf8') + '\n```';
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });

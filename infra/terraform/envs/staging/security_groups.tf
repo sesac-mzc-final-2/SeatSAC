@@ -24,7 +24,7 @@ resource "aws_security_group" "alb" {
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront_80" {
   security_group_id = aws_security_group.alb.id
-  description       = "CloudFront -> ALB /api/* origin (HTTP)"
+  description       = "CloudFront to ALB /api/* origin (HTTP)"
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80
@@ -33,7 +33,7 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront_80" {
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_vpc" {
   security_group_id = aws_security_group.alb.id
-  description       = "ALB -> pods (target-type ip)"
+  description       = "ALB to pods (target-type ip)"
   ip_protocol       = "-1"
   cidr_ipv4         = var.vpc_cidr
 }
@@ -57,7 +57,7 @@ resource "aws_security_group" "rds" {
 resource "aws_vpc_security_group_ingress_rule" "rds_from_app" {
   for_each          = toset(var.app_subnets)
   security_group_id = aws_security_group.rds.id
-  description       = "EKS pods ${each.value} -> 3306"
+  description       = "EKS pods ${each.value} to 3306"
   ip_protocol       = "tcp"
   from_port         = 3306
   to_port           = 3306
@@ -66,7 +66,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_app" {
 
 resource "aws_vpc_security_group_ingress_rule" "rds_from_lambda" {
   security_group_id            = aws_security_group.rds.id
-  description                  = "daily-stats Lambda -> 3306"
+  description                  = "daily-stats Lambda to 3306"
   ip_protocol                  = "tcp"
   from_port                    = 3306
   to_port                      = 3306
@@ -75,7 +75,7 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_lambda" {
 
 resource "aws_vpc_security_group_egress_rule" "lambda_to_rds" {
   security_group_id            = aws_security_group.lambda_stats.id
-  description                  = "-> RDS 3306"
+  description                  = "to RDS 3306"
   ip_protocol                  = "tcp"
   from_port                    = 3306
   to_port                      = 3306
@@ -93,7 +93,7 @@ resource "aws_security_group" "valkey" {
 resource "aws_vpc_security_group_ingress_rule" "valkey_from_app" {
   for_each          = toset(var.app_subnets)
   security_group_id = aws_security_group.valkey.id
-  description       = "EKS pods ${each.value} -> 6379"
+  description       = "EKS pods ${each.value} to 6379"
   ip_protocol       = "tcp"
   from_port         = 6379
   to_port           = 6379

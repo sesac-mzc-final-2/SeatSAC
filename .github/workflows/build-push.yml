@@ -1,9 +1,9 @@
 # main 머지 → 바뀐 서비스만 이미지 빌드 → ECR → cinema-gitops 태그 커밋 (ArgoCD 가 sync)
 name: build-push
 on:
-  push:
-    branches: [main]
-    paths: ["services/**", "libs/**", "build-logic/**", "gradle/**"]
+  # push:
+  #   branches: [main]
+  #   paths: ["services/**", "libs/**", "build-logic/**", "gradle/**"]
   workflow_dispatch:      # 3.1.4(CI)에서 OIDC 역할을 만든 뒤 push: branches: [main] 으로 되돌림
 permissions:
   id-token: write

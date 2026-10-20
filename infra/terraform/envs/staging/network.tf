@@ -18,7 +18,7 @@ module "vpc" {
   database_subnets = var.data_subnets   # 모듈 이름: database (= private data)
 
   # NAT: 1개를 첫 AZ(a)에 두고 두 AZ의 private 라우트가 함께 쓴다
-  enable_nat_gateway     = true
+  enable_nat_gateway     = false # 매일 아침에 켜고, 밤에 끈다 (노드가 살아있으면 끄면 안됨)
   single_nat_gateway     = true
   one_nat_gateway_per_az = false
 

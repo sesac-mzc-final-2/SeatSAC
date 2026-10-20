@@ -9,9 +9,9 @@ variable "env" {
 }
 
 variable "name" {
-  description = "리소스 이름 접두사 (cinema-staging-*)"
+  description = "리소스 이름 접두사 (seatsac-staging-*)"
   type        = string
-  default     = "cinema-staging"
+  default     = "seatsac-staging"
 }
 
 variable "owner" {

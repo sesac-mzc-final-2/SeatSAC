@@ -1,5 +1,5 @@
 # PR에 terraform plan 결과를 코멘트로 남긴다. apply는 하지 않는다 (03b).
-# 사전 조건: GitHub OIDC 역할 (cinema-staging-gha-terraform, ReadOnly + state 버킷 읽기) — 3.1.10 이후 활성화
+# 사전 조건: GitHub OIDC 역할 (seatsac-staging-gha-terraform, ReadOnly + state 버킷 읽기) — 3.1.10 이후 활성화
 name: infra-plan
 on:
   pull_request:

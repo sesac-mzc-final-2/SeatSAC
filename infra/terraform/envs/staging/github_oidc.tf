@@ -19,7 +19,7 @@ data "aws_iam_policy_document" "tf_plan_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:sesac-mzc-final-2@329788874/SeatSAC@1425477103:pull_request"]  # PR 전용 조건
+      values   = ["repo:sesac-mzc-final-2@329788874/SeatSAC@1425477103:pull_request"] # PR 전용 조건
     }
   }
 }

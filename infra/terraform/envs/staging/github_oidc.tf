@@ -19,13 +19,13 @@ data "aws_iam_policy_document" "tf_plan_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:sesac-mzc-final-2@329788874/SeatSAC@1425477103:pull_request"] # PR 전용 조건
+      values   = ["repo:sesac-mzc-final-2@329788874/SeatSAC:pull_request"] # PR 전용 조건
     }
   }
 }
 
 resource "aws_iam_role" "tf_plan" {
-  name               = "seatsac-staging-github-tf-plan"
+  name               = "cinema-staging-github-tf-plan"
   assume_role_policy = data.aws_iam_policy_document.tf_plan_trust.json
 }
 
@@ -38,13 +38,13 @@ resource "aws_iam_role_policy_attachment" "tf_plan_readonly" {
 data "aws_iam_policy_document" "tf_plan_state" {
   statement {
     actions   = ["s3:ListBucket"]
-    resources = ["arn:aws:s3:::seatsac-tfstate-${data.aws_caller_identity.current.account_id}"]
+    resources = ["arn:aws:s3:::cinema-tfstate-${data.aws_caller_identity.current.account_id}"]
   }
   statement {
     actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = [
-      "arn:aws:s3:::seatsac-tfstate-${data.aws_caller_identity.current.account_id}/staging/terraform.tfstate",
-      "arn:aws:s3:::seatsac-tfstate-${data.aws_caller_identity.current.account_id}/staging/terraform.tfstate.tflock",
+      "arn:aws:s3:::cinema-tfstate-${data.aws_caller_identity.current.account_id}/staging/terraform.tfstate",
+      "arn:aws:s3:::cinema-tfstate-${data.aws_caller_identity.current.account_id}/staging/terraform.tfstate.tflock",
     ]
   }
 }

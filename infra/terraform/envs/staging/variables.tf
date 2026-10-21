@@ -9,14 +9,14 @@ variable "env" {
 }
 
 variable "name" {
-  description = "리소스 이름 접두사 (seatsac-staging-*)"
+  description = "리소스 이름 접두사 (cinema-staging-*)"
   type        = string
-  default     = "seatsac-staging"
+  default     = "cinema-staging"
 }
 
 variable "owner" {
   type    = string
-  default = "kimjongsik"
+  default = "SeatSAC"
 }
 
 # ---- 네트워크 (3.1.1) ------------------------------------------------

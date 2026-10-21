@@ -23,6 +23,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
           aws-region: ap-northeast-2
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr

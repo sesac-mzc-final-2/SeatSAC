@@ -4,7 +4,7 @@ provider "aws" {
   # 모든 리소스에 공통 태그 → 비용 탐색기에서 Project/Env로 집계
   default_tags {
     tags = {
-      Project   = "seatsac"
+      Project   = "cinema"
       Env       = var.env
       ManagedBy = "terraform"
       Owner     = var.owner

@@ -17,7 +17,8 @@ logging:
 
 # DB: 서비스별 스키마·계정. 비밀번호는 K8s Secret → 환경변수 (ADR-10)
 spring.datasource:
-  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/booking_db?serverTimezone=UTC&characterEncoding=utf8}
+  # UTC 저장: 세션 시간대까지 UTC로 맞춘다 (ERD 1장, 10/21 결정)
+  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/booking_db?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=utf8}
   username: ${SPRING_DATASOURCE_USERNAME:booking_app}
   password: ${SPRING_DATASOURCE_PASSWORD:local}
   hikari.maximum-pool-size: 5
@@ -29,6 +30,9 @@ spring.flyway:
   enabled: ${APP_FLYWAY_ON_STARTUP:true}   # 클러스터에서는 PreSync Job이 돌리므로 false
   user: ${SPRING_FLYWAY_USER:booking_migrator}
   password: ${SPRING_FLYWAY_PASSWORD:local}
+
+# 스케줄러: 선점 만료 스캔 2종 + 아웃박스 릴레이·정리 (지침 2장)
+spring.task.scheduling.pool.size: 3
 
 spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}

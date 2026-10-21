@@ -5,7 +5,7 @@ variable "region" {
 
 variable "owner" {
   type    = string
-  default = "kimjongsik"
+  default = "SeatSAC"
 }
 
 # ---- 팀 접근 (3.1.10, OPS-11) -----------------------------------------

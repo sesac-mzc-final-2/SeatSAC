@@ -12,7 +12,8 @@ import java.util.List;
  *
  * <ul>
  *   <li>enum 이름 = <b>세분 이름</b> → {@code details[].reason}, MDC {@code errorCode}, 지표 라벨</li>
- *   <li>{@link #responseCode()} = 화면이 분기하는 <b>공통 코드</b>({@link CommonResponseCode})</li>
+ *   <li>{@link #commonCode()} = 화면이 분기하는 <b>공통 코드</b>({@link CommonResponseCode}).
+ *       HTTP 상태와 응답 {@code code} 문자열은 {@link ErrorCode}의 기본값이 여기서 꺼낸다</li>
  * </ul>
  *
  * 던질 때는 {@code throw BookingErrorCode.SCREENING_NOT_FOUND.exception()} 처럼 쓴다.
@@ -60,22 +61,17 @@ public enum BookingErrorCode implements ErrorCode {
     PAYMENT_UNAVAILABLE(CommonResponseCode.SERVICE_UNAVAILABLE,
         "결제 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
-    private final CommonResponseCode responseCode;
+    private final CommonResponseCode commonCode;
     private final String message;
 
-    BookingErrorCode(CommonResponseCode responseCode, String message) {
-        this.responseCode = responseCode;
+    BookingErrorCode(CommonResponseCode commonCode, String message) {
+        this.commonCode = commonCode;
         this.message = message;
     }
 
     @Override
-    public int status() {
-        return responseCode.status();
-    }
-
-    @Override
-    public String responseCode() {
-        return responseCode.name();
+    public CommonResponseCode commonCode() {
+        return commonCode;
     }
 
     @Override

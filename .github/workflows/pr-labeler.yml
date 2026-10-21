@@ -76,7 +76,8 @@ jobs:
             const body = pr.body ?? '';
             const refs = new Set();
             for (const x of body.matchAll(/(?:^|[\s(])#(\d+)\b/g)) refs.add(Number(x[1]));
-            const urlRe = new RegExp(`github\\.com/${owner}/${repo}/issues/(\\d+)`, 'gi');
+            const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');   // owner/repo 의 . 등을 리터럴로
+            const urlRe = new RegExp(`github\\.com/${reEsc(owner)}/${reEsc(repo)}/issues/(\\d+)`, 'gi');
             for (const x of body.matchAll(urlRe)) refs.add(Number(x[1]));
             const issues = [];
             for (const n of refs) {

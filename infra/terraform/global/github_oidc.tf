@@ -13,7 +13,12 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 locals {
-  gh_repo = "repo:${var.github_owner}/${var.github_repo}"
+  # GitHub OIDC 토큰의 sub 앞부분. 조직 설정에 따라 두 형식 중 하나가 온다 (대소문자 구분)
+  #   기본      : repo:<owner>/<repo>
+  #   변경 불가 ID: repo:<owner>@<owner_id>/<repo>@<repo_id>   ← sesac-mzc-final-2 조직은 이 형식 (10/21 확인)
+  gh_repo = (var.github_owner_id != "" && var.github_repo_id != ""
+    ? "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+    : "repo:${var.github_owner}/${var.github_repo}")
 }
 
 # 공통: aud 확인 + sub(어느 레포·어느 이벤트인지)로 제한

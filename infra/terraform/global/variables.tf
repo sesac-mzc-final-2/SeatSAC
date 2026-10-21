@@ -46,3 +46,15 @@ variable "github_repo" {
   type        = string
   default     = "SeatSAC"
 }
+
+variable "github_owner_id" {
+  description = "GitHub owner(조직·사용자)의 숫자 ID. 조직이 OIDC sub에 변경 불가 ID를 넣는 설정이면 필수 (예: repo:owner@123/repo@456:...)"
+  type        = string
+  default     = "329788874"
+}
+
+variable "github_repo_id" {
+  description = "GitHub 레포의 숫자 ID. github_owner_id와 함께 쓴다"
+  type        = string
+  default     = "1425477103"
+}

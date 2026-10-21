@@ -2,14 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seatsac.dev/schemas/error.v1.json",
   "title": "ErrorResponse",
-  "description": "모든 서비스(Java·Python·Gateway)의 오류 응답. API 명세서 1-4.",
+  "description": "모든 서비스(Java·Python·Gateway)의 오류 응답. API 명세서 1-4. details는 항상 배열이고, 담을 것이 없으면 빈 배열이다.",
   "type": "object",
-  "required": ["code", "message", "traceId"],
+  "required": ["code", "message", "traceId", "details"],
   "properties": {
     "code": { "type": "string", "pattern": "^[A-Z_]+$" },
     "message": { "type": "string" },
-    "traceId": { "type": ["string", "null"] },
-    "details": {}
+    "traceId": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
+    "details": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": { "type": ["string", "null"], "description": "문제가 된 요청 필드·헤더 이름" },
+          "value": { "description": "화면이 쓰는 보조 값. 사용자가 보낸 값(민감값)은 담지 않는다" },
+          "reason": { "type": ["string", "null"], "description": "서비스별 세분 오류 이름" }
+        },
+        "additionalProperties": false
+      }
+    }
   },
   "additionalProperties": false
 }

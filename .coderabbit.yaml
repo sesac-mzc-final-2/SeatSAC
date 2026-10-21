@@ -17,7 +17,7 @@ reviews:
     enabled: true
     drafts: false
     base_branches:
-      - main
+      - "^main$"
 
   # 리뷰에서 뺄 파일 (생성물·잠금 파일·래퍼·빌드 산출물)
   path_filters:

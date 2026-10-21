@@ -12,6 +12,9 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.List;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -21,6 +24,8 @@ import org.hibernate.type.SqlTypes;
  */
 @Entity
 @Table(name = "booking")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Booking {
 
     @Id
@@ -78,9 +83,6 @@ public class Booking {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    protected Booking() {
-    }
-
     /**
      * 선점 성공 직후의 PENDING 예매. amount는 좌석 수로 계산하고, 저장 뒤에는 세지 않는다.
      *
@@ -103,60 +105,9 @@ public class Booking {
         return booking;
     }
 
-    public Long getBookingId() {
-        return bookingId;
-    }
-
-    public String getUserId() {
-        return userId;
-    }
-
-    public Long getScreeningId() {
-        return screeningId;
-    }
-
-    public BookingStatus getStatus() {
-        return status;
-    }
-
-    public String getHoldId() {
-        return holdId;
-    }
-
-    public String getCurrentPaymentId() {
-        return currentPaymentId;
-    }
-
-    public Integer getSeatCount() {
-        return seatCount;
-    }
-
-    public Integer getAmount() {
-        return amount;
-    }
-
+    /** 방어 복사 — JSON 컬럼 값을 바깥에서 바꾸지 못하게 한다 (@Getter 대신 직접 둔다) */
     public List<String> getSeatLabels() {
         return seatLabels == null ? List.of() : List.copyOf(seatLabels);
-    }
-
-    public Instant getExpiresAt() {
-        return expiresAt;
-    }
-
-    public Instant getConfirmedAt() {
-        return confirmedAt;
-    }
-
-    public Instant getCanceledAt() {
-        return canceledAt;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
     }
 
     /** 본인 예매인지 — 문자열 비교 (명세 2장) */

@@ -1,8 +1,11 @@
 package com.seatsac.booking.common;
 
 import java.time.Duration;
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 
 /** booking 서비스의 고정 값 — 명세 1장, booking 지침 2장. 숫자는 여기에만 둔다. */
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class BookingPolicy {
 
     /** 좌석 1석 단가(원). amount = seatCount × SEAT_PRICE */
@@ -18,9 +21,6 @@ public final class BookingPolicy {
     /** SSE 하트비트 간격과 재연결 지시 값 */
     public static final Duration SSE_HEARTBEAT = Duration.ofSeconds(15);
     public static final long SSE_RETRY_MILLIS = 2_000L;
-
-    private BookingPolicy() {
-    }
 
     public static int amountOf(int seatCount) {
         return seatCount * SEAT_PRICE;

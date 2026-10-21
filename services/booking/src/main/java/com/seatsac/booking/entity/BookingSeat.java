@@ -6,6 +6,9 @@ import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
 import java.io.Serializable;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 /**
  * 점유 중(PENDING·CONFIRMED)인 좌석 — ERD 3.3. 점유가 끝나면 같은 트랜잭션에서 삭제한다.
@@ -13,6 +16,8 @@ import java.io.Serializable;
  */
 @Entity
 @Table(name = "booking_seat")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class BookingSeat {
 
     @EmbeddedId
@@ -22,18 +27,11 @@ public class BookingSeat {
     @Column(name = "screening_id", nullable = false, updatable = false)
     private Long screeningId;
 
-    protected BookingSeat() {
-    }
-
     public static BookingSeat of(Long bookingId, Long screeningId, Long seatId) {
         BookingSeat seat = new BookingSeat();
         seat.id = new Pk(bookingId, seatId);
         seat.screeningId = screeningId;
         return seat;
-    }
-
-    public Pk getId() {
-        return id;
     }
 
     public Long getBookingId() {
@@ -42,10 +40,6 @@ public class BookingSeat {
 
     public Long getSeatId() {
         return id.seatId();
-    }
-
-    public Long getScreeningId() {
-        return screeningId;
     }
 
     /** 복합 PK (booking_id, seat_id) */

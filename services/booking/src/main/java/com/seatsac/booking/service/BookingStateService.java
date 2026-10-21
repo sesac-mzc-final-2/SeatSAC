@@ -7,6 +7,7 @@ import com.seatsac.booking.repository.BookingRepository;
 import com.seatsac.booking.repository.BookingSeatRepository;
 import java.time.Instant;
 import java.util.List;
+import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,15 +18,11 @@ import org.springframework.transaction.annotation.Transactional;
  * 상태 전이(해제·확정+아웃박스·실패·만료)는 3.2.2 이후 같은 클래스에 조건부 UPDATE로 추가한다.
  */
 @Service
+@RequiredArgsConstructor
 public class BookingStateService {
 
     private final BookingRepository bookingRepository;
     private final BookingSeatRepository bookingSeatRepository;
-
-    public BookingStateService(BookingRepository bookingRepository, BookingSeatRepository bookingSeatRepository) {
-        this.bookingRepository = bookingRepository;
-        this.bookingSeatRepository = bookingSeatRepository;
-    }
 
     /**
      * BKG-02 6단계 — PENDING 예매와 점유 좌석을 한 트랜잭션으로 저장한다 (명세 5장).

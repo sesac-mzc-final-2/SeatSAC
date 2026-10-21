@@ -11,6 +11,9 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -20,6 +23,8 @@ import org.hibernate.type.SqlTypes;
  */
 @Entity
 @Table(name = "outbox_message")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class OutboxMessage {
 
     @Id
@@ -72,9 +77,6 @@ public class OutboxMessage {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    protected OutboxMessage() {
-    }
-
     /** 바로 보낼 수 있는 PENDING 메시지. messageKey는 호출하는 쪽에서 발급한 UUID */
     public static OutboxMessage pending(String messageKey, OutboxEventType eventType, Long aggregateId,
                                         String payload, String traceId, Instant now) {
@@ -92,55 +94,4 @@ public class OutboxMessage {
         return message;
     }
 
-    public Long getOutboxId() {
-        return outboxId;
-    }
-
-    public String getMessageKey() {
-        return messageKey;
-    }
-
-    public OutboxEventType getEventType() {
-        return eventType;
-    }
-
-    public Long getAggregateId() {
-        return aggregateId;
-    }
-
-    public String getPayload() {
-        return payload;
-    }
-
-    public String getTraceId() {
-        return traceId;
-    }
-
-    public OutboxStatus getStatus() {
-        return status;
-    }
-
-    public Integer getAttemptCount() {
-        return attemptCount;
-    }
-
-    public Instant getNextAttemptAt() {
-        return nextAttemptAt;
-    }
-
-    public String getLastError() {
-        return lastError;
-    }
-
-    public Instant getSentAt() {
-        return sentAt;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
-    }
 }

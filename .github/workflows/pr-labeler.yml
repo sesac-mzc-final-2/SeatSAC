@@ -6,6 +6,10 @@
 #            draft로 돌리면 다시 🚧 in progress. PR에 잘못 붙은 상태 라벨은 뗀다
 #   담당자   비어 있으면 PR 작성자
 # 코드를 체크아웃하지 않으므로 pull_request_target을 써도 안전하다 (포크 PR에도 라벨이 붙는다).
+# 단, 이슈 쪽 쓰기(상태 라벨)는 저장소 멤버가 같은 저장소 브랜치에서 올린 PR에서만 한다 — 포크 PR 본문에
+# 남의 이슈 번호를 적어 상태를 바꾸는 것을 막는다. 조회할 이슈 번호도 MAX_REFS 개로 제한한다.
+# pull_request_target은 기본 브랜치(main)에 있는 이 파일을 실행하므로, 이 파일을 바꾸는 PR에서는 바뀐 내용이
+# 돌지 않는다. 머지 뒤 다음 PR에서 확인한다.
 name: pr-labeler
 on:
   pull_request_target:
@@ -79,8 +83,12 @@ jobs:
             const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');   // owner/repo 의 . 등을 리터럴로
             const urlRe = new RegExp(`github\\.com/${reEsc(owner)}/${reEsc(repo)}/issues/(\\d+)`, 'gi');
             for (const x of body.matchAll(urlRe)) refs.add(Number(x[1]));
+            const MAX_REFS = 5;   // 본문에 번호를 잔뜩 적어 API 호출을 늘리는 것을 막는다
+            if (refs.size > MAX_REFS) {
+              core.warning(`본문에 이슈 참조가 ${refs.size}개입니다. 앞의 ${MAX_REFS}개만 봅니다.`);
+            }
             const issues = [];
-            for (const n of refs) {
+            for (const n of [...refs].slice(0, MAX_REFS)) {
               try {
                 const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: n });
                 if (!issue.pull_request) issues.push(issue);
@@ -98,8 +106,14 @@ jobs:
             // ---- 4. 상태: 연결된 이슈에 draft ↔ review (PR 자체에는 상태 라벨을 두지 않는다) ----
             const [statusOn, statusOff] = pr.draft ? [STATUS.wip, STATUS.review] : [STATUS.review, STATUS.wip];
             for (const l of statusLabels) drop(l);
+            // 이슈를 고치는 건 저장소 멤버가 같은 저장소 브랜치에서 올린 PR만. 포크 PR은 본문에 아무 번호나 적을 수 있다.
+            const sameRepo = pr.head.repo?.full_name === pr.base.repo.full_name;
+            const trusted = sameRepo && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association);
+            if (issues.length > 0 && !trusted) {
+              core.warning(`포크 또는 외부 작성자(${pr.author_association})의 PR이라 연결된 이슈의 상태 라벨은 바꾸지 않습니다.`);
+            }
             const statusChanged = [];
-            for (const issue of issues) {
+            for (const issue of trusted ? issues : []) {
               if (issue.state !== 'open') continue;
               const has = new Set(issue.labels.map(l => l.name));
               if (!has.has(statusOn)) {
@@ -135,7 +149,7 @@ jobs:
                 [{ data: '항목', header: true }, { data: '값', header: true }],
                 ['타입', typeLabel ?? '(없음)'],
                 ['영역', [...areas].join(', ') || '(없음)'],
-                ['이슈 상태', statusChanged.join(', ') || '(연결된 이슈 없음)'],
+                ['이슈 상태', statusChanged.join(', ') || (issues.length ? '(외부 PR: 변경 안 함)' : '(연결된 이슈 없음)')],
                 ['추가', [...toAdd].join(', ') || '-'],
                 ['제거', [...toRemove].join(', ') || '-'],
               ]).write();

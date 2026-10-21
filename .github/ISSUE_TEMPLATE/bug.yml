@@ -1,7 +1,7 @@
 name: 🐛 버그 제보
 description: 기대와 다르게 동작하는 것을 알립니다. 재현 절차와 X-Trace-Id가 있으면 빨리 찾습니다.
 title: "bug({범위}): {무엇이 어떻게 잘못되는지}"
-labels: ["bug"]
+labels: ["🐛 fix"]
 body:
   - type: markdown
     attributes:

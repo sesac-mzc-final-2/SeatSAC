@@ -1,0 +1,120 @@
+# PR이 열리면 라벨 사용 가이드(docs/ 참고)에 맞춰 라벨과 담당자를 자동으로 붙인다.
+#   타입     제목 접두어(feat/fix/...)로 1개      — 제목이 바뀌면 다시 계산
+#   영역     바뀐 파일 경로로 FE/BE/Infra          — 커밋이 추가되면 다시 계산 (수동으로 붙인 건 유지)
+#   우선순위 본문에 연결된 이슈(#123)의 P1~P3를 따름 — 이미 있으면 그대로
+#   상태     draft면 🚧 in progress, 아니면 👀 review
+#   담당자   비어 있으면 PR 작성자
+# 코드를 체크아웃하지 않으므로 pull_request_target을 써도 안전하다 (포크 PR에도 라벨이 붙는다).
+name: pr-labeler
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+concurrency:
+  group: pr-labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const number = pr.number;
+
+            // ---- 라벨 정의 (GitHub Labels 페이지의 이름과 정확히 같아야 한다) ----
+            const TYPE = {
+              feat: '✨ feat', fix: '🐛 fix', refactor: '♻️ refactor', docs: '📝 docs',
+              chore: '🔧 chore', test: '✅ test', design: '🎨 design',
+              infra: '🔧 chore', ci: '🔧 chore',   // infra(terraform): / ci(actions): 접두어도 chore 로
+            };
+            const AREA = { fe: '🖥️ FE', be: '⚙️ BE', infra: '☁️ Infra' };
+            const PRIORITY = ['🔥 P1', '⚡ P2', '🌱 P3'];
+            const STATUS = { wip: '🚧 in progress', review: '👀 review' };
+
+            const typeLabels = new Set(Object.values(TYPE));
+            const statusLabels = new Set(Object.values(STATUS));
+            const current = new Set(pr.labels.map(l => l.name));
+            const toAdd = new Set();
+            const toRemove = new Set();
+            const want = name => { if (!current.has(name)) toAdd.add(name); };
+            const drop = name => { if (current.has(name)) toRemove.add(name); };
+
+            // ---- 1. 타입: 제목 접두어 `type(scope): ...` ----
+            const m = /^(\w+)(?:\([^)]*\))?!?:/.exec(pr.title.trim());
+            const typeLabel = m ? TYPE[m[1].toLowerCase()] : undefined;
+            if (typeLabel) {
+              want(typeLabel);
+              for (const l of typeLabels) if (l !== typeLabel) drop(l);
+            } else {
+              core.warning(`제목에서 타입을 찾지 못했습니다: "${pr.title}" — 타입 라벨은 손으로 붙여 주세요.`);
+            }
+
+            // ---- 2. 영역: 바뀐 파일 경로 ----
+            const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 });
+            const areaOf = p => {
+              if (p.startsWith('frontend/')) return AREA.fe;
+              if (p.startsWith('infra/') || p.startsWith('.github/') || p.startsWith('tests/k6/')) return AREA.infra;
+              if (/^(services|libs|contracts|lambdas|build-logic|gradle)\//.test(p)) return AREA.be;
+              if (/^(build\.gradle\.kts|settings\.gradle\.kts|gradle\.properties|gradlew(\.bat)?)$/.test(p)) return AREA.be;
+              return undefined; // docs/, README 등은 영역 없음 → 필요하면 손으로
+            };
+            const areas = new Set(files.map(f => areaOf(f.filename)).filter(Boolean));
+            for (const a of areas) want(a);
+            if (areas.size === 0) core.warning('바뀐 파일에서 영역(FE/BE/Infra)을 정하지 못했습니다. 영역 라벨은 손으로 붙여 주세요.');
+
+            // ---- 3. 우선순위: 연결된 이슈를 따름 (이미 있으면 유지) ----
+            if (![...current].some(l => PRIORITY.includes(l))) {
+              const body = pr.body ?? '';
+              const refs = new Set();
+              for (const x of body.matchAll(/(?:^|[\s(])#(\d+)\b/g)) refs.add(Number(x[1]));
+              const urlRe = new RegExp(`github\.com/${owner}/${repo}/issues/(\d+)`, 'gi');
+              for (const x of body.matchAll(urlRe)) refs.add(Number(x[1]));
+              for (const n of refs) {
+                try {
+                  const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: n });
+                  if (issue.pull_request) continue;
+                  const p = issue.labels.map(l => l.name).find(l => PRIORITY.includes(l));
+                  if (p) { want(p); core.info(`우선순위 ${p} ← #${n}`); break; }
+                } catch (e) { core.info(`#${n} 조회 실패: ${e.message}`); }
+              }
+            }
+
+            // ---- 4. 상태: draft ↔ review ----
+            if (pr.draft) { want(STATUS.wip); drop(STATUS.review); }
+            else          { want(STATUS.review); drop(STATUS.wip); }
+
+            // ---- 라벨 적용 ----
+            if (toAdd.size) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [...toAdd] });
+              core.info(`추가: ${[...toAdd].join(', ')}`);
+            }
+            for (const name of toRemove) {
+              try { await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name }); core.info(`제거: ${name}`); }
+              catch (e) { if (e.status !== 404) throw e; }
+            }
+
+            // ---- 5. 담당자: 비어 있으면 작성자 ----
+            if (pr.assignees.length === 0 && pr.user.type === 'User') {
+              await github.rest.issues.addAssignees({ owner, repo, issue_number: number, assignees: [pr.user.login] });
+              core.info(`담당자: ${pr.user.login}`);
+            }
+
+            await core.summary
+              .addHeading('pr-labeler', 3)
+              .addTable([
+                [{ data: '항목', header: true }, { data: '값', header: true }],
+                ['타입', typeLabel ?? '(없음)'],
+                ['영역', [...areas].join(', ') || '(없음)'],
+                ['상태', pr.draft ? STATUS.wip : STATUS.review],
+                ['추가', [...toAdd].join(', ') || '-'],
+                ['제거', [...toRemove].join(', ') || '-'],
+              ]).write();

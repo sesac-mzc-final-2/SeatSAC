@@ -2,7 +2,7 @@
 region = "ap-northeast-2"
 env    = "staging"
 name   = "cinema-staging"
-owner  = "SeatSAC"
+owner  = "kimjongsik"
 
 vpc_cidr       = "10.20.0.0/16"
 azs            = ["ap-northeast-2a", "ap-northeast-2c"]

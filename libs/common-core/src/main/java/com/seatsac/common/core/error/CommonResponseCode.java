@@ -43,6 +43,12 @@ public enum CommonResponseCode implements ErrorCode {
         return status;
     }
 
+    /** 공통 코드 자신 */
+    @Override
+    public CommonResponseCode commonCode() {
+        return this;
+    }
+
     /** 공통 코드 자신이므로 세분 이름과 같다 */
     @Override
     public String responseCode() {

@@ -1,5 +1,8 @@
 package com.seatsac.common.core.error;
 
+import com.seatsac.common.core.time.Times;
+import java.time.Instant;
+
 /**
  * 오류 응답의 {@code details[]} 원소 — API 명세서 1-4. {@code details}는 항상 배열이고
  * 원소는 {@code {field, value, reason}}이다.
@@ -10,8 +13,18 @@ package com.seatsac.common.core.error;
  *       <b>사용자가 보낸 값을 그대로 담지 않는다</b> — 카드 번호 같은 민감값이 섞인다</li>
  *   <li>{@code reason} — 서비스별 세분 오류 이름 (예: {@code HOLD_EXPIRED})</li>
  * </ul>
+ *
+ * <p>시각 규칙(DB UTC, 응답 +09:00): {@code value}에 {@link Instant}를 넣으면 여기서
+ * {@link Times#toApi(Instant)}로 바꿔 둔다(예: {@code ACTIVE_HOLD_EXISTS}의 {@code expiresAt}).
+ * 그대로 두면 JSON에 {@code Z}(UTC)로 나가 다른 응답 필드와 오프셋이 달라진다.
  */
 public record ErrorDetail(String field, Object value, String reason) {
+
+    public ErrorDetail {
+        if (value instanceof Instant instant) {
+            value = Times.toApi(instant);
+        }
+    }
 
     /** 세분 이름만 담는다 */
     public static ErrorDetail reason(String reason) {

@@ -3,40 +3,59 @@ spring:
     name: gateway
   profiles:
     default: local
+  lifecycle:
+    timeout-per-shutdown-phase: 20s           # OPS-03 graceful shutdown 20초
   cloud:
     gateway:
       server:
         webflux:
+          httpclient:
+            connect-timeout: 1000             # 하위 서비스 연결 1초 (기능명세서 10장)
+            response-timeout: 10s             # 결제(BKG-10)는 Booking→Payment 3초 + 재호출·상태 조회까지 기다린다. SSE 라우트는 끔
           default-filters:
-            - RemoveRequestHeader=X-User-Id      # 외부 유입 헤더 제거 (GW-02)
-            - RemoveRequestHeader=X-User-Role
-            - StripPrefix=1                      # /api 제거 (ADR-9)
+            - StripPrefix=1                   # /api 제거 (ADR-9). X-User-* 제거·X-Trace-Id 부여는 TraceWebFilter
+          # GW-01 라우팅. 위에서부터 먼저 맞는 라우트로 간다 — 좌석 현황·SSE(Booking)가 /screenings/**(Catalog)보다 먼저.
+          # /payments·/auth·/internal/**·/actuator/** 라우트는 두지 않는다 (Payment 외부 비노출, 로그인은 Cognito Hosted UI)
           routes:
-            # 순서가 중요하다 — API 명세서 2장
-            - id: booking-seats
-              uri: ${APP_SERVICES_BOOKING_URL:http://booking:8080}
+            - id: booking-seat-stream
+              uri: ${app.services.booking-url}
               predicates:
-                - Path=/api/screenings/*/seats,/api/screenings/*/seats/stream
+                - Path=/api/screenings/{screeningId}/seats/stream
+              metadata:
+                response-timeout: -1          # BKG-05 SSE는 끊지 않는다 (heartbeat 15초)
+            - id: booking-seats
+              uri: ${app.services.booking-url}
+              predicates:
+                - Path=/api/screenings/{screeningId}/seats
             - id: booking
-              uri: ${APP_SERVICES_BOOKING_URL:http://booking:8080}
+              uri: ${app.services.booking-url}
               predicates:
                 - Path=/api/seats/**,/api/bookings/**
             - id: catalog
-              uri: ${APP_SERVICES_CATALOG_URL:http://catalog:8080}
+              uri: ${app.services.catalog-url}
               predicates:
-                - Path=/api/movies/**,/api/screenings/**,/api/theaters/**,/api/auditoriums/**,/api/admin/**
+                - Path=/api/movies/**,/api/screenings/**,/api/theaters/**,/api/auditoriums/**
+            - id: catalog-admin
+              uri: ${app.services.catalog-url}
+              predicates:
+                - Path=/api/admin/movies/**,/api/admin/screenings/**,/api/admin/auditoriums/**
             - id: user
-              uri: ${APP_SERVICES_USER_URL:http://user:8080}
+              uri: ${app.services.user-url}
               predicates:
                 - Path=/api/users/**
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          issuer-uri: ${APP_COGNITO_ISSUER_URI:https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXX}
+            - id: ai
+              uri: ${app.services.ai-url}
+              predicates:
+                - Path=/api/ai/**
 app:
-  cognito:
-    client-id: ${APP_COGNITO_CLIENT_ID:changeme}
+  services:                                   # 환경변수 APP_SERVICES_BOOKING_URL 등으로 바꾼다
+    catalog-url: http://catalog:8080
+    booking-url: http://booking:8080
+    user-url: http://user:8080
+    ai-url: http://ai:8080
+  cognito:                                    # ADR-37. 값은 Terraform 출력 → gitops env (APP_COGNITO_ISSUER_URI, APP_COGNITO_CLIENT_ID)
+    issuer-uri: https://cognito-idp.ap-northeast-2.amazonaws.com/ap-northeast-2_XXXX
+    client-id: changeme
 server:
   port: 8080
   shutdown: graceful

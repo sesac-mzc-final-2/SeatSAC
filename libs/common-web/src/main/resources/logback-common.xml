@@ -15,14 +15,20 @@
         <levelValue>[ignore]</levelValue>
       </fieldNames>
       <customFields>{"service":"${service}"}</customFields>
+      <!-- 허용 목록이다. 여기 없는 MDC 키는 로그에 나오지 않는다 (TraceKeys와 함께 고친다) -->
       <includeMdcKeyName>traceId</includeMdcKeyName>
       <includeMdcKeyName>userId</includeMdcKeyName>
+      <includeMdcKeyName>job</includeMdcKeyName>
+      <includeMdcKeyName>errorCode</includeMdcKeyName>
+      <includeMdcKeyName>bookingId</includeMdcKeyName>
+      <includeMdcKeyName>screeningId</includeMdcKeyName>
+      <includeMdcKeyName>paymentId</includeMdcKeyName>
     </encoder>
   </appender>
 
   <appender name="PLAIN" class="ch.qos.logback.core.ConsoleAppender">
     <encoder>
-      <pattern>%d{HH:mm:ss.SSS} %-5level [%X{traceId}] %logger{24} - %msg%n</pattern>
+      <pattern>%d{HH:mm:ss.SSS} %-5level [%X{traceId}]%X{job:- }%X{bookingId:- }%X{errorCode:- } %logger{24} - %msg%n</pattern>
     </encoder>
   </appender>
 

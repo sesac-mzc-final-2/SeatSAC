@@ -1,7 +1,7 @@
 name: ✨ 작업 · 개선 제안
 description: 코드에 붙여 둘 제안·개선·기술 부채. 일정이 잡힌 작업은 노션 WBS에 만듭니다.
 title: "{type}({범위}): {무엇을}"
-labels: ["enhancement"]
+labels: ["✨ feat"]
 body:
   - type: markdown
     attributes:

@@ -1,0 +1,155 @@
+# PR이 열리면 라벨 사용 가이드(docs/ 참고)에 맞춰 라벨과 담당자를 자동으로 붙인다.
+#   타입     제목 접두어(feat/fix/...)로 1개      — 제목이 바뀌면 다시 계산
+#   영역     바뀐 파일 경로로 FE/BE/Infra          — 커밋이 추가되면 다시 계산 (수동으로 붙인 건 유지)
+#   우선순위 본문에 연결된 이슈(#123)의 P1~P3를 따름 — 이미 있으면 그대로
+#   상태     PR이 아니라 연결된 이슈에 붙인다. PR이 열리면 이슈의 🚧 in progress를 떼고 👀 review,
+#            draft로 돌리면 다시 🚧 in progress. PR에 잘못 붙은 상태 라벨은 뗀다
+#   담당자   비어 있으면 PR 작성자
+# 코드를 체크아웃하지 않으므로 pull_request_target을 써도 안전하다 (포크 PR에도 라벨이 붙는다).
+# 단, 이슈 쪽 쓰기(상태 라벨)는 저장소 멤버가 같은 저장소 브랜치에서 올린 PR에서만 한다 — 포크 PR 본문에
+# 남의 이슈 번호를 적어 상태를 바꾸는 것을 막는다. 조회할 이슈 번호도 MAX_REFS 개로 제한한다.
+# pull_request_target은 기본 브랜치(main)에 있는 이 파일을 실행하므로, 이 파일을 바꾸는 PR에서는 바뀐 내용이
+# 돌지 않는다. 머지 뒤 다음 PR에서 확인한다.
+name: pr-labeler
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write   # 연결된 이슈의 상태 라벨을 바꾼다
+
+concurrency:
+  group: pr-labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const number = pr.number;
+
+            // ---- 라벨 정의 (GitHub Labels 페이지의 이름과 정확히 같아야 한다) ----
+            const TYPE = {
+              feat: '✨ feat', fix: '🐛 fix', refactor: '♻️ refactor', docs: '📝 docs',
+              chore: '🔧 chore', test: '✅ test', design: '🎨 design',
+              infra: '🔧 chore', ci: '🔧 chore',   // infra(terraform): / ci(actions): 접두어도 chore 로
+            };
+            const AREA = { fe: '🖥️ FE', be: '⚙️ BE', infra: '☁️ Infra' };
+            const PRIORITY = ['🔥 P1', '⚡ P2', '🌱 P3'];
+            const STATUS = { wip: '🚧 in progress', review: '👀 review' };
+
+            const typeLabels = new Set(Object.values(TYPE));
+            const statusLabels = new Set(Object.values(STATUS));
+            const current = new Set(pr.labels.map(l => l.name));
+            const toAdd = new Set();
+            const toRemove = new Set();
+            const want = name => { if (!current.has(name)) toAdd.add(name); };
+            const drop = name => { if (current.has(name)) toRemove.add(name); };
+
+            // ---- 1. 타입: 제목 접두어 `type(scope): ...` ----
+            const m = /^(\w+)(?:\([^)]*\))?!?:/.exec(pr.title.trim());
+            const typeLabel = m ? TYPE[m[1].toLowerCase()] : undefined;
+            if (typeLabel) {
+              want(typeLabel);
+              for (const l of typeLabels) if (l !== typeLabel) drop(l);
+            } else {
+              core.warning(`제목에서 타입을 찾지 못했습니다: "${pr.title}" — 타입 라벨은 손으로 붙여 주세요.`);
+            }
+
+            // ---- 2. 영역: 바뀐 파일 경로 ----
+            const files = await github.paginate(github.rest.pulls.listFiles, { owner, repo, pull_number: number, per_page: 100 });
+            const areaOf = p => {
+              if (p.startsWith('frontend/')) return AREA.fe;
+              if (p.startsWith('infra/') || p.startsWith('.github/') || p.startsWith('tests/k6/')) return AREA.infra;
+              if (/^(services|libs|contracts|lambdas|build-logic|gradle)\//.test(p)) return AREA.be;
+              if (/^(build\.gradle\.kts|settings\.gradle\.kts|gradle\.properties|gradlew(\.bat)?)$/.test(p)) return AREA.be;
+              return undefined; // docs/, README 등은 영역 없음 → 필요하면 손으로
+            };
+            const areas = new Set(files.map(f => areaOf(f.filename)).filter(Boolean));
+            for (const a of areas) want(a);
+            if (areas.size === 0) core.warning('바뀐 파일에서 영역(FE/BE/Infra)을 정하지 못했습니다. 영역 라벨은 손으로 붙여 주세요.');
+
+            // ---- 연결된 이슈: 본문의 #123 · 이슈 URL (PR 번호는 제외) ----
+            const body = pr.body ?? '';
+            const refs = new Set();
+            for (const x of body.matchAll(/(?:^|[\s(])#(\d+)\b/g)) refs.add(Number(x[1]));
+            const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');   // owner/repo 의 . 등을 리터럴로
+            const urlRe = new RegExp(`github\\.com/${reEsc(owner)}/${reEsc(repo)}/issues/(\\d+)`, 'gi');
+            for (const x of body.matchAll(urlRe)) refs.add(Number(x[1]));
+            const MAX_REFS = 5;   // 본문에 번호를 잔뜩 적어 API 호출을 늘리는 것을 막는다
+            if (refs.size > MAX_REFS) {
+              core.warning(`본문에 이슈 참조가 ${refs.size}개입니다. 앞의 ${MAX_REFS}개만 봅니다.`);
+            }
+            const issues = [];
+            for (const n of [...refs].slice(0, MAX_REFS)) {
+              try {
+                const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: n });
+                if (!issue.pull_request) issues.push(issue);
+              } catch (e) { core.info(`#${n} 조회 실패: ${e.message}`); }
+            }
+
+            // ---- 3. 우선순위: 연결된 이슈를 따름 (이미 있으면 유지) ----
+            if (![...current].some(l => PRIORITY.includes(l))) {
+              for (const issue of issues) {
+                const p = issue.labels.map(l => l.name).find(l => PRIORITY.includes(l));
+                if (p) { want(p); core.info(`우선순위 ${p} ← #${issue.number}`); break; }
+              }
+            }
+
+            // ---- 4. 상태: 연결된 이슈에 draft ↔ review (PR 자체에는 상태 라벨을 두지 않는다) ----
+            const [statusOn, statusOff] = pr.draft ? [STATUS.wip, STATUS.review] : [STATUS.review, STATUS.wip];
+            for (const l of statusLabels) drop(l);
+            // 이슈를 고치는 건 저장소 멤버가 같은 저장소 브랜치에서 올린 PR만. 포크 PR은 본문에 아무 번호나 적을 수 있다.
+            const sameRepo = pr.head.repo?.full_name === pr.base.repo.full_name;
+            const trusted = sameRepo && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(pr.author_association);
+            if (issues.length > 0 && !trusted) {
+              core.warning(`포크 또는 외부 작성자(${pr.author_association})의 PR이라 연결된 이슈의 상태 라벨은 바꾸지 않습니다.`);
+            }
+            const statusChanged = [];
+            for (const issue of trusted ? issues : []) {
+              if (issue.state !== 'open') continue;
+              const has = new Set(issue.labels.map(l => l.name));
+              if (!has.has(statusOn)) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: [statusOn] });
+              }
+              if (has.has(statusOff)) {
+                try { await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: statusOff }); }
+                catch (e) { if (e.status !== 404) throw e; }
+              }
+              statusChanged.push(`#${issue.number} → ${statusOn}`);
+            }
+            if (issues.length === 0) core.info('연결된 이슈가 없어 상태 라벨은 바꾸지 않았습니다. 본문에 #이슈번호를 적으면 이슈 상태가 함께 바뀝니다.');
+
+            // ---- 라벨 적용 ----
+            if (toAdd.size) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [...toAdd] });
+              core.info(`추가: ${[...toAdd].join(', ')}`);
+            }
+            for (const name of toRemove) {
+              try { await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name }); core.info(`제거: ${name}`); }
+              catch (e) { if (e.status !== 404) throw e; }
+            }
+
+            // ---- 5. 담당자: 비어 있으면 작성자 ----
+            if (pr.assignees.length === 0 && pr.user.type === 'User') {
+              await github.rest.issues.addAssignees({ owner, repo, issue_number: number, assignees: [pr.user.login] });
+              core.info(`담당자: ${pr.user.login}`);
+            }
+
+            await core.summary
+              .addHeading('pr-labeler', 3)
+              .addTable([
+                [{ data: '항목', header: true }, { data: '값', header: true }],
+                ['타입', typeLabel ?? '(없음)'],
+                ['영역', [...areas].join(', ') || '(없음)'],
+                ['이슈 상태', statusChanged.join(', ') || (issues.length ? '(외부 PR: 변경 안 함)' : '(연결된 이슈 없음)')],
+                ['추가', [...toAdd].join(', ') || '-'],
+                ['제거', [...toRemove].join(', ') || '-'],
+              ]).write();

@@ -21,13 +21,6 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.10.5"
-      - name: debug OIDC claims (확인 후 삭제)
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const t = await core.getIDToken('sts.amazonaws.com');
-            const c = JSON.parse(Buffer.from(t.split('.')[1], 'base64url').toString());
-            core.info(`sub=${c.sub}`); core.info(`aud=${c.aud}`); core.info(`event=${c.event_name}`);
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_TERRAFORM_PLAN_ROLE_ARN }}

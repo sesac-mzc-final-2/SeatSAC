@@ -1,0 +1,129 @@
+# CodeRabbit AI 코드 리뷰 설정 — https://docs.coderabbit.ai/reference/configuration
+# 공개 저장소라 무료 플랜으로 전체 리뷰가 됩니다. GitHub App 설치는 조직 owner가 app.coderabbit.ai 에서 합니다.
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: ko-KR
+tone_instructions: "한국어로 간결하게. 실제 버그·보안·계약 위반을 우선하고, 취향 문제는 짧게 제안만 한다."
+
+reviews:
+  profile: chill
+  request_changes_workflow: false    # 승인·변경요청은 사람(CODEOWNERS)이 한다
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "^main$"
+
+  # 리뷰에서 뺄 파일 (생성물·잠금 파일·래퍼·빌드 산출물)
+  path_filters:
+    - "!**/build/**"
+    - "!**/.gradle/**"
+    - "!gradlew"
+    - "!gradlew.bat"
+    - "!gradle/wrapper/**"
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+    - "!**/yarn.lock"
+    - "!**/*.min.js"
+    - "!**/dist/**"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.gif"
+    - "!**/*.svg"
+
+  # 경로별 리뷰 지침 (README 3·5장 규칙)
+  path_instructions:
+    - path: "libs/**"
+      instructions: >
+        공통 코드는 두 개 이상의 서비스가 같은 방식으로 해야 하는 것만 둔다(오류 형식·헤더·traceId·로그·시간).
+        도메인 엔티티, 다른 서비스 DTO, Valkey 키, 비즈니스 로직이 들어오면 지적한다.
+        변경은 추가만 허용한다. 기존 public 시그니처 변경·삭제는 하위 호환을 깨므로 반드시 지적한다.
+        gateway는 WebFlux라 common-web을 쓸 수 없다. gateway에서 common-web 의존이 보이면 지적한다.
+    - path: "contracts/**"
+      instructions: >
+        OpenAPI·이벤트 스키마다. 기존 필드의 타입·이름·필수 여부 변경, 응답 구조 변경은 하위 호환을 깨므로 반드시 짚는다.
+        필드 추가만 있는지, 새 엔드포인트·이벤트인지 구분해 요약한다.
+    - path: "services/*/src/main/resources/db/migration/**"
+      instructions: >
+        Flyway 파일명은 V{yyyyMMddHHmm}__{설명}.sql 형식이어야 한다. 이미 머지된 마이그레이션 파일 수정은 금지다.
+        블루/그린 배포라 확장→전환→정리 순서를 지킨다. 컬럼 삭제·이름 변경·NOT NULL 추가가 컬럼 추가와 같은 PR에 있으면 지적한다.
+        새 컬럼은 NULL 허용이거나 기본값이 있어야 한다. INSERT 로 시드 데이터를 넣는 SQL은 커밋 금지다.
+    - path: "services/**/*.java"
+      instructions: >
+        Spring Boot 3 · Java 21. DB는 UTC(DATETIME(3)), API 응답 시각은 +09:00, 영업일은 서울 기준이며 common-core 의 Times 를 쓴다.
+        다른 서비스의 DB·엔티티를 직접 읽으면 지적한다. 필요하면 그 서비스의 /internal/** API를 호출한다.
+        외부 공개 경로는 /api/* (Gateway 가 /api 를 떼고 전달), /internal/** 은 서비스끼리만 쓰는 경로다. 화면용 엔드포인트가 /internal 에 있으면 지적한다.
+        API 변경은 contracts/openapi 가 먼저다. contracts 에 없는 응답 필드·엔드포인트가 구현에 생기면 지적한다.
+        오류 응답은 { code, message, traceId, details? } 형식이어야 하며 common-core 의 ErrorCode 를 쓴다. 직접 만든 오류 JSON·ResponseEntity 는 지적한다.
+        사용자 식별은 컨트롤러 인자 @CurrentUser CurrentUser user 로만 받는다. JWT 를 직접 파싱하거나 X-User-Id 헤더를 직접 읽으면 지적한다.
+        서비스 간 내부 호출은 InternalRestClientFactory 로 만든 클라이언트만 쓴다(traceId 자동 전달). RestTemplate·WebClient 를 직접 만들면 지적한다.
+        모든 로그·오류·SQS 메시지에 traceId 가 실려야 한다. 로그는 JSON 한 줄(timestamp·level·service·traceId·userId·message·error)이며 System.out·printStackTrace 는 지적한다.
+        Valkey 키는 seat:{회차}:{좌석}, user-hold:{회차}:{사용자}, hold-expiry, seat-seq:{회차}, idem:{키}, catalog:* 규칙을 따른다. 다른 형식의 키가 보이면 지적한다.
+        환경변수는 Spring 표준 또는 APP_ 접두사만 쓴다. 로컬 비밀번호 local 외의 비밀 값·계정 ID 하드코딩은 지적한다.
+        트랜잭션(@Transactional)은 서비스 계층(*Service 클래스)의 유스케이스 메서드에서만 연다. 컨트롤러·리포지토리·이벤트 리스너·스케줄러·Lua/Valkey 헬퍼에 @Transactional 이 있으면 지적한다.
+        트랜잭션 안에서 외부 HTTP 호출·SQS 발행·Valkey 블로킹 대기·긴 루프를 하면 지적한다. 읽기 전용 조회는 readOnly = true 를 쓴다. private 메서드나 같은 클래스 내부 호출에 붙은 @Transactional 은 동작하지 않으므로 지적한다.
+        동시성: 서비스는 여러 인스턴스로 돌아가므로 synchronized·ReentrantLock·로컬 캐시 같은 JVM 로컬 락은 동시성 보장이 안 된다. 보이면 지적한다.
+        좌석 선점·해제처럼 같은 자원을 여러 요청이 다투는 로직은 Valkey Lua 스크립트(원자 연산)나 DB 유일 제약·행 락(SELECT ... FOR UPDATE, @Version)으로 보호해야 한다. "조회 후 조건 확인 후 저장"(check-then-act)을 락 없이 하면 경쟁 조건이므로 지적한다.
+        Valkey 락 키에는 TTL 과 소유자 토큰이 있어야 하며, 해제 시 소유자 확인 없이 DEL 하면 지적한다.
+        멱등성: 결제 승인·예매 확정·좌석 선점·SQS 메시지 소비처럼 재시도될 수 있는 쓰기 연산은 멱등키(Idempotency-Key 헤더 → Valkey idem:{키}, 또는 DB 유일 제약)로 중복 실행을 막아야 한다. 같은 요청이 두 번 오면 같은 결과를 돌려주는지 확인하고, 멱등 처리가 없는 쓰기 엔드포인트·메시지 핸들러는 지적한다.
+        멱등키 저장과 실제 처리가 한 트랜잭션·원자 연산 안에 있지 않아 둘 사이에서 실패하면 중복이 생기는 구조도 지적한다.
+        외부 입력을 그대로 믿는 코드, N+1 쿼리, 예외를 삼키는 catch 를 지적한다.
+    - path: "services/gateway/**"
+      instructions: >
+        Spring Cloud Gateway(WebFlux)다. 블로킹 호출(block(), JDBC, RestTemplate)이 있으면 지적한다.
+        외부에서 들어온 X-User-Id 같은 내부 헤더는 제거하고 JWT 검증 후 다시 세팅해야 한다.
+        /api/* 만 StripPrefix 로 서비스에 전달하고, /internal/** 과 /actuator/** 는 외부로 라우팅하지 않는다. 그런 라우트가 추가되면 지적한다.
+        common-web 을 의존하면 지적한다(common-core 만 허용).
+    - path: "services/ai/**"
+      instructions: >
+        Python 서비스다. 타입 힌트, 예외 처리, 외부 API 키 하드코딩 여부를 본다.
+        환경변수는 APP_ 접두사, 로그는 JSON 한 줄(timestamp·level·service·traceId·userId·message·error), 들어온 traceId 를 로그와 외부 호출에 그대로 전달한다.
+        오류 응답은 { code, message, traceId, details? } 형식을 지킨다.
+    - path: "frontend/**"
+      instructions: >
+        React · Vite · TypeScript. 폴더 구조는 FSD(Feature-Sliced Design)를 따른다.
+        레이어는 app → pages → widgets → features → entities → shared 순이며, import 는 반드시 아래 레이어만 바라본다.
+        같은 레이어의 다른 슬라이스를 import 하거나 위 레이어를 import 하면 지적한다.
+        슬라이스 바깥에서는 슬라이스의 index.ts(public API)만 import 해야 하며, 내부 파일을 직접 import 하면 지적한다.
+        비즈니스 로직이 shared 에 들어가거나 API 호출이 entities·features 밖에 흩어지면 지적한다.
+        any 남용, 미처리 Promise, 키 없는 리스트 렌더링, API 응답 타입 불일치를 본다.
+        VITE_ 환경변수는 브라우저에 그대로 노출된다. VITE_ 에 키·토큰·비밀번호가 들어가거나 번들에 시크릿이 포함되면 지적한다.
+        API 호출은 같은 도메인의 /api/* (VITE_API_BASE_URL) 로만 한다. /internal/** 호출이나 서비스 주소 하드코딩은 지적한다.
+        인증은 Cognito Hosted UI(PKCE)·react-oidc-context 로 하고 Access Token 을 Authorization: Bearer 로 보낸다. 토큰을 localStorage 에 직접 저장하거나 직접 파싱하면 지적한다.
+        롯데시네마 실제 예매 API 호출과 포스터 이미지 사용은 금지다. 좌석 배치도 화면에는 출처(롯데시네마)와 수집 시각을 표시해야 한다.
+    - path: "infra/terraform/**"
+      instructions: >
+        시크릿·계정 ID·ARN 하드코딩, 0.0.0.0/0 인바운드, 퍼블릭 S3, 암호화 미설정을 지적한다.
+        destroy 를 유발하는 리소스 교체(force new)가 있으면 요약에 명시한다.
+    - path: "lambdas/**"
+      instructions: >
+        AWS Lambda 핸들러다. 환경변수 누락, 재시도 시 멱등성, 타임아웃 처리를 본다.
+    - path: ".github/**"
+      instructions: >
+        워크플로 권한(permissions)은 최소로, 서드파티 액션은 버전 고정인지 확인한다. 시크릿이 로그에 출력되지 않는지 본다.
+    - path: "**"
+      instructions: >
+        Git 에 비밀 0개. 키·비밀번호·토큰·.env·계정 ID 가 어떤 파일에든 보이면 지적한다(로컬 Compose 용 비밀번호 "local" 은 예외).
+        롯데시네마 원본 응답·fixture·좌석 배치·상영 일정 시드 데이터는 이 저장소에 올리지 않는다. seed/·raw/·fixtures/private/ 경로나 대량 INSERT·CSV·JSON 데이터 파일이 추가되면 지적한다.
+        설계 결정은 ADR 로 남기므로, 아키텍처를 바꾸는 변경에 PR 본문의 ADR 번호가 없으면 요약에서 언급한다.
+
+  # 정적 분석 도구 — gitleaks 는 별도 워크플로가 있어 중복 알림을 막기 위해 끈다
+  tools:
+    gitleaks:
+      enabled: false
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "README.md"
+      - "docs/conventions.md"
+      - "contracts/README.md"

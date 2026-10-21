@@ -17,7 +17,7 @@ provider "aws" {
   region = "ap-northeast-2" # 자격 증명은 환경변수 AWS_PROFILE(SSO) 또는 CI의 OIDC 역할
   default_tags {
     tags = {
-      Project   = "seatsac"
+      Project   = "cinema"
       Env       = "shared"
       ManagedBy = "terraform"
     }
@@ -27,7 +27,7 @@ provider "aws" {
 data "aws_caller_identity" "me" {}
 
 resource "aws_s3_bucket" "tfstate" {
-  bucket = "seatsac-tfstate-${data.aws_caller_identity.me.account_id}"
+  bucket = "cinema-tfstate-${data.aws_caller_identity.me.account_id}"
 
   lifecycle {
     prevent_destroy = true # 실수로 destroy 하면 모든 state가 사라진다

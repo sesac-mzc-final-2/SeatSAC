@@ -1,7 +1,7 @@
 # 비밀 값 없음 → 커밋한다. 비밀(DB 비밀번호 등)은 Terraform이 random_password로 만들어 K8s Secret에 넣는다 (ADR-10)
 region = "ap-northeast-2"
 env    = "staging"
-name   = "seatsac-staging"
+name   = "cinema-staging"
 owner  = "kimjongsik"
 
 vpc_cidr       = "10.20.0.0/16"

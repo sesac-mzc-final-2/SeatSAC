@@ -1,5 +1,5 @@
 # PR에 terraform plan 결과를 코멘트로 남긴다. apply는 하지 않는다 (03b).
-# 사전 조건: GitHub OIDC 역할 (seatsac-staging-gha-terraform, ReadOnly + state 버킷 읽기) — 3.1.10 이후 활성화
+# 사전 조건: GitHub OIDC 역할 cinema-gha-tf-plan (infra/terraform/global, ReadOnly + state 읽기. 잠금 파일) -> secrets.AWS_TERRAFORM_PLAN_ROLE_ARN
 name: infra-plan
 on:
   pull_request:
@@ -24,6 +24,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
           aws-region: ap-northeast-2
       - run: terraform fmt -check -recursive
       - run: terraform init -backend-config=backend.hcl -input=false

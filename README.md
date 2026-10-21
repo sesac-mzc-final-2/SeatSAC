@@ -209,7 +209,7 @@ git push -u origin feat/BKG-02-seat-hold
 2. base: `main` ← compare: 내 브랜치
 3. 제목은 커밋 메시지 형식으로: `feat(booking): BKG-02 좌석 선점`
 4. 본문은 PR 템플릿을 채웁니다 — 변경 요약 · WBS ID·기능 ID · 테스트 방법 · 계약 변경 여부 · DB 마이그레이션 단계 · 배포 영향
-5. 리뷰어는 CODEOWNERS가, 라벨(타입·영역·상태)과 담당자는 `pr-labeler` 워크플로가 자동으로 붙입니다. 우선순위는 본문에 `#이슈번호`를 적으면 그 이슈를 따릅니다
+5. 리뷰어는 CODEOWNERS가, 라벨(타입·영역)과 담당자는 `pr-labeler` 워크플로가 자동으로 붙입니다. 본문에 `#이슈번호`를 적으면 우선순위는 그 이슈를 따르고, 이슈의 상태 라벨이 🚧 in progress → 👀 review 로 바뀝니다
 6. Actions 체크가 모두 ✅ 인지 확인
 
 ### 3-5. 리뷰와 머지

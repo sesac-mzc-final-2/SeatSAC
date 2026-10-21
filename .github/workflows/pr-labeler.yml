@@ -2,7 +2,8 @@
 #   타입     제목 접두어(feat/fix/...)로 1개      — 제목이 바뀌면 다시 계산
 #   영역     바뀐 파일 경로로 FE/BE/Infra          — 커밋이 추가되면 다시 계산 (수동으로 붙인 건 유지)
 #   우선순위 본문에 연결된 이슈(#123)의 P1~P3를 따름 — 이미 있으면 그대로
-#   상태     draft면 🚧 in progress, 아니면 👀 review
+#   상태     PR이 아니라 연결된 이슈에 붙인다. PR이 열리면 이슈의 🚧 in progress를 떼고 👀 review,
+#            draft로 돌리면 다시 🚧 in progress. PR에 잘못 붙은 상태 라벨은 뗀다
 #   담당자   비어 있으면 PR 작성자
 # 코드를 체크아웃하지 않으므로 pull_request_target을 써도 안전하다 (포크 PR에도 라벨이 붙는다).
 name: pr-labeler
@@ -13,7 +14,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: read
+  issues: write   # 연결된 이슈의 상태 라벨을 바꾼다
 
 concurrency:
   group: pr-labeler-${{ github.event.pull_request.number }}
@@ -71,26 +72,45 @@ jobs:
             for (const a of areas) want(a);
             if (areas.size === 0) core.warning('바뀐 파일에서 영역(FE/BE/Infra)을 정하지 못했습니다. 영역 라벨은 손으로 붙여 주세요.');
 
+            // ---- 연결된 이슈: 본문의 #123 · 이슈 URL (PR 번호는 제외) ----
+            const body = pr.body ?? '';
+            const refs = new Set();
+            for (const x of body.matchAll(/(?:^|[\s(])#(\d+)\b/g)) refs.add(Number(x[1]));
+            const urlRe = new RegExp(`github\\.com/${owner}/${repo}/issues/(\\d+)`, 'gi');
+            for (const x of body.matchAll(urlRe)) refs.add(Number(x[1]));
+            const issues = [];
+            for (const n of refs) {
+              try {
+                const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: n });
+                if (!issue.pull_request) issues.push(issue);
+              } catch (e) { core.info(`#${n} 조회 실패: ${e.message}`); }
+            }
+
             // ---- 3. 우선순위: 연결된 이슈를 따름 (이미 있으면 유지) ----
             if (![...current].some(l => PRIORITY.includes(l))) {
-              const body = pr.body ?? '';
-              const refs = new Set();
-              for (const x of body.matchAll(/(?:^|[\s(])#(\d+)\b/g)) refs.add(Number(x[1]));
-              const urlRe = new RegExp(`github\.com/${owner}/${repo}/issues/(\d+)`, 'gi');
-              for (const x of body.matchAll(urlRe)) refs.add(Number(x[1]));
-              for (const n of refs) {
-                try {
-                  const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: n });
-                  if (issue.pull_request) continue;
-                  const p = issue.labels.map(l => l.name).find(l => PRIORITY.includes(l));
-                  if (p) { want(p); core.info(`우선순위 ${p} ← #${n}`); break; }
-                } catch (e) { core.info(`#${n} 조회 실패: ${e.message}`); }
+              for (const issue of issues) {
+                const p = issue.labels.map(l => l.name).find(l => PRIORITY.includes(l));
+                if (p) { want(p); core.info(`우선순위 ${p} ← #${issue.number}`); break; }
               }
             }
 
-            // ---- 4. 상태: draft ↔ review ----
-            if (pr.draft) { want(STATUS.wip); drop(STATUS.review); }
-            else          { want(STATUS.review); drop(STATUS.wip); }
+            // ---- 4. 상태: 연결된 이슈에 draft ↔ review (PR 자체에는 상태 라벨을 두지 않는다) ----
+            const [statusOn, statusOff] = pr.draft ? [STATUS.wip, STATUS.review] : [STATUS.review, STATUS.wip];
+            for (const l of statusLabels) drop(l);
+            const statusChanged = [];
+            for (const issue of issues) {
+              if (issue.state !== 'open') continue;
+              const has = new Set(issue.labels.map(l => l.name));
+              if (!has.has(statusOn)) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: [statusOn] });
+              }
+              if (has.has(statusOff)) {
+                try { await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: statusOff }); }
+                catch (e) { if (e.status !== 404) throw e; }
+              }
+              statusChanged.push(`#${issue.number} → ${statusOn}`);
+            }
+            if (issues.length === 0) core.info('연결된 이슈가 없어 상태 라벨은 바꾸지 않았습니다. 본문에 #이슈번호를 적으면 이슈 상태가 함께 바뀝니다.');
 
             // ---- 라벨 적용 ----
             if (toAdd.size) {
@@ -114,7 +134,7 @@ jobs:
                 [{ data: '항목', header: true }, { data: '값', header: true }],
                 ['타입', typeLabel ?? '(없음)'],
                 ['영역', [...areas].join(', ') || '(없음)'],
-                ['상태', pr.draft ? STATUS.wip : STATUS.review],
+                ['이슈 상태', statusChanged.join(', ') || '(연결된 이슈 없음)'],
                 ['추가', [...toAdd].join(', ') || '-'],
                 ['제거', [...toRemove].join(', ') || '-'],
               ]).write();

@@ -1,34 +1,30 @@
 package com.seatsac.common.core.error;
 
-/** 오류 코드 — API 명세서 1-4. 새 코드는 추가만 한다. */
-public enum ErrorCode {
-    VALIDATION_FAILED(400),
-    SCREENING_STARTED(400),
-    UNAUTHORIZED(401),
-    FORBIDDEN(403),
-    NOT_FOUND(404),
-    SEAT_UNAVAILABLE(409),
-    ACTIVE_HOLD_EXISTS(409),
-    BOOKING_STATE_CONFLICT(409),
-    PAYMENT_ALREADY_REQUESTED(409),
-    IDEMPOTENCY_KEY_CONFLICT(409),
-    SCHEDULE_CONFLICT(409),
-    SEAT_SOLD(409),
-    PAYMENT_CONFLICT(409),
-    PAYMENT_NOT_APPROVED(409),
-    RATE_LIMITED(429),
-    INTERNAL_ERROR(500),
-    SERVICE_UNAVAILABLE(503),
-    PAYMENT_RESULT_UNKNOWN(503),
-    BOOKING_UNAVAILABLE(503);
+/**
+ * 오류 코드 계약 — 공통 모듈 문서 2장. 두 층으로 나눈다.
+ *
+ * <ul>
+ *   <li>{@link #responseCode()} — 응답 {@code code}로 나가는 <b>공통 코드</b>. 화면이 분기하는 값
+ *       ({@link CommonResponseCode})</li>
+ *   <li>{@link #name()} — <b>세분 이름</b>(enum 상수). {@code details[].reason}, MDC {@code errorCode},
+ *       지표 라벨에 쓴다</li>
+ * </ul>
+ *
+ * 서비스는 {@code XxxErrorCode implements ErrorCode} enum을 만들어 쓴다.
+ * 공통 처리가 만드는 오류({@code VALIDATION_FAILED}, {@code NOT_FOUND}, {@code INTERNAL_ERROR} 등)는
+ * {@link CommonResponseCode}를 그대로 쓰며, 이때는 세분 이름과 공통 코드가 같다.
+ */
+public interface ErrorCode {
 
-    private final int status;
+    /** 세분 이름 (enum 상수 이름) */
+    String name();
 
-    ErrorCode(int status) {
-        this.status = status;
-    }
+    /** HTTP 상태 */
+    int status();
 
-    public int status() {
-        return status;
-    }
+    /** 응답 {@code code} — 공통 코드 */
+    String responseCode();
+
+    /** 사용자에게 보여도 되는 문장 */
+    String message();
 }

@@ -17,3 +17,8 @@ spring:
       access-key: test
       secret-key: test
 logging.level.org.hibernate.SQL: INFO
+
+# 만료 스캔 주기 실행은 끈다 — 테스트가 스캔을 직접 불러 「한 주기에 몇 건」을 센다
+app:
+  expiry:
+    enabled: false

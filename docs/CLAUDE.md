@@ -157,7 +157,7 @@
 | Spring 표준 | 바인딩 이름 그대로 | `SPRING_DATASOURCE_URL`, `SPRING_DATA_REDIS_HOST`, `SPRING_DATA_REDIS_SSL_ENABLED` |
 | 앱 고유 | `APP_` | `APP_SEAT_HOLD_TTL_SECONDS=300`, `APP_SEAT_HOLD_STRATEGY=redis` |
 | 다른 서비스 주소·타임아웃 | `APP_SERVICES_{NAME}_URL`, `_CONNECT_TIMEOUT`, `_READ_TIMEOUT` | `APP_SERVICES_PAYMENT_URL=http://payment:8080` |
-| 인증 | ⚠️ `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI`, `APP_COGNITO_CLIENT_ID` (03a `APP_JWT_SECRET`·`jwt-secret` 삭제) | — |
+| 인증 | ⚠️ `APP_COGNITO_ISSUER_URI`, `APP_COGNITO_CLIENT_ID` (gateway 자체 검증기가 읽는다. 03a `APP_JWT_SECRET`·`jwt-secret` 삭제) | — |
 | AWS | SDK 표준 `AWS_REGION=ap-northeast-2`. 자격 증명은 Pod Identity, 액세스 키 금지 | — |
 | frontend | `VITE_` (빌드에 포함 = 공개 값만) | `VITE_API_BASE_URL=/api`, `VITE_COGNITO_AUTHORITY` |
 | K8s Secret (Terraform 생성) | `{service}-secrets`(앱), `{service}-migrator-secrets`(Flyway Job만) | `booking-secrets` |
@@ -354,7 +354,7 @@
 
 | 서비스 | ConfigMap 키 | Secret `{svc}-secrets` 키 |
 | --- | --- | --- |
-| gateway | `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=https://cognito-idp.ap-northeast-2.amazonaws.com/{userPoolId}`, `APP_COGNITO_CLIENT_ID`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` | 없음 |
+| gateway | `APP_COGNITO_ISSUER_URI=https://cognito-idp.ap-northeast-2.amazonaws.com/{userPoolId}`, `APP_COGNITO_CLIENT_ID`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
 | booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL`, `APP_SEAT_HOLD_TTL_SECONDS=300`, `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s` | `SPRING_DATASOURCE_PASSWORD` |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL` | `SPRING_DATASOURCE_PASSWORD` |

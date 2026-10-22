@@ -3,7 +3,6 @@ app:
     catalog-url: http://localhost:8081
     booking-url: http://localhost:8082
     user-url: http://localhost:8083
-    ai-url: http://localhost:8085
 # 로컬도 같은 Cognito 사용자 풀을 쓴다 (localhost:5173 콜백). issuer-uri·client-id는 환경변수로 넣는다
 #   APP_COGNITO_ISSUER_URI=https://cognito-idp.ap-northeast-2.amazonaws.com/{풀 ID}
 #   APP_COGNITO_CLIENT_ID={앱 클라이언트 ID}

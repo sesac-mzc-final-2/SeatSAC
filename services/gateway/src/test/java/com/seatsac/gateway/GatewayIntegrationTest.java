@@ -57,7 +57,6 @@ class GatewayIntegrationTest {
             .header("Content-Type", "application/json")
             .sendString(Mono.just(new JWKSet(KEY.toPublicJWK()).toString()))))
         .bindNow();
-    private static final int DEAD_PORT = deadPort();
 
     @Autowired
     WebTestClient client;
@@ -70,7 +69,6 @@ class GatewayIntegrationTest {
         registry.add("app.services.catalog-url", () -> "http://localhost:" + CATALOG.port());
         registry.add("app.services.booking-url", () -> "http://localhost:" + BOOKING.port());
         registry.add("app.services.user-url", () -> "http://localhost:" + USER.port());
-        registry.add("app.services.ai-url", () -> "http://localhost:" + DEAD_PORT); // 꺼진 서비스
         registry.add("app.cognito.issuer-uri", GatewayIntegrationTest::issuer);
         registry.add("app.cognito.client-id", () -> CLIENT_ID);
     }
@@ -129,15 +127,6 @@ class GatewayIntegrationTest {
     }
 
     @Test
-    void 하위_서비스가_꺼져_있으면_503() {
-        JsonNode body = expectError(get("/api/ai/recommendations", token(KEY, Map.of())), 503, "SERVICE_UNAVAILABLE");
-        JsonNode detail = body.get("details").get(0);
-        assertThat(detail.get("field").asText()).isEqualTo("service");
-        assertThat(detail.get("value").asText()).isEqualTo("ai");
-        assertThat(detail.get("reason").asText()).isEqualTo("UPSTREAM_UNAVAILABLE");
-    }
-
-    @Test
     void 헬스_체크는_인증_없이_열린다() {
         client.get().uri("/actuator/health/readiness").exchange().expectStatus().isOk();
     }
@@ -193,13 +182,19 @@ class GatewayIntegrationTest {
     }
 
     @Test
+    void 공개_경로_판정은_GET에만_적용된다() {
+        JsonNode body = expectError(post("/api/movies", null), 401, "UNAUTHORIZED");
+        assertThat(body.get("details").get(0).get("reason").asText()).isEqualTo("TOKEN_REQUIRED");
+        expectError(post("/api/screenings/7/seats", null), 401, "UNAUTHORIZED");
+    }
+
+    @Test
     void 관리자_경로는_ADMIN_그룹만() {
         String userToken = token(KEY, Map.of());
         String adminToken = token(KEY, Map.of("cognito:groups", List.of("ADMIN")));
 
         JsonNode body = expectError(post("/api/admin/movies", userToken), 403, "FORBIDDEN");
         assertThat(body.get("details").get(0).get("reason").asText()).isEqualTo("ADMIN_REQUIRED");
-        expectError(post("/api/ai/query", userToken), 403, "FORBIDDEN");
 
         JsonNode routed = post("/api/admin/movies", adminToken).expectStatus().isOk()
             .expectBody(JsonNode.class).returnResult().getResponseBody();
@@ -242,7 +237,14 @@ class GatewayIntegrationTest {
     }
 
     private WebTestClient.ResponseSpec post(String uri, String token) {
-        return client.post().uri(uri).headers(h -> h.setBearerAuth(token)).bodyValue("{}").exchange();
+        return client.post().uri(uri)
+            .headers(h -> {
+                if (token != null) {
+                    h.setBearerAuth(token);
+                }
+            })
+            .bodyValue("{}")
+            .exchange();
     }
 
     private String routedService(String uri) {
@@ -314,13 +316,5 @@ class GatewayIntegrationTest {
                 }
             })
             .bindNow();
-    }
-
-    /** 바인딩했다가 바로 닫아 아무도 듣지 않는 포트를 얻는다 */
-    private static int deadPort() {
-        DisposableServer server = HttpServer.create().port(0).bindNow();
-        int port = server.port();
-        server.disposeNow();
-        return port;
     }
 }

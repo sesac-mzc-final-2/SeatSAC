@@ -1,5 +1,6 @@
 package com.seatsac.booking.common;
 
+import java.util.Optional;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 
@@ -48,5 +49,49 @@ public final class RedisKeys {
     /** 멱등 키. 사용자 ID를 앞에 둬 남의 응답을 받지 못하게 한다. TTL 24시간 */
     public static String idempotency(String userId, String idempotencyKey) {
         return "idem:" + userId + ":" + idempotencyKey;
+    }
+
+    /**
+     * 만료 장부 멤버를 되읽는다. 형식이 아니면 비어 있는 값을 돌려준다 —
+     * 사람이 넣은 값이나 옛 형식이 스캔을 멈추게 하지 않는다.
+     */
+    public static Optional<ExpiryMember> parseHoldExpiryMember(String member) {
+        int separator = member == null ? -1 : member.indexOf(':');
+        if (separator <= 0 || separator == member.length() - 1) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new ExpiryMember(Long.parseLong(member.substring(0, separator)),
+                member.substring(separator + 1)));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 만료된 좌석 키 이름 {@code seat:{42}:101}에서 (회차, 좌석)을 읽는다 (keyspace 빠른 경로).
+     * 좌석 키가 아니면 비어 있는 값이다 — {@code user-hold:*} 같은 다른 키도 같은 알림으로 온다.
+     */
+    public static Optional<SeatKey> parseSeatKey(String key) {
+        if (key == null || !key.startsWith("seat:{")) {
+            return Optional.empty();
+        }
+        int close = key.indexOf("}:", "seat:{".length());
+        if (close < 0) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new SeatKey(
+                Long.parseLong(key.substring("seat:{".length(), close)),
+                Long.parseLong(key.substring(close + 2))));
+        } catch (NumberFormatException e) {
+            return Optional.empty();
+        }
+    }
+
+    public record ExpiryMember(Long screeningId, String holdId) {
+    }
+
+    public record SeatKey(Long screeningId, Long seatId) {
     }
 }

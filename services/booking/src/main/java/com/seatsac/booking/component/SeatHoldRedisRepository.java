@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -98,5 +99,25 @@ public class SeatHoldRedisRepository implements SeatHoldStrategy {
         Double score = redis.opsForZSet()
             .score(RedisKeys.holdExpiry(), RedisKeys.holdExpiryMember(screeningId, holdId));
         return score == null ? Optional.empty() : Optional.of(Instant.ofEpochMilli(score.longValue()));
+    }
+
+    @Override
+    public List<ExpiringHold> dueHolds(Instant now, int limit) {
+        Set<String> members = redis.opsForZSet().rangeByScore(RedisKeys.holdExpiry(),
+            Double.NEGATIVE_INFINITY, now.toEpochMilli(), 0, limit);
+        if (members == null || members.isEmpty()) {
+            return List.of();
+        }
+        return members.stream().map(RedisKeys::parseHoldExpiryMember)
+            .flatMap(Optional::stream)
+            .map(parsed -> new ExpiringHold(parsed.screeningId(), parsed.holdId()))
+            .toList();
+    }
+
+    @Override
+    public long forget(Long screeningId, String holdId) {
+        Long removed = redis.opsForZSet().remove(RedisKeys.holdExpiry(),
+            RedisKeys.holdExpiryMember(screeningId, holdId));
+        return removed == null ? 0L : removed;
     }
 }

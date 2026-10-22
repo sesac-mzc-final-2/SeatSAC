@@ -7,6 +7,7 @@ import com.seatsac.booking.repository.BookingRepository;
 import com.seatsac.booking.repository.BookingSeatRepository;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -82,6 +83,41 @@ public class BookingStateService {
         public PendingBooking {
             seatIds = List.copyOf(seatIds);
             seatLabels = List.copyOf(seatLabels);
+        }
+    }
+
+    /**
+     * BKG-04 1단계 — 조건부 UPDATE로 EXPIRED로 바꾸고 점유 좌석을 지운다.
+     * 좌석 ID는 지우기 <b>전에</b> 읽어 돌려준다 — 커밋 후 발행·Valkey 정리에 쓴다.
+     *
+     * @return 내가 처리했으면 만료된 선점 정보, 이미 다른 경로가 처리했으면 비어 있음
+     */
+    @Transactional
+    public Optional<ExpiredHold> expireHold(Long bookingId, Instant now) {
+        Booking booking = bookingRepository.findById(bookingId).orElse(null);
+        if (booking == null) {
+            return Optional.empty();
+        }
+        List<Long> seatIds = bookingSeatRepository.findSeatIdsByBookingId(bookingId);
+        if (bookingRepository.expirePendingHold(bookingId, now) == 0) {
+            return Optional.empty();
+        }
+        bookingSeatRepository.deleteByBookingId(bookingId);
+        return Optional.of(new ExpiredHold(bookingId, booking.getScreeningId(), booking.getHoldId(),
+            booking.getUserId(), seatIds, booking.getExpiresAt()));
+    }
+
+    /** 만료 처리한 선점 — 커밋 후 할 일(발행·Valkey 정리·지연 기록)에 필요한 값만 */
+    public record ExpiredHold(
+        Long bookingId,
+        Long screeningId,
+        String holdId,
+        String userId,
+        List<Long> seatIds,
+        Instant expiresAt
+    ) {
+        public ExpiredHold {
+            seatIds = List.copyOf(seatIds);
         }
     }
 }

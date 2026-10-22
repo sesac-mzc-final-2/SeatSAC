@@ -2,14 +2,47 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seatsac.dev/schemas/error.v1.json",
   "title": "ErrorResponse",
-  "description": "모든 서비스(Java·Python·Gateway)의 오류 응답. API 명세서 1-4.",
+  "description": "모든 서비스(Gateway 포함)의 오류 응답 {code, message, traceId, details[]}. docs/conventions.md 6장.",
   "type": "object",
-  "required": ["code", "message", "traceId"],
+  "required": [
+    "code",
+    "message",
+    "traceId",
+    "details"
+  ],
   "properties": {
-    "code": { "type": "string", "pattern": "^[A-Z_]+$" },
-    "message": { "type": "string" },
-    "traceId": { "type": ["string", "null"] },
-    "details": {}
+    "code": {
+      "type": "string",
+      "pattern": "^[A-Z_]+$"
+    },
+    "message": {
+      "type": "string"
+    },
+    "traceId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "X-Trace-Id (소문자 16진수 32자리, Gateway가 생성)"
+    },
+    "details": {
+      "type": "array",
+      "description": "항상 배열, 없으면 []. 화면 분기는 code로 (10/21 결정, 2.2.4 v0.3·API 명세서 v1.1)",
+      "items": {
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "value": {},
+          "reason": {
+            "type": "string",
+            "pattern": "^[A-Z_]+$"
+          }
+        }
+      }
+    }
   },
   "additionalProperties": false
 }

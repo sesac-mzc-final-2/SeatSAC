@@ -1,27 +1,136 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: seatsac payment internal API
-  version: "1.0"
+  version: "1.1"
+  description: |
+    API 명세서 v1.1 6장 (PAY-01·03 · 남궁일). 외부 비노출, 호출자는 booking만(NetworkPolicy).
+    paymentId는 Booking이 발급하는 UUID(10장 #4). 사용자 ID는 받지 않는다(추적은 bookingId·traceId).
+    처리 순서: PROCESSING 행 INSERT·커밋 → 모의 판정(트랜잭션 밖) → UPDATE … WHERE status='PROCESSING'.
+    모의 카드(ADR-13): 끝 4자리 0000 CARD_DECLINED · 1111 INSUFFICIENT_BALANCE · 9999 5초 지연 후 승인 · 그 밖 승인.
+    오류 code는 공통 코드, 세부는 details[].reason (INVALID_PAYMENT_ID·INVALID_AMOUNT·INVALID_CARD·INVALID_METHOD·PAYMENT_NOT_FOUND).
 servers:
   - url: http://payment:8080
+security: []   # 내부 API: 사용자 인증 없음. 호출자는 NetworkPolicy로 제한 (OPS-15)
 paths:
   /internal/payments:
     post:
+      operationId: createPayment
       summary: PAY-01 모의 결제 승인 (호출자 booking만, paymentId는 booking 발급)
+      x-feature-id: PAY-01
+      x-caller: [booking]
+      description: |
+        같은 paymentId 재요청 → 현재 상태 그대로 200(PROCESSING이면 PROCESSING).
+        같은 paymentId에 bookingId·amount가 다르면 409 PAYMENT_CONFLICT(reason PAYMENT_ID_CONFLICT),
+        같은 bookingId에 다른 paymentId면 409 PAYMENT_CONFLICT(reason PAYMENT_ALREADY_EXISTS).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PaymentRequest" }
+            example:
+              paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13"
+              bookingId: 9876
+              amount: 30000
+              method: CARD
+              card: { number: "4242424242424242", expiry: "12/28", holder: KIM }
       responses:
-        "200": { description: APPROVED 또는 FAILED }
-        "409": { description: PAYMENT_CONFLICT }
+        "200":
+          description: APPROVED · FAILED · PROCESSING 모두 200, status로 구분
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "400":
+          description: VALIDATION_FAILED — reason INVALID_PAYMENT_ID·INVALID_AMOUNT(15,000의 배수, 15,000~60,000)·INVALID_CARD·INVALID_METHOD
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: PAYMENT_CONFLICT — reason PAYMENT_ID_CONFLICT·PAYMENT_ALREADY_EXISTS
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /internal/payments/{paymentId}:
     get:
-      summary: 결제 상태 조회
+      operationId: getPayment
+      summary: 결제 상태 조회 (BKG-10 결과 미확인·GET /bookings/{id}·만료 처리)
+      x-caller: [booking]
       parameters: [ { name: paymentId, in: path, required: true, schema: { type: string } } ]
       responses:
-        "200": { description: OK }
-        "404": { description: NOT_FOUND }
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "404":
+          description: NOT_FOUND (reason PAYMENT_NOT_FOUND)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
   /internal/payments/{paymentId}/cancel:
     post:
+      operationId: cancelPayment
       summary: PAY-03 취소 (멱등)
+      x-feature-id: PAY-03
+      x-caller: [booking]
+      description: |
+        APPROVED → CANCELED. 이미 CANCELED면 그대로 200(처음 사유 유지).
+        FAILED → 409 PAYMENT_NOT_APPROVED(reason PAYMENT_FAILED), PROCESSING → 409 PAYMENT_NOT_APPROVED(reason PAYMENT_PROCESSING).
       parameters: [ { name: paymentId, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { $ref: "#/components/schemas/CancelReason" }
+            example: { reason: BOOKING_CANCELED }
       responses:
-        "200": { description: CANCELED }
-        "409": { description: PAYMENT_NOT_APPROVED }
+        "200":
+          description: CANCELED
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "404":
+          description: NOT_FOUND
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: PAYMENT_NOT_APPROVED — reason PAYMENT_FAILED·PAYMENT_PROCESSING
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+components:
+  schemas:
+    ErrorResponse:
+      $ref: "../../schemas/error.v1.json"
+
+    CancelReason: { type: string, enum: [HOLD_EXPIRED, BOOKING_CANCELED, STALE_PAYMENT] }
+
+    PaymentRequest:
+      type: object
+      required: [paymentId, bookingId, amount, method, card]
+      properties:
+        paymentId: { type: string, format: uuid }
+        bookingId: { type: integer, format: int64 }
+        amount: { type: integer, minimum: 15000, maximum: 60000, multipleOf: 15000 }
+        method: { type: string, enum: [CARD] }
+        card:
+          type: object
+          required: [number, expiry, holder]
+          properties:
+            number: { type: string, pattern: "^[0-9]{12,19}$", description: "저장하지 않음. card_last4만" }
+            expiry: { type: string, pattern: "^(0[1-9]|1[0-2])/[0-9]{2}$" }
+            holder: { type: string, minLength: 1, maxLength: 50 }
+
+    Payment:
+      type: object
+      required: [paymentId, bookingId, amount, method, status, cardLast4, failureCode, cancelReason, approvedAt, canceledAt, createdAt]
+      properties:
+        paymentId: { type: string, format: uuid }
+        bookingId: { type: integer, format: int64 }
+        amount: { type: integer }
+        method: { type: string, enum: [CARD] }
+        status: { type: string, enum: [PROCESSING, APPROVED, FAILED, CANCELED] }
+        cardLast4: { type: [string, "null"] }
+        failureCode: { type: [string, "null"], enum: [CARD_DECLINED, INSUFFICIENT_BALANCE, null] }
+        cancelReason:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/CancelReason"
+        approvedAt: { type: [string, "null"], format: date-time }
+        canceledAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }

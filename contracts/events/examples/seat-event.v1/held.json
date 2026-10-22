@@ -1,0 +1,11 @@
+{
+  "seq": 419,
+  "type": "HELD",
+  "screeningId": 5123,
+  "seatIds": [
+    4060121,
+    4060122
+  ],
+  "occurredAt": "2026-11-16T14:03:05.120+09:00",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
+}

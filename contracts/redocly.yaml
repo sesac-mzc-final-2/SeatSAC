@@ -1,0 +1,13 @@
+# contracts/redocly.yaml — OpenAPI lint 규칙 (2.2.7 계약 CI)
+# 실행: npx @redocly/cli@1.34.5 lint --config contracts/redocly.yaml contracts/openapi/*.yaml contracts/openapi/internal/*.yaml
+extends:
+  - recommended
+rules:
+  info-license: off                # 비공개 프로젝트
+  operation-operationId: warn      # 코드 생성 전까지는 경고만
+  operation-4xx-response: warn     # 오류 응답은 2장 공통 규약(error.v1.json)으로 통일
+  no-unused-components: warn
+  no-server-example.com: error
+  security-defined: error          # 루트 security: [] 또는 operation별 bearerAuth 필수
+  struct: error                    # OpenAPI 3.1 구조 위반
+  no-invalid-media-type-examples: error

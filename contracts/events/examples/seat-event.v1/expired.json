@@ -1,0 +1,11 @@
+{
+  "seq": 431,
+  "type": "EXPIRED",
+  "screeningId": 5123,
+  "seatIds": [
+    4060121,
+    4060122
+  ],
+  "occurredAt": "2026-11-16T14:08:06.010+09:00",
+  "traceId": "9d1e5b7c2a4f4e08b6c3d2a1f0e9d8c7"
+}

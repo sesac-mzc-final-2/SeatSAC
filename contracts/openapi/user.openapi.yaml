@@ -1,24 +1,217 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: seatsac user API
-  version: "1.0"
+  version: "1.1"
+  description: |
+    API 명세서 v1.1 5장 (USR-04·05 + 프로필 · 한채연). 가입·로그인·토큰은 Cognito Hosted UI(ADR-37)라
+    POST /users, /auth/** 는 없다. 모든 API는 USER 이상. 사용자 키는 Gateway가 넣는 X-User-Id(= Cognito sub).
 servers:
   - url: /api
+security: []   # 기본 인증 없음. 인증이 필요한 operation에 security: [ { bearerAuth: [] } ]
+tags:
+  - { name: profile, description: "프로필 (Cognito sub)" }
+  - { name: bookings, description: "예매" }
+  - { name: preferences, description: "선호 정보 (USR-05)" }
+
+paths:
+
+  /users/me:
+    get:
+      tags: [profile]
+      operationId: getMyProfile
+      summary: 프로필 (첫 호출 때 생성, Cognito sub)
+      description: |
+        프로필이 없으면 만들고 200. email·name은 요청의 Access Token으로 Cognito GetUser를 호출해 받는다
+        (2.2.4 v0.3 결정, Cognito 실패 시 503 IDENTITY_UNAVAILABLE). role은 저장하지 않고 X-User-Role을 그대로.
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: IDENTITY_UNAVAILABLE — 첫 호출 때 Cognito GetUser 실패. 화면은 잠시 뒤 재시도
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    patch:
+      tags: [profile]
+      operationId: updateMyProfile
+      summary: 프로필 이름 수정
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 20 }
+      responses:
+        "200":
+          description: 수정된 프로필
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /users/me/bookings:
+    get:
+      tags: [bookings]
+      operationId: listMyBookings
+      summary: USR-04 마이페이지 예매 내역
+      x-feature-id: USR-04
+      description: |
+        Booking GET /internal/bookings → Catalog POST /internal/screenings/summaries 순서로 합친다.
+        Catalog 실패 시 screening: null, Booking 실패 시 503 BOOKING_UNAVAILABLE.
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: status
+          in: query
+          description: 생략 시 PENDING 제외 전부
+          schema: { type: string, enum: [CONFIRMED, PAYMENT_FAILED, EXPIRED, CANCELED] }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: 페이징. 내역 없음은 content []
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyBookingPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503":
+          description: BOOKING_UNAVAILABLE — Booking 응답 없음
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  /users/me/preferences:
+    get:
+      tags: [preferences]
+      operationId: getMyPreferences
+      summary: USR-05 선호 조회 (없으면 빈 값 200)
+      x-feature-id: USR-05
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+              example: { preferredTheaters: [], preferredTimeSlot: null, preferredGenres: [] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      tags: [preferences]
+      operationId: replaceMyPreferences
+      summary: USR-05 선호 저장 (전체 교체)
+      x-feature-id: USR-05
+      description: |
+        극장 최대 3곳, rank 1~3 중복 없음. 없는 theaterId는 400 — Catalog GET /internal/theaters로 확인.
+        Catalog 응답 없음이면 검증 없이 저장. 장르는 저장만(D6).
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Preferences" }
+            example:
+              preferredTheaters: [ { rank: 1, theaterId: 1004 }, { rank: 2, theaterId: 1016 } ]
+              preferredTimeSlot: EVENING
+              preferredGenres: []
+      responses:
+        "200":
+          description: 저장된 선호
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preferences" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT   # Cognito Access Token
+      bearerFormat: JWT   # Cognito Access Token (ID 토큰 아님)
+
+  parameters:
+    Page: { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    Size: { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+
+  responses:
+    ValidationFailed:
+      description: "VALIDATION_FAILED — details[]에 { field, reason }"
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Unauthorized:
+      description: UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
   schemas:
     ErrorResponse:
       $ref: "../schemas/error.v1.json"
-paths:
 
-  /users/me:
-    get:
-      summary: 프로필 (첫 호출 때 생성, Cognito sub)
-      security: [ { bearerAuth: [] } ]
-      responses:
-        "200": { description: OK }
-  # TODO: /users/me/bookings, /users/me/preferences — API 명세서 5장
+    Profile:
+      type: object
+      required: [userId, email, name, role, createdAt]
+      properties:
+        userId: { type: string, format: uuid, description: "Cognito sub (user_id CHAR(36), ADR-37)" }
+        email: { type: string, format: email }
+        name: { type: [string, "null"], maxLength: 20 }
+        role: { type: string, enum: [USER, ADMIN] }
+        createdAt: { type: string, format: date-time }
+
+    MyBooking:
+      type: object
+      required: [bookingId, status, seatLabels, amount, createdAt, confirmedAt, canceledAt, screening]
+      properties:
+        bookingId: { type: integer, format: int64 }
+        status: { type: string, enum: [CONFIRMED, PAYMENT_FAILED, EXPIRED, CANCELED] }
+        seatLabels: { type: array, items: { type: string } }
+        seatCount: { type: integer }
+        amount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        confirmedAt: { type: [string, "null"], format: date-time }
+        canceledAt: { type: [string, "null"], format: date-time }
+        screening:
+          description: Catalog 실패 시 null
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [screeningId, movieTitle, theaterName, auditoriumName, startsAt, endsAt]
+              properties:
+                screeningId: { type: integer, format: int64 }
+                movieTitle: { type: string }
+                theaterName: { type: string }
+                auditoriumName: { type: string }
+                startsAt: { type: string, format: date-time }
+                endsAt: { type: string, format: date-time }
+
+    MyBookingPage:
+      type: object
+      required: [content, page, size, totalElements, totalPages]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/MyBooking" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer }
+
+    Preferences:
+      type: object
+      required: [preferredTheaters, preferredTimeSlot, preferredGenres]
+      properties:
+        preferredTheaters:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [rank, theaterId]
+            properties:
+              rank: { type: integer, minimum: 1, maximum: 3 }
+              theaterId: { type: integer, format: int64 }
+        preferredTimeSlot:
+          type: [string, "null"]
+          enum: [MORNING, AFTERNOON, EVENING, NIGHT, null]
+          description: "MORNING ~12 · AFTERNOON 12~17 · EVENING 17~21 · NIGHT 21~"
+        preferredGenres: { type: array, items: { type: string }, description: "저장만 (D6)" }

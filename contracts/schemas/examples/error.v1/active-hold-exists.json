@@ -1,0 +1,15 @@
+{
+  "code": "ACTIVE_HOLD_EXISTS",
+  "message": "같은 회차에 진행 중인 선점이 있습니다.",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "details": [
+    {
+      "field": "bookingId",
+      "value": 9876
+    },
+    {
+      "field": "expiresAt",
+      "value": "2026-11-16T14:08:05+09:00"
+    }
+  ]
+}

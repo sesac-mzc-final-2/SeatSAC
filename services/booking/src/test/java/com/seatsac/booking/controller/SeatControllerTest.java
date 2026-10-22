@@ -18,6 +18,7 @@ import com.seatsac.booking.dto.response.SeatHoldResponse;
 import com.seatsac.booking.dto.response.SeatStatusResponse;
 import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.enums.SeatStatus;
+import com.seatsac.booking.idempotency.IdempotencyStore;
 import com.seatsac.booking.service.SeatHoldService;
 import com.seatsac.booking.service.SeatSnapshotService;
 import com.seatsac.booking.service.SeatStreamService;
@@ -60,6 +61,13 @@ class SeatControllerTest {
     /** SSE 서비스는 Valkey 구독·메트릭을 들고 있다. 스트림 동작은 {@code SeatStreamFlowTest}가 본다 */
     @MockitoBean
     SeatStreamService seatStreamService;
+
+    /**
+     * {@code @ControllerAdvice}인 멱등 advice가 함께 올라오는데 이 슬라이스에는 Valkey가 없다.
+     * 멱등 동작 자체는 {@code SeatHoldIdempotencyTest}가 본다.
+     */
+    @MockitoBean
+    IdempotencyStore idempotencyStore;
 
     // --- BKG-01 좌석 현황 (인증 불필요) ---
 

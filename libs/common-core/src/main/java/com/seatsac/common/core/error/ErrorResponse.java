@@ -1,24 +1,27 @@
 package com.seatsac.common.core.error;
 
-import com.seatsac.common.core.trace.TraceIds;
 import java.util.List;
 
 /**
- * 오류 응답 본문 { code, message, traceId, details[] } — contracts/schemas/error.v1.json 과 같아야 한다.
- * details는 항상 배열(없으면 []), traceId는 항상 32자리 16진수(형식이 틀리거나 없으면 새로 만든다).
+ * 오류 응답 본문 {@code {code, message, traceId, details[]}} — contracts/schemas/error.v1.json 과
+ * 같아야 한다. {@code code}는 <b>공통 코드</b>({@link ErrorCode#responseCode()})이고 세분 이름은
+ * {@code details[].reason}에 담는다. {@code details}는 항상 배열이며 없으면 빈 배열이다.
  */
 public record ErrorResponse(String code, String message, String traceId, List<ErrorDetail> details) {
 
     public ErrorResponse {
-        traceId = TraceIds.orNew(traceId);
         details = details == null ? List.of() : List.copyOf(details);
     }
 
+    public static ErrorResponse of(ErrorCode code, String traceId) {
+        return of(code, code.message(), traceId, List.of());
+    }
+
     public static ErrorResponse of(ErrorCode code, String message, String traceId) {
-        return new ErrorResponse(code.name(), message, traceId, List.of());
+        return of(code, message, traceId, List.of());
     }
 
     public static ErrorResponse of(ErrorCode code, String message, String traceId, List<ErrorDetail> details) {
-        return new ErrorResponse(code.name(), message, traceId, details);
+        return new ErrorResponse(code.responseCode(), message, traceId, details);
     }
 }

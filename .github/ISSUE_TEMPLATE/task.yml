@@ -1,0 +1,68 @@
+name: ✨ 작업 · 개선 제안
+description: 코드에 붙여 둘 제안·개선·기술 부채. 일정이 잡힌 작업은 노션 WBS에 만듭니다.
+title: "{type}({범위}): {무엇을}"
+labels: ["✨ feat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제목 예) `refactor(booking): 선점 만료 스캔을 keyspace 알림으로` · `infra(eks): 노드 2대 → 3대`
+        일정이 있는 작업은 **노션 📋 작업(WBS)** 에 만들고, 이 이슈는 코드 맥락이 필요한 제안·기술 부채에 씁니다 (README 5-1).
+  - type: dropdown
+    id: area
+    attributes:
+      label: 범위
+      options:
+        - gateway
+        - catalog
+        - booking
+        - payment
+        - user
+        - ai
+        - frontend
+        - libs (공통 모듈)
+        - contracts (OpenAPI · 이벤트)
+        - infra (Terraform · EKS · gitops)
+        - ci (GitHub Actions)
+        - docs
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 배경 · 왜 필요한가
+      description: 지금 어떤 문제가 있고, 안 하면 어떻게 되는지. 데모 포인트(D1 무중단 · D2 실시간 좌석)와 관련 있으면 적어 주세요
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 할 일
+      placeholder: |
+        - [ ] contracts/openapi/booking.yaml에 필드 추가
+        - [ ] BookingHoldService 수정
+        - [ ] k6 시나리오 갱신
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준
+      description: 무엇이 확인되면 끝인지. 숫자가 있으면 숫자로 (p95 300ms, 오류율 0%)
+    validations:
+      required: true
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: 영향 범위
+      description: 해당하는 것에 체크. 체크한 항목은 PR 템플릿의 같은 절에서 다시 다룹니다
+      options:
+        - label: 계약 변경 (OpenAPI · 이벤트) → contracts/ PR 먼저
+        - label: DB 마이그레이션 (확장 → 전환 → 정리)
+        - label: 공통 모듈 libs/ (승인 2명)
+        - label: 배포 영향 (env · Secret · gitops · CloudFront 캐시)
+  - type: input
+    id: refs
+    attributes:
+      label: 관련 WBS · 기능 ID · ADR
+      placeholder: "3.2.5 · BKG-07 · ADR-37"

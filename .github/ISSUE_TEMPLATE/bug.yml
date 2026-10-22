@@ -1,0 +1,81 @@
+name: 🐛 버그 제보
+description: 기대와 다르게 동작하는 것을 알립니다. 재현 절차와 X-Trace-Id가 있으면 빨리 찾습니다.
+title: "bug({범위}): {무엇이 어떻게 잘못되는지}"
+labels: ["🐛 fix"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제목 예) `bug(booking): 같은 좌석 두 번 선점되면 409 대신 500`
+        작업·진척은 노션 WBS가 원본입니다. 고치는 PR에는 이 이슈 번호를 적어 주세요.
+  - type: dropdown
+    id: area
+    attributes:
+      label: 범위
+      description: 어디서 났나요? 여러 곳이면 가장 먼저 의심되는 곳
+      options:
+        - gateway
+        - catalog
+        - booking
+        - payment
+        - user
+        - ai
+        - frontend
+        - libs (공통 모듈)
+        - contracts (OpenAPI · 이벤트)
+        - infra (Terraform · EKS · gitops)
+        - ci (GitHub Actions)
+        - 모르겠음
+    validations:
+      required: true
+  - type: dropdown
+    id: env
+    attributes:
+      label: 환경
+      options:
+        - 로컬 (docker compose · Testcontainers)
+        - staging (main 머지 후 배포본)
+        - 부하 테스트 (k6)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 절차
+      description: 리뷰어가 그대로 따라 할 수 있게. 요청 예시는 curl이나 화면 경로로
+      placeholder: |
+        1. 로그인 후 상영 회차 /screenings/123 열기
+        2. A1 좌석 선점 (POST /api/bookings/holds)
+        3. 다른 브라우저에서 같은 좌석 선점
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 동작
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 동작
+      description: 오류 응답은 본문(code · message · details)을 그대로 붙여 주세요
+    validations:
+      required: true
+  - type: input
+    id: trace
+    attributes:
+      label: X-Trace-Id
+      description: 응답 헤더 또는 오류 본문의 traceId (소문자 hex 32자리). 로그를 바로 찾을 수 있습니다
+      placeholder: 0123456789abcdef0123456789abcdef
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그 · 스크린샷
+      description: 관련 로그 줄, 스택, 화면 캡처. 긴 로그는 <details>로 감싸 주세요. 키·비밀번호·계정 ID는 지우고 올립니다
+      render: text
+  - type: input
+    id: wbs
+    attributes:
+      label: 관련 WBS · 기능 ID · PR
+      placeholder: "3.2.2 · BKG-02 · #12"

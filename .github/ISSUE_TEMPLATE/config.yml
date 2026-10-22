@@ -1,0 +1,9 @@
+# 작업·진척 관리는 노션 WBS가 원본입니다 (README 5-1). GitHub 이슈는 버그 제보와 코드에 붙여 둘 제안에만 씁니다.
+blank_issues_enabled: false
+contact_links:
+  - name: 📋 작업(WBS) · 데일리 스크럼 · ADR
+    url: https://github.com/sesac-mzc-final-2/SeatSAC/blob/main/README.md#5-1-작업-관리는-노션
+    about: 새 작업·진척 보고·설계 결정은 노션에 남깁니다. 노션 링크는 README 5-1을 보세요.
+  - name: 📖 브랜치 → push → PR 규칙
+    url: https://github.com/sesac-mzc-final-2/SeatSAC/blob/main/README.md#3-브랜치--push--pr
+    about: 브랜치 이름·커밋 메시지·PR 템플릿·리뷰 규칙

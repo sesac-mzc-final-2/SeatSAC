@@ -3,6 +3,7 @@ package com.seatsac.booking.repository;
 import com.seatsac.booking.entity.BookingSeat;
 import com.seatsac.booking.enums.BookingStatus;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -62,4 +63,11 @@ public interface BookingSeatRepository extends JpaRepository<BookingSeat, Bookin
     List<Object[]> countSeatsByScreeningIdInAndStatusIn(
         @Param("screeningIds") List<Long> screeningIds,
         @Param("statuses") List<BookingStatus> statuses);
+    /** keyspace 빠른 경로 — 만료된 좌석 키 이름 {@code seat:{회차}:{좌석}}으로 예매를 찾는다 */
+    @Query("""
+        select bs.id.bookingId from BookingSeat bs
+         where bs.screeningId = :screeningId and bs.id.seatId = :seatId
+        """)
+    Optional<Long> findBookingIdByScreeningIdAndSeatId(@Param("screeningId") Long screeningId,
+                                                       @Param("seatId") Long seatId);
 }

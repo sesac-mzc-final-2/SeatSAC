@@ -62,4 +62,17 @@ public interface SeatHoldStrategy {
             return status == Status.OK;
         }
     }
+
+    /**
+     * 만료 장부에서 점수가 지난 멤버를 묶어 가져온다 (안전망 1).
+     * 한 번에 가져오는 양을 묶는 이유는 {@code BookingPolicy#EXPIRY_SCAN_BATCH} 참고.
+     */
+    List<ExpiringHold> dueHolds(Instant now, int limit);
+
+    /** 만료 장부에서 멤버를 지운다. <b>처리를 끝낸 뒤에</b> 부른다 (C13) */
+    long forget(Long screeningId, String holdId);
+
+    /** 만료 장부의 멤버 — {@code {회차ID}:{holdId}} */
+    record ExpiringHold(Long screeningId, String holdId) {
+    }
 }

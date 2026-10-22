@@ -35,6 +35,18 @@ public final class BookingPolicy {
 
     /** 내부 좌석 수 조회의 회차 상한 (계약 {@code maxItems: 100}). catalog가 100개씩 나눠 보낸다 */
     public static final int MAX_SEAT_COUNT_IDS = 100;
+    /**
+     * 만료 스캔 한 주기에 처리하는 최대 건수. 노드 0대 구간(ADR-34) 뒤 첫 스윕에서는 밀린 선점이
+     * 한꺼번에 걸리는데, 전부 한 주기에 처리하면 Hikari 연결 5개를 다 써 요청이 막힌다.
+     * 남은 건은 다음 주기가 이어받는다(조건부 UPDATE라 겹쳐도 한 번만 처리된다).
+     */
+    public static final int EXPIRY_SCAN_BATCH = 100;
+
+    /** 안전망 1(만료 장부) 주기 — 만료 반영 2초 목표의 근거 */
+    public static final Duration EXPIRY_LEDGER_INTERVAL = Duration.ofSeconds(1);
+
+    /** 안전망 2(RDS 스캔) 주기 — Valkey가 통째로 비어도 이 경로가 정리한다 */
+    public static final Duration EXPIRY_DB_INTERVAL = Duration.ofSeconds(10);
 
     /** SSE 하트비트 간격과 재연결 지시 값 */
     /**

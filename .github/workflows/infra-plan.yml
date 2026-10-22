@@ -28,6 +28,12 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_TERRAFORM_PLAN_ROLE_ARN }}
           aws-region: ap-northeast-2
+      # 공개 레포: 계정 ID가 로그·PR 코멘트에 남지 않게 가린다 (ARN·버킷 이름에 들어 있음)
+      - name: 계정 ID 가리기
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$ACCOUNT_ID"
+          echo "ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
       - run: terraform fmt -check -recursive ..   # envs/staging + envs/staging-k8s
       # staging-k8s는 plan 하지 않는다(클러스터 접근·state 권한 없음, apply는 관리자 로컬). 문법만 확인
       - run: terraform -chdir=../staging-k8s init -backend=false -input=false && terraform -chdir=../staging-k8s validate

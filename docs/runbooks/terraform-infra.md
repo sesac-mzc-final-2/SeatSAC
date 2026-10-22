@@ -5,8 +5,8 @@
 | 목적 | 빈 상태에서 SeatSAC AWS 인프라를 같은 순서로 다시 만들고, 평소 변경·복구를 같은 절차로 한다 |
 | 언제 | 최초 구축, 재생성 리허설(OPS-14, 11/11~12), 계정 초기화 후, 평소 인프라 변경 |
 | 담당 / 권한 | 김종식 (백업: 백업 관리자) / 최초 1회는 IAM 사용자, 이후 `cinema-admin` 역할 (MFA) |
-| 코드 | `infra/terraform/{bootstrap,global,envs/staging}` |
-| 예상 소요 | bootstrap 2분 · global 3분 · staging 네트워크 5분 (이후 단계는 실측 후 기록) |
+| 코드 | `infra/terraform/{bootstrap,global,envs/staging,envs/staging-k8s}` |
+| 예상 소요 | bootstrap 2분 · global 3분 · staging 네트워크 5분 · EKS 15~20분 + staging-k8s 3분 (이후 단계는 실측 후 기록) |
 | 마지막 검증 | ⬜ YYYY-MM-DD · 실행자 · 총 소요 ⬜분 |
 
 > 원칙: **콘솔에서 만들거나 고치지 않는다.** 모든 apply 전에 plan을 보고, `destroy`·`replace`가 하나라도 있으면 멈춘다. 비밀 값(비밀번호·키·tfstate 내용)은 이 문서에 적지 않는다.
@@ -34,6 +34,7 @@ bootstrap (state 버킷)                       ← 이게 있어야 나머지 st
        └─ staging
             ├─ 1) 네트워크 (3.1.1)            ← NAT가 있어야 노드가 Ready
             ├─ 2) EKS (3.1.2)                 ← global의 역할 ARN으로 Access Entry
+            │    └─ staging-k8s (namespace·RBAC·LB Controller) ← 클러스터가 있어야 함
             ├─ 3) RDS·Valkey (3.1.3)
             ├─ 4) ECR·SQS·Lambda (3.1.4·3.1.8·3.1.9)
             ├─ 5) Cognito·CloudFront·S3 (3.3.x·3.1.11)
@@ -165,14 +166,116 @@ terraform plan -var-file=staging.tfvars   # No changes
 
 ---
 
-## 4. staging 2) EKS (3.1.2) — ⬜ 작업 후 채움
+## 4. staging 2) EKS (3.1.2)
 
-- [ ] 노드그룹은 app 서브넷(`module.vpc.private_subnets`), On-Demand t3.large ng-a 1대 · ng-c 1대
-- [ ] 애드온: VPC CNI(네트워크 정책 켬) · EBS CSI · Pod Identity Agent · metrics-server
-- [ ] `authentication_mode = "API"`, Access Entry: `cinema-admin` → ClusterAdmin(cluster) / `cinema-developer` → View(namespace `cinema-staging`) + `kubernetes_groups = ["cinema-developers"]`
-- [ ] `enable_cluster_creator_admin_permissions = false`이면 admin Access Entry가 먼저 들어가는지 plan에서 확인 (아니면 내 kubectl 권한도 없어짐)
-- [ ] 노드그룹 `desired_size`는 `ignore_changes` (밤 0대)
-- [ ] 확인: 4명 `aws eks update-kubeconfig --name cinema-staging-eks --profile cinema-dev` → `kubectl get pods -n cinema-staging` 성공, developer의 `kubectl delete`·`get secret` 실패
+코드: `envs/staging/eks.tf`(클러스터·노드그룹·애드온·Access Entry·LB Controller Pod Identity·노드 SG 규칙) + `envs/staging-k8s/`(namespace·팀원 RBAC·LB Controller Helm)
+
+| 항목 | 값 |
+| --- | --- |
+| 클러스터 | `cinema-staging-eks`, Kubernetes 1.36, 인증 모드 `API`(Access Entry만), 공개+프라이빗 엔드포인트 |
+| 노드그룹 | `ng-a`(app 서브넷 a) · `ng-c`(app 서브넷 c), t3.large On-Demand, AL2023, min 0 · max 2 · desired 1. 실제 이름은 접두사 + 랜덤(출력 `eks_node_group_names`) |
+| 애드온 | vpc-cni(`enableNetworkPolicy=true`) · eks-pod-identity-agent · kube-proxy · coredns · metrics-server. **EBS CSI 없음**(PV 안 씀 — Prometheus도 emptyDir, 밤에 노드 0대라 보존 의미 없음) |
+| 접근 | `cinema-admin` → ClusterAdmin(cluster) / `cinema-developer` → View(namespace `cinema-staging`·`monitoring`) + 그룹 `cinema-developers`(port-forward Role) |
+| 로그 | 컨트롤 플레인 audit·authenticator, CloudWatch 7일 |
+| ALB | LB Controller가 gateway Ingress를 보고 만든다(3.1.5). 노드 SG에 ALB SG → 8080 허용 |
+
+### 4-1. envs/staging (AWS 리소스)
+
+```bash
+export AWS_PROFILE=cinema-admin          # ⚠️ 반드시. 만든 사람 자동 관리자 권한을 껐으므로 다른 주체로 만들면 kubectl 권한이 없다
+aws sts get-caller-identity              # assumed-role/cinema-admin 확인
+cd infra/terraform/envs/staging
+cp eks_access.auto.tfvars.example eks_access.auto.tfvars   # 처음 한 번: 팀 공인 IP 입력 (4-6)
+terraform init -upgrade -backend-config=backend.hcl   # 새 모듈(eks, eks-pod-identity) 받기. EKS v21.29는 AWS provider ≥ 6.59
+terraform fmt -recursive && terraform validate
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: EKS 클러스터 1 · 노드그룹 2 · 애드온 5 · Access Entry 2 + 정책 연결 2 · IAM 역할(클러스터·노드×2·LB Controller)
+#       · KMS 키(시크릿 암호화) · 로그 그룹 1 · SG 2 + 규칙 · Pod Identity 연결 1
+#       destroy = lambda_stats SG와 그 규칙(10/22 AI·OPS-08 제외)만. 그 외 destroy가 있으면 멈춘다
+terraform apply plan.out                 # 15~20분 (클러스터 ~10분, 노드그룹 ~3분)
+terraform output eks_kubeconfig_command
+```
+
+### 4-2. 관리자 kubectl 확인
+
+```bash
+aws eks update-kubeconfig --region ap-northeast-2 --name cinema-staging-eks --profile cinema-admin
+kubectl get nodes -L topology.kubernetes.io/zone,cinema/az     # 2대 Ready, zone a·c 하나씩
+kubectl get pods -n kube-system                                  # aws-node·kube-proxy·coredns·eks-pod-identity-agent·metrics-server Running
+kubectl get daemonset aws-node -n kube-system -o jsonpath='{.spec.template.spec.containers[*].name}'   # aws-network-policy-agent 포함
+kubectl top nodes                                                # metrics-server 동작 (기동 후 1~2분)
+```
+
+### 4-3. envs/staging-k8s (클러스터 안)
+
+처음 한 번 차트 버전을 확인해서 `staging-k8s.tfvars`의 `lbc_chart_version`에 적는다(`CHANGE_ME`면 plan이 멈춘다).
+
+```bash
+helm repo add eks https://aws.github.io/eks-charts && helm repo update
+helm search repo eks/aws-load-balancer-controller --versions | head -5     # CHART VERSION 열
+
+cd ../staging-k8s
+terraform init -backend-config=backend.hcl       # 같은 버킷, 키 staging-k8s/terraform.tfstate
+terraform fmt -recursive && terraform validate
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out
+# 기대: namespace 2 · Role 2 · RoleBinding 2 · helm_release 1. destroy 0
+terraform apply plan.out                          # 2~3분
+```
+
+- 이 폴더는 CI `infra-plan` 대상이 아니다(plan 역할의 state 권한이 `staging/*`뿐). PR에는 로컬 plan 결과를 붙인다
+
+### 4-4. 확인
+
+```bash
+# LB Controller
+kubectl get deploy aws-load-balancer-controller -n kube-system           # 1/1
+kubectl logs -n kube-system deploy/aws-load-balancer-controller | grep -i -m3 "error\|credential"   # 비어 있어야 함
+aws eks list-pod-identity-associations --cluster-name cinema-staging-eks  # kube-system/aws-load-balancer-controller
+
+# HPA 동작 (metrics-server) — 임시 확인 후 바로 지운다. 관리자만, 앱 namespace가 아닌 default에서
+kubectl create deploy hpa-smoke --image=registry.k8s.io/pause:3.10 -n default
+kubectl set resources deploy hpa-smoke -n default --requests=cpu=10m
+kubectl autoscale deploy hpa-smoke -n default --cpu-percent=70 --min=1 --max=2
+kubectl get hpa hpa-smoke -n default        # 1분 안에 TARGETS가 <unknown>이 아니라 0%/70%
+kubectl delete hpa,deploy hpa-smoke -n default
+```
+
+팀원(각자, `cinema-dev`):
+
+```bash
+aws eks update-kubeconfig --region ap-northeast-2 --name cinema-staging-eks --profile cinema-dev
+kubectl get pods -n cinema-staging                               # 성공 (아직 비어 있음: No resources found)
+kubectl auth can-i create pods/portforward -n cinema-staging     # yes
+kubectl auth can-i get secrets -n cinema-staging                 # no
+kubectl auth can-i delete pods -n cinema-staging                 # no
+kubectl get pods -n kube-system                                  # Forbidden
+```
+
+- [ ] 노드 2대 Ready(a·c), 시스템 파드 Running, `kubectl top nodes` 값 나옴
+- [ ] LB Controller 1/1, 로그에 자격 증명 오류 없음
+- [ ] hpa-smoke TARGETS 숫자로 표시 → 지움
+- [ ] 4명 `cinema-dev`로 위 결과 일치
+- [ ] 두 번째 plan(staging·staging-k8s) No changes. 노드 수를 바꾼 뒤에도 desired_size는 무시돼 No changes
+
+### 4-5. 주의
+
+- 노드 0대로 줄일 때(밤·주말)는 `aws eks update-nodegroup-config --scaling-config desiredSize=0`(3.1.14 워크플로). Terraform은 desired_size 변경을 무시한다
+- 삭제 순서: ArgoCD 앱(Ingress → ALB 삭제) → `staging-k8s` destroy → `staging` destroy. LB Controller를 먼저 지우면 ALB·대상 그룹이 남는다
+- 버전 업그레이드는 한 단계씩(1.36 → 1.37): `eks_version` 변경 → plan(컨트롤 플레인 → 애드온 → 노드그룹 순 교체) → 데모 주간 금지
+
+### 4-6. API 공개 엔드포인트 허용 IP
+
+EKS API(kubectl·helm)는 팀 공인 IP 대역에서만 열린다(`eks_public_access_cidrs`, 전체 공개 금지). 공인 IP는 커밋하지 않는다.
+
+| 쓰는 곳 | 값을 두는 곳 |
+| --- | --- |
+| 로컬 apply·plan (관리자) | `envs/staging/eks_access.auto.tfvars` (`.example` 복사, 커밋 안 됨) |
+| CI `infra-plan` | GitHub Secret `EKS_PUBLIC_ACCESS_CIDRS` = `["203.0.113.10/32","198.51.100.7/32"]` (JSON 배열) |
+
+- 내 공인 IP 확인: `curl -s https://checkip.amazonaws.com`
+- IP가 바뀌거나 팀원이 다른 곳에서 접속할 때: 두 곳을 같이 고치고 `terraform apply`(1~2분, 엔드포인트 재생성 없음). 증상은 `kubectl` 타임아웃(`dial tcp ... i/o timeout`)
+- plan 출력에는 `(sensitive value)`로 가려진다 → PR 코멘트에 IP가 남지 않는다
+- GitHub Actions 대역은 열지 않는다: `infra-plan`(AWS API)·`cluster-schedule`(EKS 관리 API)은 클러스터 API를 부르지 않는다. 나중에 Actions에서 kubectl이 필요해지면 그때 다시 결정
 
 ## 5. staging 3) RDS·Valkey (3.1.3) — ⬜
 
@@ -188,7 +291,59 @@ terraform plan -var-file=staging.tfvars   # No changes
 
 ---
 
-## 9. 최종 확인
+## 8-1. 가동 정책 — 노드 0대 스케줄·Budgets (3.1.14, OPS-13)
+
+코드: `.github/workflows/cluster-schedule.yml` · `infra/scripts/cluster-scale.sh` · `infra/terraform/global/{cluster_schedule,budgets}.tf`
+
+| 시각 (KST) | 동작 | 비고 |
+| --- | --- | --- |
+| 월~금 08:23 | 노드그룹마다 desired 1 (`up`) | 인스턴스 InService까지 대기(최대 10분) → 파드 Ready까지 5~10분 더 |
+| 월~금 23:07 | desired 0 (`down`) | 금요일 밤에 꺼져 월요일 아침까지 0대 |
+| 데모 주간 11/16~20 | 예약 끄기 건너뜀 (24시간) | 발표 후 수동 `down` |
+| 임시로 밤에도 켜 둠 | 레포 Variables `CLUSTER_KEEP_ON=true` | 예약 끄기만 건너뜀. 끝나면 `false` |
+
+### 8-1-1. global 적용 (역할·Budgets)
+
+```bash
+export AWS_PROFILE=cinema-admin
+cd infra/terraform/global
+cp budget.auto.tfvars.example budget.auto.tfvars    # 받을 메일 입력 (커밋 안 됨)
+terraform plan -var-file=global.tfvars -out=plan.out
+# 기대: 역할 cinema-gha-cluster-schedule 1 + 인라인 정책 1 + Budgets 2 (cinema-monthly·cinema-daily). destroy 0
+terraform apply plan.out
+terraform output github_secrets        # AWS_CLUSTER_SCHEDULE_ROLE_ARN → 레포 Actions Secrets에 등록
+```
+
+- Budgets 메일 주소마다 확인 메일은 오지 않는다(바로 발송). 스팸함 확인
+- `budget_monthly_usd`·`budget_daily_usd`는 `global.tfvars`에서 팀과 정한 값으로. 평소 하루 비용(컨트롤 플레인·NAT·RDS·Valkey·ALB + 낮 시간 노드)보다 조금 높게 둔다
+
+### 8-1-2. 사람이 직접 켜고 끄기 (워크플로와 같은 스크립트)
+
+```bash
+export AWS_PROFILE=cinema-admin
+infra/scripts/cluster-scale.sh status
+infra/scripts/cluster-scale.sh down
+infra/scripts/cluster-scale.sh up        # 노드그룹당 1대
+infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1
+```
+
+### 8-1-3. 확인
+
+- [ ] 워크플로가 main에 머지된 뒤 Actions → cluster-schedule → Run workflow `status` 성공 (역할·Secret 확인)
+- [ ] 수동 `down` → Summary 표 desired 0 · InService 0, `kubectl get nodes` → No resources
+- [ ] 수동 `up` → InService 1씩, `kubectl get nodes` 2대 Ready, ArgoCD 앱이 다시 Healthy
+- [ ] 다음 날 아침 예약 `up`이 실행됐는지 Actions 기록 확인 (schedule은 수~십수 분 늦을 수 있음)
+- [ ] `aws budgets describe-budgets --account-id <계정ID>` 에 `cinema-monthly`·`cinema-daily`
+- [ ] 두 번째 `terraform plan`(staging) No changes — desired 변경은 Terraform이 무시
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| `Not authorized to perform sts:AssumeRoleWithWebIdentity` | main이 아닌 브랜치에서 실행 / Secret 미등록 | main에서 실행, `AWS_CLUSTER_SCHEDULE_ROLE_ARN` 등록 |
+| `AccessDeniedException ... eks:UpdateNodegroupConfig` | 클러스터 이름이 `eks_cluster_name`과 다름 | global 변수 확인 후 apply |
+| `up`이 10분 넘게 InService 0 | t3.large 용량 부족·SCP·서브넷 IP 부족 | 노드그룹 Health 이슈(`describe-nodegroup`)·ASG 활동 기록 확인 |
+| 예약 실행이 안 보임 | 워크플로가 main에 없음 / 60일간 레포 활동 없음(GitHub가 schedule 중지) | main 머지 확인, Actions에서 워크플로 Enable |
+
+
 
 - [ ] global·staging 모두 두 번째 plan이 No changes
 - [ ] `kubectl get pods -n cinema-staging` 전부 Running
@@ -218,7 +373,8 @@ terraform apply plan.out                                # apply는 김종식(또
 
 ```bash
 export AWS_PROFILE=cinema-admin
-cd infra/terraform/envs/staging
+cd infra/terraform/envs/staging-k8s && terraform destroy -var-file=staging-k8s.tfvars   # 먼저 (4-5)
+cd ../staging
 terraform plan -destroy -var-file=staging.tfvars     # 지워질 목록 확인
 terraform destroy -var-file=staging.tfvars
 ```
@@ -254,6 +410,9 @@ terraform destroy -var-file=staging.tfvars
 | Actions `Could not load credentials from any providers` | Secret 미등록 또는 `permissions: id-token: write` 없음 | 2-4 Secrets 등록, 워크플로 permissions 확인 |
 | `explicit deny ... service control policy` | 학원 SCP | 학원에 문의 |
 | NAT를 지웠는데 EIP가 남음 | Terraform 밖 EIP(EC2 연결)일 가능성 | `aws ec2 describe-addresses`로 태그·연결 대상 확인 |
+| `kubectl` `You must be logged in to the server (Unauthorized)` | EKS를 `cinema-admin`이 아닌 주체로 만들었거나 kubeconfig 프로필이 다름 | `aws sts get-caller-identity`로 역할 확인, `update-kubeconfig --profile cinema-admin` 다시. Access Entry 누락이면 staging apply |
+| staging-k8s plan `Error: Kubernetes cluster unreachable` | 노드·클러스터 없음 또는 `AWS_PROFILE` 미설정(get-token 실패) | `export AWS_PROFILE=cinema-admin`, 클러스터 존재 확인 |
+| LB Controller 로그 `AccessDenied`·`no EC2 IMDS role found` | Pod Identity 연결 없음 / ServiceAccount 이름 다름 / pod-identity-agent 없음 | 4-4의 `list-pod-identity-associations`, SA 이름 `aws-load-balancer-controller` 확인 후 파드 재시작 |
 | plan에 `-/+ replace`가 나옴 | 교체가 필요한 값 변경(서브넷 CIDR, SG description 등) | 멈추고 원인 확인. 의존 리소스까지 다시 만들어질 수 있음 |
 
 ---
@@ -264,3 +423,4 @@ terraform destroy -var-file=staging.tfvars
 | --- | --- | --- | --- | --- | --- |
 | 10/20 | 김종식 | 1 bootstrap · 3 네트워크 | ⬜ | init 때 버킷 입력 요구 | 1장 "다음 단계 준비" 추가 |
 | 10/21 | 김종식 | 2 global | ⬜ | OIDC 공급자 409, import 시 already managed | 2-2·12장·13장 추가 |
+| ⬜ | 김종식 | 4 EKS (staging · staging-k8s) | ⬜ | | |

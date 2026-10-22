@@ -1,4 +1,4 @@
-# GitHub 아이디로 바꿔 커밋한다 (03b)
+# GitHub 아이디로 바꿔 커밋한다
 /services/gateway/      @imi21123
 /services/catalog/      @imi21123
 /services/user/         @imi21123
@@ -6,6 +6,8 @@
 /services/payment/      @namgungil
 /frontend/              @imi21123 @namgungil
 /contracts/             @imi21123 @namgungil
+/contracts/tools/       @pinodo
+/contracts/redocly.yaml @pinodo
 /libs/                  @pinodo @imi21123 @namgungil
 /build-logic/           @pinodo
 /gradle/                @pinodo

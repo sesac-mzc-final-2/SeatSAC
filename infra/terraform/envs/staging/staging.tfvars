@@ -9,3 +9,8 @@ azs            = ["ap-northeast-2a", "ap-northeast-2c"]
 public_subnets = ["10.20.0.0/24", "10.20.1.0/24"]
 app_subnets    = ["10.20.16.0/20", "10.20.32.0/20"]
 data_subnets   = ["10.20.48.0/24", "10.20.49.0/24"]
+
+# EKS (3.1.2)
+eks_version          = "1.36"
+node_instance_type   = "t3.large"
+developer_namespaces = ["cinema-staging", "monitoring"]

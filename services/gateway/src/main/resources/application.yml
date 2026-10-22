@@ -43,16 +43,11 @@ spring:
               uri: ${app.services.user-url}
               predicates:
                 - Path=/api/users/**
-            - id: ai
-              uri: ${app.services.ai-url}
-              predicates:
-                - Path=/api/ai/**
 app:
   services:                                   # 환경변수 APP_SERVICES_BOOKING_URL 등으로 바꾼다
     catalog-url: http://catalog:8080
     booking-url: http://booking:8080
     user-url: http://user:8080
-    ai-url: http://ai:8080
   cognito:                                    # ADR-37. 값은 Terraform 출력 → gitops env. 기본값을 두지 않아 env가 빠지면 기동이 실패한다
     issuer-uri: ${APP_COGNITO_ISSUER_URI}     # https://cognito-idp.ap-northeast-2.amazonaws.com/{풀 ID}. 자리표시 기본값이면 모든 인증 요청이 401로만 보여 배포 실수를 숨긴다
     client-id: ${APP_COGNITO_CLIENT_ID}

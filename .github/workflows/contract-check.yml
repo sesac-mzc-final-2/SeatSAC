@@ -5,12 +5,11 @@
 # 깨지는 변경은 실패. 설계 단계(구현 전)에 일부러 바꾸는 경우만 PR 라벨 'contract-break-ok' + CODEOWNERS 승인으로 경고 처리.
 # 구현과 계약 일치(springdoc 생성본 vs contracts) 검사는 서비스 구현 후 pr-check 에 추가한다 (2단계).
 name: contract-check
+# 필수 검사로 걸기 때문에 paths 필터를 두지 않는다 (필터로 안 돌면 PR이 "Expected"에서 막힘).
+# 대신 changes job이 contracts 변경 여부를 보고, 변경이 없으면 lint·compat를 건너뛴다(건너뛴 job = 성공 처리).
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
-    paths:
-      - "contracts/**"
-      - ".github/workflows/contract-check.yml"
 
 permissions:
   contents: read
@@ -26,8 +25,27 @@ env:
   BREAK_OK: ${{ contains(github.event.pull_request.labels.*.name, 'contract-break-ok') }}
 
 jobs:
+  changes:
+    name: 변경 감지
+    runs-on: ubuntu-latest
+    outputs:
+      contracts: ${{ steps.diff.outputs.contracts }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: diff
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD \
+               | grep -qE '^(contracts/|\.github/workflows/contract-check\.yml$)'; then
+            echo "contracts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "contracts=false" >> "$GITHUB_OUTPUT"
+          fi
+
   lint:
     name: lint (OpenAPI · JSON Schema · 예시)
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +80,8 @@ jobs:
 
   compat:
     name: 하위 호환 (base 대비)
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4                       # PR head

@@ -74,7 +74,7 @@
 | PENDING | CANCELED | BKG-03 해제 | AVAILABLE | RELEASED |
 | CONFIRMED | CANCELED | BKG-07 취소 + PAY-03 | AVAILABLE | RELEASED |
 
-- 모든 전이는 조건부 UPDATE(`WHERE status='PENDING' …`)로 한 번만. 처리권은 `ZREM`이 아니라 UPDATE 결과 1행으로 정한다
+- 모든 전이는 **현재 상태를 조건으로 건** 조건부 UPDATE로 한 번만 처리한다: `UPDATE booking SET status=:next … WHERE booking_id=:id AND status=:expected`(위 표의 "현재" 열). 예: 만료·해제·결제 결과는 `:expected='PENDING'`, 확정 예매 취소(BKG-07)는 `:expected='CONFIRMED'`. 갱신 행이 0이면 이미 다른 경로가 처리한 것(재시도·중복 이벤트)으로 보고 아무것도 하지 않는다. 처리권은 `ZREM`이 아니라 UPDATE 결과 1행으로 정한다
 - 이벤트 발행은 커밋 후, `ZREM hold-expiry`는 마지막
 
 ## 5. 인프라가 만드는 것 (3.1.3 · 3.1.12)

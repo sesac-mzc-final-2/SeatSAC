@@ -93,7 +93,7 @@
 
 | 파일 | 변경 |
 | --- | --- |
-| `payment.internal.openapi.yaml` | 결제·취소 요청 본문 필수 추가 |
+| `payment.internal.openapi.yaml` | 결제·취소 요청 본문 필수 추가, `paymentId` 경로 파라미터 `format: uuid`(형식 오류는 400 `VALIDATION_FAILED`) |
 | `error.v1.json` (→ 모든 OpenAPI 오류 응답) | `details` 필수, `traceId` null 불가 + pattern |
 | `booking.confirmed.v1.json` | payload 필수 3개, `userId` uuid, `traceId` pattern |
 | `seat-event.v1.json` | `traceId` pattern |

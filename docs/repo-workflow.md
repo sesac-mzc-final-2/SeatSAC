@@ -1,7 +1,7 @@
 # 레포·브랜치·PR·CI 규칙
 
 > 기준 2026-10-22 (회의록2 결정 반영, ADR-49~64). 03b 레포·브랜치·PR 개정 확정본 + 08 공통 코드(B안, ADR-56) + 브랜치 WBS ID(ADR-48) + 레포·일정(ADR-64) + 2.2.7 계약 CI.
-> 전제: staging 하나가 곧 데모 환경이라 **main 머지 = 배포**다.
+> 전제: staging 하나가 곧 데모 환경이라 **main 머지 = 배포**다(`build-push` 자동 트리거는 3.1.4에서 켠다. 그 전에는 수동).
 
 ---
 
@@ -21,14 +21,14 @@ SeatSAC/
 ├── frontend/                                                       React(Vite) → S3
 ├── contracts/{openapi,events,schemas,tools}/                       계약 + 계약 CI
 ├── lambdas/{notification,cognito-presignup}/                       Python
-├── infra/terraform/{bootstrap,global,envs/staging}/ · infra/compose/
+├── infra/terraform/{bootstrap,global,envs/staging,envs/staging-k8s}/ · infra/compose/
 ├── tests/k6/
 ├── docs/   conventions.md · contracts.md · service-runtime-contract.md · data-model.md · decisions.md · repo-workflow.md · runbooks/
 └── .github/ workflows/ · CODEOWNERS · pull_request_template.md
 
 SeatSAC-gitops/
 ├── apps/              App of Apps
-├── platform/          LB Controller, Argo Rollouts, kube-prometheus-stack
+├── platform/          Argo Rollouts, kube-prometheus-stack (LB Controller는 Terraform envs/staging-k8s)
 ├── base/{service}/    Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, ServiceMonitor, Flyway PreSync Job
 ├── overlays/staging/  이미지 태그, replicas, ConfigMap
 └── analysis/          AnalysisTemplate
@@ -41,7 +41,7 @@ SeatSAC-gitops/
 
 | 항목 | 규칙 |
 | --- | --- |
-| 기본 브랜치 | `main` 보호, 직접 push 금지. **main 머지 = staging 자동 배포** |
+| 기본 브랜치 | `main` 보호(ruleset), 직접 push 금지. **main 머지 = staging 자동 배포** — 단 지금은 `build-push`가 수동 실행(`workflow_dispatch`)만 켜져 있다. 서비스 골격·ECR이 생기는 3.1.4에서 main push 트리거를 켠다 |
 | 브랜치 이름 | `{type}/{기능ID}-{설명}`. 기능 ID가 없으면 **WBS ID** (ADR-48) |
 | type | `feat` · `fix` · `refactor` · `test` · `docs` · `infra` · `ci` · `chore` |
 | 예 | `feat/BKG-02-seat-hold`, `fix/CAT-05-cache-key`, `infra/3.1.3-rds-valkey`, `ci/2.2.7-contract-ci`, `docs/ADR-47` |
@@ -56,7 +56,7 @@ SeatSAC-gitops/
 | 항목 | 규칙 |
 | --- | --- |
 | 승인 | 1명 (11/13 이후 2명). `libs/`·`build-logic/` 변경은 2명(김종식 + 영향받는 서비스 담당) |
-| 필수 검사 | `pr-check`, `contract-check / lint (OpenAPI · JSON Schema · 예시)`, `contract-check / 하위 호환 (base 대비)`, (`infra/terraform/**`이면) `infra-plan` |
+| 필수 검사 (ruleset) | `java`·`gitleaks`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 네 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
 | 크기 | 400줄 이하 권장(생성 코드·lock 제외) |
 | 리뷰 응답 | 24시간 이내(주말 제외) |
 | 머지 후 | 작성자가 ArgoCD Synced·Healthy(또는 frontend 배포 완료)까지 확인 |
@@ -88,10 +88,10 @@ SeatSAC-gitops/
 | --- | --- | --- |
 | `pr-check` | PR | 바뀐 서비스 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ), `libs/**` 변경 시 5개 전부, Trivy, gitleaks. 2단계: springdoc 생성본 vs 계약 diff |
 | `contract-check` | PR (항상, 변경 없으면 건너뜀) | Redocly lint, JSON Schema·예시 검증, oasdiff·스키마 하위 호환 |
-| `build-push` | main 머지 (바뀐 서비스만) | x86 이미지 → ECR(OIDC `cinema-gha-ecr-push`) → `SeatSAC-gitops`에 `kustomize edit set image` 커밋 |
+| `build-push` | **현재 수동**(`workflow_dispatch`). 3.1.4부터 main 머지(바뀐 서비스만) | x86 이미지 → ECR(OIDC `cinema-gha-ecr-push`) → `SeatSAC-gitops`에 `kustomize edit set image` 커밋 |
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |
 | `lambda-deploy` | main 머지(`lambdas/**`) | 패키징 → 배포 → 별칭 갱신 |
-| `infra-plan` | PR(`infra/terraform/**`) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |
+| `infra-plan` | PR(`infra/terraform/**`, 필수 검사 아님) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |
 | `cluster-schedule` | 평일 아침·밤 cron + 수동 | 노드그룹 desired 1 ↔ 0 (ng-a·ng-c) |
 | `gitops-validate` (gitops 레포) | PR | `kustomize build` + kubeconform |
 

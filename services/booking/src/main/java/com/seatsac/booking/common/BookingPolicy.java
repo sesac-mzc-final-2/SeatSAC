@@ -18,6 +18,12 @@ public final class BookingPolicy {
     /** 선점 TTL. expires_at = now + 300초, Valkey 좌석 키·user-hold 키의 EX 값과 같다 */
     public static final Duration HOLD_TTL = Duration.ofSeconds(300);
 
+    /** 파드 캐시 — 회차 정보 10분, 좌석 배치는 (상영관, 배치 버전) 키라 1일 (명세 12.3) */
+    public static final Duration SCREENING_CACHE_TTL = Duration.ofMinutes(10);
+    public static final Duration LAYOUT_CACHE_TTL = Duration.ofDays(1);
+    public static final int SCREENING_CACHE_SIZE = 2_000;
+    public static final int LAYOUT_CACHE_SIZE = 200;
+
     /** SSE 하트비트 간격과 재연결 지시 값 */
     public static final Duration SSE_HEARTBEAT = Duration.ofSeconds(15);
     public static final long SSE_RETRY_MILLIS = 2_000L;

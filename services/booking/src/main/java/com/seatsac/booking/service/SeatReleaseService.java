@@ -3,11 +3,12 @@ package com.seatsac.booking.service;
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.component.SeatHoldStrategy;
-import com.seatsac.booking.dto.response.HoldReleaseResponse;
+import com.seatsac.booking.dto.response.BookingCancelResponse;
 import com.seatsac.booking.entity.Booking;
 import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.enums.SeatEventType;
 import com.seatsac.common.core.error.ErrorDetail;
+import com.seatsac.common.core.time.Times;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -36,7 +37,7 @@ public class SeatReleaseService {
     private final SeatHoldStrategy seatHold;
     private final SeatEventPublisher eventPublisher;
 
-    public HoldReleaseResponse release(String userId, Long bookingId) {
+    public BookingCancelResponse release(String userId, Long bookingId) {
         Instant now = clock.instant();
         Booking booking = bookingReader.findById(bookingId)
             .orElseThrow(() -> BookingErrorCode.BOOKING_NOT_FOUND.exception());
@@ -62,8 +63,7 @@ public class SeatReleaseService {
         seatHold.release(booking.getScreeningId(), userId, booking.getHoldId(), seatIds);
         eventPublisher.publish(SeatEventType.RELEASED, booking.getScreeningId(), seatIds, now);
 
-        return bookingReader.findById(bookingId).map(HoldReleaseResponse::from)
-            .orElseGet(() -> new HoldReleaseResponse(bookingId, BookingStatus.CANCELED,
-                com.seatsac.common.core.time.Times.toApi(now)));
+        return bookingReader.findById(bookingId).map(BookingCancelResponse::ofHoldRelease)
+            .orElseGet(() -> BookingCancelResponse.ofHoldRelease(bookingId, Times.toApi(now)));
     }
 }

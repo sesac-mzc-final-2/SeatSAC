@@ -1,6 +1,6 @@
 package com.seatsac.booking.controller;
 
-import com.seatsac.booking.dto.response.HoldReleaseResponse;
+import com.seatsac.booking.dto.response.BookingCancelResponse;
 import com.seatsac.booking.service.SeatReleaseService;
 import com.seatsac.common.web.user.CurrentUser;
 import lombok.RequiredArgsConstructor;
@@ -20,7 +20,7 @@ public class BookingController {
 
     /** BKG-03 선점 해제. 조건부 UPDATE라 자체로 멱등하므로 {@code Idempotency-Key}는 선택 */
     @DeleteMapping("/bookings/{bookingId}/hold")
-    public HoldReleaseResponse releaseHold(@CurrentUser String userId, @PathVariable Long bookingId) {
+    public BookingCancelResponse releaseHold(@CurrentUser String userId, @PathVariable Long bookingId) {
         return seatReleaseService.release(userId, bookingId);
     }
 }

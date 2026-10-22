@@ -1,0 +1,19 @@
+# Testcontainers 프로필. DB·Valkey 접속 값은 common-test의 @ServiceConnection이 넣어 준다.
+spring:
+  flyway:
+    # 로컬·테스트는 계정 하나로 기동 시 Flyway (ERD 7장). MySQLContainer 기본 계정 = test/test
+    enabled: true
+    user: test
+    password: test
+  jpa:
+    open-in-view: false
+    hibernate.ddl-auto: validate
+    properties.hibernate.jdbc.time_zone: UTC
+  # 아직 SQS를 쓰지 않는다 (3.2.6). 자동 설정이 자격 증명을 찾지 않게 끈다
+  cloud.aws:
+    sqs.enabled: false
+    region.static: ap-northeast-2
+    credentials:
+      access-key: test
+      secret-key: test
+logging.level.org.hibernate.SQL: INFO

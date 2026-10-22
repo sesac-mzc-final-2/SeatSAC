@@ -21,5 +21,12 @@ dependencies {
     implementation("org.flywaydb:flyway-mysql")
     implementation("io.awspring.cloud:spring-cloud-aws-starter-sqs:3.4.0") // SQS 알림 발행 (버전 팀 확정)
     runtimeOnly("com.mysql:mysql-connector-j")
+
+    // Lombok (버전은 Spring Boot BOM = 1.18.40). 전 모듈 공통으로 올리려면 build-logic 수정이 필요해 승인 후에
+    compileOnly("org.projectlombok:lombok")
+    annotationProcessor("org.projectlombok:lombok")
+    testCompileOnly("org.projectlombok:lombok")
+    testAnnotationProcessor("org.projectlombok:lombok")
+
     testImplementation(project(":libs:common-test"))
 }

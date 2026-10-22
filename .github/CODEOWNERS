@@ -4,9 +4,8 @@
 /services/user/         @hanchaeyeon
 /services/booking/      @namgungil
 /services/payment/      @namgungil
-/services/ai/           @kimseohyun
 /frontend/              @hanchaeyeon @namgungil
-/contracts/             @hanchaeyeon @namgungil @kimseohyun
+/contracts/             @hanchaeyeon @namgungil
 /libs/                  @pinodo @hanchaeyeon @namgungil
 /build-logic/           @pinodo
 /gradle/                @pinodo

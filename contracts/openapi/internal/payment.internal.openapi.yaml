@@ -50,13 +50,16 @@ paths:
       operationId: getPayment
       summary: 결제 상태 조회 (BKG-10 결과 미확인·GET /bookings/{id}·만료 처리)
       x-caller: [booking]
-      parameters: [ { name: paymentId, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { $ref: "#/components/parameters/PaymentId" } ]
       responses:
         "200":
           description: OK
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Payment" }
+        "400":
+          description: VALIDATION_FAILED — reason INVALID_PAYMENT_ID(paymentId가 UUID 형식이 아님)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "404":
           description: NOT_FOUND (reason PAYMENT_NOT_FOUND)
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
@@ -69,7 +72,7 @@ paths:
       description: |
         APPROVED → CANCELED. 이미 CANCELED면 그대로 200(처음 사유 유지).
         FAILED → 409 PAYMENT_NOT_APPROVED(reason PAYMENT_FAILED), PROCESSING → 409 PAYMENT_NOT_APPROVED(reason PAYMENT_PROCESSING).
-      parameters: [ { name: paymentId, in: path, required: true, schema: { type: string } } ]
+      parameters: [ { $ref: "#/components/parameters/PaymentId" } ]
       requestBody:
         required: true
         content:
@@ -86,14 +89,24 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Payment" }
+        "400":
+          description: VALIDATION_FAILED — reason INVALID_PAYMENT_ID(paymentId가 UUID 형식이 아님)·INVALID_CANCEL_REASON(reason 없음 또는 CancelReason 밖의 값)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "404":
-          description: NOT_FOUND
+          description: NOT_FOUND (reason PAYMENT_NOT_FOUND)
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: PAYMENT_NOT_APPROVED — reason PAYMENT_FAILED·PAYMENT_PROCESSING
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
 components:
+  parameters:
+    PaymentId:
+      name: paymentId
+      in: path
+      required: true
+      description: booking이 발급한 UUID(PaymentRequest.paymentId와 같은 값). 형식이 틀리면 400
+      schema: { type: string, format: uuid }
   schemas:
     ErrorResponse:
       $ref: "../../schemas/error.v1.json"

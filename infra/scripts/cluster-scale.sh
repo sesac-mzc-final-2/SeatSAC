@@ -52,15 +52,31 @@ check_deadline() {
   fi
 }
 
-# 노드그룹이 ACTIVE가 될 때까지 (실패 상태면 바로 중단)
+health_issues() {
+  aws eks describe-nodegroup --cluster-name "$CLUSTER" --nodegroup-name "$1" \
+    --query 'nodegroup.health.issues[].[code,message]' --output text || true
+}
+
+# 노드그룹이 변경 가능한 상태가 될 때까지 (실패 상태면 바로 중단)
+#   DEGRADED: 노드그룹은 있지만 건강 문제(인스턴스 생성 실패·서브넷 IP 부족 등)가 있는 상태.
+#     down → 통과시킨다. 줄이는 것이 문제를 키우지 않고, 밤 끄기가 막히면 비용이 계속 나간다.
+#            EKS가 변경 요청을 거부하면 그 자리에서 오류와 복구 절차를 출력한다 (request_scale)
+#     up   → 중단. 같은 원인으로 인스턴스가 뜨지 않으므로 기다려도 의미가 없다
 wait_active() {
   local ng="$1" st
   while :; do
     st=$(ng_field "$ng" 'nodegroup.status')
     case "$st" in
       ACTIVE) return 0 ;;
-      CREATE_FAILED|DELETE_FAILED|DEGRADED|DELETING)
-        echo "::error::$ng 상태 $st — describe-nodegroup의 health.issues 확인"; exit 1 ;;
+      DEGRADED)
+        if [ "$ACTION" = "down" ]; then
+          echo "::warning::$ng 상태 DEGRADED — 끄기는 계속 진행. 건강 문제:"
+          health_issues "$ng"
+          return 0
+        fi
+        echo "::error::$ng 상태 DEGRADED — 켜기 중단. 건강 문제:"; health_issues "$ng"; exit 1 ;;
+      CREATE_FAILED|DELETE_FAILED|DELETING)
+        echo "::error::$ng 상태 $st — describe-nodegroup의 health.issues 확인"; health_issues "$ng"; exit 1 ;;
     esac
     check_deadline "$ng ACTIVE 대기 (현재 $st)"
     sleep "$POLL_SECONDS"
@@ -102,8 +118,11 @@ if [ -n "$DESIRED" ]; then
       continue
     fi
     echo "$ng: desired $cur → $DESIRED"
-    id=$(aws eks update-nodegroup-config --cluster-name "$CLUSTER" --nodegroup-name "$ng" \
-      --scaling-config "desiredSize=$DESIRED" --query 'update.id' --output text)
+    if ! id=$(aws eks update-nodegroup-config --cluster-name "$CLUSTER" --nodegroup-name "$ng" \
+        --scaling-config "desiredSize=$DESIRED" --query 'update.id' --output text); then
+      echo "::error::$ng 변경 요청을 EKS가 거부함 (상태 $(ng_field "$ng" 'nodegroup.status')). 복구 절차: 런북 8-1-4"
+      exit 1
+    fi
     UPDATES+=("$ng $id")
   done
   for u in ${UPDATES[@]+"${UPDATES[@]}"}; do   # bash 3.2(macOS)·set -u 에서 빈 배열 대비

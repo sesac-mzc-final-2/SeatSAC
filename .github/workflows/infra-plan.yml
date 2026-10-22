@@ -1,4 +1,5 @@
 # PR에 terraform plan 결과를 코멘트로 남긴다. apply는 하지 않는다 (03b).
+# 공개 레포 주의: plan 출력의 계정 ID는 <ACCOUNT_ID>로 바꿔 코멘트한다. IP 등 민감 변수는 sensitive로 가려진다
 # 사전 조건: GitHub OIDC 역할 cinema-gha-tf-plan (infra/terraform/global, ReadOnly + state 읽기·잠금 파일) → secrets.AWS_TERRAFORM_PLAN_ROLE_ARN
 name: infra-plan
 on:
@@ -29,19 +30,34 @@ jobs:
           role-to-assume: ${{ secrets.AWS_TERRAFORM_PLAN_ROLE_ARN }}
           aws-region: ap-northeast-2
       # 공개 레포: 계정 ID가 로그·PR 코멘트에 남지 않게 가린다 (ARN·버킷 이름에 들어 있음)
-      - name: 계정 ID 가리기
+      - name: 민감 값 가리기
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           echo "::add-mask::$ACCOUNT_ID"
           echo "ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
+          # EKS 허용 IP: 하나씩 마스킹하고, 코멘트용 치환 목록으로 저장
+          echo "$TF_VAR_eks_public_access_cidrs" | jq -r '.[]' | while read -r cidr; do
+            ip="${cidr%/*}"
+            echo "::add-mask::$ip"
+            echo "$ip"
+          done > "$RUNNER_TEMP/mask_ips.txt"
       - run: terraform fmt -check -recursive ..   # envs/staging + envs/staging-k8s
       # staging-k8s는 plan 하지 않는다(클러스터 접근·state 권한 없음, apply는 관리자 로컬). 문법만 확인
       - run: terraform -chdir=../staging-k8s init -backend=false -input=false && terraform -chdir=../staging-k8s validate
       - run: terraform init -backend-config=backend.hcl -input=false
       - run: terraform validate
       - id: plan
-        run: terraform plan -var-file=staging.tfvars -no-color -input=false 2>&1 | tail -n 200 > plan.txt
+        run: |
+          set -o pipefail
+          terraform plan -var-file=staging.tfvars -no-color -input=false 2>&1 | tail -n 200 > plan.txt || status=$?
+          # PR 코멘트에는 로그 마스킹이 적용되지 않는다 → 본문에서 직접 지운다
+          sed -i "s/${ACCOUNT_ID}/<ACCOUNT_ID>/g" plan.txt
+          while read -r ip; do
+            [ -n "$ip" ] && sed -i "s/${ip//./\\.}/<ALLOWED_IP>/g" plan.txt
+          done < "$RUNNER_TEMP/mask_ips.txt"
+          exit "${status:-0}"
       - uses: actions/github-script@v7
+        if: always() && steps.plan.outcome != 'skipped'
         with:
           script: |
             const fs = require('fs');

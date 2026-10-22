@@ -57,9 +57,14 @@ variable "eks_version" {
 }
 
 variable "eks_public_access_cidrs" {
-  description = "API that permitted public endpoint range. Private PC·GitHub Actions(plan does not call API): Whole basic, Auth: IAM"
+  description = "EKS API 공개 엔드포인트 허용 대역(팀 공인 IP /32). 값은 커밋하지 않는다: 로컬 eks_access.auto.tfvars, CI Secret EKS_PUBLIC_ACCESS_CIDRS"
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  sensitive   = true          # ← 여기. plan·apply 출력에 (sensitive value)로 가려진다
+
+  validation {
+    condition     = length(var.eks_public_access_cidrs) > 0 && !contains(var.eks_public_access_cidrs, "0.0.0.0/0")
+    error_message = "eks_public_access_cidrs에 팀 공인 IP 대역을 넣는다. 0.0.0.0/0(전체 공개)은 쓰지 않는다."
+  }
 }
 
 variable "node_instance_type" {

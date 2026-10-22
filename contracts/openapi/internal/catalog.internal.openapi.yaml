@@ -1,0 +1,121 @@
+openapi: 3.1.0
+info:
+  title: seatsac catalog internal API
+  version: "1.1"
+  description: |
+    API 명세서 v1.1 3-2. Gateway가 라우팅하지 않는다. 호출자는 NetworkPolicy로 제한(OPS-15):
+    booking → catalog, user → catalog. 타임아웃 연결 1초 / 응답 3초, 재시도 없음.
+    호출자는 X-Trace-Id·X-User-Id를 그대로 전달한다.
+servers:
+  - url: http://catalog:8080
+security: []   # 내부 API: 사용자 인증 없음. 호출자는 NetworkPolicy로 제한 (OPS-15)
+
+paths:
+
+  /internal/screenings/{screeningId}:
+    get:
+      operationId: getScreeningForBooking
+      summary: 회차 상세 (호출자 booking — BKG-02·06·07)
+      description: "이름 필드는 SQS 알림 payload용. 좌석 검증은 booking이 CAT-04 배치도를 (상영관, 버전) 키로 파드 캐시해 쓴다(2.2.4 v0.3에서 seats 삭제)"
+      x-caller: [booking]
+      parameters:
+        - { name: screeningId, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [screeningId, auditoriumId, layoutVersion, startsAt, endsAt, movieTitle, theaterName, auditoriumName]
+                properties:
+                  screeningId: { type: integer, format: int64 }
+                  auditoriumId: { type: integer, format: int64 }
+                  layoutVersion: { type: integer, minimum: 1 }
+                  startsAt: { type: string, format: date-time }
+                  endsAt: { type: string, format: date-time }
+                  movieTitle: { type: string }
+                  theaterName: { type: string }
+                  auditoriumName: { type: string }
+        "404":
+          description: NOT_FOUND
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  /internal/screenings/summaries:
+    post:
+      operationId: getScreeningSummaries
+      summary: 회차 요약 일괄 조회 (호출자 user — USR-04)
+      x-caller: [user]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [screeningIds]
+              properties:
+                screeningIds: { type: array, minItems: 1, maxItems: 100, items: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 없는 ID는 결과에서 빠진다
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ScreeningSummary" }
+        "400":
+          description: VALIDATION_FAILED (0개 또는 100개 초과)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  /internal/theaters:
+    get:
+      operationId: getTheatersByIds
+      summary: 극장 ID 확인 (호출자 user — USR-05 선호 극장 검증, API 명세서 10장 #6)
+      x-caller: [user]
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: "쉼표 구분, 최대 10개 (예: 1004,1016)"
+          style: form
+          explode: false
+          schema: { type: array, minItems: 1, maxItems: 10, items: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 없는 ID는 결과에서 빠진다
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [theaterId, name]
+                      properties:
+                        theaterId: { type: integer, format: int64 }
+                        name: { type: string }
+        "400":
+          description: VALIDATION_FAILED
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+components:
+  schemas:
+    ErrorResponse:
+      $ref: "../../schemas/error.v1.json"
+    ScreeningSummary:
+      type: object
+      required: [screeningId, movieTitle, theaterName, auditoriumName, startsAt, endsAt]
+      properties:
+        screeningId: { type: integer, format: int64 }
+        movieTitle: { type: string }
+        theaterName: { type: string }
+        auditoriumName: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }

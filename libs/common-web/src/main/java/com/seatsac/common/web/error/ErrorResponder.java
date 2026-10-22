@@ -12,6 +12,7 @@ import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
 /**
@@ -47,7 +48,10 @@ public class ErrorResponder {
                 log.info("status={} code={} responseCode={} message={} fields={}",
                     status, code.name(), code.responseCode(), message, fieldsOf(details));
             }
+            // Content-Type을 직접 박는다. 이러면 Accept 협상을 건너뛴다 — SSE 연결(Accept:
+            // text/event-stream)에서 404를 돌려줄 때 JSON 본문이 「받을 수 없음」으로 막히면 안 된다
             return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(ErrorResponse.of(code, message, TraceIdFilter.current(), withReason(code, details)));
         } finally {
             MDC.remove(TraceKeys.MDC_ERROR_CODE);

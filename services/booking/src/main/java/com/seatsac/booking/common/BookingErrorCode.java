@@ -26,6 +26,7 @@ public enum BookingErrorCode implements ErrorCode {
 
     // 400 VALIDATION_FAILED
     INVALID_SEATS(CommonResponseCode.VALIDATION_FAILED, "좌석 선택이 올바르지 않습니다."),
+    IDEMPOTENCY_KEY_REQUIRED(CommonResponseCode.VALIDATION_FAILED, "멱등 키가 필요합니다."),
     INVALID_PAYMENT_METHOD(CommonResponseCode.VALIDATION_FAILED, "지원하지 않는 결제 수단입니다."),
     INVALID_STATUS(CommonResponseCode.VALIDATION_FAILED, "조회 조건이 올바르지 않습니다."),
     INVALID_PAGE(CommonResponseCode.VALIDATION_FAILED, "페이지 값이 올바르지 않습니다."),

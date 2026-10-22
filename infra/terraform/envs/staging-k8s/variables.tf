@@ -24,6 +24,12 @@ variable "app_namespace" {
   default = "cinema-staging"
 }
 
+variable "namespaces" {
+  description = "namespace that Terraform makes. If added here, there is no auth(distinct with developer_namespaces)"
+  type        = list(string)
+  default     = ["cinema-staging", "monitoring"]
+}
+
 variable "developer_namespaces" {
   description = "same with developer_namespaces of envs/staging (Access Entry range = RBAC range)"
   type        = list(string)
@@ -46,7 +52,7 @@ variable "lbc_chart_version" {
 }
 
 variable "lbc_replicas" {
-  description = "1 replica because of 2 nodes. Since controller is not a traffic path(ALB handles it), when restarted, service has no change"
+  description = "1 replica because of 2 nodes. Since controller is not a traffic path(ALB handles it), when restarted, service is not affected"
   type        = number
   default     = 1
 }

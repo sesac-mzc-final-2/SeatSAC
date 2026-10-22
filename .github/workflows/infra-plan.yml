@@ -13,6 +13,9 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    env:
+      # EKS API 공개 허용 대역 — 공인 IP라 커밋하지 않고 Secret에서 (JSON 배열, 예: ["203.0.113.10/32"])
+      TF_VAR_eks_public_access_cidrs: ${{ secrets.EKS_PUBLIC_ACCESS_CIDRS }}
     defaults:
       run:
         working-directory: infra/terraform/envs/staging

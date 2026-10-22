@@ -185,6 +185,7 @@ terraform plan -var-file=staging.tfvars   # No changes
 export AWS_PROFILE=cinema-admin          # ⚠️ 반드시. 만든 사람 자동 관리자 권한을 껐으므로 다른 주체로 만들면 kubectl 권한이 없다
 aws sts get-caller-identity              # assumed-role/cinema-admin 확인
 cd infra/terraform/envs/staging
+cp eks_access.auto.tfvars.example eks_access.auto.tfvars   # 처음 한 번: 팀 공인 IP 입력 (4-6)
 terraform init -upgrade -backend-config=backend.hcl   # 새 모듈(eks, eks-pod-identity) 받기. EKS v21.29는 AWS provider ≥ 6.59
 terraform fmt -recursive && terraform validate
 terraform plan -var-file=staging.tfvars -out=plan.out
@@ -262,6 +263,20 @@ kubectl get pods -n kube-system                                  # Forbidden
 - 삭제 순서: ArgoCD 앱(Ingress → ALB 삭제) → `staging-k8s` destroy → `staging` destroy. LB Controller를 먼저 지우면 ALB·대상 그룹이 남는다
 - 버전 업그레이드는 한 단계씩(1.36 → 1.37): `eks_version` 변경 → plan(컨트롤 플레인 → 애드온 → 노드그룹 순 교체) → 데모 주간 금지
 
+### 4-6. API 공개 엔드포인트 허용 IP
+
+EKS API(kubectl·helm)는 팀 공인 IP 대역에서만 열린다(`eks_public_access_cidrs`, 전체 공개 금지). 공인 IP는 커밋하지 않는다.
+
+| 쓰는 곳 | 값을 두는 곳 |
+| --- | --- |
+| 로컬 apply·plan (관리자) | `envs/staging/eks_access.auto.tfvars` (`.example` 복사, 커밋 안 됨) |
+| CI `infra-plan` | GitHub Secret `EKS_PUBLIC_ACCESS_CIDRS` = `["203.0.113.10/32","198.51.100.7/32"]` (JSON 배열) |
+
+- 내 공인 IP 확인: `curl -s https://checkip.amazonaws.com`
+- IP가 바뀌거나 팀원이 다른 곳에서 접속할 때: 두 곳을 같이 고치고 `terraform apply`(1~2분, 엔드포인트 재생성 없음). 증상은 `kubectl` 타임아웃(`dial tcp ... i/o timeout`)
+- plan 출력에는 `(sensitive value)`로 가려진다 → PR 코멘트에 IP가 남지 않는다
+- GitHub Actions 대역은 열지 않는다: `infra-plan`(AWS API)·`cluster-schedule`(EKS 관리 API)은 클러스터 API를 부르지 않는다. 나중에 Actions에서 kubectl이 필요해지면 그때 다시 결정
+
 ## 5. staging 3) RDS·Valkey (3.1.3) — ⬜
 
 ## 6. staging 4) ECR·SQS·Lambda (3.1.4·3.1.8·3.1.9) — ⬜
@@ -276,7 +291,59 @@ kubectl get pods -n kube-system                                  # Forbidden
 
 ---
 
-## 9. 최종 확인
+## 8-1. 가동 정책 — 노드 0대 스케줄·Budgets (3.1.14, OPS-13)
+
+코드: `.github/workflows/cluster-schedule.yml` · `infra/scripts/cluster-scale.sh` · `infra/terraform/global/{cluster_schedule,budgets}.tf`
+
+| 시각 (KST) | 동작 | 비고 |
+| --- | --- | --- |
+| 월~금 08:23 | 노드그룹마다 desired 1 (`up`) | 인스턴스 InService까지 대기(최대 10분) → 파드 Ready까지 5~10분 더 |
+| 월~금 23:07 | desired 0 (`down`) | 금요일 밤에 꺼져 월요일 아침까지 0대 |
+| 데모 주간 11/16~20 | 예약 끄기 건너뜀 (24시간) | 발표 후 수동 `down` |
+| 임시로 밤에도 켜 둠 | 레포 Variables `CLUSTER_KEEP_ON=true` | 예약 끄기만 건너뜀. 끝나면 `false` |
+
+### 8-1-1. global 적용 (역할·Budgets)
+
+```bash
+export AWS_PROFILE=cinema-admin
+cd infra/terraform/global
+cp budget.auto.tfvars.example budget.auto.tfvars    # 받을 메일 입력 (커밋 안 됨)
+terraform plan -var-file=global.tfvars -out=plan.out
+# 기대: 역할 cinema-gha-cluster-schedule 1 + 인라인 정책 1 + Budgets 2 (cinema-monthly·cinema-daily). destroy 0
+terraform apply plan.out
+terraform output github_secrets        # AWS_CLUSTER_SCHEDULE_ROLE_ARN → 레포 Actions Secrets에 등록
+```
+
+- Budgets 메일 주소마다 확인 메일은 오지 않는다(바로 발송). 스팸함 확인
+- `budget_monthly_usd`·`budget_daily_usd`는 `global.tfvars`에서 팀과 정한 값으로. 평소 하루 비용(컨트롤 플레인·NAT·RDS·Valkey·ALB + 낮 시간 노드)보다 조금 높게 둔다
+
+### 8-1-2. 사람이 직접 켜고 끄기 (워크플로와 같은 스크립트)
+
+```bash
+export AWS_PROFILE=cinema-admin
+infra/scripts/cluster-scale.sh status
+infra/scripts/cluster-scale.sh down
+infra/scripts/cluster-scale.sh up        # 노드그룹당 1대
+infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1
+```
+
+### 8-1-3. 확인
+
+- [ ] 워크플로가 main에 머지된 뒤 Actions → cluster-schedule → Run workflow `status` 성공 (역할·Secret 확인)
+- [ ] 수동 `down` → Summary 표 desired 0 · InService 0, `kubectl get nodes` → No resources
+- [ ] 수동 `up` → InService 1씩, `kubectl get nodes` 2대 Ready, ArgoCD 앱이 다시 Healthy
+- [ ] 다음 날 아침 예약 `up`이 실행됐는지 Actions 기록 확인 (schedule은 수~십수 분 늦을 수 있음)
+- [ ] `aws budgets describe-budgets --account-id <계정ID>` 에 `cinema-monthly`·`cinema-daily`
+- [ ] 두 번째 `terraform plan`(staging) No changes — desired 변경은 Terraform이 무시
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| `Not authorized to perform sts:AssumeRoleWithWebIdentity` | main이 아닌 브랜치에서 실행 / Secret 미등록 | main에서 실행, `AWS_CLUSTER_SCHEDULE_ROLE_ARN` 등록 |
+| `AccessDeniedException ... eks:UpdateNodegroupConfig` | 클러스터 이름이 `eks_cluster_name`과 다름 | global 변수 확인 후 apply |
+| `up`이 10분 넘게 InService 0 | t3.large 용량 부족·SCP·서브넷 IP 부족 | 노드그룹 Health 이슈(`describe-nodegroup`)·ASG 활동 기록 확인 |
+| 예약 실행이 안 보임 | 워크플로가 main에 없음 / 60일간 레포 활동 없음(GitHub가 schedule 중지) | main 머지 확인, Actions에서 워크플로 Enable |
+
+
 
 - [ ] global·staging 모두 두 번째 plan이 No changes
 - [ ] `kubectl get pods -n cinema-staging` 전부 Running

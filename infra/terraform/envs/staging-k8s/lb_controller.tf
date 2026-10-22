@@ -10,7 +10,9 @@
 #       alb.ingress.kubernetes.io/security-groups: <envs/staging 출력 sg_alb_id>
 #       alb.ingress.kubernetes.io/manage-backend-security-group-rules: "false"
 #       alb.ingress.kubernetes.io/healthcheck-path: /actuator/health/readiness
-#       alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120
+#       alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120   # SSE
+#     ※ SSE는 ALB 유휴 120초만으로 안 된다: CloudFront /api/screenings/*/seats/stream 캐시·압축 끔(3.1.11)
+#       + booking Cache-Control: no-cache 가 세트 (service-runtime-contract 6장 SSE)
 #       alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
 # ------------------------------------------------------------------
 resource "helm_release" "aws_load_balancer_controller" {

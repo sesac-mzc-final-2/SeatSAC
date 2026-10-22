@@ -6,11 +6,18 @@
 #   exec·delete·edit는 주지 않는다 (클러스터 직접 수정 금지, GitOps만)
 # ------------------------------------------------------------------
 resource "kubernetes_role_v1" "developer_port_forward" {
-  for_each = kubernetes_namespace_v1.this
+  for_each = toset(var.developer_namespaces)
 
   metadata {
     name      = "cinema-developer-port-forward"
-    namespace = each.value.metadata[0].name
+    namespace = try(kubernetes_namespace_v1.this[each.key].metadata[0].name, each.key) # 없으면 아래 precondition이 막는다
+  }
+
+  lifecycle {
+    precondition {
+      condition     = contains(var.namespaces, each.key)
+      error_message = "developer_namespaces의 ${each.key}가 namespaces에 없다. namespace를 먼저 namespaces에 추가한다."
+    }
   }
 
   rule {

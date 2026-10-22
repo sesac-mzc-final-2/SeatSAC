@@ -9,7 +9,7 @@ output "public_subnet_ids" {
 }
 
 output "app_subnet_ids" {
-  description = "EKS 노드그룹 서브넷"
+  description = "EKS node group subnet"
   value       = module.vpc.private_subnets
 }
 
@@ -22,7 +22,7 @@ output "db_subnet_group_name" {
 }
 
 output "nat_public_ip" {
-  description = "외부로 나갈 때의 고정 IP (롯데시네마·GitHub 등에서 보이는 IP)"
+  description = "Outbound Static IP (IP shown at LotteCinema·GitHub)"
   value       = module.vpc.nat_public_ips
 }
 
@@ -48,17 +48,17 @@ output "eks_cluster_endpoint" {
 }
 
 output "eks_kubeconfig_command" {
-  description = "팀원은 --profile cinema-dev, 관리자는 cinema-admin"
+  description = "members: --profile cinema-dev, admin: cinema-admin"
   value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --profile cinema-dev"
 }
 
 output "eks_node_security_group_id" {
-  description = "노드·파드 SG (ALB → 8080 허용)"
+  description = "Node·Pod SG (Allow ALB to 8080)"
   value       = module.eks.node_security_group_id
 }
 
 output "eks_node_group_names" {
-  description = "cluster-schedule 워크플로(3.1.14)가 desired 1 ↔ 0 으로 바꿀 대상"
+  description = "cluster-schedule workflow(3.1.14): desired 1 ↔ 0 un object changeable"
   value       = { for k, v in module.eks.eks_managed_node_groups : k => split(":", v.node_group_id)[1] } # node_group_id = "클러스터:노드그룹"
 }
 

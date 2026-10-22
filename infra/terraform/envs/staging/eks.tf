@@ -127,7 +127,7 @@ module "eks" {
 # manage-backend-security-group-rules = "false" 로 둔다(규칙은 여기서 관리)
 resource "aws_vpc_security_group_ingress_rule" "node_from_alb_8080" {
   security_group_id            = module.eks.node_security_group_id
-  description                  = "ALB -> gateway pods 8080 (target-type ip)"
+  description                  = "ALB to gateway pods 8080 (target-type ip)"
   ip_protocol                  = "tcp"
   from_port                    = 8080
   to_port                      = 8080

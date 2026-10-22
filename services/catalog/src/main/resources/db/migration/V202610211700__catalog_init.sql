@@ -1,4 +1,5 @@
--- catalog 스키마 V1 (build_seed.py의 DDL에서 생성. 직접 고치지 말고 스크립트를 고친다)
+-- catalog 스키마 V1 (lotte-seed/build_seed.py의 DDL 기준. 고칠 때는 스크립트도 같이 고쳐 둘을 같게 유지한다)
+-- 10/22 리뷰 반영: seat·screening → auditorium_layout(auditorium_id, layout_version) 복합 FK, layout_import.fetched_at DATETIME
 -- 시각은 UTC 저장, ID는 BIGINT. 시드(INSERT)는 포함하지 않는다
 
 CREATE TABLE theater (
@@ -25,9 +26,10 @@ CREATE TABLE seat (
   x DECIMAL(8,3) NOT NULL, y DECIMAL(8,3) NOT NULL, w DECIMAL(6,3) NOT NULL, h DECIMAL(6,3) NOT NULL,
   zone_no INT, seat_type VARCHAR(10) NOT NULL, source_seat_code INT, active TINYINT NOT NULL DEFAULT 1,
   UNIQUE KEY uk_seat_label (auditorium_id, layout_version, seat_label),
-  FOREIGN KEY (auditorium_id) REFERENCES auditorium(auditorium_id));
+  FOREIGN KEY (auditorium_id) REFERENCES auditorium(auditorium_id),
+  FOREIGN KEY (auditorium_id, layout_version) REFERENCES auditorium_layout(auditorium_id, layout_version));
 CREATE TABLE layout_import (
-  import_id BIGINT PRIMARY KEY, auditorium_id BIGINT NOT NULL, fetched_at VARCHAR(30) NOT NULL, parser_version VARCHAR(30),
+  import_id BIGINT PRIMARY KEY, auditorium_id BIGINT NOT NULL, fetched_at DATETIME NOT NULL COMMENT 'UTC', parser_version VARCHAR(30),
   source_seat_count INT, result VARCHAR(255), raw_snapshot_path VARCHAR(255));
 
 CREATE TABLE movie (
@@ -49,4 +51,5 @@ CREATE TABLE screening (
   UNIQUE KEY uk_screening (auditorium_id, business_date, play_sequence),
   KEY ix_screening_movie_date (movie_id, business_date),
   FOREIGN KEY (auditorium_id) REFERENCES auditorium(auditorium_id),
+  FOREIGN KEY (auditorium_id, layout_version) REFERENCES auditorium_layout(auditorium_id, layout_version),
   FOREIGN KEY (movie_id) REFERENCES movie(movie_id));

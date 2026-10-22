@@ -1,0 +1,42 @@
+openapi: 3.0.3
+info:
+  title: seatsac user internal API
+  version: 0.3.0-draft
+  description: |
+    WBS 2.2.4 User 내부 API 명세 (초안 v0.3). 외부 API는 ../user.openapi.yaml, 공통 규칙(오류 형식·시각·ID)도 그 파일을 따른다.
+    - `/internal/**`는 서비스 간 동기 호출 전용이다. Gateway에 라우트가 없어 외부에서 호출할 수 없고, K8s Service DNS로 직접 부른다.
+    - 인증 헤더가 없다. 호출자 검증은 네트워크 격리(클러스터 내부 전용 Service, NetworkPolicy)로 한다. 그래서 전역 `security`가 빈 배열이다.
+    - 타임아웃은 연결 1초·응답 3초(10/16 팀 기준). 호출은 InternalRestClientFactory로 만든 클라이언트만 쓴다(traceId 자동 전달).
+  x-wbs: "2.2.4"
+servers:
+  - url: http://user.cinema-staging.svc.cluster.local:8080
+    description: User 서비스 (K8s Service DNS. 네임스페이스는 인프라 확정값에 맞출 것)
+security: []   # 내부 전용. 네트워크 격리로 보호하며 토큰 검증 없음
+tags:
+  - name: Internal
+    description: 서비스 간 동기 호출 전용. Gateway에 노출하지 않음
+
+paths:
+  /internal/users/{userId}/preferences:
+    get:
+      tags: [Internal]
+      operationId: internalGetUserPreferences
+      summary: '[AI → User] 추천용 선호 정보'
+      description: |
+        AI-08 추천 입력. userId는 Cognito `sub`. 타임아웃 연결 1초·응답 3초.
+        항상 200이다. user 행이 없거나(아직 `GET /users/me`를 부르지 않은 사용자) 선호 정보를 저장한 적이 없으면
+        빈 값 `{preferredTheaterIds: [], preferredTimeSlot: null, preferredGenres: []}`을 돌려준다(AI는 인기 회차 추천으로 전환).
+        404는 쓰지 않는다. AI가 "없음"과 "오류"를 구분할 필요 없이 빈 값 하나만 처리하게 하기 위해서다.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          description: Cognito `sub` (36자)
+          schema: { type: string, minLength: 36, maxLength: 36, example: 3f2b8c1e-5a47-4d0e-9b6f-0c1d2e3f4a5b }
+      responses:
+        '200':
+          description: OK. 선호 정보 없음도 빈 값으로 200
+          content:
+            application/json:
+              schema: { $ref: '../user.openapi.yaml#/components/schemas/Preferences' }
+        '400': { $ref: '../user.openapi.yaml#/components/responses/BadRequest' }

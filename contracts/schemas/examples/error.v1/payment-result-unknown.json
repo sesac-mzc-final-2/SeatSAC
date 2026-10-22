@@ -1,0 +1,11 @@
+{
+  "code": "PAYMENT_RESULT_UNKNOWN",
+  "message": "결제 결과를 확인하지 못했습니다.",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "details": [
+    {
+      "field": "paymentId",
+      "value": "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13"
+    }
+  ]
+}

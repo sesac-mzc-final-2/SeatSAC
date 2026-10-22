@@ -1,54 +1,51 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: seatsac catalog internal API
-  version: 0.3.0-draft
+  version: "1.1"
   description: |
-    WBS 2.2.4 Catalog 내부 API 명세 (초안 v0.3). 외부 API는 ../catalog.openapi.yaml, 공통 규칙(오류 형식·시각·ID)도 그 파일을 따른다.
-    - `/internal/**`는 서비스 간 동기 호출 전용이다. Gateway에 라우트가 없어 외부에서 호출할 수 없고, K8s Service DNS로 직접 부른다.
-    - 인증 헤더가 없다. 호출자 검증은 네트워크 격리(클러스터 내부 전용 Service, NetworkPolicy)로 한다. 그래서 전역 `security`가 빈 배열이다.
-    - 타임아웃은 연결 1초·응답 3초(10/16 팀 기준). 호출은 InternalRestClientFactory로 만든 클라이언트만 쓴다(traceId 자동 전달).
-    - 오류 응답은 외부 API와 같은 `ErrorResponse` 형식.
-  x-wbs: "2.2.4"
+    API 명세서 v1.1 3-2. Gateway가 라우팅하지 않는다. 호출자는 NetworkPolicy로 제한(OPS-15):
+    booking → catalog, user → catalog. 타임아웃 연결 1초 / 응답 3초, 재시도 없음.
+    호출자는 X-Trace-Id·X-User-Id를 그대로 전달한다.
 servers:
-  - url: http://catalog.cinema-staging.svc.cluster.local:8080
-    description: Catalog 서비스 (K8s Service DNS. 네임스페이스는 인프라 확정값에 맞출 것)
-security: []   # 내부 전용. 네트워크 격리로 보호하며 토큰 검증 없음
-tags:
-  - name: Internal
-    description: 서비스 간 동기 호출 전용. Gateway에 노출하지 않음
+  - url: http://catalog:8080
+security: []   # 내부 API: 사용자 인증 없음. 호출자는 NetworkPolicy로 제한 (OPS-15)
 
 paths:
+
   /internal/screenings/{screeningId}:
     get:
-      tags: [Internal]
-      operationId: internalGetScreeningForBooking
-      summary: '[Booking → Catalog] 회차 유효성·시작 시각'
-      description: |
-        2.1.2의 Booking → Catalog ② 회차 정보. BKG-02·07(상영 시작 시각), BKG-06(SQS 알림 메시지의
-        영화 제목·극장·상영관·상영 시각)에 쓰인다. 타임아웃 연결 1초·응답 3초.
-        좌석 ID 목록은 이 응답에 넣지 않는다. Booking이 CAT-04를 (상영관, 배치 버전) 키로 Pod 캐시해 쓴다(10/20 남궁일 확인).
-        그 Pod 캐시는 좌석 active 변경(LAY-07)을 버전으로 감지할 수 없어 TTL 10분을 둔다(CAT-04·updateSeatsActive 설명 참고).
+      operationId: getScreeningForBooking
+      summary: 회차 상세 (호출자 booking — BKG-02·06·07)
+      description: "이름 필드는 SQS 알림 payload용. 좌석 검증은 booking이 CAT-04 배치도를 (상영관, 버전) 키로 파드 캐시해 쓴다(2.2.4 v0.3에서 seats 삭제)"
+      x-caller: [booking]
       parameters:
-        - $ref: '../catalog.openapi.yaml#/components/parameters/ScreeningId'
+        - { name: screeningId, in: path, required: true, schema: { type: integer, format: int64 } }
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/InternalScreening' }
-        '404': { $ref: '../catalog.openapi.yaml#/components/responses/NotFound' }
+              schema:
+                type: object
+                required: [screeningId, auditoriumId, layoutVersion, startsAt, endsAt, movieTitle, theaterName, auditoriumName]
+                properties:
+                  screeningId: { type: integer, format: int64 }
+                  auditoriumId: { type: integer, format: int64 }
+                  layoutVersion: { type: integer, minimum: 1 }
+                  startsAt: { type: string, format: date-time }
+                  endsAt: { type: string, format: date-time }
+                  movieTitle: { type: string }
+                  theaterName: { type: string }
+                  auditoriumName: { type: string }
+        "404":
+          description: NOT_FOUND
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   /internal/screenings/summaries:
     post:
-      tags: [Internal]
-      operationId: internalScreeningSummaries
-      summary: '[User·AI → Catalog] 회차 요약 일괄 조회'
-      description: |
-        USR-04 마이페이지에서 예매 목록의 회차를 표시용 정보(영화·극장·상영관·시각)로 바꾼다.
-        좌석 번호는 Booking 응답의 seatLabels를 쓰므로 여기서 받지 않는다.
-        POST를 쓰는 이유는 ID 목록이 길어질 수 있어서다(조회 전용, 멱등).
-        없는 ID는 결과에서 빠진다(오류 아님). 타임아웃 연결 1초·응답 3초.
-        응답 목록 키는 공통 규칙(페이징 없는 목록은 `{items}`)에 따라 `items`다.
+      operationId: getScreeningSummaries
+      summary: 회차 요약 일괄 조회 (호출자 user — USR-04)
+      x-caller: [user]
       requestBody:
         required: true
         content:
@@ -57,13 +54,10 @@ paths:
               type: object
               required: [screeningIds]
               properties:
-                screeningIds:
-                  type: array
-                  maxItems: 100
-                  items: { type: integer, format: int64 }
+                screeningIds: { type: array, minItems: 1, maxItems: 100, items: { type: integer, format: int64 } }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: 없는 ID는 결과에서 빠진다
           content:
             application/json:
               schema:
@@ -72,36 +66,56 @@ paths:
                 properties:
                   items:
                     type: array
-                    items: { $ref: '#/components/schemas/ScreeningSummary' }
-        '400': { $ref: '../catalog.openapi.yaml#/components/responses/BadRequest' }
+                    items: { $ref: "#/components/schemas/ScreeningSummary" }
+        "400":
+          description: VALIDATION_FAILED (0개 또는 100개 초과)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  /internal/theaters:
+    get:
+      operationId: getTheatersByIds
+      summary: 극장 ID 확인 (호출자 user — USR-05 선호 극장 검증, API 명세서 10장 #6)
+      x-caller: [user]
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: "쉼표 구분, 최대 10개 (예: 1004,1016)"
+          style: form
+          explode: false
+          schema: { type: array, minItems: 1, maxItems: 10, items: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: 없는 ID는 결과에서 빠진다
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [theaterId, name]
+                      properties:
+                        theaterId: { type: integer, format: int64 }
+                        name: { type: string }
+        "400":
+          description: VALIDATION_FAILED
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
 components:
   schemas:
+    ErrorResponse:
+      $ref: "../../schemas/error.v1.json"
     ScreeningSummary:
       type: object
-      required: [screeningId, movieId, movieTitle, theaterName, auditoriumName, startsAt, endsAt]
+      required: [screeningId, movieTitle, theaterName, auditoriumName, startsAt, endsAt]
       properties:
         screeningId: { type: integer, format: int64 }
-        movieId: { type: integer, format: int64 }
         movieTitle: { type: string }
-        viewGrade: { $ref: '../catalog.openapi.yaml#/components/schemas/ViewGrade' }
         theaterName: { type: string }
         auditoriumName: { type: string }
-        startsAt: { type: string, format: date-time }
-        endsAt: { type: string, format: date-time }
-
-    InternalScreening:
-      type: object
-      required: [screeningId, movieId, movieTitle, theaterId, theaterName, auditoriumId, auditoriumName, layoutVersion, screenType, startsAt, endsAt]
-      properties:
-        screeningId: { type: integer, format: int64 }
-        movieId: { type: integer, format: int64 }
-        movieTitle: { type: string, description: SQS 알림 메시지용 }
-        theaterId: { type: integer, format: int64 }
-        theaterName: { type: string }
-        auditoriumId: { type: integer, format: int64 }
-        auditoriumName: { type: string }
-        layoutVersion: { type: integer }
-        screenType: { $ref: '../catalog.openapi.yaml#/components/schemas/ScreenType' }
         startsAt: { type: string, format: date-time }
         endsAt: { type: string, format: date-time }

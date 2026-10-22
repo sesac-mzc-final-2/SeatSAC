@@ -37,7 +37,3 @@ output "sg_rds_id" {
 output "sg_valkey_id" {
   value = aws_security_group.valkey.id
 }
-
-output "sg_lambda_stats_id" {
-  value = aws_security_group.lambda_stats.id
-}

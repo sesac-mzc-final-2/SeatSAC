@@ -1,297 +1,205 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
   title: seatsac catalog API
-  version: 0.3.0-draft
+  version: "1.1"
   description: |
-    WBS 2.2.4 Catalog API 명세 (초안 v0.3, 2026-10-21). catalog-user.openapi.yaml(v0.3)에서 Catalog 부분을 분리한 파일로, User 부분은 user.openapi.yaml에 있다.
-    v0.3 변경: 남궁일 변경 요청(10/20) 반영 — 인증 Cognito(ADR-37, 10/19 확정) 반영으로 USR-01~03 삭제, 사용자 ID = Cognito `sub`(UUID 문자열),
-    오류 `details` 항상 배열·`{field, value, reason}`, `traceId` 32자리, Catalog ID BIGINT(int64), DB 시각 UTC 저장.
-    기준 문서: 노션 「SeatSAC 기능명세서」 4·5·6장, 「ERD·서비스별 스키마」(2.2.2, 6차), 「도메인 분리·서비스 경계 정의」(2.1.2).
-
-    공통 규칙
-    - 외부 요청은 모두 Gateway를 거친다. 인증이 필요한 API는 `Authorization: Bearer {accessToken}`.
-      토큰은 Cognito Access Token이며 Gateway가 JWKS로 검증한다(GW-02, ADR-37). 가입·로그인·토큰 재발급은 Cognito Hosted UI가 처리하므로 이 명세에 API가 없다(기능명세서 6장 USR-01~03).
-      Gateway는 검증 후 `X-User-Id`(= `sub`), `X-User-Role`(`cognito:groups`에서 USER·ADMIN), `X-Trace-Id`를 붙여 하위 서비스로 넘긴다(GW-02, GW-03).
-      Payment는 외부에 노출하지 않는다(/payments 라우트 없음).
-    - `X-Trace-Id`는 소문자 16진수 32자리. 외부에서 보낸 값은 덮어쓰고 응답 헤더로도 돌려준다.
-    - `/internal/**` 경로는 서비스 간 동기 호출 전용이다. Gateway에 라우트를 만들지 않아 외부에서 호출할 수 없다.
-      이 파일은 외부 API(`servers: /api`)만 담고, 내부 API는 `internal/catalog.internal.openapi.yaml`에 있다(contracts 규칙).
-    - 서비스 간 호출 타임아웃은 연결 1초·응답 3초(10/16 팀 기준). Catalog → Booking 잔여석만 300ms.
-    - 취소 상태 철자는 CANCELED.
-    - ID: Catalog ID(영화·극장·상영관·회차·좌석)는 BIGINT(`int64`). 사용자 ID는 Cognito `sub` 문자열(36자 UUID).
-    - JSON 필드는 camelCase, 시각은 ISO-8601 `+09:00`으로 응답한다(DB 저장은 UTC, 변환은 응답 직렬화에서). 날짜는 `YYYY-MM-DD`이며
-      요청의 `date`는 KST 영업일(`business_date`)이다.
-    - 목록 페이징은 `page`(0부터), `size`(기본 20, 최대 50). 페이징 응답은 `{content, page, size, totalElements, totalPages}`,
-      페이징 없는 목록(극장·회차·요약)은 `{items}`로 구분한다(Booking과 통일, 10/21).
-    - 오류 응답은 모두 `ErrorResponse` 형식(Gateway 401·503 포함).
-  x-wbs: "2.2.4"
+    API 명세서 v1.1 3장 (CAT-01~06, LAY-07 · 한채연). 외부 호출은 `/api` 접두사, Gateway가 StripPrefix=1.
+    `/screenings/{id}/seats`, `/screenings/{id}/seats/stream`은 booking 소관(booking.openapi.yaml).
+    시각은 ISO-8601 +09:00, 날짜만은 YYYY-MM-DD. 응답은 Valkey TTL 10분 캐시(CAT-05), 잔여 좌석은 캐시하지 않는다.
 servers:
   - url: /api
-    description: 외부 API. CloudFront와 같은 도메인의 /api/* 이며 Gateway가 /api를 제거해 전달한다(기능명세서 2장, v4). /internal/** 은 internal/catalog.internal.openapi.yaml 참고
-security:
-  - bearerAuth: []   # 기본값. 인증 없는 공개 조회(CAT-01~05)는 작업별 `security: []`로 푼다
+security: []   # 기본 인증 없음. 관리자 경로만 bearerAuth + x-required-role: ADMIN
 tags:
-  - name: Catalog
-    description: 영화·극장·상영 회차·좌석 배치 조회 (CAT-01~05, 인증 없음)
-  - name: Catalog Admin
-    description: 관리자 등록·좌석 비활성화 (CAT-06, LAY-07, P3)
+  - { name: movies, description: "영화 (CAT-01·02)" }
+  - { name: screenings, description: "상영 회차 (CAT-03)" }
+  - { name: theaters, description: "극장 (CAT-03)" }
+  - { name: auditoriums, description: "상영관 배치도 (CAT-04)" }
+  - { name: admin, description: "관리자 (ADMIN, P3)" }
 
 paths:
+
   /movies:
     get:
-      tags: [Catalog]
+      tags: [movies]
       operationId: listMovies
-      summary: 영화 목록 조회 (CAT-01)
-      description: |
-        상영 상태별 영화 목록. NOW_SHOWING은 오늘 이후 회차가 하나라도 있는 영화다.
-        movie는 롯데 시간표에 나온 영화뿐이라(상영 전 영화 없음) COMING_SOON은 현재 항상 빈 배열이다.
-        포스터는 TMDB로 보충한다(D3).
-        캐시 키 `catalog:movies:{status}:{page}:{size}`, TTL 10분(CAT-05).
-      security: []
+      summary: CAT-01 영화 목록
+      x-feature-id: CAT-01
       parameters:
-        - name: status
-          in: query
-          schema: { type: string, enum: [NOW_SHOWING, COMING_SOON], default: NOW_SHOWING }
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/Size'
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/MovieStatus" } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
       responses:
-        '200':
-          description: 결과 없음은 content 빈 배열
+        "200":
+          description: 페이징 목록. 시드에 개봉일이 없어 COMING_SOON은 빈 목록
           content:
             application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/PageMeta'
-                  - type: object
-                    required: [content]
-                    properties:
-                      content:
-                        type: array
-                        items: { $ref: '#/components/schemas/MovieSummary' }
-        '400': { $ref: '#/components/responses/BadRequest' }
+              schema: { $ref: "#/components/schemas/MoviePage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
 
   /movies/{movieId}:
     get:
-      tags: [Catalog]
+      tags: [movies]
       operationId: getMovie
-      summary: 영화 상세 조회 (CAT-02)
-      description: |
-        줄거리·감독·출연·개봉일·장르·원 러닝타임은 롯데 시드에 없어, TMDB(language=ko-KR)로 1회 수집해 movie에 보충한다(D3).
-        TMDB 매칭 실패나 번역 없음은 null로 내려간다. 화면 크레딧에 TMDB 출처를 표시해야 한다(5장 준수 조건).
-        캐시 키 `catalog:movie:{movieId}`, TTL 10분.
-      security: []
+      summary: CAT-02 영화 상세
+      x-feature-id: CAT-02
       parameters:
-        - $ref: '#/components/parameters/MovieId'
+        - { name: movieId, in: path, required: true, schema: { type: integer, format: int64 } }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: "OK. TMDB로 보충(2.2.4 D3), 없는 항목은 null·[]"
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MovieDetail' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/MovieDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /theaters:
     get:
-      tags: [Catalog]
+      tags: [theaters]
       operationId: listTheaters
-      summary: 극장 목록 조회 (CAT-03 보조)
-      description: |
-        상영시간 선택 화면의 극장 선택용. 기능명세서에 없던 API로, CAT-03 입력(극장 ID)을 고르기 위해 추가했다.
-        기본값은 좌석 배치가 있는 4개 지점(hasLayout=true)만. 캐시 키 `catalog:theaters:{hasLayout}`, TTL 10분.
-      security: []
+      summary: CAT-03 극장 목록 (상영시간 화면의 극장 선택용)
+      x-feature-id: CAT-03
       parameters:
-        - name: hasLayout
-          in: query
-          schema: { type: boolean, default: true }
-        - name: region
-          in: query
-          schema: { type: string, example: 서울 }
+        - { name: hasLayout, in: query, schema: { type: boolean, default: true } }
+        - { name: region, in: query, schema: { type: string } }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: "페이징 없는 목록 { items } (2.2.4 D8)"
           content:
             application/json:
               schema:
                 type: object
                 required: [items]
                 properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/Theater' }
+                  items: { type: array, items: { $ref: "#/components/schemas/Theater" } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
 
   /screenings:
     get:
-      tags: [Catalog]
+      tags: [screenings]
       operationId: listScreenings
-      summary: 상영시간 조회 (CAT-03)
-      description: |
-        조건에 맞는 회차를 시작 시각순으로 돌려준다. 오늘 날짜는 이미 시작한 회차를 뺀다.
-        시드 기간(2026-10-15 ~ 11-21) 밖의 날짜는 빈 배열.
-
-        `date`는 KST 영업일이다. DB의 starts_at은 UTC라서 KST 00:00~08:59 시작 회차는 UTC 날짜가 하루 전이다.
-        그래서 날짜 조건은 starts_at이 아니라 `business_date`로 건다.
-
-        잔여 좌석(remainingSeats)
-        - 1차: 회차의 상영관 total_seats를 그대로 넣고 remainingSeatsSource=TOTAL.
-        - 2차(10/16 동기 호출로 확정): Booking `GET /internal/screenings/seat-counts`를 호출(응답 타임아웃 300ms,
-          기본값 3초의 예외. 대체값이 있어서 화면을 늦추지 않음).
-          응답이 없으면 1차 값으로 대체하고 remainingSeatsSource=TOTAL.
-        - 잔여 좌석은 캐시하지 않는다. 회차 목록만 `catalog:screenings:{date}:{theaterId}:{movieId|all}`, TTL 10분.
-          캐시에는 영업일 전체 회차를 넣고, 이미 시작한 회차 제외(`startsAt > now`)는 캐시 조회 후 요청마다 적용한다
-          (키에 시각이 없어 필터를 캐시 전에 걸면 시작한 회차가 최대 10분 남는다).
-      security: []
+      summary: CAT-03 상영 회차 목록 (시간순, 오늘은 시작한 회차 제외)
+      x-feature-id: CAT-03
       parameters:
-        - name: date
-          in: query
-          required: true
-          description: KST 영업일
-          schema: { type: string, format: date, example: '2026-10-20' }
-        - name: theaterId
-          in: query
-          required: true
-          schema: { type: integer, format: int64, example: 4 }
-        - name: movieId
-          in: query
-          description: 없으면 해당 극장의 모든 영화
-          schema: { type: integer, format: int64 }
+        - { name: date, in: query, required: true, description: "KST 영업일(business_date)", schema: { type: string, format: date }, example: "2026-11-16" }
+        - { name: theaterId, in: query, required: true, schema: { type: integer, format: int64 } }
+        - { name: movieId, in: query, schema: { type: integer, format: int64 } }
       responses:
-        '200':
-          description: OK
+        "200":
+          description: "페이징 없는 목록 { items }, 시간순. 시드 기간 밖은 items: [] (2.2.4 D8)"
           content:
             application/json:
               schema:
                 type: object
                 required: [items]
                 properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/Screening' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404':
-          description: 없는 theaterId·movieId
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+                  items: { type: array, items: { $ref: "#/components/schemas/Screening" } }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
 
   /screenings/{screeningId}:
     get:
-      tags: [Catalog]
+      tags: [screenings]
       operationId: getScreening
-      summary: 회차 단건 조회 (CAT-03 보조)
-      description: |
-        좌석 선택 화면을 새로고침하거나 링크로 바로 들어왔을 때 회차 정보를 다시 받기 위한 API.
-        주의: `/screenings/{id}/seats`, `/screenings/{id}/seats/stream`은 Booking(BKG-01, 05)이다.
-        Gateway는 이 두 경로를 `/screenings/**`보다 먼저 Booking으로 라우팅해야 한다(GW-01).
-      security: []
+      summary: CAT-03 회차 단건 (좌석 선택 화면 새로고침·직접 진입)
+      x-feature-id: CAT-03
       parameters:
-        - $ref: '#/components/parameters/ScreeningId'
+        - $ref: "#/components/parameters/ScreeningId"
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Screening' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/Screening" }
+              example:
+                screeningId: 5123
+                movie: { movieId: 12, title: "영화 제목", viewGrade: "12" }
+                theater: { theaterId: 1004, name: "건대입구" }
+                auditorium: { auditoriumId: 406, name: "6관", screenType: NORMAL }
+                layoutVersion: 1
+                businessDate: "2026-11-16"
+                startsAt: "2026-11-16T14:30:00+09:00"
+                endsAt: "2026-11-16T16:25:00+09:00"
+                filmFormat: "2D"
+                totalSeats: 184
+                remainingSeats: 171
+                remainingSeatsSource: BOOKING
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /auditoriums/{auditoriumId}/layout:
     get:
-      tags: [Catalog]
+      tags: [auditoriums]
       operationId: getAuditoriumLayout
-      summary: 상영관 좌석 배치 조회 (CAT-04)
-      description: |
-        기능명세서의 `/halls/{id}/layout`을 테이블 이름·LAY-07 경로에 맞춰 `/auditoriums`로 바꿨다.
-        version을 주지 않으면 최신 layout_version. 회차에서 들어올 때는 Screening.layoutVersion을 넘긴다.
-        좌석은 seat, 스크린·입구·통로·출처는 auditorium_layout(10/16 ERD 추가) 테이블에서 읽는다.
-        좌석 상태는 포함하지 않는다(BKG-01). 배치는 정적이라 캐시 키 `catalog:layout:{auditoriumId}:{version}`, TTL 10분.
-        Booking도 이 응답을 (상영관, 배치 버전) 키로 Pod 캐시해 쓴다(10/20 남궁일 확인).
-        좌석 active 변경(LAY-07)은 배치 버전을 올리지 않으므로 Booking Pod 캐시에는 TTL이 필요하다(updateSeatsActive 참고).
-        화면 하단에 source.provider와 source.fetchedAt을 표시해야 한다(5장 준수 조건).
-      security: []
+      summary: CAT-04 상영관 좌석 배치도 (좌석 점유 상태는 BKG-01)
+      x-feature-id: CAT-04
       parameters:
-        - name: auditoriumId
-          in: path
-          required: true
-          schema: { type: integer, format: int64, example: 6 }
-        - name: version
-          in: query
-          schema: { type: integer, minimum: 1 }
+        - $ref: "#/components/parameters/AuditoriumId"
+        - { name: version, in: query, description: 생략 시 최신. 회차에서 들어올 때는 회차의 layoutVersion, schema: { type: integer, minimum: 1 } }
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AuditoriumLayout' }
-        '404':
-          description: 없는 상영관 또는 버전
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              schema: { $ref: "#/components/schemas/AuditoriumLayout" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /admin/movies:
     post:
-      tags: [Catalog Admin]
+      tags: [admin]
       operationId: createMovie
-      summary: 영화 등록 (CAT-06, P3)
-      description: 관리자(`cognito:groups`에 ADMIN) 전용. 등록 후 `catalog:movies:*` 캐시 삭제. P3이라 구현 여부는 스크럼에서 결정.
-      security: [{ bearerAuth: [] }]
+      summary: CAT-06 영화 등록 (P3)
+      x-feature-id: CAT-06
+      x-required-role: ADMIN
+      security: [ { bearerAuth: [] } ]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/MovieCreateRequest' }
+            schema: { $ref: "#/components/schemas/MovieCreateRequest" }
       responses:
-        '201':
-          description: Created
+        "201":
+          description: 생성된 영화. 관련 캐시 삭제
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MovieDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+              schema: { $ref: "#/components/schemas/MovieSummary" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /admin/screenings:
     post:
-      tags: [Catalog Admin]
+      tags: [admin]
       operationId: createScreening
-      summary: 상영 회차 등록 (CAT-06, P3)
-      description: |
-        관리자 전용. 같은 상영관·시간대 겹침은 409. 등록 후 `catalog:screenings:*` 캐시 삭제.
-        요청 시각은 `+09:00` 표기로 받고 UTC로 변환해 저장한다. business_date는 KST 기준으로 채운다.
-      security: [{ bearerAuth: [] }]
+      summary: CAT-06 회차 등록 (P3)
+      x-feature-id: CAT-06
+      x-required-role: ADMIN
+      security: [ { bearerAuth: [] } ]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ScreeningCreateRequest' }
+            schema: { $ref: "#/components/schemas/ScreeningCreateRequest" }
       responses:
-        '201':
-          description: Created
+        "201":
+          description: 생성된 회차. 관련 캐시 삭제
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Screening' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
+              schema: { $ref: "#/components/schemas/Screening" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: SCHEDULE_CONFLICT — 같은 상영관 시간 겹침
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   /admin/auditoriums/{auditoriumId}/seats:
     patch:
-      tags: [Catalog Admin]
-      operationId: updateSeatsActive
-      summary: 좌석 비활성화 (LAY-07, P3)
-      description: |
-        파손석 등을 비활성화한다. 판매된 좌석이 있으면 409.
-        판매 여부 확인에 Booking 호출이 필요하다(P3이라 구현 시 2.2.3과 맞춘다).
-        캐시 무효화: active 변경은 layoutVersion을 올리지 않는다(좌표·좌석 수가 그대로라 새 버전을 만들 이유가 없다).
-        대신 반영 후 `catalog:layout:{auditoriumId}:*` 캐시를 삭제한다.
-        Booking Pod 캐시는 (상영관, 배치 버전) 키라 이 변경을 감지하지 못하므로 TTL 10분(Catalog 캐시와 같음)을 둔다.
-        즉 비활성화는 최대 10분 뒤 Booking에 반영되며, 그 사이 판매된 좌석은 409 규칙(판매 좌석 비활성화 불가)으로 막는다. 세부는 2.2.3과 맞춘다.
-      security: [{ bearerAuth: [] }]
+      tags: [admin]
+      operationId: updateSeatActive
+      summary: LAY-07 좌석 비활성화·재활성화 (P3)
+      x-feature-id: LAY-07
+      x-required-role: ADMIN
+      security: [ { bearerAuth: [] } ]
       parameters:
-        - name: auditoriumId
-          in: path
-          required: true
-          schema: { type: integer, format: int64 }
+        - $ref: "#/components/parameters/AuditoriumId"
       requestBody:
         required: true
         content:
@@ -300,284 +208,224 @@ paths:
               type: object
               required: [seatIds, active]
               properties:
-                seatIds:
-                  type: array
-                  minItems: 1
-                  items: { type: integer, format: int64 }
+                seatIds: { type: array, minItems: 1, items: { type: integer, format: int64 } }
                 active: { type: boolean }
       responses:
-        '204': { description: 반영됨 }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "200":
+          description: 바뀐 좌석 수
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated: { type: integer, minimum: 0 }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: SEAT_SOLD — 판매된 좌석 비활성화 시도
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
-      description: Cognito Access Token. Gateway가 JWKS로 검증한다(ADR-37).
+      bearerFormat: JWT   # Cognito Access Token (ID 토큰 아님)
 
   parameters:
-    Page:
-      name: page
-      in: query
-      schema: { type: integer, minimum: 0, default: 0 }
-    Size:
-      name: size
-      in: query
-      schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
-    MovieId:
-      name: movieId
-      in: path
-      required: true
-      schema: { type: integer, format: int64, example: 1 }
-    ScreeningId:
-      name: screeningId
-      in: path
-      required: true
-      schema: { type: integer, format: int64, example: 1 }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    Size: { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+    ScreeningId: { name: screeningId, in: path, required: true, schema: { type: integer, format: int64 } }
+    AuditoriumId: { name: auditoriumId, in: path, required: true, schema: { type: integer, format: int64 } }
 
   responses:
-    BadRequest:
-      description: 입력 검증 실패 (code=VALIDATION_FAILED, details에 필드별 사유)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ValidationFailed:
+      description: "VALIDATION_FAILED — details[]에 { field, reason }"
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     Unauthorized:
-      description: 토큰 없음·만료 (Gateway가 응답, code=UNAUTHORIZED)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+      description: UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     Forbidden:
-      description: 권한 없음 (code=FORBIDDEN)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+      description: FORBIDDEN (Gateway) — ADMIN 아님
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     NotFound:
-      description: 대상 없음 (code=NOT_FOUND)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
-    Conflict:
-      description: 상태 충돌 (code=CONFLICT)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
-    Unavailable:
-      description: 의존 서비스 응답 없음 (Gateway 503 포함)
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+      description: NOT_FOUND
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   schemas:
     ErrorResponse:
-      type: object
-      required: [code, message, traceId, details]
-      properties:
-        code: { type: string, example: NOT_FOUND }
-        message: { type: string, example: 영화를 찾을 수 없습니다. }
-        traceId:
-          type: string
-          pattern: '^[0-9a-f]{32}$'
-          description: 'GW-03 추적 ID (X-Trace-Id, 소문자 16진수 32자리)'
-          example: 7f3c2a9e1b4d4c8aa0e5d6f7b8c9d0e1
-        details:
-          type: array
-          description: 항상 배열(없으면 빈 배열). Booking·Payment와 같은 원소 형식
-          items:
-            type: object
-            required: [field, reason]
-            properties:
-              field: { type: string, example: size }
-              value: { description: 거부된 입력 값 (없으면 null. 타입은 입력에 따라 다름), example: 100 }
-              reason: { type: string, example: 50 이하여야 합니다 }
+      $ref: "../schemas/error.v1.json"
 
-    PageMeta:
-      type: object
-      required: [page, size, totalElements, totalPages]
-      properties:
-        page: { type: integer, minimum: 0 }
-        size: { type: integer, minimum: 1, maximum: 50 }
-        totalElements: { type: integer, format: int64, minimum: 0 }
-        totalPages: { type: integer, minimum: 0 }
-
-    ViewGrade:
-      type: string
-      description: 'movie.view_grade 원본 값. 전체·12·15·청불'
-      enum: [ALL, '12', '15', '19']
+    MovieStatus: { type: string, enum: [NOW_SHOWING, COMING_SOON], default: NOW_SHOWING }
+    ViewGrade: { type: string, enum: ["ALL", "12", "15", "19"] }
+    ScreenType: { type: string, enum: [NORMAL, RECLINER], description: "screen_type_code 100 · 986" }
+    SeatType: { type: string, enum: [NORMAL, RECLINER, UNKNOWN], description: "PhysicalBlockCode 1 · 190 · 40(미확인)" }
 
     MovieSummary:
       type: object
-      required: [movieId, title, viewGrade, runningMinutes]
+      required: [movieId, title, viewGrade, slotMinutes, posterUrl]
       properties:
-        movieId: { type: integer, format: int64, example: 1 }
-        title: { type: string, example: 오디세이 }
-        titleEn: { type: string, nullable: true, example: The Odyssey }
-        viewGrade: { $ref: '#/components/schemas/ViewGrade' }
-        runningMinutes:
-          type: integer
-          description: 'movie.slot_minutes(회차 시작~종료 간격 최빈값). 광고 포함 여부 미확인'
-          example: 182
-        posterUrl:
-          type: string
-          nullable: true
-          description: 'TMDB 포스터. Catalog가 poster_path에 이미지 기본 주소(https://image.tmdb.org/t/p/w500)를 붙여 내려준다. TMDB 매칭 실패 시 null(화면은 제목 카드). 롯데시네마 이미지는 쓰지 않는다(D3)'
+        movieId: { type: integer, format: int64 }
+        title: { type: string }
+        titleEn: { type: [string, "null"] }
+        viewGrade: { $ref: "#/components/schemas/ViewGrade" }
+        slotMinutes: { type: integer, description: "시작~종료 간격 최빈값" }
+        posterUrl: { type: [string, "null"], description: "TMDB 포스터 URL(2.2.4 D3, 출처 표시). 롯데시네마 이미지 사용 금지. 없으면 null" }
 
     MovieDetail:
       allOf:
-        - $ref: '#/components/schemas/MovieSummary'
+        - $ref: "#/components/schemas/MovieSummary"
         - type: object
           properties:
-            synopsis: { type: string, nullable: true }
-            director: { type: string, nullable: true }
-            cast:
-              type: array
-              nullable: true
-              items: { type: string }
-            releaseDate: { type: string, format: date, nullable: true }
-            runtimeMinutes:
-              type: integer
-              nullable: true
-              description: TMDB 원 러닝타임(분). runningMinutes(회차 간격, 광고 포함 여부 미확인)와 다른 값이다
-            genres:
-              type: array
-              nullable: true
-              items: { type: string }
-              description: TMDB 장르(한국어 이름). 매칭 실패 시 null (ERD 결정 2)
+            synopsis: { type: [string, "null"] }
+            director: { type: [string, "null"] }
+            cast: { type: array, items: { type: string } }
+            releaseDate: { type: [string, "null"], format: date }
+            genres: { type: array, items: { type: string } }
+            runtimeMinutes: { type: [integer, "null"], description: "원 러닝타임(TMDB). slotMinutes(회차 간격)와 다름" }
+
+    MoviePage:
+      type: object
+      required: [content, page, size, totalElements, totalPages]
+      properties:
+        content: { type: array, items: { $ref: "#/components/schemas/MovieSummary" } }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer }
 
     Theater:
       type: object
       required: [theaterId, name, region, hasLayout]
       properties:
-        theaterId: { type: integer, format: int64, example: 4 }
-        name: { type: string, example: 건대입구 }
-        region: { type: string, example: 서울 }
-        hasLayout: { type: boolean, example: true }
-
-    ScreenType:
-      type: string
-      description: 'auditorium.screen_type_code 100=일반, 986=리클라이너'
-      enum: [NORMAL, RECLINER]
+        theaterId: { type: integer, format: int64 }
+        name: { type: string }
+        region: { type: [string, "null"] }
+        hasLayout: { type: boolean }
 
     Screening:
       type: object
-      required: [screeningId, movieId, movieTitle, viewGrade, theaterId, theaterName, auditoriumId, auditoriumName, screenType, layoutVersion, startsAt, endsAt, totalSeats, remainingSeats, remainingSeatsSource]
+      required: [screeningId, movie, theater, auditorium, layoutVersion, businessDate, startsAt, endsAt, totalSeats, remainingSeats, remainingSeatsSource]
       properties:
-        screeningId: { type: integer, format: int64, example: 1 }
-        movieId: { type: integer, format: int64, example: 1 }
-        movieTitle: { type: string, example: 오디세이 }
-        viewGrade: { $ref: '#/components/schemas/ViewGrade' }
-        theaterId: { type: integer, format: int64, example: 4 }
-        theaterName: { type: string, example: 건대입구 }
-        auditoriumId: { type: integer, format: int64, example: 1 }
-        auditoriumName: { type: string, example: 1관 }
-        screenType: { $ref: '#/components/schemas/ScreenType' }
-        layoutVersion: { type: integer, example: 1 }
-        businessDate: { type: string, format: date, description: KST 영업일, example: '2026-10-20' }
-        playSequence: { type: integer, example: 1 }
-        startsAt: { type: string, format: date-time, description: 'DB는 UTC, 응답은 +09:00', example: '2026-10-20T09:20:00+09:00' }
-        endsAt: { type: string, format: date-time, example: '2026-10-20T12:22:00+09:00' }
-        filmFormat: { type: string, example: 2D 일반사운드 }
-        subtitleType: { type: string, description: 원본에 이름이 없어 현재 모두 "미확인", example: 미확인 }
-        totalSeats: { type: integer, example: 105 }
-        remainingSeats: { type: integer, example: 105 }
+        screeningId: { type: integer, format: int64 }
+        movie:
+          type: object
+          required: [movieId, title, viewGrade]
+          properties:
+            movieId: { type: integer, format: int64 }
+            title: { type: string }
+            viewGrade: { $ref: "#/components/schemas/ViewGrade" }
+        theater:
+          type: object
+          required: [theaterId, name]
+          properties:
+            theaterId: { type: integer, format: int64 }
+            name: { type: string }
+        auditorium:
+          type: object
+          required: [auditoriumId, name, screenType]
+          properties:
+            auditoriumId: { type: integer, format: int64 }
+            name: { type: string }
+            screenType: { $ref: "#/components/schemas/ScreenType" }
+        layoutVersion: { type: integer, minimum: 1 }
+        businessDate: { type: string, format: date, description: "상영 영업일 (Asia/Seoul)" }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        filmFormat: { type: [string, "null"], examples: ["2D"] }
+        totalSeats: { type: integer, minimum: 0 }
+        remainingSeats: { type: integer, minimum: 0, description: "totalSeats − (heldCount + reservedCount)" }
         remainingSeatsSource:
           type: string
           enum: [TOTAL, BOOKING]
-          description: TOTAL이면 Booking 값이 아닌 전체 좌석 수(1차 구현 또는 Booking 응답 없음)
+          description: "Booking이 300ms 안에 답하지 않으면 TOTAL (remainingSeats = totalSeats)"
 
     AuditoriumLayout:
       type: object
-      required: [auditoriumId, theaterId, theaterName, name, screenType, layoutVersion, width, height, totalSeats, screen, entrances, verticalAisles, horizontalAisles, seats, source]
+      required: [auditoriumId, name, screenType, layoutVersion, width, height, screen, entrances, verticalAisles, horizontalAisles, seats, source]
       properties:
-        auditoriumId: { type: integer, format: int64, example: 6 }
-        theaterId: { type: integer, format: int64, example: 4 }
-        theaterName: { type: string, example: 건대입구 }
-        name: { type: string, example: 6관 }
-        screenType: { $ref: '#/components/schemas/ScreenType' }
-        layoutVersion: { type: integer, example: 1 }
-        width: { type: number, description: '정규화 좌표 기준 가로 크기(auditorium.layout_width)', example: 26.095 }
-        height: { type: number, description: '정규화 좌표 기준 세로 크기(auditorium.layout_height)', example: 20.6 }
-        totalSeats: { type: integer, example: 401 }
+        auditoriumId: { type: integer, format: int64 }
+        name: { type: string }
+        screenType: { $ref: "#/components/schemas/ScreenType" }
+        layoutVersion: { type: integer, minimum: 1 }
+        width: { type: number }
+        height: { type: number }
         screen:
           type: object
           required: [xFrom, xTo]
-          description: 배치도 위쪽에 그린다
           properties:
-            xFrom: { type: number, example: 0.0 }
-            xTo: { type: number, example: 26.095 }
+            xFrom: { type: number }
+            xTo: { type: number }
         entrances:
           type: array
           items:
             type: object
-            required: [label, x, y]
+            required: [x, y]
             properties:
-              label: { type: string, example: 입구 }
               x: { type: number }
               y: { type: number }
-              angleCode: { type: integer, description: 원본 각도 코드(10·20·30), example: 20 }
         verticalAisles:
           type: array
           items:
             type: object
+            required: [xFrom, xTo]
             properties:
               xFrom: { type: number }
               xTo: { type: number }
-              rows: { type: integer, description: 이 통로에 걸친 행 수 }
         horizontalAisles:
           type: array
           items:
             type: object
+            required: [yFrom, yTo]
             properties:
-              afterRow: { type: string, example: I }
-              beforeRow: { type: string, example: J }
               yFrom: { type: number }
               yTo: { type: number }
         seats:
           type: array
-          items: { $ref: '#/components/schemas/Seat' }
+          items: { $ref: "#/components/schemas/LayoutSeat" }
         source:
           type: object
           required: [provider, fetchedAt]
+          description: "화면 하단에 출처·수집 시각 표시 (준수 조건)"
           properties:
-            provider: { type: string, example: 롯데시네마 }
-            fetchedAt: { type: string, format: date-time, example: '2026-10-14T18:45:47+09:00' }
+            provider: { type: string, examples: [LOTTE] }
+            fetchedAt: { type: string, format: date-time }
 
-    Seat:
+    LayoutSeat:
       type: object
-      required: [seatId, label, row, col, x, y, w, h, zone, type, active]
+      required: [seatId, seatLabel, rowLabel, colNo, x, y, w, h, seatType, active]
       properties:
-        seatId: { type: integer, format: int64, description: 'auditorium_id × 10000 + 순번', example: 60001 }
-        label: { type: string, example: A1 }
-        row: { type: string, example: A }
-        col: { type: integer, example: 1 }
-        x: { type: number, example: 0.0 }
-        y: { type: number, example: 0.0 }
-        w: { type: number, example: 0.8 }
-        h: { type: number, example: 0.8 }
-        zone: { type: integer, example: 1 }
-        type:
-          type: string
-          enum: [NORMAL, RECLINER, UNKNOWN]
-          description: 'seat_type 일반·리클라이너·미확인. UNKNOWN은 원본 코드 40(장애인석 추정)'
-        active: { type: boolean, example: true }
+        seatId: { type: integer, format: int64 }
+        seatLabel: { type: string, examples: [A1] }
+        rowLabel: { type: string }
+        colNo: { type: integer }
+        x: { type: number }
+        y: { type: number }
+        w: { type: number }
+        h: { type: number }
+        zoneNo: { type: [integer, "null"] }
+        seatType: { $ref: "#/components/schemas/SeatType" }
+        active: { type: boolean }
 
     MovieCreateRequest:
       type: object
-      required: [title, viewGrade, runningMinutes]
+      required: [title, viewGrade, slotMinutes]
       properties:
-        title: { type: string, maxLength: 100 }
-        titleEn: { type: string, maxLength: 100 }
-        viewGrade: { $ref: '#/components/schemas/ViewGrade' }
-        runningMinutes: { type: integer, minimum: 1 }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        titleEn: { type: [string, "null"], maxLength: 200 }
+        viewGrade: { $ref: "#/components/schemas/ViewGrade" }
+        slotMinutes: { type: integer, minimum: 1 }
 
     ScreeningCreateRequest:
       type: object
-      required: [auditoriumId, movieId, startsAt]
+      required: [auditoriumId, movieId, businessDate, startsAt, endsAt]
       properties:
         auditoriumId: { type: integer, format: int64 }
         movieId: { type: integer, format: int64 }
+        businessDate: { type: string, format: date }
         startsAt: { type: string, format: date-time }
-        endsAt: { type: string, format: date-time, description: 없으면 startsAt + runningMinutes }
+        endsAt: { type: string, format: date-time }
+        filmFormat: { type: [string, "null"] }

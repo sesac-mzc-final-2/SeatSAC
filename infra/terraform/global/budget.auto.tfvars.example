@@ -1,0 +1,2 @@
+# 이 파일을 budget.auto.tfvars 로 복사해서 쓴다. budget.auto.tfvars 는 .gitignore(*.auto.tfvars)라 커밋되지 않는다
+budget_emails = ["<받을 메일 1>", "<받을 메일 2>"]

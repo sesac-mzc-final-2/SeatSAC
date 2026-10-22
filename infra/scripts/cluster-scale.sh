@@ -6,6 +6,8 @@
 #     down   : 모든 노드그룹 desired = 0
 #     status : 현재 desired·min·max·InService 수만 출력
 #   환경변수: CLUSTER(기본 cinema-staging-eks), AWS_REGION(기본 ap-northeast-2), WAIT_SECONDS(기본 600)
+#   WAIT_SECONDS는 실행 전체의 대기 한도: ACTIVE 대기·변경 결과 대기·InService 대기가 모두 같은 deadline을 쓴다
+#   (aws eks wait는 최대 약 40분까지 기다리므로 쓰지 않는다 — Actions timeout 20분보다 길다)
 #   권한: 사람은 AWS_PROFILE=cinema-admin, CI는 cinema-gha-cluster-schedule
 #   Terraform은 desired_size 변경을 무시하므로 이 스크립트로 바꿔도 drift가 아니다 (3.1.2)
 # ------------------------------------------------------------------
@@ -26,6 +28,9 @@ if [ -n "$DESIRED" ] && ! [[ "$DESIRED" =~ ^[0-9]+$ ]]; then
   echo "desired는 0 이상의 정수: $DESIRED" >&2; exit 2
 fi
 
+DEADLINE=$(( $(date +%s) + WAIT_SECONDS ))
+POLL_SECONDS="${POLL_SECONDS:-15}"
+
 summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then echo "$*" >> "$GITHUB_STEP_SUMMARY"; fi; echo "$*"; }
 
 NGS=$(aws eks list-nodegroups --cluster-name "$CLUSTER" --query 'nodegroups[]' --output text)
@@ -40,6 +45,47 @@ in_service() {
     --query 'length(AutoScalingGroups[0].Instances[?LifecycleState==`InService`])' --output text
 }
 
+# deadline 안에서만 기다린다. 넘으면 무엇을 기다리다 멈췄는지 남기고 실패
+check_deadline() {
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "::error::${WAIT_SECONDS}초 안에 끝나지 않음: $1"; exit 1
+  fi
+}
+
+# 노드그룹이 ACTIVE가 될 때까지 (실패 상태면 바로 중단)
+wait_active() {
+  local ng="$1" st
+  while :; do
+    st=$(ng_field "$ng" 'nodegroup.status')
+    case "$st" in
+      ACTIVE) return 0 ;;
+      CREATE_FAILED|DELETE_FAILED|DEGRADED|DELETING)
+        echo "::error::$ng 상태 $st — describe-nodegroup의 health.issues 확인"; exit 1 ;;
+    esac
+    check_deadline "$ng ACTIVE 대기 (현재 $st)"
+    sleep "$POLL_SECONDS"
+  done
+}
+
+# update-nodegroup-config 결과(Successful)까지 (Failed·Cancelled면 오류 내용 출력 후 중단)
+wait_update() {
+  local ng="$1" id="$2" st
+  while :; do
+    st=$(aws eks describe-update --name "$CLUSTER" --nodegroup-name "$ng" --update-id "$id" \
+      --query 'update.status' --output text)
+    case "$st" in
+      Successful) return 0 ;;
+      Failed|Cancelled)
+        aws eks describe-update --name "$CLUSTER" --nodegroup-name "$ng" --update-id "$id" \
+          --query 'update.errors' --output json
+        echo "::error::$ng 변경 $id 이 $st"; exit 1 ;;
+    esac
+    check_deadline "$ng 변경 $id 대기 (현재 $st)"
+    sleep "$POLL_SECONDS"
+  done
+}
+
+UPDATES=()
 # 1) 변경 요청 (이미 같은 값이면 건너뜀 — EKS는 변경 없는 요청을 오류로 돌려준다)
 if [ -n "$DESIRED" ]; then
   for ng in $NGS; do
@@ -49,30 +95,32 @@ if [ -n "$DESIRED" ]; then
     fi
     if [ "$status" != "ACTIVE" ]; then
       echo "$ng 상태 $status → ACTIVE 대기"
-      aws eks wait nodegroup-active --cluster-name "$CLUSTER" --nodegroup-name "$ng"
+      wait_active "$ng"
     fi
     if [ "$cur" = "$DESIRED" ]; then
       echo "$ng: 이미 desired=$DESIRED"
       continue
     fi
     echo "$ng: desired $cur → $DESIRED"
-    aws eks update-nodegroup-config --cluster-name "$CLUSTER" --nodegroup-name "$ng" \
-      --scaling-config "desiredSize=$DESIRED" --query 'update.id' --output text
+    id=$(aws eks update-nodegroup-config --cluster-name "$CLUSTER" --nodegroup-name "$ng" \
+      --scaling-config "desiredSize=$DESIRED" --query 'update.id' --output text)
+    UPDATES+=("$ng $id")
+  done
+  for u in ${UPDATES[@]+"${UPDATES[@]}"}; do   # bash 3.2(macOS)·set -u 에서 빈 배열 대비
+    read -r ng id <<< "$u"
+    wait_update "$ng" "$id"
   done
   for ng in $NGS; do
-    aws eks wait nodegroup-active --cluster-name "$CLUSTER" --nodegroup-name "$ng"
+    wait_active "$ng"
   done
 fi
 
 # 2) 켤 때는 인스턴스가 실제로 뜰 때까지 기다린다 (Ready 판정은 kubelet 등록까지 1~2분 더 걸린다)
 if [ "$ACTION" = "up" ]; then
-  deadline=$(( $(date +%s) + WAIT_SECONDS ))
   for ng in $NGS; do
     until [ "$(in_service "$ng")" -ge "$DESIRED" ]; do
-      if [ "$(date +%s)" -ge "$deadline" ]; then
-        echo "::error::$ng 인스턴스가 ${WAIT_SECONDS}초 안에 InService가 되지 않음 (용량 부족·SCP·서브넷 IP 확인)"; exit 1
-      fi
-      sleep 15
+      check_deadline "$ng 인스턴스 InService 대기 (용량 부족·SCP·서브넷 IP 확인)"
+      sleep "$POLL_SECONDS"
     done
   done
 fi

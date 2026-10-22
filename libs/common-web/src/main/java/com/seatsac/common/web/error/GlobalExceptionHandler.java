@@ -1,11 +1,7 @@
 package com.seatsac.common.web.error;
 
 import com.seatsac.common.core.error.BusinessException;
-<<<<<<< HEAD
-import com.seatsac.common.core.error.ErrorCode;
-=======
 import com.seatsac.common.core.error.CommonResponseCode;
->>>>>>> origin/main
 import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.core.error.ErrorResponse;
 import com.seatsac.common.web.trace.TraceIdFilter;
@@ -26,15 +22,11 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-<<<<<<< HEAD
-/** 모든 예외를 { code, message, traceId, details[] } 로 바꾼다 (API 명세서 1-4, error.v1.json). */
-=======
 /**
  * 모든 예외를 {@code {code, message, traceId, details[]}}로 바꾼다 (API 명세서 1-4).
  * 응답 {@code code}는 공통 코드, 세분 이름은 {@code details[].reason}·MDC {@code errorCode}에 간다.
  * 로그·MDC 규칙은 {@link ErrorResponder}가 담당한다.
  */
->>>>>>> origin/main
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -53,15 +45,6 @@ public class GlobalExceptionHandler {
 
     /** 본문 검증 실패. {@code value}에는 사용자 입력을 담지 않는다 (카드 번호 등 민감값) */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-<<<<<<< HEAD
-    public ResponseEntity<ErrorResponse> validation(MethodArgumentNotValidException e) {
-        // value(rejectedValue)는 넣지 않는다: 카드 번호 등 민감 값이 응답·로그에 남을 수 있음
-        List<ErrorDetail> details = e.getBindingResult().getFieldErrors().stream()
-            .map(f -> ErrorDetail.of(f.getField(), String.valueOf(f.getDefaultMessage())))
-            .toList();
-        return ResponseEntity.badRequest()
-            .body(ErrorResponse.of(ErrorCode.VALIDATION_FAILED, "요청 값이 올바르지 않습니다.", TraceIdFilter.current(), details));
-=======
     public ResponseEntity<ErrorResponse> bodyValidation(MethodArgumentNotValidException e) {
         return badRequest(e.getBindingResult().getFieldErrors().stream()
             .map(f -> ErrorDetail.of(f.getField(), null, f.getCode()))
@@ -97,7 +80,6 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorResponse> notReadable(HttpMessageNotReadableException e) {
         return badRequest(List.of(ErrorDetail.reason("MALFORMED_BODY")), e);
->>>>>>> origin/main
     }
 
     @ExceptionHandler(NoResourceFoundException.class)

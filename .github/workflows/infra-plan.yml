@@ -36,11 +36,12 @@ jobs:
           echo "::add-mask::$ACCOUNT_ID"
           echo "ACCOUNT_ID=$ACCOUNT_ID" >> "$GITHUB_ENV"
           # EKS 허용 IP: 하나씩 마스킹하고, 코멘트용 치환 목록으로 저장
+          : > "$RUNNER_TEMP/mask_ips.txt"
           echo "$TF_VAR_eks_public_access_cidrs" | jq -r '.[]' | while read -r cidr; do
             ip="${cidr%/*}"
             echo "::add-mask::$ip"
-            echo "$ip"
-          done > "$RUNNER_TEMP/mask_ips.txt"
+            echo "$ip" >> "$RUNNER_TEMP/mask_ips.txt"
+          done
       - run: terraform fmt -check -recursive ..   # envs/staging + envs/staging-k8s
       # staging-k8s는 plan 하지 않는다(클러스터 접근·state 권한 없음, apply는 관리자 로컬). 문법만 확인
       - run: terraform -chdir=../staging-k8s init -backend=false -input=false && terraform -chdir=../staging-k8s validate

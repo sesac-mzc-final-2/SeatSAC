@@ -39,6 +39,15 @@ spring.flyway:
 # 스케줄러: 선점 만료 스캔 2종 + 아웃박스 릴레이·정리 (지침 2장)
 spring.task.scheduling.pool.size: 3
 
+# 서비스 간 호출 주소·선점 설정 (service-runtime-contract 3장의 이름 그대로)
+app:
+  services:
+    catalog-url: ${APP_SERVICES_CATALOG_URL:http://catalog:8080}
+    payment-url: ${APP_SERVICES_PAYMENT_URL:http://payment:8080}
+  seat-hold:
+    ttl-seconds: ${APP_SEAT_HOLD_TTL_SECONDS:300}
+    strategy: ${APP_SEAT_HOLD_STRATEGY:redis}   # ADR-45 인터페이스. db-lock은 나중
+
 spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}
   port: ${SPRING_DATA_REDIS_PORT:6379}

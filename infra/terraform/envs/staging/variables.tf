@@ -48,3 +48,28 @@ variable "data_subnets" {
   type        = list(string)
   default     = ["10.20.48.0/24", "10.20.49.0/24"]
 }
+
+# ---- EKS (3.1.2) -----------------------------------------------------
+variable "eks_version" {
+  description = "Kubernetes 버전. 1.36 표준 지원 ~2027-08-02. 올릴 때는 한 단계씩"
+  type        = string
+  default     = "1.36"
+}
+
+variable "eks_public_access_cidrs" {
+  description = "API 공개 엔드포인트 허용 대역. 팀원 노트북·GitHub Actions(plan은 API 호출 안 함) → 기본 전체, 인증은 IAM"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "node_instance_type" {
+  description = "노드 인스턴스 (ADR-7: t3.large 2대)"
+  type        = string
+  default     = "t3.large"
+}
+
+variable "developer_namespaces" {
+  description = "cinema-developer가 조회·로그·port-forward 할 수 있는 namespace"
+  type        = list(string)
+  default     = ["cinema-staging", "monitoring"]
+}

@@ -38,6 +38,30 @@ output "sg_valkey_id" {
   value = aws_security_group.valkey.id
 }
 
-output "sg_lambda_stats_id" {
-  value = aws_security_group.lambda_stats.id
+# ---- EKS (3.1.2) -----------------------------------------------------
+output "eks_cluster_name" {
+  value = module.eks.cluster_name
+}
+
+output "eks_cluster_endpoint" {
+  value = module.eks.cluster_endpoint
+}
+
+output "eks_kubeconfig_command" {
+  description = "팀원은 --profile cinema-dev, 관리자는 cinema-admin"
+  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --profile cinema-dev"
+}
+
+output "eks_node_security_group_id" {
+  description = "노드·파드 SG (ALB → 8080 허용)"
+  value       = module.eks.node_security_group_id
+}
+
+output "eks_node_group_names" {
+  description = "cluster-schedule 워크플로(3.1.14)가 desired 1 ↔ 0 으로 바꿀 대상"
+  value       = { for k, v in module.eks.eks_managed_node_groups : k => split(":", v.node_group_id)[1] } # node_group_id = "클러스터:노드그룹"
+}
+
+output "lb_controller_role_arn" {
+  value = module.lb_controller_pod_identity.iam_role_arn
 }

@@ -12,6 +12,7 @@ provider "aws" {
   }
 }
 
+# 계정 ID·팀 역할 ARN (역할 자체는 infra/terraform/global에서 만든다)
 data "aws_caller_identity" "current" {}
 
 locals {

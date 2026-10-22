@@ -1,5 +1,5 @@
 # PR에 terraform plan 결과를 코멘트로 남긴다. apply는 하지 않는다 (03b).
-# 사전 조건: GitHub OIDC 역할 cinema-gha-tf-plan (infra/terraform/global, ReadOnly + state 읽기. 잠금 파일) -> secrets.AWS_TERRAFORM_PLAN_ROLE_ARN
+# 사전 조건: GitHub OIDC 역할 cinema-gha-tf-plan (infra/terraform/global, ReadOnly + state 읽기·잠금 파일) → secrets.AWS_TERRAFORM_PLAN_ROLE_ARN
 name: infra-plan
 on:
   pull_request:
@@ -24,9 +24,10 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_TERRAFORM_PLAN_ROLE_ARN }}
-          role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
           aws-region: ap-northeast-2
-      - run: terraform fmt -check -recursive
+      - run: terraform fmt -check -recursive ..   # envs/staging + envs/staging-k8s
+      # staging-k8s는 plan 하지 않는다(클러스터 접근·state 권한 없음, apply는 관리자 로컬). 문법만 확인
+      - run: terraform -chdir=../staging-k8s init -backend=false -input=false && terraform -chdir=../staging-k8s validate
       - run: terraform init -backend-config=backend.hcl -input=false
       - run: terraform validate
       - id: plan

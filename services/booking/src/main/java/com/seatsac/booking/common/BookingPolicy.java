@@ -18,9 +18,18 @@ public final class BookingPolicy {
     /** 선점 TTL. expires_at = now + 300초, Valkey 좌석 키·user-hold 키의 EX 값과 같다 */
     public static final Duration HOLD_TTL = Duration.ofSeconds(300);
 
-    /** 파드 캐시 — 회차 정보 10분, 좌석 배치는 (상영관, 배치 버전) 키라 1일 (명세 12.3) */
+    /**
+     * 파드 캐시 TTL — 회차 정보 10분(명세 12.3).
+     *
+     * <p>좌석 배치는 명세 12.3이 1일로 적었지만 <b>10분</b>으로 줄였다(10/22, PR #7 리뷰).
+     * 좌석 비활성화(LAY-07)는 {@code layoutVersion}을 올리지 않아 캐시 키가 그대로라,
+     * 1일이면 최대 하루 동안 비활성 좌석을 선점 가능한 좌석으로 취급한다.
+     * 선점마다 Catalog를 다시 부르면 p95 300ms를 못 맞추므로 TTL을 catalog 캐시와 같은 10분으로 맞추고,
+     * 그 사이의 선점은 감수한다(이미 판매된 좌석은 CAT PATCH의 409 SEAT_SOLD와
+     * booking_seat 유일 제약이 막는다).
+     */
     public static final Duration SCREENING_CACHE_TTL = Duration.ofMinutes(10);
-    public static final Duration LAYOUT_CACHE_TTL = Duration.ofDays(1);
+    public static final Duration LAYOUT_CACHE_TTL = Duration.ofMinutes(10);
     public static final int SCREENING_CACHE_SIZE = 2_000;
     public static final int LAYOUT_CACHE_SIZE = 200;
 

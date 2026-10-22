@@ -10,7 +10,9 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import com.seatsac.common.core.trace.TraceIds;
 import java.time.Instant;
+import java.util.Objects;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -77,15 +79,28 @@ public class OutboxMessage {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    /** 바로 보낼 수 있는 PENDING 메시지. messageKey는 호출하는 쪽에서 발급한 UUID */
+    /**
+     * 바로 보낼 수 있는 PENDING 메시지. {@code messageKey}는 호출하는 쪽에서 발급한 UUID다.
+     *
+     * <p>{@code traceId}가 비어 있으면 <b>새로 만든다</b> — {@code booking.confirmed} 계약이
+     * {@code traceId}를 필수로 요구하고(2.2.7), 명세 12.2도 「요청 없는 작업은 새로 생성」이다.
+     * 여기서 예외를 던지면 <b>이미 승인된 결제의 확정이 롤백</b>되므로 막지 않고 채운다.
+     * 나머지 필수 값이 비는 것은 코드 버그라 바로 막는다.
+     */
     public static OutboxMessage pending(String messageKey, OutboxEventType eventType, Long aggregateId,
                                         String payload, String traceId, Instant now) {
+        Objects.requireNonNull(messageKey, "messageKey");
+        Objects.requireNonNull(eventType, "eventType");
+        Objects.requireNonNull(aggregateId, "aggregateId");
+        Objects.requireNonNull(payload, "payload");
+        Objects.requireNonNull(now, "now");
+
         OutboxMessage message = new OutboxMessage();
         message.messageKey = messageKey;
         message.eventType = eventType;
         message.aggregateId = aggregateId;
         message.payload = payload;
-        message.traceId = traceId;
+        message.traceId = traceId == null ? TraceIds.newId() : traceId;
         message.status = OutboxStatus.PENDING;
         message.attemptCount = 0;
         message.nextAttemptAt = now;

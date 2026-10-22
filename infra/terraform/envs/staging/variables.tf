@@ -59,7 +59,7 @@ variable "eks_version" {
 variable "eks_public_access_cidrs" {
   description = "EKS API 공개 엔드포인트 허용 대역(팀 공인 IP /32). 값은 커밋하지 않는다: 로컬 eks_access.auto.tfvars, CI Secret EKS_PUBLIC_ACCESS_CIDRS"
   type        = list(string)
-  sensitive   = true          # ← 여기. plan·apply 출력에 (sensitive value)로 가려진다
+  sensitive   = true # ← 여기. plan·apply 출력에 (sensitive value)로 가려진다
 
   validation {
     condition     = length(var.eks_public_access_cidrs) > 0 && !contains(var.eks_public_access_cidrs, "0.0.0.0/0")

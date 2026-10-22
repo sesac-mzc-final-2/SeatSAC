@@ -46,7 +46,7 @@ module "eks" {
     vpc-cni = {
       before_compute = true # 노드보다 먼저 (없으면 노드가 NotReady)
       most_recent    = false
-      addon_version        = "v1.23.2-eksbuild.3"
+      addon_version  = "v1.23.2-eksbuild.3"
       configuration_values = jsonencode({
         enableNetworkPolicy = "true" # NetworkPolicy(3.1.13) — VPC CNI 네트워크 정책 에이전트
       })

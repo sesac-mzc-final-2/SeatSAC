@@ -51,19 +51,10 @@ module "eks" {
         enableNetworkPolicy = "true" # NetworkPolicy(3.1.13) — VPC CNI 네트워크 정책 에이전트
       })
     }
-    eks-pod-identity-agent = {
-      before_compute = true
-      most_recent    = false
-    }
-    kube-proxy = {
-      most_recent = false
-    }
-    coredns = {
-      most_recent = false
-    }
-    metrics-server = { # EKS 커뮤니티 애드온. HPA·kubectl top 용
-      most_recent = false
-    }
+    eks-pod-identity-agent = { before_compute = true, most_recent = false, addon_version = "v1.4.0-eksbuild.4" }
+    kube-proxy             = { most_recent = false, addon_version = "v1.36.0-eksbuild.48" }
+    coredns                = { most_recent = false, addon_version = "v1.14.7-eksbuild.11" }
+    metrics-server         = { most_recent = false, addon_version = "v0.9.0-eksbuild.13" }
   }
 
   eks_managed_node_groups = {

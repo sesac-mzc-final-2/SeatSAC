@@ -147,11 +147,15 @@ class SeatHoldFlowTest {
             });
     }
 
-    /** 고아 키(B3): Lua는 성공했는데 RDS 예매가 없다 → 정리하고 선점을 계속한다. 409가 아니다 */
+    /**
+     * 고아 키(B3): Lua는 성공했는데 RDS 예매가 없다 → 정리하고 선점을 계속한다. 409가 아니다.
+     * 「만들어진 지 오래된」 선점이라야 고아다 — 장부 점수를 유예 시간보다 앞으로 둔다.
+     */
     @Test
-    void orphanUserHoldIsCleanedAndHoldSucceeds() {
+    void staleOrphanUserHoldIsCleanedAndHoldSucceeds() {
         String orphanHoldId = UUID.randomUUID().toString();
-        seatHold.hold(SCREENING, USER, orphanHoldId, List.of(103L), NOW.plus(BookingPolicy.HOLD_TTL));
+        seatHold.hold(SCREENING, USER, orphanHoldId, List.of(103L),
+            NOW.plus(BookingPolicy.HOLD_TTL).minus(BookingPolicy.HOLD_COMMIT_GRACE).minusSeconds(1));
         assertThat(bookingRepository.findByHoldId(orphanHoldId)).isEmpty();
 
         SeatHoldResponse response = seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L)));
@@ -161,6 +165,28 @@ class SeatHoldFlowTest {
             .isNotEqualTo(orphanHoldId);
         assertThat(redis.opsForZSet().score(RedisKeys.holdExpiry(),
             RedisKeys.holdExpiryMember(SCREENING, orphanHoldId))).isNull();
+    }
+
+    /**
+     * 더블클릭·타임아웃 재시도: {@code hold.lua}는 RDS 커밋 <b>전에</b> {@code user-hold}와 장부를
+     * 쓴다. 그 창에 들어온 두 번째 요청은 RDS에서 예매를 찾지 못하는데, 이것을 고아로 보고 지우면
+     * 첫 요청의 선점 1건 제한과 만료 장부가 깨진다 → 방금 만들어진 선점이면 409다.
+     */
+    @Test
+    void secondRequestWhileFirstIsStillCommittingIsRejected() {
+        String committingHoldId = UUID.randomUUID().toString();
+        seatHold.hold(SCREENING, USER, committingHoldId, List.of(103L), NOW.plus(BookingPolicy.HOLD_TTL));
+        assertThat(bookingRepository.findByHoldId(committingHoldId)).isEmpty();   // 아직 커밋 전
+
+        assertThatThrownBy(() -> seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.ACTIVE_HOLD_EXISTS.name());
+
+        // 첫 요청의 선점이 그대로 남아 있다 — 지워지지 않았다
+        assertThat(redis.opsForValue().get(RedisKeys.userHold(SCREENING, USER))).isEqualTo(committingHoldId);
+        assertThat(redis.opsForZSet().score(RedisKeys.holdExpiry(),
+            RedisKeys.holdExpiryMember(SCREENING, committingHoldId))).isNotNull();
     }
 
     @Test

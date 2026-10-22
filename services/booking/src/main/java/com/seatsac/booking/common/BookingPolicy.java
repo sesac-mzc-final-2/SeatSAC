@@ -34,6 +34,17 @@ public final class BookingPolicy {
     public static final int LAYOUT_CACHE_SIZE = 200;
 
     /** SSE 하트비트 간격과 재연결 지시 값 */
+    /**
+     * 고아 키 판정을 유예하는 시간. {@code hold.lua}는 RDS 커밋 <b>전에</b> {@code user-hold}와
+     * 만료 장부를 쓰므로, 같은 사용자의 두 번째 요청(더블클릭·타임아웃 재시도)이 그 사이에 오면
+     * RDS에서 예매를 찾지 못한다. 이때 고아로 보고 지우면 첫 요청의 선점 1건 제한과 만료 장부가
+     * 깨진다 — 선점이 만들어진 지 이 시간 안이면 「처리 중」으로 보고 409를 돌려준다.
+     *
+     * <p>트랜잭션은 보통 수 ms라 10초면 넉넉하다. 진짜 고아(파드가 죽은 경우)는 10초 뒤 다음
+     * 요청에서 정리되고, 그 전에도 RDS 만료 스캔이 300초 안에 치운다.
+     */
+    public static final Duration HOLD_COMMIT_GRACE = Duration.ofSeconds(10);
+
     public static final Duration SSE_HEARTBEAT = Duration.ofSeconds(15);
     public static final long SSE_RETRY_MILLIS = 2_000L;
 

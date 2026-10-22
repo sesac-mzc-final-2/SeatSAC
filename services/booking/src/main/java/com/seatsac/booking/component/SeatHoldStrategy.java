@@ -2,6 +2,7 @@ package com.seatsac.booking.component;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 좌석 선점 방식 — ADR-45. 지금은 Valkey 구현({@link SeatHoldRedisRepository})만 있고,
@@ -26,6 +27,12 @@ public interface SeatHoldStrategy {
      * @return 지운 좌석 키 개수
      */
     long release(Long screeningId, String userId, String holdId, List<Long> seatIds);
+
+    /**
+     * 만료 장부에 적힌 만료 시각. 선점이 언제 만들어졌는지(= 만료 시각 − TTL) 알아야
+     * 「RDS에 없는 선점」이 고아인지 아직 커밋 중인지 가를 수 있다.
+     */
+    Optional<Instant> expiryOf(Long screeningId, String holdId);
 
     /** 선점 결과. 상태에 따라 채워지는 필드가 다르다 */
     record HoldOutcome(Status status, String activeHoldId, List<Long> takenSeatIds) {

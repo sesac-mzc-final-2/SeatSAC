@@ -4,6 +4,7 @@ import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.common.RedisKeys;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Optional;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -90,5 +91,12 @@ public class SeatHoldRedisRepository implements SeatHoldStrategy {
         keys.add(RedisKeys.holdExpiry());
         seatIds.forEach(seatId -> keys.add(RedisKeys.seat(screeningId, seatId)));
         return keys;
+    }
+
+    @Override
+    public Optional<Instant> expiryOf(Long screeningId, String holdId) {
+        Double score = redis.opsForZSet()
+            .score(RedisKeys.holdExpiry(), RedisKeys.holdExpiryMember(screeningId, holdId));
+        return score == null ? Optional.empty() : Optional.of(Instant.ofEpochMilli(score.longValue()));
     }
 }

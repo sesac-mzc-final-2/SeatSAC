@@ -52,3 +52,19 @@ spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}
   port: ${SPRING_DATA_REDIS_PORT:6379}
   ssl.enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache는 true
+
+# Catalog 내부 호출 서킷 — 실패율 50%·10초 (ADR-23·32)
+resilience4j:
+  circuitbreaker:
+    instances:
+      catalog:
+        failure-rate-threshold: 50
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        # 4xx는 가용성 문제가 아니다 — 없는 회차를 반복 조회해도 서킷이 열리면 안 된다
+        ignore-exceptions:
+          - com.seatsac.common.core.error.BusinessException
+          - org.springframework.web.client.HttpClientErrorException

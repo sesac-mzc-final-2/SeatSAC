@@ -8,8 +8,10 @@ import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import java.time.Instant;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -29,13 +31,18 @@ public class CatalogClient {
         this.catalog = factory.create(catalogUrl);
     }
 
-    /** 회차 정보 (상영 시작 확인·배치 버전·알림 본문). 없으면 404 → {@code SCREENING_NOT_FOUND} */
+    /**
+     * 회차 정보 (상영 시작 확인·배치 버전·알림 본문). 없으면 404 → {@code SCREENING_NOT_FOUND}
+     *
+     * <p>404만 도메인 응답으로 바꾼다. 400·401·403은 우리 요청이 잘못된 것이라 그대로 올려
+     * 500으로 드러나게 한다 — 「회차 없음」으로 덮으면 원인을 못 찾는다.
+     */
     @CircuitBreaker(name = "catalog")
     public Screening findScreening(Long screeningId) {
         return catalog.get()
             .uri("/internal/screenings/{screeningId}", screeningId)
             .retrieve()
-            .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
+            .onStatus(CatalogClient::isNotFound, (req, res) -> {
                 throw BookingErrorCode.SCREENING_NOT_FOUND.exception();
             })
             .body(Screening.class);
@@ -47,17 +54,29 @@ public class CatalogClient {
         return catalog.get()
             .uri("/auditoriums/{auditoriumId}/layout?version={version}", auditoriumId, layoutVersion)
             .retrieve()
-            .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
+            .onStatus(CatalogClient::isNotFound, (req, res) -> {
                 throw BookingErrorCode.SCREENING_NOT_FOUND.exception();
             })
             .body(AuditoriumLayout.class);
     }
 
-    /** 서킷이 열렸거나 응답을 못 받은 경우 — 503 {@code CATALOG_UNAVAILABLE} */
-    public static BusinessException unavailable(Throwable cause) {
+    private static boolean isNotFound(HttpStatusCode status) {
+        return status.value() == HttpStatus.NOT_FOUND.value();
+    }
+
+    /**
+     * 서킷이 열렸거나 응답을 못 받은 경우 — 503 {@code CATALOG_UNAVAILABLE}.
+     *
+     * <p>4xx는 가용성 문제가 아니라 그대로 올린다 — 404는 도메인 응답(`SCREENING_NOT_FOUND`),
+     * 나머지 4xx는 우리 쪽 요청 결함이라 500으로 드러나야 원인이 로그에 남는다.
+     */
+    public static RuntimeException unavailable(RuntimeException cause) {
         if (cause instanceof BusinessException business
             && business.code().responseCode().equals(CommonResponseCode.NOT_FOUND.name())) {
-            return business;   // 404는 그대로 올린다
+            return business;
+        }
+        if (cause instanceof HttpClientErrorException) {
+            return cause;
         }
         return BookingErrorCode.CATALOG_UNAVAILABLE.exception();
     }

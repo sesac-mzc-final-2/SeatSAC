@@ -13,6 +13,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 /**
@@ -27,6 +29,7 @@ import org.springframework.stereotype.Service;
  *
  * 조건부 UPDATE라 같은 요청이 여러 번 와도 결과가 같다(멱등 키는 선택).
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class SeatReleaseService {
@@ -59,8 +62,14 @@ public class SeatReleaseService {
                 current.name(), BookingErrorCode.BOOKING_NOT_PENDING.name()));
         }
 
-        // 커밋 후: Valkey 정리 → 발행
-        seatHold.release(booking.getScreeningId(), userId, booking.getHoldId(), seatIds);
+        // 커밋 후: Valkey 정리 → 발행. 이미 CANCELED로 커밋됐으니 정리 실패로 500을 내지 않는다
+        // (좌석 키는 TTL 300초로, 장부 멤버는 만료 스캔이 치운다)
+        try {
+            seatHold.release(booking.getScreeningId(), userId, booking.getHoldId(), seatIds);
+        } catch (DataAccessException e) {
+            log.warn("해제 후 Valkey 정리 실패 — TTL·만료 스캔에 맡긴다 bookingId={} screeningId={} seats={}",
+                bookingId, booking.getScreeningId(), seatIds, e);
+        }
         eventPublisher.publish(SeatEventType.RELEASED, booking.getScreeningId(), seatIds, now);
 
         return bookingReader.findById(bookingId).map(BookingCancelResponse::ofHoldRelease)

@@ -100,6 +100,14 @@ public class SeatHoldService {
                         ErrorDetail.of("bookingId", pending.getBookingId()),
                         ErrorDetail.of("expiresAt", Times.toApi(pending.getExpiresAt())));
                 }
+                // 아직 커밋 중일 수 있다: hold.lua는 RDS 커밋 전에 user-hold·장부를 쓴다.
+                // 같은 사용자의 두 번째 요청(더블클릭·재시도)을 고아로 보고 지우면 첫 요청의
+                // 선점 1건 제한과 만료 장부가 깨진다 → 만들어진 지 얼마 안 됐으면 409로 돌려준다
+                if (isCommitInFlight(screeningId, outcome.activeHoldId(), now)) {
+                    throw BookingErrorCode.ACTIVE_HOLD_EXISTS.exception(
+                        ErrorDetail.of("screeningId", screeningId, "HOLD_IN_PROGRESS"));
+                }
+
                 // 고아 키 (B3): Lua는 성공했는데 RDS 저장이 실패했거나 파드가 죽은 경우.
                 // 좌석 키는 알 수 없어 그대로 두고(TTL로 사라진다) user-hold·장부만 정리한 뒤 다시 시도한다.
                 log.info("고아 선점 키 정리 screeningId={} holdId={}", screeningId, outcome.activeHoldId());
@@ -120,6 +128,17 @@ public class SeatHoldService {
             seatHold.release(screeningId, userId, holdId, seatIds);
             throw e;
         }
+    }
+
+    /**
+     * 장부 점수(만료 시각)에서 선점 생성 시각을 구해, 아직 RDS 커밋이 끝나지 않았을 수 있는
+     * 창인지 본다. 장부에 멤버가 없으면(이미 정리됐거나 장부만 날아간 경우) 고아로 본다.
+     */
+    private boolean isCommitInFlight(Long screeningId, String activeHoldId, Instant now) {
+        return seatHold.expiryOf(screeningId, activeHoldId)
+            .map(expiresAt -> expiresAt.minus(BookingPolicy.HOLD_TTL))
+            .filter(createdAt -> createdAt.isAfter(now.minus(BookingPolicy.HOLD_COMMIT_GRACE)))
+            .isPresent();
     }
 
     /** 좌석마다 왜 막혔는지 채운다 — RDS가 CONFIRMED면 RESERVED, 그 밖은 HELD (명세 3장 우선순위) */

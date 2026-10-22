@@ -621,7 +621,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 63      | 화면 토큰 저장은 **메모리**(`InMemoryWebStorage`), localStorage 금지. 새로고침은 Cognito 세션으로 재발급                                                                           |                            |
 | 56      | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명                        | 최종 결정 21번 "복사" 대체 |
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 | `docs/repo-workflow.md`    |
-| 49      | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR)                                                                                            | 65는 49로 통합(폐기)       |
+| 49      | 공통 문서 6종 채택, 합본 `CLAUDE.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR)                                                                                            | 65는 49로 통합(폐기)       |
 
 ---
 

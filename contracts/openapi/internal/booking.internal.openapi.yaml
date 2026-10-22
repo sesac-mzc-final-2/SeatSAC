@@ -1,0 +1,100 @@
+openapi: 3.1.0
+info:
+  title: seatsac booking internal API
+  version: "1.1"
+  description: |
+    API 명세서 v1.1 4-2. Gateway가 라우팅하지 않는다. 호출자는 NetworkPolicy로 제한(OPS-15):
+    user → booking, catalog → booking. 호출자는 X-Trace-Id·X-User-Id를 그대로 전달한다.
+servers:
+  - url: http://booking:8080
+security: []   # 내부 API: 사용자 인증 없음. 호출자는 NetworkPolicy로 제한 (OPS-15)
+
+paths:
+
+  /internal/bookings:
+    get:
+      operationId: listBookingsByUser
+      summary: 사용자 예매 내역 (호출자 user — USR-04). 1초 / 3초
+      x-caller: [user]
+      parameters:
+        - { name: userId, in: query, required: true, description: "Cognito sub", schema: { type: string, format: uuid } }
+        - name: status
+          in: query
+          description: 생략 시 PENDING 제외 전부
+          schema: { type: string, enum: [CONFIRMED, PAYMENT_FAILED, EXPIRED, CANCELED] }
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        "200":
+          description: 페이징 (최신순)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [content, page, size, totalElements, totalPages]
+                properties:
+                  content:
+                    type: array
+                    items:
+                      type: object
+                      required: [bookingId, status, screeningId, seatLabels, seatCount, amount, createdAt, confirmedAt, canceledAt]
+                      properties:
+                        bookingId: { type: integer, format: int64 }
+                        status: { type: string, enum: [CONFIRMED, PAYMENT_FAILED, EXPIRED, CANCELED] }
+                        screeningId: { type: integer, format: int64 }
+                        seatLabels: { type: array, items: { type: string } }
+                        seatCount: { type: integer }
+                        amount: { type: integer }
+                        createdAt: { type: string, format: date-time }
+                        confirmedAt: { type: [string, "null"], format: date-time }
+                        canceledAt: { type: [string, "null"], format: date-time }
+                  page: { type: integer }
+                  size: { type: integer }
+                  totalElements: { type: integer, format: int64 }
+                  totalPages: { type: integer }
+        "400":
+          description: VALIDATION_FAILED (userId 없음 등)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  /internal/screenings/seat-counts:
+    get:
+      operationId: getSeatCounts
+      summary: 회차별 선점·확정 좌석 수 (호출자 catalog — CAT-03). 300ms 전체
+      description: |
+        RDS booking_seat + booking 집계(PENDING → heldCount, CONFIRMED → reservedCount). Valkey 카운터 없음(v1.1).
+        요청한 회차는 예매가 없어도 모두 넣고 0. 300ms를 넘기면 catalog가 remainingSeatsSource TOTAL로 대체.
+      x-caller: [catalog]
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          description: 쉼표 구분, 최대 100개
+          style: form
+          explode: false
+          schema: { type: array, minItems: 1, maxItems: 100, items: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [screeningId, heldCount, reservedCount]
+                      properties:
+                        screeningId: { type: integer, format: int64 }
+                        heldCount: { type: integer, minimum: 0 }
+                        reservedCount: { type: integer, minimum: 0 }
+        "400":
+          description: VALIDATION_FAILED
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+components:
+  schemas:
+    ErrorResponse:
+      $ref: "../../schemas/error.v1.json"

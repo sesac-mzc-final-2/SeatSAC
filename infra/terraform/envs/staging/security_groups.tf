@@ -38,14 +38,6 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_vpc" {
   cidr_ipv4         = var.vpc_cidr
 }
 
-# ---- Lambda (일별 집계, VPC 연결) --------------------------------------
-resource "aws_security_group" "lambda_stats" {
-  name        = "${var.name}-lambda-stats"
-  description = "daily-stats Lambda in VPC"
-  vpc_id      = module.vpc.vpc_id
-  tags        = { Name = "${var.name}-lambda-stats" }
-}
-
 # ---- RDS MySQL -------------------------------------------------------
 resource "aws_security_group" "rds" {
   name        = "${var.name}-rds"
@@ -62,24 +54,6 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_app" {
   from_port         = 3306
   to_port           = 3306
   cidr_ipv4         = each.value
-}
-
-resource "aws_vpc_security_group_ingress_rule" "rds_from_lambda" {
-  security_group_id            = aws_security_group.rds.id
-  description                  = "daily-stats Lambda to 3306"
-  ip_protocol                  = "tcp"
-  from_port                    = 3306
-  to_port                      = 3306
-  referenced_security_group_id = aws_security_group.lambda_stats.id
-}
-
-resource "aws_vpc_security_group_egress_rule" "lambda_to_rds" {
-  security_group_id            = aws_security_group.lambda_stats.id
-  description                  = "to RDS 3306"
-  ip_protocol                  = "tcp"
-  from_port                    = 3306
-  to_port                      = 3306
-  referenced_security_group_id = aws_security_group.rds.id
 }
 
 # ---- ElastiCache Valkey ------------------------------------------------

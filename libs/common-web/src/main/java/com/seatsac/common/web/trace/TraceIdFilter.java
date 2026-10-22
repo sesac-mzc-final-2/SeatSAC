@@ -23,6 +23,7 @@ public class TraceIdFilter extends OncePerRequestFilter {
 
     private static final ThreadLocal<String> CURRENT = new ThreadLocal<>();
 
+    /** 요청 밖(만료 스캔·릴레이)이나 필터 전 오류에서도 null을 돌려주지 않는다. */
     public static String current() {
         String id = CURRENT.get();
         return id != null ? id : MDC.get(TraceKeys.MDC_TRACE_ID);

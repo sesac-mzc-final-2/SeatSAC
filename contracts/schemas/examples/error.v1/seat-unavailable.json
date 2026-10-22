@@ -1,0 +1,12 @@
+{
+  "code": "SEAT_UNAVAILABLE",
+  "message": "이미 선점되었거나 확정된 좌석이 있습니다.",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "details": [
+    {
+      "field": "seatIds",
+      "value": 4060121,
+      "reason": "HELD"
+    }
+  ]
+}

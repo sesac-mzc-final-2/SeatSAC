@@ -12,6 +12,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -88,9 +89,25 @@ public class Booking {
      *
      * @param now        흐름에서 Clock으로 한 번 구한 값
      * @param expiresAt  {@code now + }{@link BookingPolicy#HOLD_TTL}
+     * @throws IllegalArgumentException 좌석 수가 1~4가 아니거나 {@code seatLabels} 크기와 다를 때
+     *                                  (사용자 입력 검증은 흐름 서비스가 먼저 하고 400으로 돌려준다)
      */
     public static Booking pending(String userId, Long screeningId, String holdId, List<String> seatLabels,
                                   int seatCount, Instant expiresAt, Instant now) {
+        Objects.requireNonNull(userId, "userId");
+        Objects.requireNonNull(screeningId, "screeningId");
+        Objects.requireNonNull(holdId, "holdId");
+        Objects.requireNonNull(seatLabels, "seatLabels");
+        Objects.requireNonNull(expiresAt, "expiresAt");
+        Objects.requireNonNull(now, "now");
+        if (!BookingPolicy.isAllowedSeatCount(seatCount)) {
+            throw new IllegalArgumentException("seatCount=" + seatCount);
+        }
+        if (seatLabels.size() != seatCount) {
+            // 좌석 수와 번호 목록이 어긋나면 amount가 틀어진다. DB에 CHECK 제약이 없어 여기서 막는다
+            throw new IllegalArgumentException("seatLabels=" + seatLabels.size() + " seatCount=" + seatCount);
+        }
+
         Booking booking = new Booking();
         booking.userId = userId;
         booking.screeningId = screeningId;

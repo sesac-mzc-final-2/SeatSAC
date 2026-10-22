@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -44,6 +45,13 @@ class BookingStateServiceTest {
     BookingRepository bookingRepository;
     @Autowired
     BookingSeatRepository bookingSeatRepository;
+
+    @BeforeEach
+    void clearBookings() {
+        // 컨테이너와 컨텍스트를 여러 테스트가 공유한다. 회차 ID가 겹치면 유일 제약에 걸리므로 비우고 시작한다
+        bookingSeatRepository.deleteAllInBatch();
+        bookingRepository.deleteAllInBatch();
+    }
 
     @Test
     void createPendingSavesBookingAndSeats() {
@@ -84,5 +92,19 @@ class BookingStateServiceTest {
         List<String> labels = seatIds.size() == 2 ? List.of("J7", "J8") : List.of("J7");
         return new PendingBooking(USER_ID, screeningId, UUID.randomUUID().toString(), seatIds,
             labels.subList(0, seatIds.size()), expiresAt);
+    }
+
+    @Test
+    void createPendingRejectsSeatCountMismatch() {
+        Instant now = clock.instant();
+        Instant expiresAt = now.plus(BookingPolicy.HOLD_TTL);
+
+        // 좌석 번호 목록과 좌석 수가 어긋나면 amount가 틀어진다 — 저장 전에 막는다
+        assertThatThrownBy(() -> Booking.pending(USER_ID, 1L, "hold", List.of("J7"), 2, expiresAt, now))
+            .isInstanceOf(IllegalArgumentException.class);
+        // 1회 최대 4석
+        assertThatThrownBy(() -> Booking.pending(USER_ID, 1L, "hold",
+            List.of("J1", "J2", "J3", "J4", "J5"), 5, expiresAt, now))
+            .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -34,7 +34,7 @@ class BookingDtoJsonTest {
         SeatHoldRequest req = mapper.readValue(
             "{\"screeningId\": 42, \"seatIds\": [101, 102]}", SeatHoldRequest.class);
 
-        assertThat(req.getScreeningId()).isEqualTo(42L);
+        assertThat(req.screeningId()).isEqualTo(42L);
         assertThat(req.seatIds()).containsExactly(101L, 102L);
     }
 
@@ -44,9 +44,10 @@ class BookingDtoJsonTest {
             {"method": "CARD", "card": {"number": "4111111111111111", "expiry": "12/28", "holder": "KIM"}}
             """, BookingPayRequest.class);
 
-        assertThat(req.getMethod()).isEqualTo(PaymentMethod.CARD);
-        assertThat(req.getCard().last4()).isEqualTo("1111");
+        assertThat(req.method()).isEqualTo(PaymentMethod.CARD);
+        assertThat(req.card().last4()).isEqualTo("1111");
         assertThat(req.toString()).doesNotContain("4111111111111111").doesNotContain("KIM");
+        assertThat(req.card().toString()).doesNotContain("4111111111111111").doesNotContain("KIM");
     }
 
     @Test
@@ -69,15 +70,12 @@ class BookingDtoJsonTest {
         try (var factory = Validation.buildDefaultValidatorFactory()) {
             Validator validator = factory.getValidator();
 
-            assertThat(validator.validate(SeatHoldRequest.builder()
-                .screeningId(42L).seatIds(List.of(1L, 2L, 3L, 4L, 5L)).build())).hasSize(1);
-            assertThat(validator.validate(SeatHoldRequest.builder()
-                .screeningId(42L).seatIds(List.of()).build())).hasSize(1);
-            assertThat(validator.validate(BookingPayRequest.builder()
-                .method(PaymentMethod.CARD)
-                .card(BookingPayRequest.Card.builder()
-                    .number("4111").expiry("13/28").holder("KIM").build())
-                .build())).hasSize(2);   // number 자리수, expiry 월
+            assertThat(validator.validate(
+                new SeatHoldRequest(42L, List.of(1L, 2L, 3L, 4L, 5L)))).hasSize(1);   // 5석
+            assertThat(validator.validate(
+                new SeatHoldRequest(42L, List.of()))).hasSize(1);                     // 0석
+            assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
+                new BookingPayRequest.Card("4111", "13/28", "KIM")))).hasSize(2);     // 자리수, 월
         }
     }
 }

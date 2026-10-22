@@ -6,6 +6,7 @@ import com.seatsac.booking.common.RedisKeys;
 import com.seatsac.booking.dto.response.SeatEventMessage;
 import com.seatsac.booking.enums.SeatEventType;
 import com.seatsac.common.core.time.Times;
+import com.seatsac.common.core.trace.TraceIds;
 import com.seatsac.common.core.trace.TraceKeys;
 import java.time.Instant;
 import java.util.List;
@@ -32,6 +33,15 @@ public class SeatEventPublisher {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 요청 밖(만료 스캔·아웃박스 릴레이)에서는 MDC가 비어 있다. 계약({@code seat-event.v1.json})은
+     * {@code traceId}를 필수 + 32자리로 못 박아 뒀으므로 그때는 새로 만든다.
+     */
+    private static String traceId() {
+        String current = MDC.get(TraceKeys.MDC_TRACE_ID);
+        return TraceIds.isValid(current) ? current : TraceIds.newId();
+    }
+
     public void publish(SeatEventType type, Long screeningId, List<Long> seatIds, Instant occurredAt) {
         try {
             Long seq = redis.opsForValue().increment(RedisKeys.seatSeq(screeningId));
@@ -41,7 +51,7 @@ public class SeatEventPublisher {
                 .screeningId(screeningId)
                 .seatIds(List.copyOf(seatIds))
                 .occurredAt(Times.toApi(occurredAt))
-                .traceId(MDC.get(TraceKeys.MDC_TRACE_ID))
+                .traceId(traceId())
                 .build();
             redis.convertAndSend(RedisKeys.seatEvents(screeningId), objectMapper.writeValueAsString(message));
         } catch (JsonProcessingException | RuntimeException e) {

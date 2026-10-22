@@ -15,6 +15,11 @@ management:
 logging:
   config: classpath:logback-spring.xml
 
+# 계약 CI 2단계가 /v3/api-docs 생성본과 contracts/openapi/booking.openapi.yaml 을 비교한다 (계약 확정 #1)
+springdoc:
+  api-docs.version: openapi_3_1
+  api-docs.path: /v3/api-docs
+
 # DB: 서비스별 스키마·계정. 비밀번호는 K8s Secret → 환경변수 (ADR-10)
 spring.datasource:
   # UTC 저장: 세션 시간대까지 UTC로 맞춘다 (ERD 1장, 10/21 결정)

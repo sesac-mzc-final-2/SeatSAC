@@ -109,7 +109,10 @@ public class IdempotencyStore {
                 owner, mode, value, String.valueOf(ttlSeconds));
             return changed != null && changed == 1L;
         } catch (DataAccessException e) {
-            log.warn("멱등 키를 쓰지 못했다 mode={} — 24시간 뒤 TTL로 사라진다", mode, e);
+            // 키는 IN_PROGRESS로 남는다 → 그 TTL(선점과 같은 300초) 동안 같은 키 재시도가
+            // 409 IDEMPOTENCY_IN_PROGRESS를 받고, 그 뒤에는 다시 실행된다
+            log.warn("멱등 키를 쓰지 못했다 mode={} — 처리 중 상태로 남아 {}초 뒤 만료된다", mode,
+                BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds(), e);
             return false;
         }
     }

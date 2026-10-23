@@ -57,6 +57,17 @@ spring.data.redis:
 resilience4j:
   circuitbreaker:
     instances:
+      payment:
+        failure-rate-threshold: 50
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        # 4xx는 가용성 문제가 아니다. 응답을 못 받은 경우(503으로 바뀜)와 결과 미확인은 집계한다 —
+        # 그래야 payment가 죽었을 때 서킷이 열려 선점을 빨리 포기할 수 있다
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
       catalog:
         failure-rate-threshold: 50
         sliding-window-type: COUNT_BASED

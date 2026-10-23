@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.core.http.Headers;
+import com.seatsac.common.web.user.CurrentUserHeaders;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Type;
 import java.util.Optional;
@@ -83,9 +84,10 @@ public class IdempotencyRequestAdvice implements RequestBodyAdvice {
             return body;
         }
 
-        // 사용자 헤더가 없으면 @CurrentUser 해석이 401을 낸다. 키를 잡지 않고 넘긴다
-        String userId = request.getHeader(Headers.USER_ID);
-        if (!StringUtils.hasText(userId)) {
+        // 사용자 식별은 공통 규칙(@CurrentUser와 같은 곳)으로 읽는다. 헤더가 없거나 형식이
+        // 틀리면 키를 잡지 않고 넘긴다 — 바로 뒤 @CurrentUser 해석이 401을 낸다
+        String userId = CurrentUserHeaders.userId(request.getHeader(Headers.USER_ID)).orElse(null);
+        if (userId == null) {
             return body;
         }
 

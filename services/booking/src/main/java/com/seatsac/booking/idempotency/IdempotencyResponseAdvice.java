@@ -56,17 +56,17 @@ public class IdempotencyResponseAdvice implements ResponseBodyAdvice<Object> {
 
         int status = servletResponse.getServletResponse().getStatus();
         if (status >= 500) {
-            store.discard(pending.userId(), pending.key());
+            store.discard(pending.userId(), pending.key(), pending.owner());
             return body;
         }
 
         try {
-            store.complete(pending.userId(), pending.key(), pending.requestHash(),
-                status, mapper.writeValueAsString(body));
+            store.complete(pending.userId(), pending.key(), pending.owner(),
+                pending.requestHash(), status, mapper.writeValueAsString(body));
         } catch (JsonProcessingException e) {
             // 저장만 못 했다. 응답은 그대로 내보내고 키를 지워 재시도 때 다시 실행되게 한다
             log.warn("멱등 응답을 직렬화할 수 없다 — 키를 지운다 status={}", status, e);
-            store.discard(pending.userId(), pending.key());
+            store.discard(pending.userId(), pending.key(), pending.owner());
         }
         return body;
     }

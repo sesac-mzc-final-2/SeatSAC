@@ -7,20 +7,24 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
  *
  * @param status      {@code IN_PROGRESS} 처리 중 · {@code DONE} 첫 응답 저장 완료
  * @param requestHash 요청 본문 SHA-256. 같은 키로 다른 본문이 오면 409로 거절하는 근거
+ * @param owner       처리권을 잡을 때마다 새로 만드는 UUID. 늦게 끝난 요청이 그 뒤에 들어온
+ *                    요청의 응답을 덮어쓰지 못하게 하는 근거다({@code idem-write.lua})
  * @param httpStatus  첫 응답의 상태 코드 (DONE일 때만)
  * @param body        첫 응답 본문 JSON 그대로 (DONE일 때만)
  */
-public record IdempotencyRecord(String status, String requestHash, Integer httpStatus, String body) {
+public record IdempotencyRecord(String status, String requestHash, String owner,
+                                Integer httpStatus, String body) {
 
     public static final String IN_PROGRESS = "IN_PROGRESS";
     public static final String DONE = "DONE";
 
-    public static IdempotencyRecord inProgress(String requestHash) {
-        return new IdempotencyRecord(IN_PROGRESS, requestHash, null, null);
+    public static IdempotencyRecord inProgress(String requestHash, String owner) {
+        return new IdempotencyRecord(IN_PROGRESS, requestHash, owner, null, null);
     }
 
-    public static IdempotencyRecord done(String requestHash, int httpStatus, String body) {
-        return new IdempotencyRecord(DONE, requestHash, httpStatus, body);
+    public static IdempotencyRecord done(String requestHash, String owner, int httpStatus,
+                                         String body) {
+        return new IdempotencyRecord(DONE, requestHash, owner, httpStatus, body);
     }
 
     @JsonIgnore

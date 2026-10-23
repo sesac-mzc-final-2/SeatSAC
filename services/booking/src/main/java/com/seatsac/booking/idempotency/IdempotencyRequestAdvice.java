@@ -8,7 +8,6 @@ import com.seatsac.common.core.http.Headers;
 import com.seatsac.common.web.user.CurrentUserHeaders;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Type;
-import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpInputMessage;
@@ -41,8 +40,8 @@ public class IdempotencyRequestAdvice implements RequestBodyAdvice {
     private final IdempotencyStore store;
     private final ObjectMapper mapper;
 
-    /** 처리권을 잡은 요청의 키와 해시 */
-    record Pending(String userId, String key, String requestHash) {
+    /** 처리권을 잡은 요청의 키·해시·처리권(owner) */
+    record Pending(String userId, String key, String requestHash, String owner) {
     }
 
     @Override
@@ -92,13 +91,14 @@ public class IdempotencyRequestAdvice implements RequestBodyAdvice {
         }
 
         String requestHash = store.hash(serialize(body));
-        Optional<IdempotencyRecord> stored = store.begin(userId, key, requestHash);
-        if (stored.isEmpty()) {
-            request.setAttribute(PENDING_ATTRIBUTE, new Pending(userId, key, requestHash));
+        IdempotencyStore.Begin begin = store.begin(userId, key, requestHash);
+        if (begin.acquired()) {
+            request.setAttribute(PENDING_ATTRIBUTE,
+                new Pending(userId, key, requestHash, begin.owner()));
             return body;
         }
 
-        IdempotencyRecord record = stored.get();
+        IdempotencyRecord record = begin.existingRecord().orElseThrow();
         if (!requestHash.equals(record.requestHash())) {
             throw BookingErrorCode.IDEMPOTENCY_KEY_CONFLICT.exception(
                 ErrorDetail.of(Headers.IDEMPOTENCY_KEY, key, "DIFFERENT_REQUEST"));

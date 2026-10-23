@@ -109,10 +109,11 @@ public class IdempotencyStore {
                 owner, mode, value, String.valueOf(ttlSeconds));
             return changed != null && changed == 1L;
         } catch (DataAccessException e) {
-            // 키는 IN_PROGRESS로 남는다 → 그 TTL(선점과 같은 300초) 동안 같은 키 재시도가
-            // 409 IDEMPOTENCY_IN_PROGRESS를 받고, 그 뒤에는 다시 실행된다
-            log.warn("멱등 키를 쓰지 못했다 mode={} — 처리 중 상태로 남아 {}초 뒤 만료된다", mode,
-                BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds(), e);
+            // 스크립트가 돌기 전에 끊겼는지 돈 뒤에 끊겼는지 알 수 없다 — 키가 그대로일 수도,
+            // 이미 바뀌었거나 지워졌을 수도 있다. 어느 쪽이든 응답은 그대로 내보낸다
+            // (예매는 이미 커밋됐다). 그대로 남은 경우에만 처리 중 TTL로 풀린다
+            log.warn("멱등 키 쓰기 실패 mode={} — 키 상태를 확인할 수 없다(그대로면 처리 중 TTL {}초 뒤 만료)",
+                mode, BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds(), e);
             return false;
         }
     }

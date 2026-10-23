@@ -65,3 +65,33 @@ output "eks_node_group_names" {
 output "lb_controller_role_arn" {
   value = module.lb_controller_pod_identity.iam_role_arn
 }
+
+# ---- CloudFront·S3 (3.1.11) → GitHub Variables(frontend-deploy) · global(무효화 권한) ----
+output "cloudfront_domain_name" {
+  description = "화면·API 주소: https://<이 값>/ , https://<이 값>/api/*"
+  value       = aws_cloudfront_distribution.frontend.domain_name
+}
+
+output "cloudfront_distribution_id" {
+  description = "global frontend_distribution_ids(무효화 권한을 이 배포로 좁힘) · GitHub Variables CLOUDFRONT_DISTRIBUTION_ID"
+  value       = aws_cloudfront_distribution.frontend.id
+}
+
+output "frontend_bucket" {
+  description = "GitHub Variables FRONTEND_BUCKET (frontend-deploy가 올리는 곳)"
+  value       = aws_s3_bucket.frontend.bucket
+}
+
+output "api_origin_domain_name" {
+  description = "/api/* 원본(gateway ALB). 비어 있으면 Ingress(gitops 3.1.5)가 아직 없다 → ALB가 생긴 뒤 apply를 한 번 더"
+  value       = local.api_origin_enabled ? local.api_origin_domain_name : ""
+}
+
+output "frontend_github_variables" {
+  description = "레포 Settings → Secrets and variables → Actions → Variables. Cognito 3개(VITE_COGNITO_AUTHORITY·CLIENT_ID·DOMAIN)는 cognito.tf(3.3.x) 출력에서"
+  value = {
+    FRONTEND_BUCKET            = aws_s3_bucket.frontend.bucket
+    CLOUDFRONT_DISTRIBUTION_ID = aws_cloudfront_distribution.frontend.id
+    VITE_COGNITO_REDIRECT_URI  = "https://${aws_cloudfront_distribution.frontend.domain_name}/callback"
+  }
+}

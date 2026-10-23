@@ -245,8 +245,10 @@ git push --force-with-lease
 | `pr-check` | 모든 PR | `./gradlew build` (컴파일 · 단위 테스트 · Testcontainers), gitleaks(비밀 유출 검사) | 머지 불가. 로그의 첫 에러부터 확인 |
 | `infra-plan` | `infra/terraform/**` 바뀐 PR | `terraform fmt · validate · plan` 결과를 PR 코멘트로 | 김종식 확인 |
 | `build-push` | main 머지 | 서비스 이미지 빌드 → ECR → `cinema-gitops` 태그 커밋 → ArgoCD 자동 배포 | 김종식 확인 |
+| `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`assets/*` 1년 · `index.html` no-cache) → CloudFront 무효화 | 레포 Variables·`package-lock.json` 확인 (런북 7장) |
+| `cluster-schedule` | 월~금 08:23 켜기 · 23:07 끄기(KST) + 수동 | EKS 노드그룹 desired 1 ↔ 0 | 김종식 확인 |
 
-**추가될 예정** — OpenAPI diff(계약 깨짐 차단) · Trivy(이미지 취약점) · ai pytest · `frontend-deploy`(S3) · `lambda-deploy` · `cluster-schedule`
+**추가될 예정** — OpenAPI diff(계약 깨짐 차단) · Trivy(이미지 취약점) · `lambda-deploy`
 
 > 현재 `build-push`와 `infra-plan`은 AWS OIDC 역할(WBS 3.1.10)이 생기기 전이라 실패하거나 꺼져 있을 수 있습니다. PR에서는 **`pr-check`만 통과하면 됩니다.**
 

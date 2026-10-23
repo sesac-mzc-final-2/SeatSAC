@@ -10,3 +10,6 @@ github_owner    = "sesac-mzc-final-2"
 github_owner_id = "329788874" # OIDC sub의 owner@ID (조직 설정: 변경 불가 ID 포함)
 github_repo     = "SeatSAC"   # 대소문자 그대로
 github_repo_id  = "1425477103"
+
+# 3.1.11: envs/staging apply 뒤 `terraform output cloudfront_distribution_id` 값을 넣고 global apply (무효화 권한을 이 배포로 좁힘)
+frontend_distribution_ids = []

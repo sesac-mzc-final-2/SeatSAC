@@ -29,7 +29,9 @@ import org.springframework.web.client.RestClient;
  *
  * <pre>
  * RestClient payment = factory.create("http://payment:8080");
- * RestClient booking = factory.create("http://booking:8080", Duration.ofMillis(300)); // 잔여석 300ms
+ * RestClient booking = factory.create("http://booking:8080", Duration.ofMillis(300)); // 잔여석 응답 300ms
+ * RestClient counts  = factory.create("http://booking:8080", Duration.ofMillis(300), Duration.ofMillis(300));
+ *                      // 연결까지 포함해 300ms 예산(catalog → booking 잔여석, 계약 "300ms 전체")
  * </pre>
  */
 public class InternalRestClientFactory {
@@ -43,13 +45,19 @@ public class InternalRestClientFactory {
         return create(baseUrl, READ);
     }
 
+    /** 연결 타임아웃은 기본 1초({@link #CONNECT}) */
     public RestClient create(String baseUrl, Duration readTimeout) {
-        var settings = ClientHttpRequestFactorySettings.defaults()
-            .withConnectTimeout(CONNECT)
-            .withReadTimeout(readTimeout);
+        return create(baseUrl, CONNECT, readTimeout);
+    }
+
+    /**
+     * 연결·응답 타임아웃을 모두 지정한다. 호출 전체 예산이 연결 기본값(1초)보다 짧을 때 쓴다 —
+     * 연결이 느린 상대에게 기본값을 그대로 두면 응답 타임아웃을 줄여도 예산을 넘긴다.
+     */
+    public RestClient create(String baseUrl, Duration connectTimeout, Duration readTimeout) {
         return RestClient.builder()
             .baseUrl(baseUrl)
-            .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings))
+            .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings(connectTimeout, readTimeout)))
             .requestInterceptor((req, body, exec) -> {
                 String traceId = TraceIdFilter.current();
                 if (traceId != null) {
@@ -73,6 +81,13 @@ public class InternalRestClientFactory {
                 throw unavailable();
             })
             .build();
+    }
+
+    /** 요청 팩토리에 넣는 타임아웃 설정. 테스트가 연결·응답 값이 그대로 들어가는지 확인한다 */
+    static ClientHttpRequestFactorySettings settings(Duration connectTimeout, Duration readTimeout) {
+        return ClientHttpRequestFactorySettings.defaults()
+            .withConnectTimeout(connectTimeout)
+            .withReadTimeout(readTimeout);
     }
 
     private static BusinessException unavailable() {

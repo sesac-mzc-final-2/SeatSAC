@@ -210,6 +210,7 @@ paths:
                     bookingId: 9876
                     status: CONFIRMED
                     confirmedAt: "2026-11-16T14:04:10+09:00"
+                    seatLabels: [J7, J8]
                     payment: { paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", status: APPROVED, cardLast4: "4242", approvedAt: "2026-11-16T14:04:10+09:00" }
                 declined:
                   value:
@@ -382,6 +383,11 @@ components:
         bookingId: { type: integer, format: int64 }
         status: { type: string, enum: [CONFIRMED, PAYMENT_FAILED] }
         confirmedAt: { type: string, format: date-time, description: "CONFIRMED일 때만" }
+        seatLabels:
+          type: array
+          description: 결제 완료 화면이 좌석을 다시 조회하지 않도록 함께 돌려준다 (API 명세서 BKG-10 200 예시)
+          items: { type: string }
+          example: [J7, J8]
         payment: { $ref: "#/components/schemas/BookingPayment" }
 
     CancelResult:

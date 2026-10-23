@@ -1,0 +1,23 @@
+{
+  "eventId": "7a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5e",
+  "type": "booking.confirmed",
+  "version": 1,
+  "occurredAt": "2026-11-16T14:04:10+09:00",
+  "producer": "booking",
+  "traceId": "9f1c2d3e4a5b46c78d9e0f1a2b3c4d5e",
+  "payload": {
+    "bookingId": 9877,
+    "userId": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+    "screeningId": 5123,
+    "movieTitle": null,
+    "theaterName": null,
+    "auditoriumName": null,
+    "startsAt": null,
+    "seatLabels": [
+      "J9"
+    ],
+    "seatCount": 1,
+    "amount": 15000,
+    "confirmedAt": "2026-11-16T14:04:10+09:00"
+  }
+}

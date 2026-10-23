@@ -65,18 +65,22 @@
           "description": "Cognito sub"
         },
         "movieTitle": {
-          "type": "string"
-        },
+          "type": ["string", "null"],
+        "description": "Catalog 조회 실패 시 null"
+      },
         "theaterName": {
-          "type": "string"
-        },
+          "type": ["string", "null"],
+        "description": "Catalog 조회 실패 시 null"
+      },
         "auditoriumName": {
-          "type": "string"
-        },
+          "type": ["string", "null"],
+        "description": "Catalog 조회 실패 시 null"
+      },
         "startsAt": {
-          "type": "string",
-          "format": "date-time"
-        },
+          "type": ["string", "null"],
+          "format": "date-time",
+        "description": "Catalog 조회 실패 시 null"
+      },
         "seatLabels": {
           "type": "array",
           "items": {

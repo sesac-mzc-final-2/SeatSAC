@@ -52,6 +52,21 @@ public class BookingStateService {
     }
 
     /**
+     * BKG-03 3단계 — 조건부 UPDATE로 CANCELED로 바꾸고 점유 좌석을 지운다 (명세 5장).
+     * 0행이면 그 사이 확정·만료가 먼저 처리한 것이므로 부르는 쪽이 현재 상태를 읽어 409를 돌려준다.
+     *
+     * @return 처리했으면 true
+     */
+    @Transactional
+    public boolean releaseHold(Long bookingId, Instant now) {
+        if (bookingRepository.cancelPendingHold(bookingId, now) == 0) {
+            return false;
+        }
+        bookingSeatRepository.deleteByBookingId(bookingId);
+        return true;
+    }
+
+    /**
      * 선점 저장 입력. 좌석 수·금액은 {@code seatIds}에서 계산하고 이후 다시 세지 않는다.
      *
      * @param seatLabels Pod 캐시의 좌석 배치에서 찾은 좌석 번호 (seatIds와 같은 순서)

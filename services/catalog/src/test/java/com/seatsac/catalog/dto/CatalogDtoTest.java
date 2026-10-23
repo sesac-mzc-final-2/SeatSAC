@@ -81,8 +81,8 @@ class CatalogDtoTest {
     void cacheKeysFollowConventions() {
         assertThat(CacheKeys.movies("NOW_SHOWING", 0, 20)).isEqualTo("catalog:movies:NOW_SHOWING:0:20");
         assertThat(CacheKeys.movie(12L)).isEqualTo("catalog:movie:12");
-        assertThat(CacheKeys.theaters(true, null)).isEqualTo("catalog:theaters:true:all");
-        assertThat(CacheKeys.theaters(false, "서울")).isEqualTo("catalog:theaters:false:서울");
+        assertThat(CacheKeys.theaters(true)).isEqualTo("catalog:theaters:true:all");
+        assertThat(CacheKeys.theaters(false)).isEqualTo("catalog:theaters:false:all");   // region은 키에 넣지 않는다
         assertThat(CacheKeys.screenings(LocalDate.of(2026, 11, 16), 1004L, null)).isEqualTo("catalog:screenings:2026-11-16:1004:all");
         assertThat(CacheKeys.screenings(LocalDate.of(2026, 11, 16), 1004L, 12L)).isEqualTo("catalog:screenings:2026-11-16:1004:12");
         assertThat(CacheKeys.layout(406L, 1)).isEqualTo("catalog:layout:406:1");

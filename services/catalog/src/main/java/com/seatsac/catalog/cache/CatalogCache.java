@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.seatsac.catalog.config.CatalogProperties;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -18,7 +19,8 @@ import org.springframework.stereotype.Component;
  *
  * <ul>
  *   <li>키 이름은 {@link CacheKeys}만. Spring Cache 추상화를 쓰지 않는 이유는 키 형식({@code catalog:...})을 규약 그대로 두기 위해서다</li>
- *   <li>Valkey 장애·직렬화 오류는 <b>조회 실패가 아니다</b>: WARN 한 줄 남기고 DB에서 읽어 응답한다(캐시는 가속 장치)</li>
+ *   <li>Valkey 장애·직렬화 오류는 <b>조회 실패가 아니다</b>: WARN 한 줄 남기고 DB에서 읽어 응답한다(캐시는 가속 장치).
+ *       읽기가 Valkey 오류로 실패한 요청은 쓰기도 건너뛴다 — 장애 구간에서 명령 타임아웃(300ms)을 두 번 물지 않게</li>
  *   <li>적중률 메트릭 {@code catalog_cache_requests_total{result=hit|miss}} (서비스 실행 계약 5장). Valkey 오류도 miss로 센다</li>
  *   <li>loader가 예외를 던지면(404 등) 캐시에 넣지 않는다</li>
  * </ul>
@@ -52,14 +54,14 @@ public class CatalogCache {
     }
 
     private <T> T getOrLoad(String key, JavaType type, Supplier<T> loader) {
-        T cached = read(key, type);
-        if (cached != null) {
+        Lookup<T> lookup = read(key, type);
+        if (lookup.state() == Lookup.State.HIT) {
             hits.increment();
-            return cached;
+            return lookup.value();
         }
         misses.increment();
         T loaded = loader.get();
-        if (loaded != null) {
+        if (loaded != null && lookup.state() == Lookup.State.MISS) {
             write(key, loaded);
         }
         return loaded;
@@ -74,14 +76,26 @@ public class CatalogCache {
         }
     }
 
-    private <T> T read(String key, JavaType type) {
+    /**
+     * 미스와 Valkey 오류를 구분한다. 깨진 값(역직렬화 실패)은 미스로 보고 새 값으로 덮어쓴다.
+     */
+    private <T> Lookup<T> read(String key, JavaType type) {
+        String json;
         try {
-            String json = redis.opsForValue().get(key);
-            return json == null ? null : mapper.readValue(json, type);
-        } catch (Exception e) {
-            // 연결 실패·타임아웃·깨진 값 — 캐시 없이 진행한다
+            json = redis.opsForValue().get(key);
+        } catch (RuntimeException e) {
+            // 연결 실패·명령 타임아웃 — 캐시 없이 진행하고 이 요청에서는 쓰기도 하지 않는다
             log.warn("cache read failed key={} cause={}: {}", key, e.getClass().getSimpleName(), e.getMessage());
-            return null;
+            return Lookup.error();
+        }
+        if (json == null) {
+            return Lookup.miss();
+        }
+        try {
+            return Lookup.hit(mapper.readValue(json, type));
+        } catch (IOException e) {
+            log.warn("cache value unreadable key={} cause={}: {}", key, e.getClass().getSimpleName(), e.getMessage());
+            return Lookup.miss();
         }
     }
 
@@ -90,6 +104,23 @@ public class CatalogCache {
             redis.opsForValue().set(key, mapper.writeValueAsString(value), ttl);
         } catch (Exception e) {
             log.warn("cache write failed key={} cause={}: {}", key, e.getClass().getSimpleName(), e.getMessage());
+        }
+    }
+
+    private record Lookup<T>(State state, T value) {
+
+        enum State { HIT, MISS, ERROR }
+
+        static <T> Lookup<T> hit(T value) {
+            return new Lookup<>(State.HIT, value);
+        }
+
+        static <T> Lookup<T> miss() {
+            return new Lookup<>(State.MISS, null);
+        }
+
+        static <T> Lookup<T> error() {
+            return new Lookup<>(State.ERROR, null);
         }
     }
 }

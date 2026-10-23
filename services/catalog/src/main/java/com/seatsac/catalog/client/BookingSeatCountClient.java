@@ -25,6 +25,7 @@ import org.springframework.web.client.RestClientException;
  * <ul>
  *   <li>타임아웃·연결 오류·5xx는 공통 {@code InternalRestClientFactory}가 503 {@link BusinessException}으로 바꿔 던진다</li>
  *   <li>서킷 {@code booking}(실패율 50%·10초, ADR-23)이 열려 있으면 호출하지 않고 바로 대체한다</li>
+ *   <li>계약상 요청한 회차는 모두 돌아온다. 빠진 회차가 있거나 본문이 없으면 응답을 믿지 않고 전체를 대체한다</li>
  *   <li>대체 횟수 {@code catalog_seat_counts_fallback_total} (서비스 실행 계약 5장)</li>
  * </ul>
  * 재시도는 하지 않는다(공통 규칙). 요청이 100개를 넘으면 나눠 보내고, 한 묶음이라도 실패하면 전체를 대체한다
@@ -62,16 +63,20 @@ public class BookingSeatCountClient implements SeatCountClient {
                 }
             }
         } catch (CallNotPermittedException | BusinessException | RestClientException e) {
-            fallbacks.increment();
-            log.warn("seat-counts fallback to TOTAL ids={} cause={}: {}", screeningIds.size(),
-                e.getClass().getSimpleName(), e.getMessage());
-            return Optional.empty();
+            return fallback(screeningIds.size(), e.getClass().getSimpleName() + ": " + e.getMessage());
         }
-        // 계약상 요청한 회차는 모두 돌아오지만, 빠진 회차는 예매 없음(0)으로 본다
-        for (Long id : screeningIds) {
-            counts.putIfAbsent(id, 0L);
+        long missing = screeningIds.stream().filter(id -> !counts.containsKey(id)).count();
+        if (missing > 0) {
+            // 계약 위반 응답(본문 없음·일부 회차 누락) — 0으로 추정하지 않는다
+            return fallback(screeningIds.size(), "response missing " + missing + " screening(s)");
         }
         return Optional.of(counts);
+    }
+
+    private Optional<Map<Long, Long>> fallback(int requested, String cause) {
+        fallbacks.increment();
+        log.warn("seat-counts fallback to TOTAL ids={} cause={}", requested, cause);
+        return Optional.empty();
     }
 
     private SeatCounts fetch(List<Long> ids) {

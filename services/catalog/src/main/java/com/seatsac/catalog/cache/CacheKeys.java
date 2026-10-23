@@ -7,7 +7,7 @@ import java.time.LocalDate;
  * <pre>
  * catalog:movies:{status}:{page}:{size}
  * catalog:movie:{id}
- * catalog:theaters:{hasLayout}:{region|all}
+ * catalog:theaters:{hasLayout}:all       (region은 키에 넣지 않고 메모리에서 거른다 — 키 수 제한)
  * catalog:screenings:{date}:{theaterId}:{movieId|all}
  * catalog:layout:{auditoriumId}:{version}
  * </pre>
@@ -27,8 +27,8 @@ public final class CacheKeys {
         return "catalog:movie:" + movieId;
     }
 
-    public static String theaters(boolean hasLayout, String region) {
-        return "catalog:theaters:" + hasLayout + ":" + (region == null || region.isBlank() ? ALL : region);
+    public static String theaters(boolean hasLayout) {
+        return "catalog:theaters:" + hasLayout + ":" + ALL;
     }
 
     public static String screenings(LocalDate date, Long theaterId, Long movieId) {

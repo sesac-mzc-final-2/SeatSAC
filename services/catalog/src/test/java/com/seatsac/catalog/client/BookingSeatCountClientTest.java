@@ -12,18 +12,21 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * booking 집계 호출의 세 가지 결말 — 정상(합산·0 채움·100개 분할), 300ms 초과(TOTAL 대체 + 메트릭), 서킷 열림(호출 없이 대체).
- * 컨테이너 없이 JDK HttpServer로 booking을 대신한다.
+ * booking 집계 호출의 결말 — 정상(합산·100개 분할), 계약 위반 응답(회차 누락·본문 없음 → TOTAL),
+ * 300ms 초과·5xx(TOTAL + 메트릭), 서킷 열림(호출 없이 대체). 컨테이너 없이 JDK HttpServer로 booking을 대신한다.
  */
 class BookingSeatCountClientTest {
 
@@ -31,6 +34,9 @@ class BookingSeatCountClientTest {
     private final List<String> queries = new CopyOnWriteArrayList<>();
     private volatile long delayMillis = 0;
     private volatile int status = 200;
+    /** 응답에서 빼 버릴 회차 (계약 위반 흉내) */
+    private volatile Set<Long> dropIds = Set.of();
+    private volatile boolean emptyBody = false;
 
     private SimpleMeterRegistry meters;
     private CircuitBreakerRegistry breakers;
@@ -40,7 +46,8 @@ class BookingSeatCountClientTest {
     void start() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/internal/screenings/seat-counts", exchange -> {
-            queries.add(exchange.getRequestURI().getQuery());
+            String query = exchange.getRequestURI().getQuery();
+            queries.add(query);
             if (delayMillis > 0) {
                 try {
                     Thread.sleep(delayMillis);
@@ -48,10 +55,16 @@ class BookingSeatCountClientTest {
                     Thread.currentThread().interrupt();
                 }
             }
-            byte[] body = "{\"items\":[{\"screeningId\":1,\"heldCount\":2,\"reservedCount\":3}]}"
-                .getBytes(StandardCharsets.UTF_8);
+            // 요청한 회차마다 항목을 돌려준다. 1번 회차만 선점 2 + 확정 3, 나머지는 0
+            String items = Arrays.stream(query.substring("ids=".length()).split(","))
+                .map(Long::valueOf)
+                .filter(id -> !dropIds.contains(id))
+                .map(id -> "{\"screeningId\":" + id + ",\"heldCount\":" + (id == 1 ? 2 : 0)
+                    + ",\"reservedCount\":" + (id == 1 ? 3 : 0) + ",\"extra\":true}")
+                .collect(Collectors.joining(","));
+            byte[] body = (emptyBody ? "" : "{\"items\":[" + items + "]}").getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
-            exchange.sendResponseHeaders(status, body.length);
+            exchange.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);
             try (OutputStream out = exchange.getResponseBody()) {
                 out.write(body);
             }
@@ -73,7 +86,7 @@ class BookingSeatCountClientTest {
     }
 
     @Test
-    void sumsHeldAndReservedAndFillsMissingWithZero() {
+    void sumsHeldAndReservedPerScreening() {
         Optional<Map<Long, Long>> counts = client.unavailableCounts(List.of(1L, 2L));
 
         assertThat(counts).contains(Map.of(1L, 5L, 2L, 0L));
@@ -98,6 +111,22 @@ class BookingSeatCountClientTest {
     void emptyInputDoesNotCallBooking() {
         assertThat(client.unavailableCounts(List.of())).contains(Map.of());
         assertThat(queries).isEmpty();
+    }
+
+    @Test
+    void missingScreeningInResponseFallsBackInsteadOfAssumingZero() {
+        dropIds = Set.of(2L);
+
+        assertThat(client.unavailableCounts(List.of(1L, 2L, 3L))).isEmpty();
+        assertThat(fallbacks()).isEqualTo(1);
+    }
+
+    @Test
+    void emptyBodyFallsBack() {
+        emptyBody = true;
+
+        assertThat(client.unavailableCounts(List.of(1L))).isEmpty();
+        assertThat(fallbacks()).isEqualTo(1);
     }
 
     @Test

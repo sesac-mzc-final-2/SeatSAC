@@ -9,7 +9,5 @@ public interface TheaterRepository extends JpaRepository<Theater, Long> {
 
     List<Theater> findByHasLayoutOrderByTheaterId(boolean hasLayout);
 
-    List<Theater> findByHasLayoutAndRegionOrderByTheaterId(boolean hasLayout, String region);
-
     List<Theater> findByTheaterIdInOrderByTheaterId(Collection<Long> theaterIds);
 }

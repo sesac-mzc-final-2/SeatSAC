@@ -20,7 +20,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,10 +93,13 @@ class CatalogApiIntegrationTest {
                 body = "{}".getBytes(StandardCharsets.UTF_8);
             } else {
                 status = 200;
-                // 5001: 선점 1 + 확정 1 → 잔여 2. 그 외 ID는 0. 모르는 필드(extra)는 무시돼야 한다
-                body = (ids.contains("5001")
-                    ? "{\"items\":[{\"screeningId\":5001,\"heldCount\":1,\"reservedCount\":1,\"extra\":true}]}"
-                    : "{\"items\":[]}").getBytes(StandardCharsets.UTF_8);
+                // 계약대로 요청한 회차를 모두 돌려준다. 5001만 선점 1 + 확정 1(→ 잔여 2), 나머지 0. 모르는 필드(extra)는 무시돼야 한다
+                String items = Arrays.stream(ids.replace("ids=", "").split(","))
+                    .filter(s -> !s.isBlank())
+                    .map(id -> "{\"screeningId\":" + id + ",\"heldCount\":" + ("5001".equals(id) ? 1 : 0)
+                        + ",\"reservedCount\":" + ("5001".equals(id) ? 1 : 0) + ",\"extra\":true}")
+                    .collect(Collectors.joining(","));
+                body = ("{\"items\":[" + items + "]}").getBytes(StandardCharsets.UTF_8);
             }
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(status, body.length);
@@ -239,8 +244,13 @@ class CatalogApiIntegrationTest {
             .andExpect(jsonPath("$.items", hasSize(1)))
             .andExpect(jsonPath("$.items[0].theaterId").value(2));
 
+        // region은 캐시 키에 들어가지 않는다 — 전체를 캐시하고 메모리에서 거른다 (키 수 제한)
+        mvc.perform(get("/theaters").param("hasLayout", "false").param("region", "없는지역"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.items", hasSize(0)));
         assertThat(redis.hasKey("catalog:theaters:true:all")).isTrue();
-        assertThat(redis.hasKey("catalog:theaters:false:부산")).isTrue();
+        assertThat(redis.hasKey("catalog:theaters:false:all")).isTrue();
+        assertThat(redis.keys("catalog:theaters:*")).hasSize(2);
     }
 
     @Test

@@ -129,8 +129,8 @@ class SeatHoldIdempotencyTest {
     }
 
     /**
-     * 처리 중 키는 <b>짧게</b> 산다. 처리 도중 파드가 죽어 남은 키가 24시간이면 같은 키로
-     * 들어오는 재시도가 하루 동안 409를 받는다.
+     * 처리 중 키는 <b>짧게</b> 산다(선점 TTL과 같은 300초). 처리 도중 파드가 죽어 남은 키가
+     * 24시간이면 같은 키로 들어오는 재시도가 하루 동안 409를 받는다.
      */
     @Test
     void inProgressKeyExpiresMuchSoonerThanTheStoredResponse() {
@@ -176,6 +176,40 @@ class SeatHoldIdempotencyTest {
             .andExpect(jsonPath("$.details[0].reason").value("IN_PROGRESS"));
 
         verify(seatHoldService, times(0)).hold(anyString(), any());
+    }
+
+    /**
+     * 처리 중 TTL이 끝난 뒤 같은 키로 새 요청이 들어와 응답을 저장했는데, <b>늦게 끝난 원래
+     * 요청</b>이 그것을 덮어쓰면 안 된다. 저장·삭제는 처리권(owner)이 같을 때만 한다.
+     */
+    @Test
+    void lateFinisherCannotOverwriteANewerRequestsStoredResponse() {
+        String key = RedisKeys.idempotency(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST);
+        String hash = "same-request-hash";
+
+        // 원래 요청이 처리권을 잡는다
+        IdempotencyStore.Begin first = store.begin(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST, hash);
+        assertThat(first.acquired()).isTrue();
+
+        // TTL이 끝난 상황을 만든다 → 새 요청이 처리권을 잡고 응답까지 저장한다
+        redis.delete(key);
+        IdempotencyStore.Begin second = store.begin(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST, hash);
+        assertThat(second.acquired()).isTrue();
+        store.complete(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST, second.owner(), hash, 201,
+            "{\"bookingId\":5002}");
+
+        // 늦게 끝난 원래 요청이 저장·삭제를 시도해도 바뀌지 않는다
+        store.complete(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST, first.owner(), hash, 409,
+            "{\"code\":\"SEAT_UNAVAILABLE\"}");
+        store.discard(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST, first.owner());
+
+        // 저장된 값은 새 요청(두 번째)의 것이다. body는 레코드 안에서 다시 이스케이프된다
+        assertThat(redis.opsForValue().get(key))
+            .contains("bookingId")
+            .contains("5002")
+            .contains("\"httpStatus\":201")
+            .contains(second.owner())
+            .doesNotContain("SEAT_UNAVAILABLE");
     }
 
     // --- 사용자 분리 ---

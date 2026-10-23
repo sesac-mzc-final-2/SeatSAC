@@ -86,3 +86,15 @@ variable "budget_emails" {
     error_message = "budget_emails에 메일을 1개 이상 넣는다 (budget.auto.tfvars)."
   }
 }
+
+# ---- frontend 배포 (3.1.11, OPS-12) ------------------------------------
+variable "frontend_distribution_ids" {
+  description = "cinema-gha-frontend-deploy가 무효화할 수 있는 CloudFront 배포 ID(envs/staging 출력 cloudfront_distribution_id, 비밀 아님). 비어 있으면 모든 배포 — staging apply 뒤 반드시 채운다"
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.frontend_distribution_ids : can(regex("^[A-Z0-9]{13,14}$", id))])
+    error_message = "frontend_distribution_ids는 CloudFront 배포 ID(E로 시작하는 대문자·숫자 13~14자) 목록이다."
+  }
+}

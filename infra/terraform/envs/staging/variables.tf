@@ -108,3 +108,22 @@ variable "valkey_node_type" {
   type        = string
   default     = "cache.t4g.micro"
 }
+
+# ---- CloudFront·S3 (3.1.11) --------------------------------------------
+variable "gateway_ingress_stack" {
+  description = "gateway Ingress의 <namespace>/<이름>(gitops 3.1.5). LB Controller가 ALB에 태그 ingress.k8s.aws/stack=<이 값>을 붙인다 → CloudFront /api/* 원본을 자동으로 찾는다"
+  type        = string
+  default     = "cinema-staging/gateway"
+}
+
+variable "api_origin_domain_name" {
+  description = "비워 두면 위 태그로 ALB를 찾는다. 태그 탐색이 안 될 때만 ALB DNS 이름을 직접 넣는다(비밀 아님)"
+  type        = string
+  default     = ""
+}
+
+variable "cloudfront_price_class" {
+  description = "PriceClass_200 = 북미·유럽·아시아(한국 포함). PriceClass_100은 한국 엣지가 빠진다"
+  type        = string
+  default     = "PriceClass_200"
+}

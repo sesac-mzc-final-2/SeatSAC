@@ -1,0 +1,111 @@
+# 3.1.11 프런트 배포 (OPS-12): main 머지(frontend/**) → Vite 빌드 → S3 업로드 → CloudFront 무효화
+#   - 역할: cinema-gha-frontend-deploy (main에서만 AssumeRole 가능. S3 버킷 읽기·쓰기 + 무효화만) → secrets.AWS_FRONTEND_DEPLOY_ROLE_ARN
+#   - 값: 레포 Variables (envs/staging 출력 frontend_github_variables + cognito 출력). 비밀 없음 — VITE_ 값은 빌드에 박혀 공개된다
+#   - 캐시: assets/*(해시 파일명) 1년 immutable · 그 외 루트 파일 5분 · index.html no-cache → 무효화는 /* 1건
+#     이전 배포의 assets는 지우지 않는다(열려 있는 화면이 지연 로딩 청크를 받을 수 있게). 용량은 작다
+#   - 사람이 S3에 직접 올리지 않는다. 롤백 = 되돌리는 PR을 main에 머지(main이 아닌 ref에서 Run workflow 하면 AssumeRole이 거부된다)
+#   - Terraform(S3·CloudFront)은 infra/terraform/envs/staging/cloudfront.tf
+name: frontend-deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["frontend/**"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: frontend-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-2
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 설정 값 확인
+        env:
+          FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET }}
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+          VITE_COGNITO_AUTHORITY: ${{ vars.VITE_COGNITO_AUTHORITY }}
+          VITE_COGNITO_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID }}
+          VITE_COGNITO_DOMAIN: ${{ vars.VITE_COGNITO_DOMAIN }}
+          VITE_COGNITO_REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI }}
+        run: |
+          missing=0
+          for v in FRONTEND_BUCKET CLOUDFRONT_DISTRIBUTION_ID VITE_COGNITO_AUTHORITY VITE_COGNITO_CLIENT_ID VITE_COGNITO_DOMAIN VITE_COGNITO_REDIRECT_URI; do
+            if [ -z "${!v}" ]; then echo "::error::레포 Variables에 $v 가 없다 (docs/runbooks/terraform-infra.md 7장)"; missing=1; fi
+          done
+          [ -f package-lock.json ] || { echo "::error::frontend/package-lock.json 이 없다 (npm ci 에 필요. 커밋한다)"; missing=1; }
+          [ "$missing" = 0 ]
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Vite 빌드
+        env:
+          VITE_API_BASE_URL: /api
+          VITE_COGNITO_AUTHORITY: ${{ vars.VITE_COGNITO_AUTHORITY }}
+          VITE_COGNITO_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID }}
+          VITE_COGNITO_DOMAIN: ${{ vars.VITE_COGNITO_DOMAIN }}
+          VITE_COGNITO_REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI }}
+        run: |
+          npm run build
+          test -f dist/index.html || { echo "::error::dist/index.html 이 없다 (vite build outDir 확인)"; exit 1; }
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_FRONTEND_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 계정 ID 가리기 (공개 레포 로그 — 버킷 이름에 들어 있다)
+        run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+
+      - name: S3 업로드
+        env:
+          BUCKET: ${{ vars.FRONTEND_BUCKET }}
+        run: |
+          # 1) assets/*: 해시 파일명 → 1년 immutable. 새 index.html보다 먼저 올라가 있어야 한다
+          if [ -d dist/assets ]; then
+            aws s3 sync dist/assets "s3://$BUCKET/assets" --no-progress \
+              --cache-control "public, max-age=31536000, immutable"
+          fi
+          # 2) 루트 파일(favicon 등, 해시 없음): 5분
+          aws s3 sync dist "s3://$BUCKET" --no-progress --exclude "assets/*" --exclude "index.html" \
+            --cache-control "public, max-age=300"
+          # 3) index.html: 캐시 금지 (CloudFront spa-shell 정책 min TTL 0 → 캐시하지 않는다). 마지막에 올린다
+          aws s3 cp dist/index.html "s3://$BUCKET/index.html" --no-progress \
+            --cache-control "no-cache" --content-type "text/html; charset=utf-8"
+
+      - name: CloudFront 무효화
+        env:
+          DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+          REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI }}
+        run: |
+          id=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" \
+                 --query Invalidation.Id --output text)
+          echo "invalidation $id"
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$id"
+          {
+            echo "## frontend 배포 완료"
+            echo "- 커밋: \`${GITHUB_SHA::7}\`"
+            echo "- 무효화: \`$id\` (/*)"
+            echo "- 화면: ${REDIRECT_URI%/callback}"
+          } >> "$GITHUB_STEP_SUMMARY"

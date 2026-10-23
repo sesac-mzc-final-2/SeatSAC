@@ -223,6 +223,35 @@ class HoldExpiryFlowTest {
             RedisKeys.holdExpiryMember(SCREENING, holdId))).isNotNull();
     }
 
+    /**
+     * 결제 중이라 보류한 멤버는 장부에 남는다. 늘 앞에서부터만 읽으면 그 멤버들이 첫 쪽을 채웠을 때
+     * <b>뒤에 있는 만료 건을 영영 못 본다</b> — 스캔이 쪽을 넘겨야 한다.
+     */
+    @Test
+    void deferredHoldsDoNotBlockLaterOnesInTheLedger() {
+        // 결제 중(보류) 선점 3건을 먼저 만든다 — 장부 앞쪽을 차지한다
+        List<Long> deferred = IntStream.range(0, 3)
+            .mapToObj(i -> hold("payer-" + i, 201L + i).bookingId())
+            .toList();
+        deferred.forEach(this::startPayment);
+        // 그 뒤에 보통 선점 2건
+        List<Long> expiring = IntStream.range(0, 2)
+            .mapToObj(i -> hold("user-" + i, 301L + i).bookingId())
+            .toList();
+        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+
+        sweeper.sweepLedger();
+
+        assertThat(expiring).allSatisfy(id ->
+            assertThat(bookingRepository.findById(id).orElseThrow().getStatus())
+                .isEqualTo(BookingStatus.EXPIRED));
+        // 보류 건은 그대로 PENDING이고 장부에도 남아 있다
+        assertThat(deferred).allSatisfy(id ->
+            assertThat(bookingRepository.findById(id).orElseThrow().getStatus())
+                .isEqualTo(BookingStatus.PENDING));
+        assertThat(redis.opsForZSet().size(RedisKeys.holdExpiry())).isEqualTo(3);
+    }
+
     // --- 장기 중단 후 첫 스윕 (ADR-34 노드 0대) ---
 
     /**

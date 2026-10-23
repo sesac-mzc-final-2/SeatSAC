@@ -4,10 +4,14 @@ import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.component.SeatHoldStrategy.ExpiringHold;
 import com.seatsac.booking.service.HoldExpiryService;
 import com.seatsac.booking.service.HoldExpiryService.Outcome;
+import com.seatsac.common.core.trace.TraceIds;
+import com.seatsac.common.core.trace.TraceKeys;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
@@ -31,6 +35,9 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class HoldExpirySweeper {
 
+    /** 한 번에 읽는 장부 멤버 수. 처리 상한({@link BookingPolicy#EXPIRY_SCAN_BATCH})과 다르다 */
+    private static final int PAGE_SIZE = 100;
+
     private final Clock clock;
     private final SeatHoldStrategy seatHold;
     private final HoldExpiryService holdExpiry;
@@ -44,41 +51,72 @@ public class HoldExpirySweeper {
      * 예매도 RDS 스캔이 먼저 정리했을 수 있다.
      */
     public void sweepLedger() {
-        List<ExpiringHold> due;
+        String traceId = TraceIds.newId();   // 요청 밖 작업도 로그에 추적 ID를 남긴다 (명세 12.2)
+        MDC.put(TraceKeys.MDC_TRACE_ID, traceId);
         try {
-            due = seatHold.dueHolds(clock.instant(), BookingPolicy.EXPIRY_SCAN_BATCH);
-        } catch (DataAccessException e) {
-            log.warn("만료 장부를 읽지 못했다 — 다음 주기에 다시 본다", e);
-            return;
+            sweepLedgerPages();
+        } finally {
+            MDC.remove(TraceKeys.MDC_TRACE_ID);
         }
-        if (due.isEmpty()) {
-            return;
-        }
+    }
 
+    /**
+     * 쪽을 넘기며 돈다. 보류(결제 중)·고아 멤버는 장부에 남거나 지워지는데, 늘 앞에서부터만 읽으면
+     * 보류 멤버가 첫 쪽을 채웠을 때 <b>뒤에 있는 만료 건을 영영 못 본다</b>. 한 주기에 처리하는 양은
+     * {@link BookingPolicy#EXPIRY_SCAN_BATCH}로 묶되, 보류 멤버는 건너뛰고 다음 쪽을 본다.
+     */
+    private void sweepLedgerPages() {
+        Instant now = clock.instant();
+        int offset = 0;
+        int handled = 0;
         int expired = 0;
         int orphans = 0;
         int deferred = 0;
-        for (ExpiringHold hold : due) {
-            Long bookingId = expiredBookings.findPendingBookingIdByHoldId(hold.holdId()).orElse(null);
-            if (bookingId == null) {
-                seatHold.forget(hold.screeningId(), hold.holdId());   // 고아 멤버 — 장부만 정리
-                orphans++;
-                continue;
+
+        while (handled < BookingPolicy.EXPIRY_SCAN_BATCH) {
+            List<ExpiringHold> due;
+            try {
+                due = seatHold.dueHolds(now, offset, PAGE_SIZE);
+            } catch (DataAccessException e) {
+                log.warn("만료 장부를 읽지 못했다 — 다음 주기에 다시 본다", e);
+                return;
+            }
+            if (due.isEmpty()) {
+                break;
             }
 
-            Outcome outcome = holdExpiry.expire(bookingId);
-            if (outcome == Outcome.DEFERRED) {
-                // 결제 중이다. 장부에 남겨 둬야 결제가 끝난 뒤 다시 본다
-                deferred++;
-                continue;
+            for (ExpiringHold hold : due) {
+                Long bookingId = expiredBookings.findPendingBookingIdByHoldId(hold.holdId()).orElse(null);
+                if (bookingId == null) {
+                    seatHold.forget(hold.screeningId(), hold.holdId());   // 고아 멤버 — 장부만 정리
+                    orphans++;
+                    handled++;
+                    continue;
+                }
+
+                Outcome outcome = holdExpiry.expire(bookingId);
+                if (outcome == Outcome.DEFERRED) {
+                    // 결제 중이다. 장부에 남겨 둬야 결제가 끝난 뒤 다시 본다 →
+                    // 그만큼 offset을 밀어 다음 쪽에서 뒤 멤버를 본다
+                    deferred++;
+                    offset++;
+                    continue;
+                }
+                if (outcome == Outcome.EXPIRED) {
+                    expired++;
+                }
+                seatHold.forget(hold.screeningId(), hold.holdId());
+                handled++;
             }
-            if (outcome == Outcome.EXPIRED) {
-                expired++;
+
+            if (due.size() < PAGE_SIZE) {
+                break;   // 더 없다
             }
-            seatHold.forget(hold.screeningId(), hold.holdId());
         }
-        log.info("만료 장부 스캔 due={} expired={} orphans={} deferred={}",
-            due.size(), expired, orphans, deferred);
+
+        if (expired + orphans + deferred > 0) {
+            log.info("만료 장부 스캔 expired={} orphans={} deferred={}", expired, orphans, deferred);
+        }
     }
 
     /**
@@ -86,6 +124,15 @@ public class HoldExpirySweeper {
      * 좌석 키가 아직 살아 있을 수 있어 만료 흐름이 {@code release.lua}로 함께 치운다.
      */
     public void sweepDatabase() {
+        MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.newId());
+        try {
+            sweepExpiredBookings();
+        } finally {
+            MDC.remove(TraceKeys.MDC_TRACE_ID);
+        }
+    }
+
+    private void sweepExpiredBookings() {
         List<Long> bookingIds;
         try {
             bookingIds = expiredBookings.findExpiredPendingIds(clock.instant(),

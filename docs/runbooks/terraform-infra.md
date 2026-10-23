@@ -310,7 +310,9 @@ terraform plan -var-file=staging.tfvars -out=plan.out
 # 기대: S3 버킷 1 + 설정 4(공개 차단·소유권·암호화·정책) · OAC 1 · 캐시 정책 2 · 원본 요청 정책 1 · Function 1 · 배포 1. destroy 0
 #       출력 api_origin_domain_name 은 "" (ALB 없음)
 terraform apply plan.out                 # CloudFront 배포 생성 5~10분
-terraform output cloudfront_domain_name cloudfront_distribution_id frontend_github_variables
+terraform output cloudfront_domain_name          # 출력 이름은 한 번에 하나만 받는다
+terraform output cloudfront_distribution_id      # → 7-2 global.tfvars
+terraform output frontend_github_variables       # → 7-3 GitHub Variables
 ```
 
 ### 7-2. global — 무효화 권한을 이 배포로 좁힘

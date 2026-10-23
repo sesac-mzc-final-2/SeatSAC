@@ -19,6 +19,9 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets # 컨트롤 플레인 ENI·노드 모두 app 서브넷
 
+  # KMS 키 관리자를 실행 주체가 아니라 cinema-admin으로 고정 (CI plan 때 관리자가 tf-plan 역할로 바뀌는 차이 방지)
+  kms_key_administrators = [local.admin_role_arn]
+
   # API 엔드포인트: Bastion 없이 팀원 노트북에서 kubectl → 공개 엔드포인트 + IAM 인증.
   # 노드는 private 엔드포인트로 붙는다
   endpoint_public_access       = true
@@ -42,24 +45,16 @@ module "eks" {
   addons = {
     vpc-cni = {
       before_compute = true # 노드보다 먼저 (없으면 노드가 NotReady)
-      most_recent    = true
+      most_recent    = false
+      addon_version  = "v1.23.2-eksbuild.3"
       configuration_values = jsonencode({
         enableNetworkPolicy = "true" # NetworkPolicy(3.1.13) — VPC CNI 네트워크 정책 에이전트
       })
     }
-    eks-pod-identity-agent = {
-      before_compute = true
-      most_recent    = true
-    }
-    kube-proxy = {
-      most_recent = true
-    }
-    coredns = {
-      most_recent = true
-    }
-    metrics-server = { # EKS 커뮤니티 애드온. HPA·kubectl top 용
-      most_recent = true
-    }
+    eks-pod-identity-agent = { before_compute = true, most_recent = false, addon_version = "v1.4.0-eksbuild.4" }
+    kube-proxy             = { most_recent = false, addon_version = "v1.36.0-eksbuild.48" }
+    coredns                = { most_recent = false, addon_version = "v1.14.7-eksbuild.11" }
+    metrics-server         = { most_recent = false, addon_version = "v0.9.0-eksbuild.13" }
   }
 
   eks_managed_node_groups = {

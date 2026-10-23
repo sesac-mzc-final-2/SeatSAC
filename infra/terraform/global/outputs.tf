@@ -16,6 +16,7 @@ output "github_secrets" {
     AWS_ECR_PUSH_ROLE_ARN        = aws_iam_role.gha_ecr_push.arn
     AWS_TERRAFORM_PLAN_ROLE_ARN  = aws_iam_role.gha_tf_plan.arn
     AWS_FRONTEND_DEPLOY_ROLE_ARN = aws_iam_role.gha_frontend_deploy.arn
+    AWS_CLUSTER_SCHEDULE_ROLE_ARN = aws_iam_role.gha_cluster_schedule.arn
   }
 }
 

@@ -1,6 +1,7 @@
 package com.seatsac.booking.component;
 
 import com.seatsac.booking.common.BookingErrorCode;
+import com.seatsac.booking.common.ScreeningNotFoundException;
 import com.seatsac.common.core.error.BusinessException;
 import com.seatsac.common.core.error.CommonResponseCode;
 import com.seatsac.common.web.client.InternalRestClientFactory;
@@ -43,7 +44,7 @@ public class CatalogClient {
             .uri("/internal/screenings/{screeningId}", screeningId)
             .retrieve()
             .onStatus(CatalogClient::isNotFound, (req, res) -> {
-                throw BookingErrorCode.SCREENING_NOT_FOUND.exception();
+                throw new ScreeningNotFoundException();
             })
             .body(Screening.class);
     }
@@ -55,7 +56,7 @@ public class CatalogClient {
             .uri("/auditoriums/{auditoriumId}/layout?version={version}", auditoriumId, layoutVersion)
             .retrieve()
             .onStatus(CatalogClient::isNotFound, (req, res) -> {
-                throw BookingErrorCode.SCREENING_NOT_FOUND.exception();
+                throw new ScreeningNotFoundException();
             })
             .body(AuditoriumLayout.class);
     }

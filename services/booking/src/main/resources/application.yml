@@ -64,7 +64,8 @@ resilience4j:
         minimum-number-of-calls: 10
         wait-duration-in-open-state: 10s
         permitted-number-of-calls-in-half-open-state: 3
-        # 4xx는 가용성 문제가 아니다 — 없는 회차를 반복 조회해도 서킷이 열리면 안 된다
+        # 4xx만 무시한다. BusinessException 전체를 무시하면 InternalRestClientFactory가
+        # 타임아웃·5xx를 바꿔 주는 503까지 빠져 Catalog 장애에도 서킷이 열리지 않는다
         ignore-exceptions:
-          - com.seatsac.common.core.error.BusinessException
+          - com.seatsac.booking.common.ScreeningNotFoundException
           - org.springframework.web.client.HttpClientErrorException

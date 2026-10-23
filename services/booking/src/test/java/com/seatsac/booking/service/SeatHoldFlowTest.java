@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 
+import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.common.BookingPolicy;
+import com.seatsac.booking.common.ScreeningNotFoundException;
 import com.seatsac.booking.common.RedisKeys;
 import com.seatsac.booking.component.CatalogClient;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout;
@@ -70,6 +72,8 @@ class SeatHoldFlowTest {
     BookingSeatRepository bookingSeatRepository;
     @Autowired
     StringRedisTemplate redis;
+    @Autowired
+    io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry circuitBreakers;
 
     @BeforeEach
     void setUp() {
@@ -145,6 +149,21 @@ class SeatHoldFlowTest {
                     assertThat(detail.value()).isEqualTo(first.bookingId());
                 });
             });
+    }
+
+    /**
+     * 서킷은 404(도메인 응답)만 무시하고 <b>Catalog 장애는 집계</b>해야 한다.
+     * {@code BusinessException} 전체를 무시하면 타임아웃·5xx가 바뀐 503까지 빠져
+     * 장애가 이어져도 서킷이 열리지 않는다.
+     */
+    @Test
+    void catalogCircuitIgnoresNotFoundButCountsOutages() {
+        var config = circuitBreakers.circuitBreaker("catalog").getCircuitBreakerConfig();
+
+        assertThat(config.getIgnoreExceptionPredicate().test(new ScreeningNotFoundException())).isTrue();
+        assertThat(config.getIgnoreExceptionPredicate()
+            .test(BookingErrorCode.CATALOG_UNAVAILABLE.exception())).isFalse();
+        assertThat(config.getFailureRateThreshold()).isEqualTo(50.0f);
     }
 
     /**

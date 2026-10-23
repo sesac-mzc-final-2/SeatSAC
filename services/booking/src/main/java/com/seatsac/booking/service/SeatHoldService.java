@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 /**
@@ -124,8 +125,15 @@ public class SeatHoldService {
             return bookingState.createPending(new PendingBooking(userId, screeningId, holdId, seatIds,
                 layout.labelsOf(seatIds), expiresAt), now);
         } catch (RuntimeException e) {
-            // 유일 제약 위반 등. Valkey를 되돌리고 이벤트는 발행하지 않는다
-            seatHold.release(screeningId, userId, holdId, seatIds);
+            // 유일 제약 위반 등. Valkey를 되돌리고 이벤트는 발행하지 않는다.
+            // 되돌리기가 실패해도 원래 예외를 그대로 던진다 — 409를 500으로 바꾸면 안 된다
+            // (남은 좌석 키는 TTL 300초로 사라진다)
+            try {
+                seatHold.release(screeningId, userId, holdId, seatIds);
+            } catch (DataAccessException cleanupFailure) {
+                log.warn("선점 되돌리기 실패 screeningId={} seats={} cause={}: {}", screeningId, seatIds,
+                    cleanupFailure.getClass().getSimpleName(), cleanupFailure.getMessage());
+            }
             throw e;
         }
     }

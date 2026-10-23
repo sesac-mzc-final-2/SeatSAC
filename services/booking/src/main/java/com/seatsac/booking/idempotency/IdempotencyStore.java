@@ -42,13 +42,19 @@ public class IdempotencyStore {
      * 처리권을 잡는다. 비어 있으면 {@code IN_PROGRESS}로 선점하고 {@link Optional#empty()},
      * 이미 있으면 그 값을 돌려준다(호출자가 409 또는 응답 재생을 고른다).
      *
+     * <p>{@code IN_PROGRESS}는 <b>짧은 TTL</b>이다
+     * ({@link BookingPolicy#IDEMPOTENCY_IN_PROGRESS_TTL}) — 처리 도중 파드가 죽으면 키가 남는데,
+     * 24시간이면 그 키로 들어오는 재시도가 하루 동안 409를 받는다. 첫 응답을 저장할 때
+     * 24시간으로 늘린다.
+     *
      * <p>Valkey를 읽지 못하면 그대로 올려 보낸다 — 멱등 보장을 못 하는 쓰기는 받지 않는다.
      */
     public Optional<IdempotencyRecord> begin(String userId, String key, String requestHash) {
         String redisKey = RedisKeys.idempotency(userId, key);
         String fresh = serialize(IdempotencyRecord.inProgress(requestHash));
 
-        if (Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(redisKey, fresh, BookingPolicy.IDEMPOTENCY_TTL))) {
+        if (Boolean.TRUE.equals(redis.opsForValue()
+            .setIfAbsent(redisKey, fresh, BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL))) {
             return Optional.empty();
         }
 
@@ -56,7 +62,7 @@ public class IdempotencyStore {
         if (stored == null) {
             // 확인하는 사이 24시간 TTL이 끝났다. 한 번 더 잡아 보고, 그래도 안 되면 처리 중으로 본다
             if (Boolean.TRUE.equals(redis.opsForValue()
-                .setIfAbsent(redisKey, fresh, BookingPolicy.IDEMPOTENCY_TTL))) {
+                .setIfAbsent(redisKey, fresh, BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL))) {
                 return Optional.empty();
             }
             return Optional.of(IdempotencyRecord.inProgress(requestHash));
@@ -68,8 +74,9 @@ public class IdempotencyStore {
      * 첫 응답을 저장한다(4xx도 저장 — 같은 키로 다시 와도 같은 거절을 받는다).
      *
      * <p>여기서 실패해도 응답은 그대로 내보낸다. 예매는 이미 커밋됐으니 저장 실패로 500을 내면
-     * 사용자가 성공한 예매를 못 받는다. 재요청은 키가 없어 다시 실행되지만, 그때는
-     * {@code user-hold}와 RDS PENDING이 있어 409 {@code ACTIVE_HOLD_EXISTS}로 막힌다.
+     * 사용자가 성공한 예매를 못 받는다. 그 경우 키는 {@code IN_PROGRESS}로 남아 60초 동안
+     * 같은 키 재시도에 409를 돌려주고, TTL이 끝나면 다시 실행된다 — 그때는 {@code user-hold}와
+     * RDS {@code PENDING}이 있어 409 {@code ACTIVE_HOLD_EXISTS}로 막힌다.
      */
     public void complete(String userId, String key, String requestHash, int httpStatus, String body) {
         try {

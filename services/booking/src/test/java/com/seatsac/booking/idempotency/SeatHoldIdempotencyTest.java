@@ -128,6 +128,24 @@ class SeatHoldIdempotencyTest {
             BookingPolicy.IDEMPOTENCY_TTL.toSeconds());
     }
 
+    /**
+     * 처리 중 키는 <b>짧게</b> 산다. 처리 도중 파드가 죽어 남은 키가 24시간이면 같은 키로
+     * 들어오는 재시도가 하루 동안 409를 받는다.
+     */
+    @Test
+    void inProgressKeyExpiresMuchSoonerThanTheStoredResponse() {
+        store.begin(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST, "hash-only-for-ttl-check");
+
+        Long inProgressTtl = redis.getExpire(
+            RedisKeys.idempotency(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST), TimeUnit.SECONDS);
+
+        assertThat(inProgressTtl).isBetween(
+            BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds() - 5,
+            BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds());
+        assertThat(BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL)
+            .isLessThan(BookingPolicy.IDEMPOTENCY_TTL);
+    }
+
     // --- 같은 키·다른 본문 / 처리 중 ---
 
     @Test

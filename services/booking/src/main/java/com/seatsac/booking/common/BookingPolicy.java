@@ -44,6 +44,18 @@ public final class BookingPolicy {
      */
     public static final Duration HOLD_COMMIT_GRACE = Duration.ofSeconds(10);
 
+    /**
+     * 처리 중({@code IN_PROGRESS}) 멱등 키의 TTL. 요청이 끝나면 저장(DONE) 또는 삭제로 바뀌므로
+     * 이 값이 쓰이는 경우는 <b>처리 도중 파드가 죽은 경우</b>뿐이다. 24시간을 그대로 쓰면 그 키로
+     * 들어오는 재시도가 하루 동안 409 {@code IDEMPOTENCY_IN_PROGRESS}를 받는다.
+     *
+     * <p>60초인 근거: 한 요청이 이보다 오래 살아 있을 수 없다 — Gateway 응답 대기가 15초이고
+     * (BKG-10 최악 경로 ≈ 12초) 그 뒤에는 클라이언트가 이미 포기한 상태다. 만료 뒤 같은 키로
+     * 재시도가 오면 다시 실행되는데, 선점은 {@code user-hold}와 RDS {@code PENDING} 확인이
+     * 막아 주므로 좌석이 두 번 잡히지 않는다.
+     */
+    public static final Duration IDEMPOTENCY_IN_PROGRESS_TTL = Duration.ofSeconds(60);
+
     /** 멱등 키 TTL 24시간 — 화면이 재시도할 수 있는 동안 첫 응답을 들고 있는다 (ADR-19) */
     public static final Duration IDEMPOTENCY_TTL = Duration.ofHours(24);
 

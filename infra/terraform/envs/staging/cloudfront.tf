@@ -225,7 +225,7 @@ resource "aws_cloudfront_distribution" "frontend" {
         https_port               = 443
         origin_protocol_policy   = "http-only"
         origin_ssl_protocols     = ["TLSv1.2"] # https-only로 바꿀 때만 쓰인다(필수 인수라 둔다)
-        origin_read_timeout      = 30 # 원본 응답 대기. SSE heartbeat 15초보다 길어야 한다(세트 ③). Gateway 응답 타임아웃 15초보다도 길다
+        origin_read_timeout      = 30          # 원본 응답 대기. SSE heartbeat 15초보다 길어야 한다(세트 ③). Gateway 응답 타임아웃 15초보다도 길다
         origin_keepalive_timeout = 5
       }
     }

@@ -9,7 +9,7 @@ output "public_subnet_ids" {
 }
 
 output "app_subnet_ids" {
-  description = "EKS node group subnet"
+  description = "EKS 노드그룹 서브넷"
   value       = module.vpc.private_subnets
 }
 
@@ -22,7 +22,7 @@ output "db_subnet_group_name" {
 }
 
 output "nat_public_ip" {
-  description = "Outbound Static IP (IP shown at LotteCinema·GitHub)"
+  description = "외부로 나갈 때의 고정 IP (롯데시네마·GitHub 등에서 보이는 IP)"
   value       = module.vpc.nat_public_ips
 }
 
@@ -48,17 +48,17 @@ output "eks_cluster_endpoint" {
 }
 
 output "eks_kubeconfig_command" {
-  description = "members: --profile cinema-dev, admin: cinema-admin"
+  description = "팀원은 --profile cinema-dev, 관리자는 cinema-admin"
   value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --profile cinema-dev"
 }
 
 output "eks_node_security_group_id" {
-  description = "Node·Pod SG (Allow ALB to 8080)"
+  description = "노드·파드 SG (ALB → 8080 허용)"
   value       = module.eks.node_security_group_id
 }
 
 output "eks_node_group_names" {
-  description = "cluster-schedule workflow(3.1.14): desired 1 ↔ 0 un object changeable"
+  description = "cluster-schedule 워크플로(3.1.14)가 desired 1 ↔ 0 으로 바꿀 대상"
   value       = { for k, v in module.eks.eks_managed_node_groups : k => split(":", v.node_group_id)[1] } # node_group_id = "클러스터:노드그룹"
 }
 
@@ -80,4 +80,9 @@ output "rds_master_secret_arn" {
 output "valkey_primary_endpoint" {
   description = "SPRING_DATA_REDIS_HOST (포트 6379, SSL true)"
   value       = aws_elasticache_replication_group.valkey.primary_endpoint_address
+}
+
+output "db_bootstrap_role_arn" {
+  description = "3.1.12 DB 계정 생성 Job Pod Identity 역할 (cinema-ops/db-bootstrap, 마스터 Secret 읽기만)"
+  value       = module.db_bootstrap_pod_identity.iam_role_arn
 }

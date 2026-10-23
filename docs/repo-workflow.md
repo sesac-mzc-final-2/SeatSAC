@@ -29,7 +29,7 @@ SeatSAC/
 SeatSAC-gitops/
 ├── apps/              App of Apps
 ├── platform/          Argo Rollouts, kube-prometheus-stack (LB Controller는 Terraform envs/staging-k8s)
-├── base/{service}/    Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, ServiceMonitor, Flyway PreSync Job
+├── base/{service}/    Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, ServiceMonitor, Flyway 훅 Job(Sync wave -1)
 ├── overlays/staging/  이미지 태그, replicas, ConfigMap
 └── analysis/          AnalysisTemplate
 ```
@@ -92,7 +92,7 @@ SeatSAC-gitops/
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |
 | `lambda-deploy` | main 머지(`lambdas/**`) | 패키징 → 배포 → 별칭 갱신 |
 | `infra-plan` | PR(`infra/terraform/**`, 필수 검사 아님) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |
-| `cluster-schedule` | 평일 아침·밤 cron + 수동 | 노드그룹 desired 1 ↔ 0 (ng-a·ng-c) |
+| `cluster-schedule` | 월~금 08:23 켜기 · 23:07 끄기(KST) + 수동(up·down·status) | 노드그룹 desired 1 ↔ 0 (ng-a·ng-c, OIDC `cinema-gha-cluster-schedule`). 데모 주간 11/16~20과 Variables `CLUSTER_KEEP_ON=true`이면 예약 끄기 건너뜀. 스크립트 `infra/scripts/cluster-scale.sh` |
 | `gitops-validate` (gitops 레포) | PR | `kustomize build` + kubeconform |
 
 - OIDC 역할 세션 이름 `gha-${{ github.actor }}-${{ github.run_id }}`(CloudTrail에 실행자)

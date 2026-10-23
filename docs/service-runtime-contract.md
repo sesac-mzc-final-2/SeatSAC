@@ -50,7 +50,7 @@
 | `SPRING_DATASOURCE_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` |
 | `SPRING_DATASOURCE_USERNAME` | `{svc}_app` |
 | `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` |
-| `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 PreSync Job) |
+| `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 Flyway 훅 Job) |
 | `SPRING_DATA_REDIS_HOST` / `_PORT` / `_SSL_ENABLED` | `{valkey-primary-endpoint}` / `6379` / `true` (Valkey 쓰는 서비스만) |
 
 ### 서비스별
@@ -95,7 +95,7 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
 
 | 항목 | 규칙 |
 | --- | --- |
-| 마이그레이션 실행 | ArgoCD **PreSync** Job `{svc}-flyway`: initContainer(같은 앱 이미지)가 `/app/db/migration`을 emptyDir로 복사 → `flyway/flyway`(버전 고정) 컨테이너가 `{svc}_migrator`로 `migrate` |
+| 마이그레이션 실행 | ArgoCD 훅 Job `{svc}-flyway`(**Sync 단계 wave -1**: ConfigMap `{svc}-config` wave -2 → Job → Deployment/Rollout wave 0, 실패하면 sync 중단): initContainer(같은 앱 이미지)가 `/app/db/migration`을 emptyDir로 복사 → `flyway/flyway:11.7.2`(Spring Boot 3.5 Flyway 11.7과 같은 메이저) 컨테이너가 `{svc}_migrator`로 `migrate`. URL은 `{svc}-config`의 `SPRING_DATASOURCE_URL`, 계정은 `{svc}-migrator-secrets` |
 | 파일 위치 | `services/{svc}/src/main/resources/db/migration/V{yyyyMMddHHmm}__{설명}.sql` |
 | 호환 | 블루/그린·롤링 중 두 버전이 같은 DB를 쓴다 → 확장 → 전환 → 정리. 컬럼 삭제·이름 변경은 다음 배포 |
 | 실패 | Job 실패 = sync 실패 → 새 버전이 뜨지 않는다. 고친 마이그레이션은 새 V 번호로(이미 적용된 파일 수정 금지) |
@@ -162,6 +162,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [x] EKS 1.36 · 노드그룹 ng-a·ng-c · 애드온(VPC CNI 네트워크 정책 켬·metrics-server) · Access Entry · LB Controller (3.1.2, 코드 10/22 · apply 후 런북 4장 확인)
 - [x] 가동 정책: 평일 08:23 켜기·23:07 끄기(KST), 데모 주간 24시간, Budgets 월·일 경보 (3.1.14, 코드 10/22 · global apply 후 런북 8-1장 확인)
 - [x] ElastiCache Valkey 8.2 `cache.t4g.micro`(noeviction·Ex·TLS) + 메모리 80%·Evictions 경보, RDS MySQL 8.4 Single-AZ `db.t4g.small`(UTC·utf8mb4·TLS 강제) (3.1.3, 코드 10/22 · apply 후 런북 5장 확인)
+- [x] DB 스키마 4·계정 8(`REQUIRE SSL`)·`{svc}-secrets`·`{svc}-migrator-secrets` (3.1.12, `envs/staging-k8s/db_bootstrap.tf` — 클러스터 안 Job이 마스터 Secret을 Pod Identity로 읽어 생성, 코드 10/23 · apply 후 런북 8장 확인). Flyway 훅 Job 틀은 gitops `base/{svc}/flyway-job.yaml`(3.1.5에서 연결)
 - [ ] Compose `elasticmq-native:latest` → 버전 고정 — 김종식
 - [ ] `infra/terraform/envs/staging`에 Cognito·SQS·Pod Identity 모듈 추가 시 이 문서 3·6장 이름 그대로 — 김종식
 

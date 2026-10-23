@@ -173,6 +173,7 @@
 | 공통 접두사 / 환경 | `cinema` / `staging` (환경은 staging 하나, ADR-34) | — |
 | 앱 namespace | `cinema-staging` | — |
 | 플랫폼 namespace | 도구 기본값 | `argocd`, `argo-rollouts`, `monitoring`, `kube-system` |
+| 관리자 namespace | `cinema-ops` (팀원 조회 범위 밖, Terraform이 만드는 운영 Job·그 입력 Secret) | `db-bootstrap-*` Job (3.1.12) |
 | AWS 리소스 | `cinema-staging-{대상}` | `cinema-staging-eks`, `cinema-staging-valkey`, `cinema-staging-users`(Cognito) |
 | 계정 단위 리소스 | `cinema-{대상}` | `cinema-admin`, `cinema-developer`, `cinema-gha-ecr-push`, `cinema-tfstate-{계정ID}` |
 | S3 버킷 | `cinema-staging-frontend-{계정ID}`, `cinema-tfstate-{계정ID}` | — |
@@ -347,7 +348,7 @@
 | `SPRING_DATASOURCE_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` |
 | `SPRING_DATASOURCE_USERNAME` | `{svc}_app` |
 | `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` |
-| `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 PreSync Job) |
+| `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 Flyway 훅 Job) |
 | `SPRING_DATA_REDIS_HOST` / `_PORT` / `_SSL_ENABLED` | `{valkey-primary-endpoint}` / `6379` / `true` (Valkey 쓰는 서비스만) |
 
 #### 서비스별
@@ -392,7 +393,7 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
 
 | 항목 | 규칙 |
 | --- | --- |
-| 마이그레이션 실행 | ArgoCD **PreSync** Job `{svc}-flyway`: initContainer(같은 앱 이미지)가 `/app/db/migration`을 emptyDir로 복사 → `flyway/flyway`(버전 고정) 컨테이너가 `{svc}_migrator`로 `migrate` |
+| 마이그레이션 실행 | ArgoCD 훅 Job `{svc}-flyway`(**Sync 단계 wave -1**: ConfigMap `{svc}-config` wave -2 → Job → Deployment/Rollout wave 0, 실패하면 sync 중단): initContainer(같은 앱 이미지)가 `/app/db/migration`을 emptyDir로 복사 → `flyway/flyway:11.7.2`(Spring Boot 3.5 Flyway 11.7과 같은 메이저) 컨테이너가 `{svc}_migrator`로 `migrate`. URL은 `{svc}-config`의 `SPRING_DATASOURCE_URL`, 계정은 `{svc}-migrator-secrets` |
 | 파일 위치 | `services/{svc}/src/main/resources/db/migration/V{yyyyMMddHHmm}__{설명}.sql` |
 | 호환 | 블루/그린·롤링 중 두 버전이 같은 DB를 쓴다 → 확장 → 전환 → 정리. 컬럼 삭제·이름 변경은 다음 배포 |
 | 실패 | Job 실패 = sync 실패 → 새 버전이 뜨지 않는다. 고친 마이그레이션은 새 V 번호로(이미 적용된 파일 수정 금지) |
@@ -459,6 +460,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [x] EKS 1.36 · 노드그룹 ng-a·ng-c · 애드온(VPC CNI 네트워크 정책 켬·metrics-server) · Access Entry · LB Controller (3.1.2, 코드 10/22 · apply 후 런북 4장 확인)
 - [x] 가동 정책: 평일 08:23 켜기·23:07 끄기(KST), 데모 주간 24시간, Budgets 월·일 경보 (3.1.14, 코드 10/22 · global apply 후 런북 8-1장 확인)
 - [x] ElastiCache Valkey 8.2 `cache.t4g.micro`(noeviction·Ex·TLS) + 메모리 80%·Evictions 경보, RDS MySQL 8.4 Single-AZ `db.t4g.small`(UTC·utf8mb4·TLS 강제) (3.1.3, 코드 10/22 · apply 후 런북 5장 확인)
+- [x] DB 스키마 4·계정 8(`REQUIRE SSL`)·`{svc}-secrets`·`{svc}-migrator-secrets` (3.1.12, `envs/staging-k8s/db_bootstrap.tf` — 클러스터 안 Job이 마스터 Secret을 Pod Identity로 읽어 생성, 코드 10/23 · apply 후 런북 8장 확인). Flyway 훅 Job 틀은 gitops `base/{svc}/flyway-job.yaml`(3.1.5에서 연결)
 - [ ] Compose `elasticmq-native:latest` → 버전 고정 — 김종식
 - [ ] `infra/terraform/envs/staging`에 Cognito·SQS·Pod Identity 모듈 추가 시 이 문서 3·6장 이름 그대로 — 김종식
 
@@ -550,10 +552,10 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | --- | --- |
 | RDS 파라미터 그룹 | `time_zone=UTC`, `character_set_server=utf8mb4`, `collation_server=utf8mb4_0900_ai_ci` |
 | 스키마 | `catalog_db`, `booking_db`, `user_db`, `payment_db` |
-| 계정·권한 | 1장 계정 규칙. 마스터 계정은 앱·Flyway Job에서 쓰지 않음. 마스터 비밀번호는 RDS가 Secrets Manager에서 관리(3.1.3) → 계정·스키마 생성은 3.1.12 클러스터 안 Job(RDS는 VPC 밖에서 닿지 않음) |
-| Secret | `{svc}-secrets`(`SPRING_DATASOURCE_PASSWORD`), `{svc}-migrator-secrets`(`FLYWAY_USER`, `FLYWAY_PASSWORD`) |
+| 계정·권한 | 1장 계정 규칙 + 모든 계정 `REQUIRE SSL`, `@'%'`. 마스터 계정(`cinema_master`)은 앱·Flyway Job에서 쓰지 않음. 마스터 비밀번호는 RDS가 Secrets Manager에서 관리(3.1.3) → 계정·스키마 생성은 3.1.12 클러스터 안 Job `cinema-ops/db-bootstrap-*`(Pod Identity로 마스터 Secret 읽기, RDS는 VPC 밖에서 닿지 않음). SQL은 멱등(`IF NOT EXISTS` + `ALTER USER`) → 비밀번호 교체도 같은 Job |
+| Secret | `{svc}-secrets`(`SPRING_DATASOURCE_PASSWORD`), `{svc}-migrator-secrets`(`FLYWAY_USER`, `FLYWAY_PASSWORD`) — namespace `cinema-staging`, 비밀번호는 Terraform `random_password`(영숫자 32자, `envs/staging-k8s` state에만) |
 | ElastiCache Valkey 8.2 | `notify-keyspace-events Ex`(만료 감지, ADR-44), 전송 중 암호화, `maxmemory-policy noeviction`(선점 키가 밀려나면 안 됨), 노드 **`cache.t4g.micro`** + 메모리 80%·Evictions 경보(ADR-59) |
-| 시드 적재 | 3.1.12 후 `lotte-seed` SQL을 `catalog_migrator`로 1회 (catalog ID BIGINT·UTC 반영본) |
+| 시드 적재 | 3.1.12 후 `lotte-seed/load/run.sh`(관리자): 일회성 Job이 catalog Flyway를 먼저 적용하고 시드를 `catalog_migrator`로 1회 넣은 뒤 검증(극장 132·상영관 39·좌석 6,767·회차 8,360·영화 22). 재실행 안전, 끝나면 Job·ConfigMap 삭제. 시드 파일은 레포·gitops에 두지 않는다 |
 | 가용성·백업 | RDS **Single-AZ**(ADR-61) `db.t4g.small`, 자동 백업 7일(03:00 KST), 최종 스냅샷 없음(재생성 리허설용) · 자동 백업은 삭제 후에도 보존 |
 | 만들지 않는 것 | 리포트 뷰(`v_*_report`)·`stats_db` — catalog Flyway V2 `v_screening_report`는 머지하지 않음(ADR-60) |
 
@@ -585,7 +587,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | --- | --- | --- |
 | 3 · 33 · 61 | RDS **MySQL 8.4** 1대(**Single-AZ**, `db.t4g.small`, TLS 강제, 마스터 비밀번호는 RDS 관리 Secrets Manager) + 서비스별 스키마·계정 | Multi-AZ·AZ 장애 실험은 시간 남을 때 |
 | 33 · 59 | ElastiCache **Valkey 8.2 `cache.t4g.micro`**, `noeviction`, `notify-keyspace-events Ex`, 메모리 80%·Evictions 경보 | 부하 테스트에서 70% 넘으면 t4g.small |
-| 57 | DB 마이그레이션은 ArgoCD **PreSync Flyway Job**(`{svc}_migrator`), 앱은 Flyway 끔 | |
+| 57 | DB 마이그레이션은 ArgoCD **Flyway 훅 Job**(`{svc}_migrator`, Sync 단계 wave -1 — ConfigMap 다음·앱 전, 실패 시 sync 중단), 앱은 Flyway 끔. 스키마·계정·Secret은 Terraform(`envs/staging-k8s`)이 클러스터 안 Job으로 생성(3.1.12) | 처음 "PreSync"였으나 첫 배포 때 ConfigMap보다 먼저 돌아 Sync wave -1로 변경(10/23) |
 | 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)` · `pg_provider`는 `MOCK`만 | |
 | 4 | 좌석 이벤트: Valkey Pub/Sub `seat-events:{회차}` → SSE, 놓치면 BKG-01 스냅샷 | 유실 허용 |
 | 5 | 선점: Valkey `SET NX EX 300`(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
@@ -662,7 +664,7 @@ SeatSAC/
 SeatSAC-gitops/
 ├── apps/              App of Apps
 ├── platform/          Argo Rollouts, kube-prometheus-stack (LB Controller는 Terraform envs/staging-k8s)
-├── base/{service}/    Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, ServiceMonitor, Flyway PreSync Job
+├── base/{service}/    Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, ServiceMonitor, Flyway 훅 Job(Sync wave -1)
 ├── overlays/staging/  이미지 태그, replicas, ConfigMap
 └── analysis/          AnalysisTemplate
 ```

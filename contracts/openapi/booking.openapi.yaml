@@ -299,7 +299,13 @@ components:
     SeatStatus: { type: string, enum: [AVAILABLE, HELD, RESERVED] }
     BookingStatus: { type: string, enum: [PENDING, CONFIRMED, PAYMENT_FAILED, EXPIRED, CANCELED] }
     PaymentStatus: { type: string, enum: [PROCESSING, APPROVED, FAILED, CANCELED] }
-    FailureCode: { type: [string, "null"], enum: [CARD_DECLINED, INSUFFICIENT_BALANCE, null] }
+    FailureCode:
+      type: [string, "null"]
+      enum: [CARD_DECLINED, INSUFFICIENT_BALANCE, PROCESSING_TIMEOUT, null]
+      description: |
+        CARD_DECLINED·INSUFFICIENT_BALANCE는 모의 판정 결과.
+        PROCESSING_TIMEOUT은 payment가 판정 중 종료돼 PROCESSING으로 남은 결제를 기동·주기 정리로
+        닫은 경우다(payment 명세 3·7장). booking은 결제 실패로 다루고 좌석을 푼다.
 
     SeatSnapshot:
       type: object

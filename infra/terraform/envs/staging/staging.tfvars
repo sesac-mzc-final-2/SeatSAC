@@ -14,3 +14,9 @@ data_subnets   = ["10.20.48.0/24", "10.20.49.0/24"]
 eks_version          = "1.36"
 node_instance_type   = "t3.large"
 developer_namespaces = ["cinema-staging", "monitoring"]
+
+# RDS·Valkey (3.1.3)
+rds_engine_version    = "8.4"
+rds_instance_class    = "db.t4g.small"
+valkey_engine_version = "8.2"
+valkey_node_type      = "cache.t4g.micro"

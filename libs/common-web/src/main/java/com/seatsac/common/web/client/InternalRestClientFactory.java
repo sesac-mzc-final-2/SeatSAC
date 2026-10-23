@@ -73,7 +73,7 @@ public class InternalRestClientFactory {
                     // 타임아웃·연결 거부 — 상대가 응답하지 못한 경우
                     log.warn("internal call failed uri={} cause={}: {}", req.getURI(),
                         e.getClass().getSimpleName(), e.getMessage());
-                    throw new BusinessException(CommonResponseCode.SERVICE_UNAVAILABLE, e);
+                    throw unavailable();
                 }
             })
             .defaultStatusHandler(HttpStatusCode::is5xxServerError, (req, res) -> {

@@ -78,3 +78,33 @@ variable "developer_namespaces" {
   type        = list(string)
   default     = ["cinema-staging", "monitoring"]
 }
+
+# ---- RDS·Valkey (3.1.3) ----------------------------------------------
+variable "rds_engine_version" {
+  description = "MySQL 메이저 버전(ADR-3·33). 마이너는 생성 시점 AWS 기본값, 자동 업그레이드 끔"
+  type        = string
+  default     = "8.4"
+}
+
+variable "rds_instance_class" {
+  description = "RDS 클래스. 파드당 Hikari 5 x 최대 파드 수 + Flyway Job 연결을 받아야 한다"
+  type        = string
+  default     = "db.t4g.small"
+}
+
+variable "rds_connection_alarm" {
+  description = "RDS 연결 수 경보 기준 (t4g.small max_connections 약 170의 80%)"
+  type        = number
+  default     = 130
+}
+
+variable "valkey_engine_version" {
+  type    = string
+  default = "8.2"
+}
+
+variable "valkey_node_type" {
+  description = "ADR-59: t4g.micro, 부하 테스트에서 메모리 70% 넘으면 t4g.small"
+  type        = string
+  default     = "cache.t4g.micro"
+}

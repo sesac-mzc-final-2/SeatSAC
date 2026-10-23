@@ -11,6 +11,9 @@
 #       alb.ingress.kubernetes.io/manage-backend-security-group-rules: "false"
 #       alb.ingress.kubernetes.io/healthcheck-path: /actuator/health/readiness
 #       alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120   # SSE
+#       alb.ingress.kubernetes.io/target-group-attributes: deregistration_delay.timeout_seconds=30
+#         └ 기본 300초 → 30초: 블루/그린·롤링에서 내려가는 gateway 파드의 SSE·긴 요청을 graceful 20초 + preStop 5초 안에
+#           정리하고, 화면은 retry 2초로 새 파드에 다시 붙는다 (terminationGracePeriodSeconds 35 보다 짧게)
 #     ※ SSE는 ALB 유휴 120초만으로 안 된다: CloudFront /api/screenings/*/seats/stream 캐시·압축 끔(3.1.11)
 #       + booking Cache-Control: no-cache 가 세트 (service-runtime-contract 6장 SSE)
 #       alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'

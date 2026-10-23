@@ -1,0 +1,95 @@
+# 3.1.14 가동 정책 (OPS-13, ADR-34): 평일 아침 켜고 밤에 끈다. 주말은 금요일 밤에 꺼진 채로 월요일 아침까지.
+#   데모 주간(DEMO_START~DEMO_END, KST)은 예약 끄기를 건너뛴다(24시간 가동).
+#   임시로 밤에도 켜 두려면: 레포 Settings → Variables → CLUSTER_KEEP_ON = true (예약 끄기만 건너뜀, 다시 false로)
+#   수동 실행: Actions → cluster-schedule → Run workflow (up·down·status)
+#   주의: schedule은 기본 브랜치(main)에 있는 파일만 실행되고, GitHub 사정으로 수~십수 분 늦을 수 있다.
+#   실제 작업은 infra/scripts/cluster-scale.sh (사람도 같은 스크립트를 cinema-admin으로 쓴다)
+name: cluster-schedule
+
+on:
+  schedule:
+    - cron: "23 23 * * 0-4" # 켜기: 월~금 08:23 KST (= UTC 일~목 23:23). 정각을 피해 지연을 줄인다
+    - cron: "7 14 * * 1-5"  # 끄기: 월~금 23:07 KST (= UTC 월~금 14:07)
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "up · down · status"
+        type: choice
+        options: [status, up, down]
+        default: status
+      desired:
+        description: "up일 때 노드그룹당 대수 (1~2, 부하 테스트 때 2)"
+        type: string
+        default: "1"
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: cluster-schedule
+  cancel-in-progress: false
+
+env:
+  CLUSTER: cinema-staging-eks
+  AWS_REGION: ap-northeast-2
+  DEMO_START: "2026-11-16"
+  DEMO_END: "2026-11-20"
+
+jobs:
+  scale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 할 일 결정
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_DESIRED: ${{ inputs.desired }}
+          KEEP_ON: ${{ vars.CLUSTER_KEEP_ON }}
+        run: |
+          today=$(TZ=Asia/Seoul date +%F)
+          desired=1
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            action="$INPUT_ACTION"; desired="$INPUT_DESIRED"
+          else
+            case "$SCHEDULE" in
+              "23 23 * * 0-4") action=up ;;
+              "7 14 * * 1-5")  action=down ;;
+              *) echo "::error::모르는 schedule: $SCHEDULE"; exit 1 ;;
+            esac
+            if [ "$action" = "down" ]; then
+              if ! [[ "$today" < "$DEMO_START" ]] && ! [[ "$today" > "$DEMO_END" ]]; then
+                echo "데모 주간($DEMO_START~$DEMO_END) — 예약 끄기 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; action=skip
+              elif [ "$KEEP_ON" = "true" ]; then
+                echo "CLUSTER_KEEP_ON=true — 예약 끄기 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; action=skip
+              fi
+            fi
+          fi
+          if ! [[ "$desired" =~ ^[1-2]$ ]]; then echo "::error::desired는 1 또는 2"; exit 1; fi
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "desired=$desired" >> "$GITHUB_OUTPUT"
+          echo "오늘(KST) $today · 이벤트 $EVENT · 할 일 $action"
+
+      - uses: actions/checkout@v4
+        if: steps.decide.outputs.action != 'skip'
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.decide.outputs.action != 'skip'
+        with:
+          role-to-assume: ${{ secrets.AWS_CLUSTER_SCHEDULE_ROLE_ARN }}
+          role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 계정 ID 가리기 (공개 레포 로그)
+        if: steps.decide.outputs.action != 'skip'
+        run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
+
+      - name: 노드그룹 조정
+        if: steps.decide.outputs.action != 'skip'
+        env:
+          ACTION: ${{ steps.decide.outputs.action }}
+          DESIRED: ${{ steps.decide.outputs.desired }}
+        run: infra/scripts/cluster-scale.sh "$ACTION" "$DESIRED"

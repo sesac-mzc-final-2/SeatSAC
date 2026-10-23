@@ -58,3 +58,31 @@ variable "github_repo_id" {
   type        = string
   default     = "1425477103"
 }
+
+# ---- 가동 정책·비용 (3.1.14, OPS-13) -----------------------------------
+variable "eks_cluster_name" {
+  description = "cluster-schedule이 조정할 클러스터 (envs/staging 출력 eks_cluster_name)"
+  type        = string
+  default     = "cinema-staging-eks"
+}
+
+variable "budget_monthly_usd" {
+  description = "월 비용 한도(USD, 계정 전체). 팀과 정한 값"
+  type        = string
+}
+
+variable "budget_daily_usd" {
+  description = "하루 비용 한도(USD). 평소 하루 비용보다 조금 높게 — 넘으면 끄기 실패·방치 의심"
+  type        = string
+}
+
+variable "budget_emails" {
+  description = "Budgets 경보 받는 메일. 커밋 금지 → budget.auto.tfvars 또는 TF_VAR_budget_emails"
+  type        = list(string)
+  sensitive   = true
+
+  validation {
+    condition     = length(var.budget_emails) > 0
+    error_message = "budget_emails에 메일을 1개 이상 넣는다 (budget.auto.tfvars)."
+  }
+}

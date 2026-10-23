@@ -13,9 +13,10 @@ output "developer_role_arn" {
 output "github_secrets" {
   description = "GitHub 레포 Settings → Secrets and variables → Actions 에 등록"
   value = {
-    AWS_ECR_PUSH_ROLE_ARN        = aws_iam_role.gha_ecr_push.arn
-    AWS_TERRAFORM_PLAN_ROLE_ARN  = aws_iam_role.gha_tf_plan.arn
-    AWS_FRONTEND_DEPLOY_ROLE_ARN = aws_iam_role.gha_frontend_deploy.arn
+    AWS_ECR_PUSH_ROLE_ARN         = aws_iam_role.gha_ecr_push.arn
+    AWS_TERRAFORM_PLAN_ROLE_ARN   = aws_iam_role.gha_tf_plan.arn
+    AWS_FRONTEND_DEPLOY_ROLE_ARN  = aws_iam_role.gha_frontend_deploy.arn
+    AWS_CLUSTER_SCHEDULE_ROLE_ARN = aws_iam_role.gha_cluster_schedule.arn
   }
 }
 

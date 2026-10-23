@@ -1,11 +1,13 @@
 package com.seatsac.catalog.client;
 
+import com.seatsac.catalog.config.CatalogProperties;
 import com.seatsac.common.core.error.BusinessException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -30,6 +32,11 @@ import org.springframework.web.client.RestClientException;
  * </ul>
  * 재시도는 하지 않는다(공통 규칙). 요청이 100개를 넘으면 나눠 보내고, 한 묶음이라도 실패하면 전체를 대체한다
  * (일부만 BOOKING으로 섞어 보내면 화면이 출처를 회차마다 해석해야 한다).
+ *
+ * <p>시간 예산({@code app.services.booking-read-timeout}, 300ms)은 두 겹으로 지킨다 — 호출 하나는 연결·응답 단계마다
+ * 예산만큼 기다리고({@code BookingClientConfig}), 배치가 여럿이면 예산을 다 쓴 뒤에는 다음 배치를 보내지 않고 대체한다.
+ * 호출 도중을 벽시계로 끊지는 않는다(별도 스레드·버려지는 요청이 생긴다). 그래서 최악은 "예산 안에 시작한 마지막 호출의
+ * 연결 + 응답"까지다.
  */
 @Component
 public class BookingSeatCountClient implements SeatCountClient {
@@ -41,12 +48,14 @@ public class BookingSeatCountClient implements SeatCountClient {
     private final RestClient bookingRestClient;
     private final CircuitBreaker circuitBreaker;
     private final Counter fallbacks;
+    private final Duration budget;
 
     public BookingSeatCountClient(RestClient bookingRestClient, CircuitBreakerRegistry circuitBreakerRegistry,
-                                  MeterRegistry meterRegistry) {
+                                  MeterRegistry meterRegistry, CatalogProperties properties) {
         this.bookingRestClient = bookingRestClient;
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker("booking");
         this.fallbacks = Counter.builder("catalog.seat.counts.fallback").register(meterRegistry);
+        this.budget = properties.services().bookingReadTimeout();
     }
 
     @Override
@@ -55,8 +64,14 @@ public class BookingSeatCountClient implements SeatCountClient {
             return Optional.of(Map.of());
         }
         Map<Long, Long> counts = new HashMap<>();
+        long deadline = System.nanoTime() + budget.toNanos();
         try {
             for (List<Long> batch : partition(screeningIds)) {
+                if (System.nanoTime() >= deadline) {
+                    // 앞 배치들이 예산을 다 썼다 — 더 기다리지 않고 전체를 대체한다
+                    return fallback(screeningIds.size(), "budget " + budget.toMillis() + "ms spent before batch of "
+                        + batch.size());
+                }
                 SeatCounts response = circuitBreaker.executeSupplier(() -> fetch(batch));
                 for (SeatCounts.Item item : response.items()) {
                     counts.put(item.screeningId(), item.heldCount() + item.reservedCount());

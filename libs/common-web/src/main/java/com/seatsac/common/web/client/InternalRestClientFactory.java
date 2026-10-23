@@ -55,12 +55,9 @@ public class InternalRestClientFactory {
      * 연결이 느린 상대에게 기본값을 그대로 두면 응답 타임아웃을 줄여도 예산을 넘긴다.
      */
     public RestClient create(String baseUrl, Duration connectTimeout, Duration readTimeout) {
-        var settings = ClientHttpRequestFactorySettings.defaults()
-            .withConnectTimeout(connectTimeout)
-            .withReadTimeout(readTimeout);
         return RestClient.builder()
             .baseUrl(baseUrl)
-            .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings))
+            .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings(connectTimeout, readTimeout)))
             .requestInterceptor((req, body, exec) -> {
                 String traceId = TraceIdFilter.current();
                 if (traceId != null) {
@@ -76,7 +73,7 @@ public class InternalRestClientFactory {
                     // 타임아웃·연결 거부 — 상대가 응답하지 못한 경우
                     log.warn("internal call failed uri={} cause={}: {}", req.getURI(),
                         e.getClass().getSimpleName(), e.getMessage());
-                    throw unavailable();
+                    throw new BusinessException(CommonResponseCode.SERVICE_UNAVAILABLE, e);
                 }
             })
             .defaultStatusHandler(HttpStatusCode::is5xxServerError, (req, res) -> {
@@ -84,6 +81,13 @@ public class InternalRestClientFactory {
                 throw unavailable();
             })
             .build();
+    }
+
+    /** 요청 팩토리에 넣는 타임아웃 설정. 테스트가 연결·응답 값이 그대로 들어가는지 확인한다 */
+    static ClientHttpRequestFactorySettings settings(Duration connectTimeout, Duration readTimeout) {
+        return ClientHttpRequestFactorySettings.defaults()
+            .withConnectTimeout(connectTimeout)
+            .withReadTimeout(readTimeout);
     }
 
     private static BusinessException unavailable() {

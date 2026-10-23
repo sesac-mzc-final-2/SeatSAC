@@ -2,6 +2,7 @@ package com.seatsac.catalog.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.seatsac.catalog.config.CatalogProperties;
 import com.seatsac.common.web.client.InternalRestClientFactory;
 import com.sun.net.httpserver.HttpServer;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -26,7 +27,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * booking 집계 호출의 결말 — 정상(합산·100개 분할), 계약 위반 응답(회차 누락·본문 없음 → TOTAL),
- * 300ms 초과·5xx(TOTAL + 메트릭), 서킷 열림(호출 없이 대체). 컨테이너 없이 JDK HttpServer로 booking을 대신한다.
+ * 300ms 초과·5xx(TOTAL + 메트릭), 예산 소진 뒤 다음 배치 생략, 서킷 열림(호출 없이 대체).
+ * 컨테이너 없이 JDK HttpServer로 booking을 대신한다.
  */
 class BookingSeatCountClientTest {
 
@@ -75,9 +77,13 @@ class BookingSeatCountClientTest {
         breakers = CircuitBreakerRegistry.of(CircuitBreakerConfig.custom()
             .slidingWindowSize(4).minimumNumberOfCalls(2).failureRateThreshold(50)
             .waitDurationInOpenState(Duration.ofSeconds(10)).build());
+        Duration budget = Duration.ofMillis(300);
+        String bookingUrl = "http://127.0.0.1:" + server.getAddress().getPort();
         client = new BookingSeatCountClient(
-            new InternalRestClientFactory().create("http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofMillis(300)),
-            breakers, meters);
+            new InternalRestClientFactory().create(bookingUrl, budget, budget),
+            breakers, meters,
+            new CatalogProperties(new CatalogProperties.Cache(Duration.ofMinutes(10)),
+                new CatalogProperties.Services(bookingUrl, budget)));
     }
 
     @AfterEach
@@ -134,6 +140,16 @@ class BookingSeatCountClientTest {
         delayMillis = 800;
 
         assertThat(client.unavailableCounts(List.of(1L))).isEmpty();
+        assertThat(fallbacks()).isEqualTo(1);
+    }
+
+    @Test
+    void stopsSendingBatchesOnceBudgetIsSpent() {
+        delayMillis = 200;   // 호출마다 응답 타임아웃(300ms) 안이지만, 두 번이면 예산 300ms를 넘긴다
+        List<Long> ids = LongStream.rangeClosed(1, 250).boxed().toList();   // 3배치
+
+        assertThat(client.unavailableCounts(ids)).isEmpty();
+        assertThat(queries).hasSizeLessThan(3);   // 예산을 다 쓴 뒤 세 번째 배치는 보내지 않는다
         assertThat(fallbacks()).isEqualTo(1);
     }
 

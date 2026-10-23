@@ -17,7 +17,7 @@ logging:
 
 # DB: 서비스별 스키마·계정. 비밀번호는 K8s Secret → 환경변수 (ADR-10)
 spring.datasource:
-  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/payment_db?serverTimezone=UTC&characterEncoding=utf8}
+  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/payment_db?connectionTimeZone=UTC&characterEncoding=utf8}
   username: ${SPRING_DATASOURCE_USERNAME:payment_app}
   password: ${SPRING_DATASOURCE_PASSWORD:local}
   hikari.maximum-pool-size: 5
@@ -29,3 +29,10 @@ spring.flyway:
   enabled: ${APP_FLYWAY_ON_STARTUP:true}   # 클러스터에서는 PreSync Job이 돌리므로 false
   user: ${SPRING_FLYWAY_USER:payment_migrator}
   password: ${SPRING_FLYWAY_PASSWORD:local}
+
+# 앱 고유 설정 — 이름은 docs/service-runtime-contract.md 3장 그대로
+app:
+  payment:
+    mock-delay: ${APP_PAYMENT_MOCK_DELAY:5s}             # 지연 카드가 승인될 때까지
+    mock-delay-card: ${APP_PAYMENT_MOCK_DELAY_CARD:9999} # 끝 4자리가 이 값이면 지연 승인
+    close-stale-on-startup: true                         # 기동 시 PROCESSING 30초 초과 행 정리

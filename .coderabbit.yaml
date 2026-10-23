@@ -18,6 +18,7 @@ reviews:
     drafts: false
     base_branches:
       - "^main$"
+      - "^feat/.*$"        # 스택 PR(feat 브랜치 위에 쌓은 PR)도 자동 리뷰
 
   # 리뷰에서 뺄 파일 (생성물·잠금 파일·래퍼·빌드 산출물)
   path_filters:

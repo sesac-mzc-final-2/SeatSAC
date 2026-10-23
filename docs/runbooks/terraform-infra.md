@@ -277,7 +277,78 @@ EKS API(kubectl·helm)는 팀 공인 IP 대역에서만 열린다(`eks_public_ac
 - plan 출력에는 `(sensitive value)`로 가려진다 → PR 코멘트에 IP가 남지 않는다
 - GitHub Actions 대역은 열지 않는다: `infra-plan`(AWS API)·`cluster-schedule`(EKS 관리 API)은 클러스터 API를 부르지 않는다. 나중에 Actions에서 kubectl이 필요해지면 그때 다시 결정
 
-## 5. staging 3) RDS·Valkey (3.1.3) — ⬜
+## 5. staging 3) RDS·Valkey (3.1.3)
+
+코드: `envs/staging/{rds,valkey,alerts}.tf` + `global/alerts.tf`(SNS `cinema-alerts`)
+
+| 항목 | 값 |
+| --- | --- |
+| RDS | `cinema-staging-mysql`, MySQL 8.4, `db.t4g.small`, gp3 20GB(자동 확장 50GB), 암호화, Single-AZ(AZ a), 퍼블릭 접근 없음, 백업 7일(03:00 KST), 마이너 자동 업그레이드 끔 |
+| RDS 파라미터 | `time_zone=UTC`, `character_set_server=utf8mb4`, `collation_server=utf8mb4_0900_ai_ci`, `require_secure_transport=1`, 느린 쿼리 0.5초 → CloudWatch Logs 7일 |
+| 마스터 비밀번호 | RDS 관리(Secrets Manager, 7일 자동 교체). tfstate·tfvars에 없음. 앱·Flyway는 사용 안 함 |
+| Valkey | `cinema-staging-valkey`, 8.2, `cache.t4g.micro` 1노드(AZ a), TLS 필수·저장 암호화, AUTH 없음, 스냅샷 없음 |
+| Valkey 파라미터 | `maxmemory-policy=noeviction`, `notify-keyspace-events=Ex` |
+| 경보 → `cinema-alerts` | Valkey 메모리 80%·Evictions > 0, RDS CPU 80%(15분)·연결 130·남은 저장소 2GB |
+
+### 5-1. global 먼저 (SNS 주제)
+
+```bash
+export AWS_PROFILE=cinema-admin
+cd infra/terraform/global
+terraform plan -var-file=global.tfvars -out=plan.out   # 기대: SNS 주제 1 + 구독(메일 수). destroy 0
+terraform apply plan.out
+```
+
+- 메일마다 "AWS Notification - Subscription Confirmation"이 온다 → **Confirm subscription**. 안 누르면 경보가 안 온다
+
+### 5-2. staging
+
+```bash
+cd ../envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: DB 파라미터 그룹 1 · RDS 1 · 로그 그룹 2 · ElastiCache 서브넷 그룹 1 · 파라미터 그룹 1 · 복제 그룹 1 · 경보 5. destroy 0
+terraform apply plan.out      # RDS 10~15분, Valkey 10~15분 (동시에 만들어짐)
+terraform output rds_endpoint valkey_primary_endpoint
+```
+
+### 5-3. 확인
+
+```bash
+aws rds describe-db-instances --db-instance-identifier cinema-staging-mysql \
+  --query 'DBInstances[0].[DBInstanceStatus,EngineVersion,MultiAZ,PubliclyAccessible,DBParameterGroups[0].ParameterApplyStatus]'
+#   available · 8.4.x · False · False · in-sync
+aws elasticache describe-replication-groups --replication-group-id cinema-staging-valkey \
+  --query 'ReplicationGroups[0].[Status,TransitEncryptionEnabled,AtRestEncryptionEnabled]'
+#   available · True · True
+aws cloudwatch describe-alarms --alarm-name-prefix cinema-staging- --query 'MetricAlarms[].[AlarmName,StateValue]' --output table
+```
+
+클러스터 안에서 접속 확인 (노드가 켜져 있을 때, 관리자만 — 확인 후 바로 지운다):
+
+```bash
+# Valkey: TLS로 PING → PONG, 파라미터 확인
+kubectl run valkey-check -n default --rm -it --restart=Never --image=valkey/valkey:8.2 -- \
+  sh -c 'valkey-cli -h <valkey_primary_endpoint> --tls PING && valkey-cli -h <valkey_primary_endpoint> --tls CONFIG GET maxmemory-policy'
+#   CONFIG는 ElastiCache에서 막혀 있을 수 있다 → 그 경우 콘솔 파라미터 그룹으로 확인
+
+# MySQL: TLS 강제 확인 (비밀번호 없이 접속 시도 → Access denied면 네트워크·TLS는 정상)
+kubectl run mysql-check -n default --rm -it --restart=Never --image=mysql:8.4 -- \
+  mysql -h <rds_endpoint> -u nobody --ssl-mode=REQUIRED -e 'select 1'
+```
+
+- [ ] RDS available·8.4·Single-AZ·파라미터 in-sync, 퍼블릭 접근 False
+- [ ] Valkey available·TLS·암호화
+- [ ] 경보 5개 `OK`(데이터가 없으면 `INSUFFICIENT_DATA`도 정상), 구독 메일 Confirm
+- [ ] 클러스터에서 Valkey PING, MySQL `Access denied`(연결 자체는 됨)
+- [ ] 두 번째 plan No changes
+
+### 5-4. 주의
+
+- 마스터 비밀번호는 **3.1.12 DB 계정 생성 Job만** 읽는다(Secrets Manager `rds_master_secret_arn`). RDS는 VPC 밖(노트북)에서 닿지 않으므로 계정·스키마는 클러스터 안에서 만든다
+- 인스턴스 클래스·파라미터 변경은 `apply_immediately = true`라 바로 적용되고, 일부(클래스 변경·static 파라미터)는 **재시작**된다. 데모 주간 금지
+- destroy 시 최종 스냅샷은 만들지 않는다(`skip_final_snapshot`). 자동 백업은 보존 기간(7일) 동안 남는다 — 복원: `aws rds restore-db-instance-to-point-in-time`
+- Valkey 메모리가 부하 테스트에서 70%를 넘으면 `valkey_node_type = "cache.t4g.small"` (재생성 없이 변경, 잠깐 끊김)
+
 
 ## 6. staging 4) ECR·SQS·Lambda (3.1.4·3.1.8·3.1.9) — ⬜
 
@@ -341,9 +412,35 @@ infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드�
 | `Not authorized to perform sts:AssumeRoleWithWebIdentity` | main이 아닌 브랜치에서 실행 / Secret 미등록 | main에서 실행, `AWS_CLUSTER_SCHEDULE_ROLE_ARN` 등록 |
 | `AccessDeniedException ... eks:UpdateNodegroupConfig` | 클러스터 이름이 `eks_cluster_name`과 다름 | global 변수 확인 후 apply |
 | `up`이 10분 넘게 InService 0 | t3.large 용량 부족·SCP·서브넷 IP 부족 | 노드그룹 Health 이슈(`describe-nodegroup`)·ASG 활동 기록 확인 |
+| 노드그룹 `DEGRADED` | 인스턴스 생성 실패·서브넷 IP 부족·IAM 등 건강 문제 | 끄기는 그대로 진행됨(경고만). 켜기는 중단 → 8-1-4 |
 | 예약 실행이 안 보임 | 워크플로가 main에 없음 / 60일간 레포 활동 없음(GitHub가 schedule 중지) | main 머지 확인, Actions에서 워크플로 Enable |
 
 
+### 8-1-4. 노드그룹 DEGRADED·변경 거부 복구
+
+`cluster-scale.sh`는 DEGRADED일 때 **끄기(down)는 진행**하고(줄이는 건 문제를 키우지 않고, 밤 끄기가 막히면 비용이 계속 나감), **켜기(up)는 중단**한다(같은 원인으로 인스턴스가 뜨지 않음). EKS가 변경 요청 자체를 거부하면 둘 다 멈추고 이 절을 가리킨다.
+
+```bash
+export AWS_PROFILE=cinema-admin
+NG=<노드그룹 이름>   # terraform output eks_node_group_names
+aws eks describe-nodegroup --cluster-name cinema-staging-eks --nodegroup-name $NG \
+  --query 'nodegroup.[status,health.issues]'
+```
+
+| health.issues code | 원인 | 조치 |
+| --- | --- | --- |
+| `AsgInstanceLaunchFailures` | t3.large 용량 부족, SCP, 시작 템플릿 문제 | ASG 활동 기록 확인(`aws autoscaling describe-scaling-activities --auto-scaling-group-name <ASG>`). 용량 부족이면 잠시 뒤 재시도 |
+| `InsufficientFreeAddresses` | app 서브넷 IP 부족 | 남는 ENI·파드 정리, 서브넷 확인 |
+| `Ec2SecurityGroupNotFound`·`IamInstanceProfileNotFound`·`IamNodeRoleNotFound` 등 | Terraform 밖에서 SG·IAM이 지워짐 | staging `terraform plan`·apply로 다시 만들기 → ACTIVE로 돌아오는지 확인 |
+| `AccessDenied` | 노드 역할 정책 변경 | staging apply로 정책 복구 |
+
+- 원인을 고치면 EKS가 상태를 ACTIVE로 되돌린다(수 분). 그 뒤 스크립트를 다시 실행한다
+- **밤 끄기가 거부됐는데 바로 못 고칠 때**(비용만 막는 임시 조치): `aws autoscaling update-auto-scaling-group --auto-scaling-group-name <ASG> --min-size 0 --desired-capacity 0`. EKS가 다음 노드그룹 변경 때 원래 값으로 되돌릴 수 있으므로, 다음 날 원인을 고치고 `cluster-scale.sh down`·`up`으로 정상화한다. 실행했다면 14장 실행 기록에 남긴다
+- 그래도 안 되면 노드그룹 교체: `terraform apply -replace='module.eks.module.eks_managed_node_group["ng-a"].aws_eks_node_group.this[0]'` (데모 주간 금지, 파드 재배치됨)
+
+---
+
+## 9. 최종 확인
 
 - [ ] global·staging 모두 두 번째 plan이 No changes
 - [ ] `kubectl get pods -n cinema-staging` 전부 Running

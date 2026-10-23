@@ -65,3 +65,19 @@ output "eks_node_group_names" {
 output "lb_controller_role_arn" {
   value = module.lb_controller_pod_identity.iam_role_arn
 }
+
+# ---- RDS·Valkey (3.1.3) → 3.1.12 ConfigMap·Secret·DB 계정 Job --------------
+output "rds_endpoint" {
+  description = "SPRING_DATASOURCE_URL 호스트 (jdbc:mysql://<이 값>:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED)"
+  value       = aws_db_instance.mysql.address
+}
+
+output "rds_master_secret_arn" {
+  description = "마스터 계정 비밀번호가 든 Secrets Manager ARN (3.1.12 DB 계정 생성 Job만 사용. 앱은 쓰지 않음)"
+  value       = aws_db_instance.mysql.master_user_secret[0].secret_arn
+}
+
+output "valkey_primary_endpoint" {
+  description = "SPRING_DATA_REDIS_HOST (포트 6379, SSL true)"
+  value       = aws_elasticache_replication_group.valkey.primary_endpoint_address
+}

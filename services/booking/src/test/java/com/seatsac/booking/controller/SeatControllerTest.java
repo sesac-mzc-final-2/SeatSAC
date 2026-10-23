@@ -18,6 +18,7 @@ import com.seatsac.booking.dto.response.SeatHoldResponse;
 import com.seatsac.booking.dto.response.SeatStatusResponse;
 import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.enums.SeatStatus;
+import com.seatsac.booking.idempotency.IdempotencyStore;
 import com.seatsac.booking.service.SeatHoldService;
 import com.seatsac.booking.service.SeatSnapshotService;
 import com.seatsac.common.core.error.ErrorDetail;
@@ -27,6 +28,7 @@ import com.seatsac.common.test.WithCurrentUser;
 import com.seatsac.common.web.CommonWebAutoConfiguration;
 import java.time.Instant;
 import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -55,6 +57,19 @@ class SeatControllerTest {
 
     @MockitoBean
     SeatHoldService holdService;
+
+    /**
+     * {@code @ControllerAdvice}인 멱등 advice가 함께 올라오는데 이 슬라이스에는 Valkey가 없다.
+     * 멱등 동작 자체는 {@code SeatHoldIdempotencyTest}가 본다 — 여기서는 「처리권을 잡았다」로만 둔다.
+     */
+    @MockitoBean
+    IdempotencyStore idempotencyStore;
+
+    @BeforeEach
+    void acquireIdempotencyKey() {
+        when(idempotencyStore.begin(anyString(), anyString(), any()))
+            .thenReturn(IdempotencyStore.Begin.acquired("owner-for-http-layer-test"));
+    }
 
     // --- BKG-01 좌석 현황 (인증 불필요) ---
 

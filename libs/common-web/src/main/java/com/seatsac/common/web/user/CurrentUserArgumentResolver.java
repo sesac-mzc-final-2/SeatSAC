@@ -6,7 +6,6 @@ import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.core.http.Headers;
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 import org.springframework.core.MethodParameter;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
@@ -17,11 +16,11 @@ import org.springframework.web.method.support.ModelAndViewContainer;
  * {@code @CurrentUser}가 붙은 {@code String}·{@link AuthUser} 인자에 {@code X-User-Id}·{@code X-User-Role}을
  * 넣는다. 헤더가 없거나 {@code sub}가 UUID 형식이 아니면 401 (Gateway 우회 방어, API 명세서 2장).
  * {@code Optional<...>}로 받으면 헤더가 없을 때 빈 값이 들어간다(인증이 필요 없는 경로).
+ *
+ * <p>헤더를 읽고 형식을 보는 규칙은 {@link CurrentUserHeaders}에 모아 둔다 — 컨트롤러 인자
+ * 해석보다 먼저 도는 곳(멱등 처리 어드바이스)도 같은 규칙을 쓴다.
  */
 public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolver {
-
-    private static final Pattern SUB_FORMAT =
-        Pattern.compile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
     @Override
     public boolean supportsParameter(MethodParameter p) {
@@ -44,7 +43,7 @@ public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolve
             }
             throw unauthorized("USER_HEADER_MISSING");
         }
-        if (!SUB_FORMAT.matcher(userId).matches()) {
+        if (!CurrentUserHeaders.isValidUserId(userId)) {
             // 형식이 틀린 값은 선택 인자라도 받지 않는다 (Gateway를 우회한 호출)
             throw unauthorized("USER_HEADER_INVALID");
         }
@@ -66,8 +65,7 @@ public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolve
     }
 
     private static String role(NativeWebRequest req) {
-        String role = req.getHeader(Headers.USER_ROLE);
-        return role == null || role.isBlank() ? Headers.ROLE_USER : role;
+        return CurrentUserHeaders.roleOrUser(req.getHeader(Headers.USER_ROLE));
     }
 
     private static BusinessException unauthorized(String reason) {

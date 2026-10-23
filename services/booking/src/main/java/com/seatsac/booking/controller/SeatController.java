@@ -1,6 +1,7 @@
 package com.seatsac.booking.controller;
 
 import com.seatsac.booking.dto.request.SeatHoldRequest;
+import com.seatsac.booking.idempotency.Idempotent;
 import com.seatsac.booking.dto.response.SeatHoldResponse;
 import com.seatsac.booking.dto.response.SeatStatusResponse;
 import com.seatsac.booking.service.SeatHoldService;
@@ -39,6 +40,7 @@ public class SeatController {
      * BKG-02 좌석 선점. {@code Idempotency-Key} 필수 — 헤더가 없으면 공통 처리가
      * 400 {@code VALIDATION_FAILED}로 돌려준다. 키를 실제로 쓰는 멱등 처리는 3.2.4.
      */
+    @Idempotent
     @PostMapping("/seats/hold")
     @ResponseStatus(HttpStatus.CREATED)
     public SeatHoldResponse hold(@CurrentUser String userId,

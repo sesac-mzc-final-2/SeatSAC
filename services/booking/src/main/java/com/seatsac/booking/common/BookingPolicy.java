@@ -33,7 +33,6 @@ public final class BookingPolicy {
     public static final int SCREENING_CACHE_SIZE = 2_000;
     public static final int LAYOUT_CACHE_SIZE = 200;
 
-    /** SSE 하트비트 간격과 재연결 지시 값 */
     /**
      * 고아 키 판정을 유예하는 시간. {@code hold.lua}는 RDS 커밋 <b>전에</b> {@code user-hold}와
      * 만료 장부를 쓰므로, 같은 사용자의 두 번째 요청(더블클릭·타임아웃 재시도)이 그 사이에 오면
@@ -45,6 +44,25 @@ public final class BookingPolicy {
      */
     public static final Duration HOLD_COMMIT_GRACE = Duration.ofSeconds(10);
 
+    /**
+     * 처리 중({@code IN_PROGRESS}) 멱등 키의 TTL. 요청이 끝나면 저장(DONE) 또는 삭제로 바뀌므로
+     * 이 값이 쓰이는 경우는 <b>처리 도중 파드가 죽거나 요청이 아주 오래 걸리는 경우</b>뿐이다.
+     * 24시간을 그대로 쓰면 그런 키로 들어오는 재시도가 하루 동안 409를 받는다.
+     *
+     * <p>{@link #HOLD_TTL}과 같은 값으로 둔다. 이 시간이 지나면 <b>선점 자체가 이미 만료</b>되어
+     * 좌석이 풀리므로, 같은 키의 재시도가 새로 선점을 잡아도 앞 요청과 좌석을 다툴 일이 없다.
+     * Gateway 응답 대기(15초)는 근거로 쓸 수 없다 — 클라이언트가 포기해도 서버 처리는 계속된다.
+     *
+     * <p>TTL이 끝난 뒤 늦게 끝난 요청이 그 사이 들어온 요청의 응답을 덮어쓰는 문제는 TTL로
+     * 막지 않는다 — 저장·삭제를 <b>처리권(owner)이 같을 때만</b> 하도록 했다
+     * ({@code idem-write.lua}).
+     */
+    public static final Duration IDEMPOTENCY_IN_PROGRESS_TTL = HOLD_TTL;
+
+    /** 멱등 키 TTL 24시간 — 화면이 재시도할 수 있는 동안 첫 응답을 들고 있는다 (ADR-19) */
+    public static final Duration IDEMPOTENCY_TTL = Duration.ofHours(24);
+
+    /** SSE 하트비트 간격과 재연결 지시 값 */
     public static final Duration SSE_HEARTBEAT = Duration.ofSeconds(15);
     public static final long SSE_RETRY_MILLIS = 2_000L;
 

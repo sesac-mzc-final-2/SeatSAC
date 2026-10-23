@@ -17,12 +17,14 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,12 +44,13 @@ class PaymentClientTest {
     private static final Long BOOKING = 5001L;
 
     private HttpServer server;
+    private ExecutorService serverThreads;
     private PaymentClient client;
     private SimpleMeterRegistry meterRegistry;
 
     /** 미리 넣어 둔 응답을 순서대로 내보낸다 */
-    private final Deque<Response> responses = new ArrayDeque<>();
-    private final List<String> requestedPaths = new ArrayList<>();
+    private final Deque<Response> responses = new ConcurrentLinkedDeque<>();
+    private final List<String> requestedPaths = new CopyOnWriteArrayList<>();
     private final AtomicInteger postCount = new AtomicInteger();
 
     private record Response(int status, String body, long delayMillis) {
@@ -69,6 +72,9 @@ class PaymentClientTest {
     void startFakePayment() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/internal/payments", this::handle);
+        // 기본값(단일 스레드)이면 4초 지연 핸들러가 다음 요청까지 막아 테스트가 시간 여유에 기댄다
+        serverThreads = Executors.newFixedThreadPool(4);
+        server.setExecutor(serverThreads);
         server.start();
 
         meterRegistry = new SimpleMeterRegistry();
@@ -79,6 +85,7 @@ class PaymentClientTest {
     @AfterEach
     void stopFakePayment() {
         server.stop(0);
+        serverThreads.shutdownNow();
     }
 
     private void handle(HttpExchange exchange) throws IOException {
@@ -87,7 +94,10 @@ class PaymentClientTest {
             && !exchange.getRequestURI().getPath().endsWith("/cancel")) {
             postCount.incrementAndGet();
         }
-        Response response = responses.isEmpty() ? Response.status(500) : responses.poll();
+        Response response = responses.poll();   // 비었으면 null — isEmpty 후 poll 사이 경쟁을 없앤다
+        if (response == null) {
+            response = Response.status(500);
+        }
         if (response.delayMillis() > 0) {
             try {
                 Thread.sleep(response.delayMillis());
@@ -215,6 +225,20 @@ class PaymentClientTest {
 
         assertThat(result.isApproved()).isTrue();
         assertThat(postCount).hasValue(1);              // 409에는 재호출하지 않는다
+    }
+
+    /** 409 뒤 조회로도 못 찾으면 <b>재호출하지 않는다</b> — 또 409다. 결과 미확인으로 끝낸다 */
+    @Test
+    void conflictWithoutLookupResultDoesNotRetryThePost() {
+        responses.add(Response.status(409));
+        responses.add(Response.status(404));   // 조회도 없음
+
+        assertThatThrownBy(() -> client.request(request()))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
+
+        assertThat(postCount).hasValue(1);
     }
 
     /** 400은 우리 요청이 잘못된 것이다 — 재시도하지 않고 그대로 올린다 */

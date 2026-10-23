@@ -52,18 +52,19 @@ public class PaymentClient {
      */
     @CircuitBreaker(name = "payment")
     public PaymentResult request(PaymentRequest request) {
-        PaymentResult result = post(request);
-        if (result == null) {
+        Attempt attempt = post(request);
+        if (attempt.noResponse()) {
             // 응답을 못 받았다. 같은 paymentId로 1회만 다시 — Payment는 행을 먼저 만들어 둔다
             log.warn("결제 응답을 받지 못해 같은 결제 ID로 1회 재호출한다 paymentId={} bookingId={}",
                 request.paymentId(), request.bookingId());
-            result = post(request);
+            attempt = post(request);
         }
-        if (result == null) {
+        if (attempt.noResponse()) {
             // 재호출도 실패 → 조회로 확인한다 (결제가 됐는지 모르는 채 끝내지 않는다)
-            result = find(request.paymentId()).orElse(null);
+            attempt = Attempt.of(find(request.paymentId()).orElse(null));
         }
 
+        PaymentResult result = attempt.result();
         if (result == null || result.isProcessing()) {
             count("timeout");
             throw BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception(
@@ -113,17 +114,35 @@ public class PaymentClient {
         }
     }
 
-    /** 응답을 받았으면 결과, 못 받았으면 {@code null}(재호출·조회로 이어진다) */
-    private PaymentResult post(PaymentRequest request) {
+    /**
+     * 한 번의 POST 결과.
+     *
+     * @param result     받은 결과 (없을 수 있다)
+     * @param noResponse 응답 자체를 못 받았는가 — <b>이때만</b> 재호출한다.
+     *                   409처럼 「응답은 받았고 조회로도 결과를 못 찾은」 경우는 재호출해도 같다
+     */
+    private record Attempt(PaymentResult result, boolean noResponse) {
+
+        private static Attempt of(PaymentResult result) {
+            return new Attempt(result, false);
+        }
+
+        private static Attempt unavailable() {
+            return new Attempt(null, true);
+        }
+    }
+
+    private Attempt post(PaymentRequest request) {
         try {
-            return payment.post().uri("/internal/payments").body(request).retrieve()
-                .body(PaymentResult.class);
+            return Attempt.of(payment.post().uri("/internal/payments").body(request).retrieve()
+                .body(PaymentResult.class));
         } catch (HttpClientErrorException.Conflict e) {
             // 같은 예매에 이미 결제가 있다(PAYMENT_CONFLICT). 결과는 조회로 알 수 있으므로
-            // 모른다고 끝내지 않는다 — 우리 상태와 payment 상태가 어긋난 경우다
+            // 모른다고 끝내지 않는다 — 우리 상태와 payment 상태가 어긋난 경우다.
+            // 조회로도 못 찾으면 재호출하지 않는다(또 409다) → 결과 미확인으로 끝낸다
             log.warn("결제 요청이 409 — 조회로 현재 상태를 확인한다 paymentId={} bookingId={}",
                 request.paymentId(), request.bookingId());
-            return find(request.paymentId()).orElse(null);
+            return Attempt.of(find(request.paymentId()).orElse(null));
         } catch (HttpClientErrorException e) {
             // 400 등 — 우리 요청이 잘못됐다. 재시도해도 같으니 그대로 올린다
             count("error");
@@ -132,7 +151,7 @@ public class PaymentClient {
             throw e;
         } catch (BusinessException e) {
             if (isUnavailable(e)) {
-                return null;   // 타임아웃·연결 오류·상대 5xx
+                return Attempt.unavailable();   // 타임아웃·연결 오류·상대 5xx
             }
             count("error");
             throw e;

@@ -57,7 +57,7 @@
 
 | 서비스 | ConfigMap 키 | Secret `{svc}-secrets` 키 |
 | --- | --- | --- |
-| gateway | `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=https://cognito-idp.ap-northeast-2.amazonaws.com/{userPoolId}`, `APP_COGNITO_CLIENT_ID`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` | 없음 |
+| gateway | `APP_COGNITO_ISSUER_URI=https://cognito-idp.ap-northeast-2.amazonaws.com/{userPoolId}`, `APP_COGNITO_CLIENT_ID`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
 | booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL`, `APP_SEAT_HOLD_TTL_SECONDS=300`, `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s` | `SPRING_DATASOURCE_PASSWORD` |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL` | `SPRING_DATASOURCE_PASSWORD` |

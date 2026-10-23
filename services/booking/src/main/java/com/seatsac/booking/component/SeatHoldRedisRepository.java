@@ -102,9 +102,9 @@ public class SeatHoldRedisRepository implements SeatHoldStrategy {
     }
 
     @Override
-    public List<ExpiringHold> dueHolds(Instant now, int limit) {
+    public List<ExpiringHold> dueHolds(Instant now, int offset, int limit) {
         Set<String> members = redis.opsForZSet().rangeByScore(RedisKeys.holdExpiry(),
-            Double.NEGATIVE_INFINITY, now.toEpochMilli(), 0, limit);
+            Double.NEGATIVE_INFINITY, now.toEpochMilli(), offset, limit);
         if (members == null || members.isEmpty()) {
             return List.of();
         }

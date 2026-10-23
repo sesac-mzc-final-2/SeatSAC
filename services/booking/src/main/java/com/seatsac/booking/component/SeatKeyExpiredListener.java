@@ -2,10 +2,13 @@ package com.seatsac.booking.component;
 
 import com.seatsac.booking.common.RedisKeys;
 import com.seatsac.booking.service.HoldExpiryService;
+import com.seatsac.common.core.trace.TraceIds;
+import com.seatsac.common.core.trace.TraceKeys;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.connection.MessageListener;
 import org.springframework.data.redis.listener.PatternTopic;
@@ -42,12 +45,17 @@ public class SeatKeyExpiredListener implements MessageListener {
             return;   // user-hold 등 다른 키의 만료
         }
 
+        // 구독 콜백은 요청 밖이라 MDC가 비어 있다. 로그에 추적 ID를 남기고(명세 12.2),
+        // 스레드가 재사용되므로 끝나면 지운다
+        MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.newId());
         try {
             expiredBookings.findBookingIdBySeat(seat.get().screeningId(), seat.get().seatId())
                 .ifPresent(holdExpiry::expire);
         } catch (RuntimeException e) {
             // 안전망 두 개가 같은 선점을 다시 본다. 알림 처리 실패로 구독을 끊지 않는다
             log.warn("만료 알림 처리 실패 key={} — 안전망이 이어받는다", key, e);
+        } finally {
+            MDC.remove(TraceKeys.MDC_TRACE_ID);
         }
     }
 }

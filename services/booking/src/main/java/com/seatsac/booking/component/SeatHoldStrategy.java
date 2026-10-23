@@ -65,9 +65,12 @@ public interface SeatHoldStrategy {
 
     /**
      * 만료 장부에서 점수가 지난 멤버를 묶어 가져온다 (안전망 1).
-     * 한 번에 가져오는 양을 묶는 이유는 {@code BookingPolicy#EXPIRY_SCAN_BATCH} 참고.
+     *
+     * <p>{@code offset}이 필요한 이유: 결제 중이라 보류한 멤버는 장부에 그대로 남는다. 늘 앞에서부터
+     * {@code limit}개만 읽으면 보류 멤버가 그 자리를 채웠을 때 <b>뒤에 있는 만료 건을 영영 못 본다.</b>
+     * 스캔은 보류·고아 멤버를 지나 다음 쪽으로 넘어간다.
      */
-    List<ExpiringHold> dueHolds(Instant now, int limit);
+    List<ExpiringHold> dueHolds(Instant now, int offset, int limit);
 
     /** 만료 장부에서 멤버를 지운다. <b>처리를 끝낸 뒤에</b> 부른다 (C13) */
     long forget(Long screeningId, String holdId);

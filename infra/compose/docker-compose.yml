@@ -5,14 +5,16 @@ services:
     ports: ["3306:3306"]
     environment:
       MYSQL_ROOT_PASSWORD: root
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+    # staging RDS 파라미터 그룹과 같게 (3.1.3): UTC, utf8mb4. TLS 강제는 로컬에서 끔(sslMode 기본값으로 접속)
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci", "--default-time-zone=+00:00"]
     volumes:
       - ./mysql-init:/docker-entrypoint-initdb.d:ro   # 스키마·계정 생성 SQL (03a 2️⃣)
       - mysql-data:/var/lib/mysql
   valkey:
-    image: valkey/valkey:8.1
+    image: valkey/valkey:8.2
     ports: ["6379:6379"]
-    command: ["valkey-server", "--notify-keyspace-events", "Ex", "--maxmemory-policy", "volatile-lru"]
+    # staging ElastiCache 파라미터 그룹과 같게 (3.1.3): noeviction, 만료 이벤트 Ex
+    command: ["valkey-server", "--notify-keyspace-events", "Ex", "--maxmemory-policy", "noeviction"]
   elasticmq:
     image: softwaremill/elasticmq-native:latest
     ports: ["9324:9324", "9325:9325"]

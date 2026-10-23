@@ -93,12 +93,31 @@ class PaymentFlowTest {
     void rowIsInsertedAsProcessingBeforeJudgement() {
         String paymentId = UUID.randomUUID().toString();
 
-        Payment started = paymentState.startOrFind(paymentId, BOOKING, 30_000, PaymentMethod.CARD,
-            "9999", Instant.now());
+        var started = paymentState.startOrFind(paymentId, BOOKING, 30_000, PaymentMethod.CARD,
+            "9999", Instant.now()).payment();
 
         assertThat(started.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
         assertThat(paymentService.get(paymentId).status()).isEqualTo(PaymentStatus.PROCESSING);
         assertThat(started.getCardLast4()).isEqualTo("9999");
+    }
+
+    /**
+     * 지연 카드가 판정 중일 때 같은 결제 ID로 다시 오면(Booking 3초 타임아웃 후 재호출)
+     * <b>판정을 다시 하지 않고</b> PROCESSING을 그대로 돌려준다 — 또 5초를 기다리면 안 된다.
+     */
+    @Test
+    void reCallWhileProcessingReturnsProcessingWithoutJudgingAgain() {
+        PaymentCreateRequest request = request(BOOKING, 30_000, "4111111111119999");
+        paymentState.startOrFind(request.paymentId(), BOOKING, 30_000, PaymentMethod.CARD, "9999",
+            Instant.now());
+
+        long startedAt = System.nanoTime();
+        PaymentResponse response = paymentService.pay(request);
+        long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000;
+
+        assertThat(response.status()).isEqualTo(PaymentStatus.PROCESSING);
+        assertThat(response.approvedAt()).isNull();
+        assertThat(elapsedMillis).isLessThan(500);   // 테스트 프로필 지연 50ms도 타지 않는다
     }
 
     // --- 멱등 (명세 1·4장) ---

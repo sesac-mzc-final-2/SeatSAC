@@ -27,6 +27,12 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class StaleProcessingCloser {
 
+    /** 한 번에 읽는 건수 — Hikari 5개를 오래 붙잡지 않는다 */
+    private static final int BATCH_SIZE = 100;
+
+    /** 안전 상한 (100 × 50 = 5,000건) */
+    private static final int MAX_ROUNDS = 50;
+
     private final Clock clock;
     private final PaymentStateService paymentState;
 
@@ -38,22 +44,35 @@ public class StaleProcessingCloser {
      */
     public int closeStale() {
         Instant now = clock.instant();
-        List<String> stale = paymentState.findStaleProcessingIds(
-            now.minus(PaymentPolicy.PROCESSING_TIMEOUT), PageRequest.ofSize(100));
-        if (stale.isEmpty()) {
-            return 0;
-        }
-
+        Instant threshold = now.minus(PaymentPolicy.PROCESSING_TIMEOUT);
         int closed = 0;
-        for (String paymentId : stale) {
-            // 조건부 UPDATE라 다른 파드가 먼저 닫았으면 0행이다
-            if (paymentState.settle(paymentId, PaymentStatus.FAILED,
-                PaymentFailureCode.PROCESSING_TIMEOUT, now)) {
-                closed++;
+        int found = 0;
+
+        // 한 번에 100건씩, 더 없을 때까지 돈다. 조회 한 번으로 끝내면 101건째부터 남는다.
+        // 상한을 둬서 (조건부 UPDATE가 계속 0행을 내는) 예상 못 한 상황에 무한 반복하지 않는다
+        for (int round = 0; round < MAX_ROUNDS; round++) {
+            List<String> stale = paymentState.findStaleProcessingIds(threshold,
+                PageRequest.ofSize(BATCH_SIZE));
+            if (stale.isEmpty()) {
+                break;
+            }
+            found += stale.size();
+            for (String paymentId : stale) {
+                // 조건부 UPDATE라 다른 파드가 먼저 닫았으면 0행이다
+                if (paymentState.settle(paymentId, PaymentStatus.FAILED,
+                    PaymentFailureCode.PROCESSING_TIMEOUT, now)) {
+                    closed++;
+                }
+            }
+            if (stale.size() < BATCH_SIZE) {
+                break;
             }
         }
-        log.warn("기동 정리: PROCESSING으로 남아 있던 결제를 FAILED(PROCESSING_TIMEOUT)로 닫았다 found={} closed={}",
-            stale.size(), closed);
+
+        if (found > 0) {
+            log.warn("PROCESSING으로 남아 있던 결제를 FAILED(PROCESSING_TIMEOUT)로 닫았다 found={} closed={}",
+                found, closed);
+        }
         return closed;
     }
 }

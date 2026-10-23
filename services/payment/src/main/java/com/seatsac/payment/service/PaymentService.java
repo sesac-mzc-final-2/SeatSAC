@@ -10,6 +10,7 @@ import com.seatsac.payment.dto.response.PaymentResponse;
 import com.seatsac.payment.entity.Payment;
 import com.seatsac.payment.enums.PaymentCancelReason;
 import com.seatsac.payment.enums.PaymentStatus;
+import com.seatsac.payment.service.PaymentStateService.StartResult;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Instant;
@@ -54,11 +55,15 @@ public class PaymentService {
         Instant now = clock.instant();
         String cardLast4 = Payment.last4Of(request.card().number());
 
-        Payment existing = start(request, cardLast4, now);
-        if (existing.getStatus() != PaymentStatus.PROCESSING) {
-            // 이미 끝난 결제에 같은 요청이 또 왔다 — 저장된 결과를 그대로 돌려준다(멱등)
-            countRequest(existing.getStatus());
-            return PaymentResponse.from(existing);
+        StartResult started = start(request, cardLast4, now);
+        if (!started.created()) {
+            // 같은 결제 ID로 다시 왔다 — 저장된 상태를 그대로 돌려준다(PROCESSING이면 PROCESSING).
+            // 판정을 다시 하지 않는다: 지연 카드라면 또 5초를 기다리게 되고 결과가 뒤집힐 수도 있다
+            Payment current = started.payment();
+            countRequest(current.getStatus());
+            log.info("같은 결제 ID 재호출 — 저장된 상태를 돌려준다 paymentId={} status={}",
+                request.paymentId(), current.getStatus());
+            return PaymentResponse.from(current);
         }
 
         Judgement judgement = gateway.judge(cardLast4);   // 트랜잭션 밖
@@ -110,10 +115,10 @@ public class PaymentService {
      * 2단계. 같은 결제 ID에 내용이 다르면 409, 같은 예매에 다른 결제 ID면 유일 제약이 막는다.
      * 동시에 들어온 첫 요청 둘이 겹치면 한쪽이 PK 위반을 받으므로 다시 읽어 그 행으로 간다.
      */
-    private Payment start(PaymentCreateRequest request, String cardLast4, Instant now) {
-        Payment payment;
+    private StartResult start(PaymentCreateRequest request, String cardLast4, Instant now) {
+        StartResult started;
         try {
-            payment = paymentState.startOrFind(request.paymentId(), request.bookingId(),
+            started = paymentState.startOrFind(request.paymentId(), request.bookingId(),
                 request.amount(), request.method(), cardLast4, now);
         } catch (DataIntegrityViolationException e) {
             Payment concurrent = paymentState.find(request.paymentId()).orElse(null);
@@ -123,15 +128,15 @@ public class PaymentService {
                     ErrorDetail.of("bookingId", request.bookingId(),
                         PaymentErrorCode.PAYMENT_ALREADY_EXISTS.name()));
             }
-            payment = concurrent;
+            started = new StartResult(concurrent, false);
         }
 
-        if (!payment.matches(request.bookingId(), request.amount())) {
+        if (!started.payment().matches(request.bookingId(), request.amount())) {
             throw PaymentErrorCode.PAYMENT_ID_CONFLICT.exception(
                 ErrorDetail.of("paymentId", request.paymentId(),
                     PaymentErrorCode.PAYMENT_ID_CONFLICT.name()));
         }
-        return payment;
+        return started;
     }
 
     /** 금액은 15,000의 배수여야 한다 — 범위는 DTO가 본다 (명세 4장) */

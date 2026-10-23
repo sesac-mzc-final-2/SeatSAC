@@ -33,15 +33,24 @@ public class PaymentStateService {
     /**
      * 2단계 — 판정 전 행을 만든다 (명세 4장).
      *
-     * @return 새로 만들었으면 그 행, 이미 있으면 기존 행 (부르는 쪽이 내용 일치를 본다)
+     * <p>「새로 만들었는지」를 함께 돌려주는 이유: 이미 있던 행이면 <b>판정을 다시 하지 않고</b>
+     * 저장된 상태를 그대로 응답해야 한다({@code PROCESSING}이면 {@code PROCESSING}). 그러지 않으면
+     * 지연 카드 재호출마다 5초를 또 기다리고, 재호출이 결과를 뒤집을 수도 있다.
+     *
      * @throws DataIntegrityViolationException 같은 예매에 다른 결제가 이미 있을 때
      *                                        ({@code uk_payment_booking_id})
      */
     @Transactional
-    public Payment startOrFind(String paymentId, Long bookingId, Integer amount, PaymentMethod method,
-                               String cardLast4, Instant now) {
-        return paymentRepository.findById(paymentId).orElseGet(() -> paymentRepository.saveAndFlush(
-            Payment.processing(paymentId, bookingId, amount, method, cardLast4, now)));
+    public StartResult startOrFind(String paymentId, Long bookingId, Integer amount,
+                                   PaymentMethod method, String cardLast4, Instant now) {
+        return paymentRepository.findById(paymentId)
+            .map(existing -> new StartResult(existing, false))
+            .orElseGet(() -> new StartResult(paymentRepository.saveAndFlush(
+                Payment.processing(paymentId, bookingId, amount, method, cardLast4, now)), true));
+    }
+
+    /** @param created 이번 요청이 행을 만들었는가 (false면 재호출이다) */
+    public record StartResult(Payment payment, boolean created) {
     }
 
     /**

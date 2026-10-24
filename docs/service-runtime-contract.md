@@ -85,13 +85,15 @@
 ```dockerfile
 # services/{svc}/Dockerfile — 모든 Java 서비스 공통
 FROM eclipse-temurin:21-jre
-RUN useradd -r -u 10001 app
+RUN useradd -r -u 10001 -d /app -s /usr/sbin/nologin app
 WORKDIR /app
 COPY build/libs/app.jar app.jar
-COPY src/main/resources/db/migration /app/db/migration   # Flyway Job이 복사해 감 (gateway는 없음)
+# Flyway Job이 복사해 감 (gateway는 이 줄 없음). Dockerfile은 줄 끝 주석이 없다 — 주석은 따로 한 줄
+COPY src/main/resources/db/migration /app/db/migration
 USER 10001
 EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
+ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
 | 항목 | 규칙 |
@@ -149,7 +151,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 4 | RDS·Valkey 엔드포인트, `{svc}-secrets`, `{svc}-migrator-secrets`, `time_zone=UTC` | 김종식 (3.1.3·3.1.12) | 각 서비스 staging 배포, 시드 적재 | 첫 staging 배포 전 | 관리자 `kubectl get secret -n cinema-staging` (developer는 Secret 목록도 Forbidden — 이름은 이 문서 3장으로 확인) |
 | 5 | Cognito 사용자 풀·앱 클라이언트·`ADMIN` 그룹·Pre sign-up Lambda | 김종식 (Terraform) | 한채연 GW-02·3.3.3·로그인 화면 | 3.3.1 인증 필터 시작 전 | Hosted UI 로그인 → Access Token 발급 |
 | 6 | EKS + Access Entry(4명) + namespace `cinema-staging`·`monitoring` + port-forward RBAC (`envs/staging-k8s`) | 김종식 (3.1.2·3.1.10) | 개발 전원 (`kubectl logs`·port-forward) | 첫 staging 배포 전 | 4명 `kubectl get pods -n cinema-staging` |
-| 7 | 서비스 Dockerfile·`bootJar` 이름·actuator 설정 | 각 서비스 담당 | 김종식 3.1.4 `build-push` | 서비스 첫 머지 | `pr-check`에서 이미지 빌드 성공 |
+| 7 | 서비스 Dockerfile·`bootJar` 이름·actuator 설정 | 각 서비스 담당 (Dockerfile 5개는 3.1.4에서 4장 템플릿으로 맞춤) | 김종식 3.1.4 `build-push` | 서비스 첫 머지 | `build-push` 수동 실행(`update_gitops` 끔)으로 ECR push·Trivy 통과 |
 | 8 | gitops `base/{svc}` (Deployment/Rollout·Service·HPA·NetworkPolicy·PodMonitor·Flyway Job) | 김종식 (3.1.5) | 각 서비스 (main 머지 = 배포) | 첫 staging 배포 | ArgoCD Synced·Healthy |
 | 9 | 필수 메트릭 구현 (5장) | 남궁일·한채연 | 김종식 3.1.6 AnalysisTemplate, 3.1.7 대시보드 | 3.1.6 블루/그린 시연 전 | `/actuator/prometheus`에 이름·라벨 존재 |
 | 10 | SQS 큐·DLQ, booking Pod Identity, 알림 Lambda | 김종식 (3.1.8·3.1.9) | 남궁일 3.2.6 (확정·아웃박스 릴레이) | 3.2.6 통합 테스트 전 | 확정 → Lambda 로그에 `eventId` |

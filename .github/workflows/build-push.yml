@@ -1,34 +1,256 @@
-# main 머지 → 바뀐 서비스만 이미지 빌드 → ECR → cinema-gitops 태그 커밋 (ArgoCD 가 sync)
+# 3.1.4 CI: main 머지 → 바뀐 서비스만 이미지 빌드 → Trivy → ECR push → SeatSAC-gitops 이미지 태그 커밋 (ArgoCD가 sync)
+#   - 역할: cinema-gha-ecr-push (main에서만 AssumeRole. ECR cinema/* push만) → secrets.AWS_ECR_PUSH_ROLE_ARN
+#   - gitops 쓰기: GitHub App seatsac-build-push(SeatSAC-gitops에만 설치, Contents 쓰기) → vars.GITOPS_APP_ID · secrets.GITOPS_APP_PRIVATE_KEY
+#     (조직 정책상 Deploy key 불가. 없으면 gitops 단계만 건너뜀). gitops main ruleset 우회 목록에 이 앱이 있어야 push된다 (런북 6-A-3)
+#   - 태그 = git SHA 7자리, ECR IMMUTABLE. 같은 태그가 이미 있으면 빌드·push를 건너뛴다(재실행 안전)
+#   - libs/·build-logic/·gradle/만 바뀐 머지는 배포하지 않는다 (docs/repo-workflow.md 4장). 급하면 수동 실행으로 한 서비스씩
+#   - 블루/그린 동시 금지(노드 2대): booking·gateway가 함께 바뀌면 booking만 태그를 올리고 gateway는 수동 실행으로
+#   - 서비스 고르기·Trivy는 .github/scripts/ (pr-check의 image job과 같은 스크립트)
+#   - 레포가 Public → 로그에 계정 ID가 나오지 않게 mask-aws-account-id, 요약에는 cinema/{svc}:{tag}만
+#   - 사람이 ECR에 직접 올리지 않는다(저장소 정책이 막음). 롤백 = gitops 태그 커밋 revert PR
 name: build-push
+
 on:
-  # push:
-  #   branches: [main]
-  #   paths: ["services/**", "libs/**", "build-logic/**", "gradle/**"]
-  workflow_dispatch:      # 3.1.4(CI)에서 OIDC 역할을 만든 뒤 push: branches: [main] 으로 되돌림
+  push:
+    branches: [main]
+    paths: ["services/**"]
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "all 또는 쉼표 목록 (예: booking,catalog)"
+        type: string
+        required: true
+        default: all
+      update_gitops:
+        description: "SeatSAC-gitops 태그 커밋까지 (끄면 ECR push만)"
+        type: boolean
+        default: true
+
 permissions:
   id-token: write
   contents: read
+
+concurrency:
+  group: build-push # gitops 커밋이 겹치지 않게 한 번에 하나씩
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-2
+  KUSTOMIZE_VERSION: "5.4.3"
+
 jobs:
-  build:
+  changes:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: [gateway, catalog, booking, user, payment]
+    timeout-minutes: 5
+    outputs:
+      services: ${{ steps.pick.outputs.services }}
+      tag: ${{ steps.pick.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "21" }
-      - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew :services:${{ matrix.service }}:bootJar --no-daemon
+        with: { fetch-depth: 0 } # push 이전 커밋과 비교
+
+      - name: 빌드할 서비스 고르기
+        id: pick
+        env:
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || 'push' }}
+          INPUT_SERVICES: ${{ inputs.services }}
+          BASE: ${{ github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::main에서만 실행한다 (cinema-gha-ecr-push 신뢰 정책이 main만 허용)"; exit 1
+          fi
+          bash .github/scripts/changed-services.sh # pr-check(image)와 같은 규칙. push는 services/** 만
+          echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    env:
+      SVC: ${{ matrix.service }}
+      TAG: ${{ needs.changes.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
           role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
-          aws-region: ap-northeast-2
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
-      - run: |
-          IMG=${{ steps.ecr.outputs.registry }}/cinema/${{ matrix.service }}:${GITHUB_SHA::7}
-          docker build --platform linux/amd64 -t "$IMG" services/${{ matrix.service }}
+
+      - name: 같은 태그가 이미 있는지 (IMMUTABLE)
+        id: exists
+        run: |
+          if aws ecr describe-images --repository-name "cinema/$SVC" --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "- cinema/$SVC:$TAG 이미 있음 → 빌드·push 건너뜀" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.exists.outputs.already == 'false'
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.exists.outputs.already == 'false'
+
+      - name: bootJar
+        if: steps.exists.outputs.already == 'false'
+        run: ./gradlew ":services:$SVC:bootJar" --no-daemon # 테스트는 PR의 pr-check에서 이미 통과
+
+      - name: 이미지 빌드 (x86)
+        if: steps.exists.outputs.already == 'false'
+        env:
+          IMG: ${{ steps.ecr.outputs.registry }}/cinema/${{ matrix.service }}:${{ needs.changes.outputs.tag }}
+        run: |
+          docker build --platform linux/amd64 \
+            --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            -t "$IMG" "services/$SVC"
+
+      - name: Trivy (CRITICAL·수정 가능이면 실패, .github/scripts/trivy-scan.sh)
+        if: steps.exists.outputs.already == 'false'
+        env:
+          IMG: ${{ steps.ecr.outputs.registry }}/cinema/${{ matrix.service }}:${{ needs.changes.outputs.tag }}
+        run: bash .github/scripts/trivy-scan.sh "$IMG" "cinema/$SVC:$TAG"
+
+      - name: ECR push
+        if: steps.exists.outputs.already == 'false'
+        env:
+          IMG: ${{ steps.ecr.outputs.registry }}/cinema/${{ matrix.service }}:${{ needs.changes.outputs.tag }}
+        run: |
           docker push "$IMG"
-      # TODO: Trivy 스캔, 경로 필터로 바뀐 서비스만, cinema-gitops kustomize edit set image 커밋
+          echo "- cinema/$SVC:$TAG push" >> "$GITHUB_STEP_SUMMARY"
+
+  gitops:
+    needs: [changes, build]
+    if: >-
+      needs.changes.outputs.services != '[]' &&
+      (github.event_name == 'push' || inputs.update_gitops)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TAG: ${{ needs.changes.outputs.tag }}
+      SERVICES: ${{ join(fromJSON(needs.changes.outputs.services), ' ') }}
+      GITOPS_REPO: ${{ github.repository_owner }}/${{ vars.GITOPS_REPO_NAME || 'SeatSAC-gitops' }}
+    steps:
+      - name: GitHub App 설정 확인
+        id: key
+        env:
+          APP_ID: ${{ vars.GITOPS_APP_ID }}
+          APP_KEY: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo "::warning::vars.GITOPS_APP_ID 또는 secrets.GITOPS_APP_PRIVATE_KEY 가 없어 gitops 태그 커밋을 건너뛴다 (이미지는 ECR에 있음, 런북 6-A-3)"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 조직 정책으로 Deploy key 사용 불가 → GitHub App(seatsac-build-push, SeatSAC-gitops Contents 쓰기만) 설치 토큰. 1시간 뒤 만료
+      - name: GitHub App 토큰 (SeatSAC-gitops만)
+        id: app
+        if: steps.key.outputs.ok == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.GITOPS_REPO_NAME || 'SeatSAC-gitops' }}
+
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.ok == 'true'
+        with:
+          repository: ${{ github.repository_owner }}/${{ vars.GITOPS_REPO_NAME || 'SeatSAC-gitops' }}
+          token: ${{ steps.app.outputs.token }} # 이 토큰으로 git push까지 한다
+          ref: main
+          path: gitops
+
+      - name: 커밋 작성자 = 앱 봇
+        id: bot
+        if: steps.key.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          uid=$(gh api "/users/${SLUG}[bot]" --jq .id)
+          echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=${uid}+${SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.key.outputs.ok == 'true'
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        if: steps.key.outputs.ok == 'true'
+        id: ecr
+
+      - name: kustomize 설치
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin kustomize
+          kustomize version
+          yq --version # 러너 기본 설치(mikefarah yq v4)
+
+      - name: 이미지 태그 커밋
+        if: steps.key.outputs.ok == 'true'
+        working-directory: gitops
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          BOT_NAME: ${{ steps.bot.outputs.name }}
+          BOT_EMAIL: ${{ steps.bot.outputs.email }}
+        run: |
+          deploy=()
+          for s in $SERVICES; do deploy+=("$s"); done
+
+          # 블루/그린 두 서비스를 한 번에 올리지 않는다 → booking 먼저, gateway는 booking 전환 뒤 수동 실행
+          if [[ " ${deploy[*]} " == *" booking "* && " ${deploy[*]} " == *" gateway "* ]]; then
+            keep=(); for s in "${deploy[@]}"; do [ "$s" = gateway ] || keep+=("$s"); done; deploy=("${keep[@]}")
+            echo "::warning::booking·gateway가 함께 바뀌었다. booking만 배포한다. booking 전환(Healthy) 뒤 Run workflow: services=gateway"
+            echo "- ⚠️ gateway는 보류 (블루/그린 동시 금지). booking 전환 뒤 수동 실행: services=gateway" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          changed=()
+          for s in "${deploy[@]}"; do
+            dir="overlays/staging/$s"
+            [ -f "$dir/kustomization.yaml" ] || { echo "::error::$GITOPS_REPO 에 $dir/kustomization.yaml 이 없다"; exit 1; }
+            # kustomize edit set image는 파일 전체를 다시 써서 주석·순서가 사라진다 → yq로 images 두 값만 바꾼다
+            IMG_NAME="cinema/$s" NEW_NAME="$REGISTRY/cinema/$s" \
+              yq -i '(.images[] | select(.name == strenv(IMG_NAME))) |= (.newName = strenv(NEW_NAME) | .newTag = strenv(TAG))' "$dir/kustomization.yaml"
+            got=$(IMG_NAME="cinema/$s" yq '.images[] | select(.name == strenv(IMG_NAME)) | .newTag' "$dir/kustomization.yaml")
+            [ "$got" = "$TAG" ] || { echo "::error::$dir 의 images에 name: cinema/$s 항목이 없다"; exit 1; }
+            kustomize build "$dir" > /dev/null # 깨진 매니페스트는 커밋하지 않는다
+            changed+=("$s")
+          done
+
+          if git diff --quiet; then
+            echo "gitops 변경 없음 (이미 같은 태그)" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_EMAIL"
+          git commit -am "deploy(staging): ${changed[*]} → $TAG" \
+            -m "SeatSAC $GITHUB_SHA" \
+            -m "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          for i in 1 2 3; do
+            git push origin HEAD:main && break
+            [ "$i" = 3 ] && { echo "::error::gitops push 실패 (gitops main ruleset 우회 목록에 앱 seatsac-build-push, 앱 설치 레포·Contents 쓰기 권한 확인 — 런북 6-A-3)"; exit 1; }
+            git pull --rebase origin main
+          done
+          echo "- gitops: ${changed[*]} → $TAG 커밋 (ArgoCD가 sync)" >> "$GITHUB_STEP_SUMMARY"

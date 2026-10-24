@@ -37,3 +37,15 @@ bin/
 .classpath
 .project
 .settings/
+# 키·인증서 (GitHub App .pem 등) — 레포가 Public
+*.pem
+*.key
+*.p12
+*private-key*
+# kubeconfig (클러스터 접속 정보)
+kubeconfig
+*.kubeconfig
+# Trivy 로컬 캐시
+.trivycache/
+# 시드 적재 도구는 lotte-seed에만 (실수로 복사해 왔을 때)
+/load/

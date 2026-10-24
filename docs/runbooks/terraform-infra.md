@@ -452,9 +452,109 @@ docker compose -f infra/compose/docker-compose.yml exec valkey valkey-cli CONFIG
 - Valkey 메모리가 부하 테스트에서 70%를 넘으면 `valkey_node_type = "cache.t4g.small"` (재생성 없이 변경, 잠깐 끊김). `noeviction`이라 가득 차면 선점 쓰기가 `OOM` 오류로 실패한다
 - Evictions 경보가 울리면 파라미터 그룹이 적용되지 않은 것 → 5-3 `describe-cache-parameters`로 확인
 
-## 6. staging 4) ECR·SQS·Lambda (3.1.4·3.1.8·3.1.9) — ⬜
+## 6. staging 4) ECR·SQS·Lambda (3.1.4·3.1.8·3.1.9)
 
-- [ ] ECR 저장소 `cinema/{service}`: 태그 불변(`IMMUTABLE`) + 저장소 정책으로 `cinema-gha-ecr-push`만 push
+### 6-A. ECR·build-push (3.1.4)
+
+코드: `envs/staging/ecr.tf` · `.github/workflows/build-push.yml` · `services/*/Dockerfile` · 역할은 이미 있는 `global/github_oidc.tf`의 `cinema-gha-ecr-push`(main에서만)
+
+| 항목 | 값 |
+| --- | --- |
+| 저장소 | `cinema/{gateway,catalog,booking,user,payment}`, 태그 **IMMUTABLE**, push 때 기본 스캔, AES256 |
+| 저장소 정책 | push 계열 4개 API(`PutImage`·`InitiateLayerUpload`·`UploadLayerPart`·`CompleteLayerUpload`)를 `cinema-gha-ecr-push` 외 **모두 Deny**(관리자 포함). pull은 같은 계정 노드 역할이라 정책 불필요 |
+| 수명 주기 | 태그 없는 이미지 1일 · 저장소당 최근 30개만 |
+| `force_delete` | `true` — 11장 재생성 리허설에서 destroy가 이미지 때문에 멈추지 않게. 지운 뒤에는 `build-push` 수동 실행 `services=all` |
+| 태그 | git SHA 7자리. 같은 태그가 이미 있으면 빌드·push를 건너뜀(재실행 안전) |
+| Trivy | 0.69.3 고정(0.69.4는 2026-03 공급망 사고 버전). HIGH 이상은 실행 요약에 표, **CRITICAL + 수정 버전 있음**이면 실패 |
+| gitops 커밋 | `overlays/staging/{svc}/kustomization.yaml`의 `images[cinema/{svc}]` `newName`·`newTag`만 yq로 바꿔 GitHub App `seatsac-build-push` 토큰으로 main에 직접 커밋(`deploy(staging): {svc} → {tag}`). `kustomize build`가 깨지면 커밋하지 않는다 |
+| 블루/그린 동시 금지 | booking·gateway가 한 머지에 같이 바뀌면 booking만 커밋 → booking 전환 뒤 수동 실행 `services=gateway` |
+
+#### 6-A-0. PR 이미지 검사 (`pr-check` → `image`)
+
+| 단계 | 하는 일 |
+| --- | --- |
+| `image-changes` | PR base와 비교해 `services/{svc}/**`가 바뀐 서비스만. `build-logic/`·`gradle/`·`settings.gradle.kts`·`build.gradle.kts`·`.github/scripts/`·`pr-check.yml`·`build-push.yml`이 바뀌면 5개 전부 |
+| `image-build` (서비스마다) | bootJar → `docker build`(x86) → `USER`가 숫자 UID(0 아님)인지 → Trivy(`build-push`와 같은 `.github/scripts/trivy-scan.sh`). **push 안 함, AWS 권한 없음** |
+| `image` | 위 결과를 모아 성공·실패 하나로. 대상이 없으면 성공 → **이 이름을 SeatSAC ruleset 필수 검사에 추가** |
+
+- 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행(PR을 다시 만들 필요 없음)
+- 여기서 만든 이미지는 버린다. 배포 이미지는 머지 뒤 `build-push`가 main 커밋으로 다시 만든다(태그 = main SHA)
+- 필수 검사 등록: SeatSAC → Settings → Rules → main ruleset → Require status checks → `image` 추가 (한 번 실행된 뒤에 목록에 뜬다)
+
+#### 6-A-1. envs/staging apply (ECR)
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명)
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out   # 예상: ECR 저장소 5 + 수명 주기 5 + 저장소 정책 5 = 15 add, 다른 변경 없음
+terraform apply plan.out
+terraform output ecr_repository_urls
+```
+
+#### 6-A-2. GitHub 설정 (SeatSAC 레포)
+
+| 종류 | 이름 | 값 | 비고 |
+| --- | --- | --- | --- |
+| Secret | `AWS_ECR_PUSH_ROLE_ARN` | global 출력 `github_secrets.AWS_ECR_PUSH_ROLE_ARN` | 2-4에서 이미 넣었으면 그대로 |
+| Variable | `GITOPS_APP_ID` | GitHub App `seatsac-build-push`의 **App ID**(숫자, 앱 General 맨 위. Client ID 아님) | 공개 값 |
+| **Secret** | `GITOPS_APP_PRIVATE_KEY` | 앱 **Private key**(`.pem`) 내용 전체(`-----BEGIN …` ~ `-----END …`) | **Variable에 넣지 않는다**(Variable은 로그에 가려지지 않는다). 없으면 gitops 단계만 경고 후 건너뜀(ECR push까지는 됨) |
+| Variable | `GITOPS_REPO_NAME` (선택) | `SeatSAC-gitops` | 비우면 이 값. 조직은 이 레포와 같다 |
+
+#### 6-A-3. SeatSAC-gitops 쓰기 권한 = GitHub App `seatsac-build-push`
+
+조직 정책으로 **Deploy key는 쓸 수 없다**("Some settings on this page can't be changed because of a sesac-mzc-final-2 policy"). GitHub App은 사람 계정에 묶이지 않고, 레포 하나·권한 하나로 좁히고, 실행마다 1시간짜리 토큰을 받는다.
+
+| 단계 | 어디서 | 값 |
+| --- | --- | --- |
+| 1. 앱 만들기 (Owner) | 조직 Settings → Developer settings → GitHub Apps → **New GitHub App** | 이름 `seatsac-build-push` · Homepage URL `https://github.com/sesac-mzc-final-2/SeatSAC` · Callback·Setup URL 비움 · OAuth during installation 끔 · Device Flow 끔 · **Webhook Active 끔** · Repository permissions **Contents: Read and write**만(Metadata 읽기 자동) · 나머지 No access · **Only on this account** |
+| 2. 키 받기 | 앱 General 페이지 **왼쪽 탭 Credentials** → **Key pairs** → Generate a private key | `.pem`이 브라우저 다운로드 폴더에 한 번만 받아진다(못 받았으면 생긴 키를 Delete하고 다시 Generate) |
+| 3. 설치 | 앱 왼쪽 **Install App** → `sesac-mzc-final-2` Install → **Only select repositories → SeatSAC-gitops** | SeatSAC 등 다른 레포는 고르지 않는다 |
+| 4. SeatSAC에 등록 | SeatSAC → Settings → Secrets and variables → Actions | 6-A-2 표: Variable `GITOPS_APP_ID`, **Secret** `GITOPS_APP_PRIVATE_KEY` |
+| 5. 키 파일 지우기 | 로컬 | 다운로드 폴더의 `.pem` 삭제(휴지통 비우기). 레포 폴더·노션·메신저에 두지 않는다 |
+| 6. ruleset 우회 | **SeatSAC-gitops** → Settings → Rules → main ruleset → Bypass list → Add bypass → **Apps → `seatsac-build-push`** | 사람은 계속 PR만, 앱만 태그 커밋 직접 push |
+
+- 워크플로는 `actions/create-github-app-token`으로 **SeatSAC-gitops에만 쓰는 설치 토큰**(1시간)을 받아 checkout·push한다. 커밋 작성자는 `seatsac-build-push[bot]`
+- 키 교체: 앱 Private keys에서 새로 Generate → Secret 덮어쓰기 → 옛 키 Delete. 키가 Variable·로그·문서에 노출됐으면 **바로 교체**
+- 3.1.5 ArgoCD가 SeatSAC-gitops를 읽을 때도 Deploy key 대신 GitHub App 자격 증명을 쓴다(같은 정책)
+
+#### 6-A-4. 첫 실행 (수동)
+
+1. Actions → `build-push` → Run workflow (branch **main**) → `services=all`, `update_gitops`는 gitops 레포·앱(6-A-3)이 준비됐으면 켬
+2. 확인
+
+```bash
+# 터미널 A (cinema-dev도 조회 가능)
+for s in gateway catalog booking user payment; do
+  aws ecr describe-images --repository-name cinema/$s --query 'imageDetails[].imageTags' --output text
+done
+```
+
+3. 사람이 push하면 막히는지 (관리자도 거부가 정상)
+
+```bash
+aws ecr get-login-password --profile cinema-admin | docker login --username AWS --password-stdin <레지스트리>
+docker push <레지스트리>/cinema/booking:test   # denied ... explicit deny in a resource-based policy
+```
+
+#### 6-A-5. 확인
+
+| 항목 | 기대 |
+| --- | --- |
+| 두 번째 plan | No changes |
+| 수동 실행 `services=all` | 5개 push, 요약에 Trivy 표 |
+| 같은 커밋으로 재실행 | "이미 있음 → 건너뜀" |
+| 서비스 하나만 바꾼 PR 머지 | 그 서비스만 빌드, gitops에 `deploy(staging): {svc} → {sha7}` 커밋 1개 |
+| `libs/`만 바꾼 PR 머지 | `build-push`가 돌지 않음 (경로 필터 `services/**`) |
+| 사람 `docker push` | explicit deny |
+
+#### 6-A-6. 주의
+
+- `build-push`는 **main에서만** 실행된다(역할 신뢰 정책). 다른 브랜치에서 Run workflow 하면 첫 단계에서 멈춘다
+- 롤백은 SeatSAC-gitops에서 태그 커밋을 revert하는 PR. ECR 이미지는 지우지 않는다(최근 30개 유지)
+- Trivy가 CRITICAL로 막으면: 베이스 이미지(`eclipse-temurin:21-jre`) 갱신이나 의존성 버전 업으로 고친다. 당장 고칠 수 없는 오탐만 레포 루트 `.trivyignore`에 CVE ID + 이유 주석(PR 리뷰)
+- 레포가 Public이라 Actions 로그도 공개된다. 워크플로가 계정 ID를 가리지만(`mask-aws-account-id`), 실행 로그·요약을 노션·PR에 붙일 때 레지스트리 주소가 없는지 한 번 더 본다
+
+### 6-B. SQS·Lambda (3.1.8·3.1.9) — ⬜
 
 ## 7. staging 5) Cognito·CloudFront·S3 (3.1.11) — ⬜
 
@@ -849,6 +949,16 @@ terraform destroy -var-file=staging.tfvars
 | `aws eks update-kubeconfig` `Unknown options: ... kubectl` | 여러 명령을 한 줄로 붙여 넣음(`\` 뒤 줄바꿈 없음) | 한 줄씩 따로 실행 (4-4) |
 | `kubectl` `dial tcp ...:443: i/o timeout` | 내 공인 IP가 EKS API 허용 목록에 없음 | 4-6 IP 추가 후 apply |
 | `kubectl` `exec plugin` 오류·멈춤 | `aws eks get-token`이 MFA를 묻지 못함 | `aws sts get-caller-identity --profile cinema-dev`로 MFA 세션 먼저 |
+| `build-push` `main에서만 실행한다` | main이 아닌 브랜치에서 Run workflow | 브랜치를 main으로 골라 다시 실행 |
+| `build-push` gitops 단계 `GITOPS_APP_ID 또는 GITOPS_APP_PRIVATE_KEY 가 없어 … 건너뛴다` | Variable·Secret 미등록, 또는 키를 **Variable**에 넣음(Secret에서만 읽는다) | 6-A-2. Variable에 넣었던 키는 지우고 앱에서 새 키로 교체 |
+| `create-github-app-token` `Not Found`·`Integration not found`·`A JSON web token could not be decoded` | App ID 대신 Client ID를 넣음, 키 일부만 복사, 앱이 SeatSAC-gitops에 설치 안 됨 | App ID(숫자) 확인, `.pem` 전체 다시 붙여 넣기, 6-A-3의 3 |
+| `build-push` `gitops push 실패` · `GH013: Repository rule violations` · `403 Resource not accessible by integration` | gitops main ruleset 우회 목록에 앱 없음, 또는 앱 권한이 Contents 읽기만 | 6-A-3의 6, 앱 Permissions → Contents: Read and write(바꾸면 설치 화면에서 권한 변경 승인) |
+| `build-push` `images에 name: cinema/{svc} 항목이 없다` | gitops overlay `images:`의 `name`이 base 매니페스트 `image:`와 다름 | overlay를 `name: cinema/{svc}`로 고치는 gitops PR |
+| `build-push` Trivy 단계 실패 | CRITICAL + 수정 버전 있는 취약점 | 6-A-6 |
+| PR `image` 실패, `image-build` 로그에 `COPY failed`·`not found` | Dockerfile 경로 오류, 줄 끝 주석(`COPY a b # 주석`) | 런타임 계약 4장 템플릿대로. 주석은 따로 한 줄 |
+| PR `image` 실패 `Dockerfile USER가 숫자 UID(0 아님)가 아니다` | `USER app`처럼 이름이거나 USER 없음 | `USER 10001` (K8s `runAsNonRoot`는 숫자 UID여야 확인 가능) |
+| ruleset에서 필수 검사 `image`가 목록에 없음 | 아직 한 번도 실행되지 않음 | 아무 PR에서 `pr-check`가 한 번 돈 뒤 추가 |
+| `tag invalid: The image tag ... already exists ... immutable` | 같은 태그로 다시 push (보통 일어나지 않음: 있으면 건너뜀) | 같은 SHA면 정상 — 새 커밋으로 |
 | plan에 `-/+ replace`가 나옴 | 교체가 필요한 값 변경(서브넷 CIDR, SG description 등) | 멈추고 원인 확인. 의존 리소스까지 다시 만들어질 수 있음 |
 
 ---

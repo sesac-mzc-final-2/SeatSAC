@@ -383,13 +383,15 @@
 ```dockerfile
 # services/{svc}/Dockerfile — 모든 Java 서비스 공통
 FROM eclipse-temurin:21-jre
-RUN useradd -r -u 10001 app
+RUN useradd -r -u 10001 -d /app -s /usr/sbin/nologin app
 WORKDIR /app
 COPY build/libs/app.jar app.jar
-COPY src/main/resources/db/migration /app/db/migration   # Flyway Job이 복사해 감 (gateway는 없음)
+# Flyway Job이 복사해 감 (gateway는 이 줄 없음). Dockerfile은 줄 끝 주석이 없다 — 주석은 따로 한 줄
+COPY src/main/resources/db/migration /app/db/migration
 USER 10001
 EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -Djava.security.egd=file:/dev/./urandom"
+ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
 | 항목 | 규칙 |
@@ -447,7 +449,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 4 | RDS·Valkey 엔드포인트, `{svc}-secrets`, `{svc}-migrator-secrets`, `time_zone=UTC` | 김종식 (3.1.3·3.1.12) | 각 서비스 staging 배포, 시드 적재 | 첫 staging 배포 전 | 관리자 `kubectl get secret -n cinema-staging` (developer는 Secret 목록도 Forbidden — 이름은 이 문서 3장으로 확인) |
 | 5 | Cognito 사용자 풀·앱 클라이언트·`ADMIN` 그룹·Pre sign-up Lambda | 김종식 (Terraform) | 한채연 GW-02·3.3.3·로그인 화면 | 3.3.1 인증 필터 시작 전 | Hosted UI 로그인 → Access Token 발급 |
 | 6 | EKS + Access Entry(4명) + namespace `cinema-staging`·`monitoring` + port-forward RBAC (`envs/staging-k8s`) | 김종식 (3.1.2·3.1.10) | 개발 전원 (`kubectl logs`·port-forward) | 첫 staging 배포 전 | 4명 `kubectl get pods -n cinema-staging` |
-| 7 | 서비스 Dockerfile·`bootJar` 이름·actuator 설정 | 각 서비스 담당 | 김종식 3.1.4 `build-push` | 서비스 첫 머지 | `pr-check`에서 이미지 빌드 성공 |
+| 7 | 서비스 Dockerfile·`bootJar` 이름·actuator 설정 | 각 서비스 담당 (Dockerfile 5개는 3.1.4에서 4장 템플릿으로 맞춤) | 김종식 3.1.4 `build-push` | 서비스 첫 머지 | PR의 `pr-check` `image` 통과(빌드·비루트·Trivy) → 머지 후 `build-push` ECR push |
 | 8 | gitops `base/{svc}` (Deployment/Rollout·Service·HPA·NetworkPolicy·PodMonitor·Flyway Job) | 김종식 (3.1.5) | 각 서비스 (main 머지 = 배포) | 첫 staging 배포 | ArgoCD Synced·Healthy |
 | 9 | 필수 메트릭 구현 (5장) | 남궁일·한채연 | 김종식 3.1.6 AnalysisTemplate, 3.1.7 대시보드 | 3.1.6 블루/그린 시연 전 | `/actuator/prometheus`에 이름·라벨 존재 |
 | 10 | SQS 큐·DLQ, booking Pod Identity, 알림 Lambda | 김종식 (3.1.8·3.1.9) | 남궁일 3.2.6 (확정·아웃박스 릴레이) | 3.2.6 통합 테스트 전 | 확정 → Lambda 로그에 `eventId` |
@@ -640,7 +642,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 # 6. 레포·브랜치·PR·CI (`docs/repo-workflow.md`)
 
 > 기준 2026-10-22 (회의록2 결정 반영, ADR-49~64). 03b 레포·브랜치·PR 개정 확정본 + 08 공통 코드(B안, ADR-56) + 브랜치 WBS ID(ADR-48) + 레포·일정(ADR-64) + 2.2.7 계약 CI.
-> 전제: staging 하나가 곧 데모 환경이라 **main 머지 = 배포**다(`build-push` 자동 트리거는 3.1.4에서 켠다. 그 전에는 수동).
+> 전제: staging 하나가 곧 데모 환경이라 **main 머지 = 배포**다(3.1.4부터 `build-push`가 main 머지마다 자동으로 돈다).
 
 ---
 
@@ -663,7 +665,7 @@ SeatSAC/
 ├── infra/terraform/{bootstrap,global,envs/staging,envs/staging-k8s}/ · infra/compose/
 ├── tests/k6/
 ├── docs/   conventions.md · contracts.md · service-runtime-contract.md · data-model.md · decisions.md · repo-workflow.md · runbooks/
-└── .github/ workflows/ · CODEOWNERS · pull_request_template.md
+└── .github/ workflows/ · scripts/(서비스 고르기·Trivy, pr-check·build-push 공용) · CODEOWNERS · pull_request_template.md
 
 SeatSAC-gitops/
 ├── apps/                  App of Apps (root.yaml + staging/: project·플랫폼 2·cinema-common·서비스 5)
@@ -683,7 +685,7 @@ SeatSAC-gitops/
 
 | 항목 | 규칙 |
 | --- | --- |
-| 기본 브랜치 | `main` 보호(ruleset), 직접 push 금지. **main 머지 = staging 자동 배포** — 단 지금은 `build-push`가 수동 실행(`workflow_dispatch`)만 켜져 있다. 서비스 골격·ECR이 생기는 3.1.4에서 main push 트리거를 켠다 |
+| 기본 브랜치 | `main` 보호(ruleset), 직접 push 금지. **main 머지 = staging 자동 배포**(`services/**`가 바뀐 머지 → `build-push`, 3.1.4) |
 | 브랜치 이름 | `{type}/{기능ID}-{설명}`. 기능 ID가 없으면 **WBS ID** (ADR-48) |
 | type | `feat` · `fix` · `refactor` · `test` · `docs` · `infra` · `ci` · `chore` |
 | 예 | `feat/BKG-02-seat-hold`, `fix/CAT-05-cache-key`, `infra/3.1.3-rds-valkey`, `ci/2.2.7-contract-ci`, `docs/ADR-47` |
@@ -698,7 +700,7 @@ SeatSAC-gitops/
 | 항목 | 규칙 |
 | --- | --- |
 | 승인 | 1명 (11/13 이후 2명). `libs/`·`build-logic/` 변경은 2명(김종식 + 영향받는 서비스 담당) |
-| 필수 검사 (ruleset) | `java`·`gitleaks`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 네 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
+| 필수 검사 (ruleset) | `java`·`gitleaks`·`image`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 다섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
 | 크기 | 400줄 이하 권장(생성 코드·lock 제외) |
 | 리뷰 응답 | 24시간 이내(주말 제외) |
 | 머지 후 | 작성자가 ArgoCD Synced·Healthy(또는 frontend 배포 완료)까지 확인 |
@@ -728,9 +730,9 @@ SeatSAC-gitops/
 
 | 워크플로 | 트리거 | 하는 일 |
 | --- | --- | --- |
-| `pr-check` | PR | 바뀐 서비스 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ), `libs/**` 변경 시 5개 전부, Trivy, gitleaks. 2단계: springdoc 생성본 vs 계약 diff |
+| `pr-check` | PR | `java`: 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ) · `gitleaks` · `image`: 바뀐 서비스만 bootJar → `docker build` → 비루트 확인 → Trivy(push 안 함, AWS 권한 없음. `build-logic/`·`gradle/`·이미지 스크립트·워크플로가 바뀌면 5개 전부). 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행. 2단계: springdoc 생성본 vs 계약 diff |
 | `contract-check` | PR (항상, 변경 없으면 건너뜀) | Redocly lint, JSON Schema·예시 검증, oasdiff·스키마 하위 호환 |
-| `build-push` | **현재 수동**(`workflow_dispatch`). 3.1.4부터 main 머지(바뀐 서비스만) | x86 이미지 → ECR(OIDC `cinema-gha-ecr-push`) → `SeatSAC-gitops`에 `kustomize edit set image` 커밋 |
+| `build-push` | main 머지(`services/**`, 바뀐 서비스만) + 수동(`services`=all 또는 목록, main에서만) | bootJar → x86 이미지 → Trivy(CRITICAL·수정 가능이면 실패) → ECR `cinema/{svc}:{sha7}`(OIDC `cinema-gha-ecr-push`, 같은 태그 있으면 건너뜀) → `SeatSAC-gitops` `overlays/staging/{svc}`의 `images` 태그를 GitHub App `seatsac-build-push`(gitops에만 설치, Contents 쓰기) 토큰으로 main에 커밋(조직 정책상 Deploy key 불가). booking·gateway가 같이 바뀌면 booking만(블루/그린 동시 금지) |
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |
 | `lambda-deploy` | main 머지(`lambdas/**`) | 패키징 → 배포 → 별칭 갱신 |
 | `infra-plan` | PR(`infra/terraform/**`, 필수 검사 아님) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |
@@ -738,7 +740,9 @@ SeatSAC-gitops/
 | `gitops-validate` (gitops 레포) | PR | `kustomize build` + kubeconform |
 
 - OIDC 역할 세션 이름 `gha-${{ github.actor }}-${{ github.run_id }}`(CloudTrail에 실행자)
-- 공통 모듈만 바뀐 머지는 배포하지 않는다. 급하면 `build-push` 수동 실행으로 한 서비스씩
+- 이미지는 두 번 빌드된다: PR의 `image`(검사용, 버림)와 main의 `build-push`(진짜, 태그 = main 커밋 SHA). 서비스 고르기·Trivy는 `.github/scripts/`를 같이 쓴다
+- 공통 모듈(`libs/`·`build-logic/`·`gradle/`)만 바뀐 머지는 배포하지 않는다. 급하면 `build-push` 수동 실행으로 한 서비스씩
+- 롤백 = `SeatSAC-gitops`에서 해당 태그 커밋을 revert하는 PR. ECR 이미지는 저장소당 최근 30개가 남는다
 
 ### 5. 지켜야 할 것
 

@@ -12,9 +12,16 @@ SQL="$WORK_DIR/bootstrap.sql"
 trap 'rm -f "$SQL"' EXIT
 [[ -f $CNF ]] || { echo "FAIL: $CNF 없음 (fetch-master 실패)"; exit 1; }
 
-my() { mysql --defaults-extra-file="$CNF" -h "$DB_HOST" -P "${DB_PORT:-3306}" --ssl-mode=REQUIRED --default-character-set=utf8mb4 "$@"; }
+# 서버 인증서·호스트 이름까지 검증(SSL_CA = RDS CA 번들, rds_ca.tf). 없으면 암호화만(로컬 리허설용)
+if [[ -n "${SSL_CA:-}" ]]; then
+  [[ -s "$SSL_CA" ]] || { echo "FAIL: SSL_CA=$SSL_CA 없음 (ConfigMap rds-ca-bundle)"; exit 1; }
+  TLS_OPTS=(--ssl-mode=VERIFY_IDENTITY --ssl-ca="$SSL_CA")
+else
+  TLS_OPTS=(--ssl-mode=REQUIRED)
+fi
+my() { mysql --defaults-extra-file="$CNF" -h "$DB_HOST" -P "${DB_PORT:-3306}" "${TLS_OPTS[@]}" --default-character-set=utf8mb4 "$@"; }
 
-echo "== 접속 확인"
+echo "== 접속 확인 (${TLS_OPTS[0]})"
 my -N -B -e "SELECT CONCAT('server ', VERSION(), ' · time_zone=', @@global.time_zone, ' · require_secure_transport=', @@global.require_secure_transport)"
 
 pw() {  # CATALOG_APP_PASSWORD 형식 환경변수 → 값 (영숫자만 허용)
@@ -62,4 +69,5 @@ for s in $DB_SERVICES; do
   [[ -z "$others" ]] || { echo "FAIL: ${s} 계정에 다른 스키마 권한: $others"; fail=1; }
 done
 [[ $fail == 0 ]] || exit 1
-echo "PASS: 스키마 4 · 계정 8 · 권한 확인 완료"
+n=$(wc -w <<<"$DB_SERVICES")
+echo "PASS: 스키마 ${n} · 계정 $((n * 2)) · 권한 확인 완료 (${TLS_OPTS[0]})"

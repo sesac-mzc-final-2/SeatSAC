@@ -436,7 +436,7 @@ Compose 설정이 바뀌면 각자 컨테이너를 다시 만든다(데이터 �
 
 ```bash
 docker compose -f infra/compose/docker-compose.yml up -d --force-recreate mysql valkey
-docker compose -f infra/compose/docker-compose.yml exec mysql mysql -uroot -proot -e "SELECT @@global.time_zone, NOW(), UTC_TIMESTAMP();"
+docker compose -f infra/compose/docker-compose.yml exec mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SELECT @@global.time_zone, NOW(), UTC_TIMESTAMP();"'   # 비밀번호는 Compose 환경변수에서
 #   +00:00 · 두 시각이 같으면 OK
 docker compose -f infra/compose/docker-compose.yml exec valkey valkey-cli CONFIG GET maxmemory-policy
 #   noeviction
@@ -570,11 +570,12 @@ aws s3api get-public-access-block --bucket "$(terraform output -raw frontend_buc
 | 비밀번호 | `random_password` 영숫자 32자 × 8 → **`staging-k8s` tfstate에만** 평문 (2-6 tfstate 거부가 중요한 이유) |
 | 앱 Secret (`cinema-staging`) | `{svc}-secrets`: `SPRING_DATASOURCE_PASSWORD` · `{svc}-migrator-secrets`: `FLYWAY_USER`·`FLYWAY_PASSWORD` (팀원은 목록도 볼 수 없음 — 이름은 이 표·문서로 확인) |
 | 계정 생성 Job (`cinema-ops`) | `db-bootstrap-<해시8>`: initContainer(aws-cli)가 Pod Identity `cinema-staging-db-bootstrap-pod`로 마스터 Secret 읽기 → mysql 컨테이너가 멱등 SQL 실행·권한 검증. 입력 Secret `db-bootstrap-accounts`. `cinema-ops`는 팀원 조회 범위 밖 |
-| 다시 도는 조건 | 스크립트·비밀번호·RDS 주소·이미지가 바뀌면 Job 이름(해시)이 바뀌어 새로 실행. 마스터 비밀번호 자동 교체(7일)와는 무관 |
+| TLS 검증 | RDS CA 번들(`truststore.pki.rds.amazonaws.com/ap-northeast-2`)을 ConfigMap `rds-ca-bundle`(cinema-staging·cinema-ops, `rds_ca.tf`)로. db-bootstrap은 `mysql --ssl-mode=VERIFY_IDENTITY --ssl-ca`, Flyway·시드 Job은 `FLYWAY_URL`의 `serverSslCert` → 서버 인증서·호스트 이름 검증 |
+| 다시 도는 조건 | 스크립트·비밀번호·RDS 주소·이미지·CA 번들이 바뀌면 Job 이름(해시)이 바뀌어 새로 실행. 마스터 비밀번호 자동 교체(7일)와는 무관 |
 
 ### 8-A. 적용
 
-전제: 3.1.3(RDS available, `time_zone=UTC`) 완료 · staging-k8s 3.1.2 적용됨 · **노드가 켜져 있음**(Job 실행, `infra/scripts/cluster-scale.sh up`) · Terraform 자격 증명(0장 `export-credentials`)
+전제: 3.1.3(RDS available, `time_zone=UTC`) 완료 · staging-k8s 3.1.2 적용됨 · **노드가 켜져 있음**(Job 실행, `infra/scripts/cluster-scale.sh up`) · Terraform 자격 증명(0장 사전 조건·2-5 `export-credentials`)
 
 ```bash
 # 1) staging: Job용 Pod Identity (역할 1 + 정책 1 + 연결 1)
@@ -584,10 +585,10 @@ terraform apply plan.out
 
 # 2) staging-k8s: random provider 추가 → init 한 번
 cd ../staging-k8s
-terraform init -upgrade -backend-config=backend.hcl
+terraform init -upgrade -backend-config=backend.hcl      # random·http provider 추가 → 한 번
 terraform fmt -recursive && terraform validate
 terraform plan -var-file=staging-k8s.tfvars -out=plan.out
-# 기대: namespace 1(cinema-ops) · random_password 8 · Secret 9(app 4·migrator 4·db-bootstrap-accounts 1)
+# 기대: namespace 1(cinema-ops) · random_password 8 · Secret 9(app 4·migrator 4·db-bootstrap-accounts 1) · ConfigMap rds-ca-bundle 2
 #       · ServiceAccount 1 · ConfigMap 1 · Job 1. destroy 0
 #       Secret data는 (sensitive value)로 가려져야 한다. 값이 보이면 멈춘다
 terraform apply plan.out          # Job 완료까지 기다린다 (보통 1~2분, 노드가 막 켜졌으면 이미지 받는 시간 추가)
@@ -609,7 +610,7 @@ kubectl -n cinema-ops logs $JOB -c bootstrap        # 스키마 4·계정 8 표 
 kubectl -n cinema-staging get secrets -l app.kubernetes.io/managed-by=terraform   # 8개 (값은 보지 않는다)
 ```
 
-- Job 이름은 `terraform output db_bootstrap_job`으로도 볼 수 있지만, 그때는 0장 Terraform 자격 증명(`export-credentials`)이 필요하다. `AWS_PROFILE=cinema-admin`만 걸린 터미널에서 `terraform output`을 쓰면 `AssumeRoleTokenProvider session option not set` 오류
+- Job 이름은 `terraform output db_bootstrap_job`으로도 볼 수 있지만, 그때는 Terraform 자격 증명(0장 사전 조건·2-5 `export-credentials`)이 필요하다. `AWS_PROFILE=cinema-admin`만 걸린 터미널에서 `terraform output`을 쓰면 `AssumeRoleTokenProvider session option not set` 오류
 - Job이 여러 개 보이면(입력이 바뀌어 다시 돈 경우) Terraform이 지금 관리하는 것은 최신 1개다. 이전 Job은 apply 때 지워진다
 
 팀원(`cinema-dev`)으로:
@@ -643,7 +644,7 @@ bash run.sh
 # 마지막 줄: 완료: catalog_db 시드 적재·검증 통과
 ```
 
-- `RDS_HOST`는 `aws rds`로 구한다. `terraform output`은 이 터미널(`AWS_PROFILE`)에서 MFA 오류가 난다(0장)
+- `RDS_HOST`는 `aws rds`로 구한다. `terraform output`은 이 터미널(`AWS_PROFILE`)에서 MFA 오류가 난다(0장 사전 조건·2-5)
 - `REPO`는 PC 어디에 클론했든 그 **레포 루트**면 된다. 실행 전 `git -C "$REPO" switch main && git -C "$REPO" pull`
 
 - 일회성 `kubectl apply`(Job·ConfigMap)는 GitOps 예외로 이 절차만 허용한다. 성공하면 run.sh가 Job·ConfigMap을 지운다(실패 시 Job은 남겨 둠 → 로그 확인 후 `kubectl -n cinema-staging delete job catalog-seed-load`)
@@ -653,7 +654,7 @@ bash run.sh
 
 | 시드 Job 증상 | 원인 | 해결 |
 | --- | --- | --- |
-| flyway `RSA public key is not available client side (option serverRsaPublicKeyFile not set)` 재시도 후 실패 | flyway 이미지는 MariaDB 드라이버로 붙는데 URL의 `sslMode=REQUIRED`(MySQL 드라이버 값)를 모름 → TLS 없이 접속 → `caching_sha2_password` 실패 | `seed-load-job.yaml`의 `FLYWAY_URL`을 `...?useSsl=true&trustServerCertificate=true&sslMode=trust`로. `sslMode=trust`만으로는 MariaDB 드라이버 2.x가 TLS를 켜지 않는다(오류의 `(type=master)` = 2.x) (10/24) |
+| flyway `RSA public key is not available client side (option serverRsaPublicKeyFile not set)` 재시도 후 실패 | flyway 11.7 이미지는 MariaDB Connector/J 2.7.x로 붙는다. 2.x는 `sslMode`(3.x 옵션)를 무시해 TLS가 켜지지 않고, TLS 없는 `caching_sha2_password` 인증이 실패 | `seed-load-job.yaml`의 `FLYWAY_URL`을 `...?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&sslMode=verify-full`로 + ConfigMap `rds-ca-bundle`을 `/etc/rds-ca`에 마운트(서버 인증서 검증). seed 컨테이너 mysql도 `--ssl-mode=VERIFY_IDENTITY --ssl-ca=/etc/rds-ca/rds-ca.pem` (10/24) |
 | `timed out waiting for the condition` 까지 10분 대기 | run.sh가 Job 완료만 기다림(실패해도 끝까지 대기) | 다른 터미널에서 `kubectl -n cinema-staging get pods -l job-name=catalog-seed-load`로 바로 상태 확인 |
 
 - [ ] `verify.sql` 15개 항목 일치 (극장 132 · 상영관 39 · 좌석 6,767 · 회차 8,360 · 영화 22, UTC 날짜 ≠ 영업일 228건)
@@ -676,7 +677,8 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 | apply가 Job 대기 중 timeout, 파드 `Pending` | 노드 0대 | `cluster-scale.sh up` 후 다시 apply (Job은 tainted → 재생성) |
 | fetch-master `AccessDeniedException ... GetSecretValue` | Pod Identity 연결 없음(staging apply 전) / SA·namespace 이름 다름 | 8-A 1) staging apply, `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks`에 `cinema-ops/db-bootstrap` |
 | fetch-master `Unable to locate credentials` | eks-pod-identity-agent 애드온 없음·파드 기동 직후 | `kubectl get ds -n kube-system eks-pod-identity-agent`, Job 다시(`-replace=kubernetes_job_v1.db_bootstrap`) |
-| fetch-master `FAIL: 마스터 Secret 형식` (**마스터 Secret 형식**) | 자동 교체된 마스터 비밀번호에 `"`·`\`가 섞임(스크립트가 안전하게 거부) | 다음 자동 교체를 기다리거나 `aws secretsmanager rotate-secret --secret-id <rds_master_secret_arn>`(관리자) 후 Job 다시 |
+| fetch-master `FAIL: 마스터 Secret 형식` (**마스터 Secret 형식**) | 자동 교체된 마스터 비밀번호에 `"`·`\`가 섞임(스크립트가 안전하게 거부) | 다음 자동 교체를 기다리거나 RDS로 즉시 교체(관리자): `aws rds modify-db-instance --db-instance-identifier cinema-staging-mysql --rotate-master-user-password --apply-immediately` → 1~2분 뒤 Job 다시. Secrets Manager `rotate-secret`은 쓰지 않는다(RDS 관리형 Secret은 RDS 명령으로 교체) |
+| bootstrap `ERROR 2026 … certificate verify failed` | CA 번들이 RDS 인증서와 안 맞음(번들 갱신 전·지역 다름) / `DB_HOST`가 엔드포인트가 아닌 IP·별칭 | `terraform apply`로 `rds-ca-bundle` 갱신, `DB_HOST`는 RDS 엔드포인트 그대로 |
 | bootstrap `ERROR 2003`/타임아웃 | 노드 SG → RDS 3306 규칙·서브넷 | staging `security_groups.tf`, 5-3 클러스터 안 접속 확인 |
 | bootstrap `ERROR 1045` (master) | 마스터 Secret이 교체 중(rotation 진행) | 1~2분 뒤 Job 다시 |
 | 앱 `Access denied for user '{svc}_app'` | Secret 교체 후 재시작 안 함 / Job 실패 | 위 교체 절차, Job 로그 PASS 확인 |

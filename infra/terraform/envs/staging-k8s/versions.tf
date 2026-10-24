@@ -29,6 +29,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    http = {
+      source  = "hashicorp/http"
+      version = "~> 3.4"
+    }
   }
 
   # 버킷은 envs/staging과 같은 backend.hcl, 키만 다르다

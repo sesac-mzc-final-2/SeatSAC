@@ -105,6 +105,7 @@ locals {
   # 비밀번호가 섞인 해시라 Terraform이 sensitive로 표시한다 → 해시는 되돌릴 수 없으므로 nonsensitive로 이름에 쓴다
   db_bootstrap_hash = nonsensitive(substr(sha256(join("|", concat(
     values(kubernetes_config_map_v1.db_bootstrap.data),
+    [sha256(data.http.rds_ca.response_body)],
     [for k in sort(keys(random_password.db)) : random_password.db[k].result],
     [data.aws_db_instance.mysql.address, var.mysql_client_image, var.awscli_image],
   ))), 0, 8))
@@ -198,6 +199,10 @@ resource "kubernetes_job_v1" "db_bootstrap" {
             value = data.aws_db_instance.mysql.address
           }
           env {
+            name  = "SSL_CA" # 서버 인증서·호스트 이름 검증 (rds_ca.tf)
+            value = "/etc/rds-ca/rds-ca.pem"
+          }
+          env {
             name  = "DB_SERVICES"
             value = join(" ", sort(tolist(local.db_services)))
           }
@@ -225,6 +230,11 @@ resource "kubernetes_job_v1" "db_bootstrap" {
             name       = "tmp"
             mount_path = "/tmp"
           }
+          volume_mount {
+            name       = "rds-ca"
+            mount_path = "/etc/rds-ca"
+            read_only  = true
+          }
 
           security_context {
             allow_privilege_escalation = false
@@ -237,6 +247,12 @@ resource "kubernetes_job_v1" "db_bootstrap" {
           }
         }
 
+        volume {
+          name = "rds-ca"
+          config_map {
+            name = kubernetes_config_map_v1.rds_ca[var.ops_namespace].metadata[0].name
+          }
+        }
         volume {
           name = "scripts"
           config_map {

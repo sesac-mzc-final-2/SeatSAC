@@ -89,6 +89,12 @@ variable "developer_namespaces" {
   description = "cinema-developer가 조회·로그·port-forward 할 수 있는 namespace"
   type        = list(string)
   default     = ["cinema-staging", "monitoring"]
+
+  # 관리자 전용 namespace(DB 계정 생성 Job·계정 비밀번호 Secret)를 팀원 조회 범위에 넣지 않는다 (Terraform ≥ 1.9 교차 변수 검증)
+  validation {
+    condition     = !contains(var.developer_namespaces, var.ops_namespace)
+    error_message = "developer_namespaces에 ops_namespace(cinema-ops)를 넣지 않는다. 관리자 전용이다."
+  }
 }
 
 # ---- RDS·Valkey (3.1.3) ----------------------------------------------

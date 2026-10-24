@@ -2,6 +2,9 @@ package com.seatsac.payment.component;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.ApplicationArguments;
+import com.seatsac.common.core.trace.TraceIds;
+import com.seatsac.common.core.trace.TraceKeys;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
 import java.util.concurrent.TimeUnit;
@@ -38,12 +41,25 @@ public class StaleProcessingStartupRunner implements ApplicationRunner {
         if (!closeOnStartup) {
             return;
         }
-        closer.closeStale();
+        withTraceId(closer::closeStale);
     }
 
     /** 기동 뒤에도 주기적으로 — 30초 안에 죽어 남은 행을 다음 기동까지 끌지 않는다 */
     @Scheduled(fixedDelay = 60, initialDelay = 60, timeUnit = TimeUnit.SECONDS)
     public void sweep() {
-        closer.closeStale();
+        withTraceId(closer::closeStale);
+    }
+
+    /**
+     * 요청 밖 작업도 로그에 추적 ID를 남긴다(명세 1장 「추적 ID」). 스레드가 재사용되므로
+     * 끝나면 MDC에서 지운다.
+     */
+    private void withTraceId(Runnable job) {
+        MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.newId());
+        try {
+            job.run();
+        } finally {
+            MDC.remove(TraceKeys.MDC_TRACE_ID);
+        }
     }
 }

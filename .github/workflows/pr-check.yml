@@ -14,15 +14,19 @@ jobs:
       - run: ./gradlew build --no-daemon      # Testcontainers 는 ubuntu 러너의 Docker 사용
   gitleaks:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       GITLEAKS_VERSION: "8.21.2"   # 버전 고정 (올릴 때 여기만)
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }   # PR 커밋 범위를 보려면 전체 이력 필요
-      - name: Install gitleaks
+      - name: Install gitleaks (체크섬 확인)
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tgz="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "$base/$tgz"
+          curl -sSfL "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " $tgz\$" | sha256sum -c -
+          tar -xzf "$tgz" -C /usr/local/bin gitleaks
           gitleaks version
       - name: Scan PR commits
         run: |

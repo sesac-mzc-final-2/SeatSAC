@@ -174,6 +174,17 @@ class PaymentClientTest {
         assertThat(result.publicFailureCode()).isNull();                    // 응답에는 담지 않는다
     }
 
+    /** 승인 건은 failureCode가 null이다 — Set.of(...).contains(null)이 NPE라 먼저 걸러야 한다 */
+    @Test
+    void approvedPaymentHasNoFailureCode() {
+        responses.add(Response.ok(paymentJson("APPROVED")));
+
+        PaymentResult result = client.request(request());
+
+        assertThat(result.failureCode()).isNull();
+        assertThat(result.publicFailureCode()).isNull();   // NPE 없이 null
+    }
+
     @Test
     void declineReasonsAreExposedToClients() {
         responses.add(Response.ok(paymentJson("FAILED").replace("\"failureCode\":null",

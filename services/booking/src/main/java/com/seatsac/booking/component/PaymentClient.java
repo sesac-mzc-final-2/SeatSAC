@@ -252,6 +252,10 @@ public class PaymentClient {
          * null이 되어 화면은 「결제 실패」로만 표시한다(booking 계약의 enum을 넓히지 않는 이유).
          */
         public String publicFailureCode() {
+            // Set.of(...)의 contains(null)은 NPE다. 승인 건은 failureCode가 null이다
+            if (failureCode == null) {
+                return null;
+            }
             return PUBLIC_FAILURE_CODES.contains(failureCode) ? failureCode : null;
         }
     }

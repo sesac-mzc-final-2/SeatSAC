@@ -18,6 +18,10 @@ resource "kubernetes_role_v1" "developer_port_forward" {
       condition     = contains(var.namespaces, each.key)
       error_message = "developer_namespaces의 ${each.key}가 namespaces에 없다. namespace를 먼저 namespaces에 추가한다."
     }
+    precondition {
+      condition     = each.key != var.ops_namespace
+      error_message = "${var.ops_namespace}는 관리자 전용(DB 계정 비밀번호 Secret)이라 developer_namespaces에 넣지 않는다."
+    }
   }
 
   rule {

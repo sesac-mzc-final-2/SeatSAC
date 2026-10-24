@@ -9,7 +9,7 @@ output "public_subnet_ids" {
 }
 
 output "app_subnet_ids" {
-  description = "EKS node group subnet"
+  description = "EKS 노드그룹 서브넷"
   value       = module.vpc.private_subnets
 }
 
@@ -22,7 +22,7 @@ output "db_subnet_group_name" {
 }
 
 output "nat_public_ip" {
-  description = "Outbound Static IP (IP shown at LotteCinema·GitHub)"
+  description = "외부로 나갈 때의 고정 IP (롯데시네마·GitHub 등에서 보이는 IP)"
   value       = module.vpc.nat_public_ips
 }
 
@@ -48,17 +48,17 @@ output "eks_cluster_endpoint" {
 }
 
 output "eks_kubeconfig_command" {
-  description = "members: --profile cinema-dev, admin: cinema-admin"
-  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --profile cinema-dev"
+  description = "팀원 컨텍스트 cinema-dev. 관리자는 --profile cinema-admin --alias cinema-admin --user-alias cinema-admin (런북 4-2)"
+  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --profile cinema-dev --alias cinema-dev --user-alias cinema-dev"
 }
 
 output "eks_node_security_group_id" {
-  description = "Node·Pod SG (Allow ALB to 8080)"
+  description = "노드·파드 SG (ALB → 8080 허용)"
   value       = module.eks.node_security_group_id
 }
 
 output "eks_node_group_names" {
-  description = "cluster-schedule workflow(3.1.14): desired 1 ↔ 0 un object changeable"
+  description = "cluster-schedule 워크플로(3.1.14)가 desired 1 ↔ 0 으로 바꿀 대상"
   value       = { for k, v in module.eks.eks_managed_node_groups : k => split(":", v.node_group_id)[1] } # node_group_id = "클러스터:노드그룹"
 }
 
@@ -110,4 +110,10 @@ output "frontend_github_variables" {
     CLOUDFRONT_DISTRIBUTION_ID = aws_cloudfront_distribution.frontend.id
     VITE_COGNITO_REDIRECT_URI  = "https://${aws_cloudfront_distribution.frontend.domain_name}/callback"
   }
+}
+
+# ---- DB 계정 생성 Job (3.1.12) ------------------------------------------
+output "db_bootstrap_role_arn" {
+  description = "3.1.12 DB 계정 생성 Job Pod Identity 역할 (cinema-ops/db-bootstrap, 마스터 Secret 읽기만)"
+  value       = module.db_bootstrap_pod_identity.iam_role_arn
 }

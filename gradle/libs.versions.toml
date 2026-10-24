@@ -10,8 +10,8 @@ testcontainers = "1.21.3"
 springdoc = "2.8.9"
 # ---- 보안 패치용 강제 버전 (Trivy CRITICAL, 3.1.4). Spring Boot BOM보다 새 버전이 필요할 때만 둔다 ----
 # Boot를 올렸을 때 BOM 버전이 이보다 높아지면 이 줄을 지운다(낮은 버전으로 내려가지 않게)
-netty = "4.1.137.Final"         # CVE-2026-75595 (gateway·catalog·booking: reactor-netty·Lettuce)
-tomcat = "10.1.58"              # CVE-2026-41293·43512·43515·65182·65905·68525 (MVC 서비스 4개)
+netty = "4.1.139.Final"         # CVE-2026-75595 (gateway·catalog·booking: reactor-netty·Lettuce)
+tomcat = "10.1.61"              # CVE-2026-41293·43512·43515·65182·65905·68525 (MVC 서비스 4개)
 bouncycastle = "1.85"           # CVE-2025-14813·CVE-2026-8763 (gateway, 다른 라이브러리가 끌고 옴)
 
 [libraries]

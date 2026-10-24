@@ -179,12 +179,14 @@ class BookingHistoryFlowTest {
             .andExpect(jsonPath("$.totalPages").value(1));
     }
 
+    /** 내부 API는 인증을 쓰지 않는다 — 형식 오류는 400이다(계약에 401 응답이 없다) */
     @Test
     void userIdMustBeCognitoSub() throws Exception {
         mvc.perform(get("/internal/bookings").param("userId", "not-a-uuid"))
-            .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
-            .andExpect(jsonPath("$.details[0].field").value("userId"));
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+            .andExpect(jsonPath("$.details[0].field").value("userId"))
+            .andExpect(jsonPath("$.details[0].reason").value("INVALID_USER_ID"));
     }
 
     /** PENDING을 콕 집어 요청하면 400 — 조용히 빈 목록을 주면 호출자가 오해한다 */

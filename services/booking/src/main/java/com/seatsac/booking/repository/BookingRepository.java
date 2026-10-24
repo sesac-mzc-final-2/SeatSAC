@@ -71,6 +71,8 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
          order by b.expiresAt asc
         """)
     List<Long> findExpiredPendingIds(@Param("now") Instant now, Pageable pageable);
+
+    /**
      * BKG-14 사용자 예매 내역 (호출자 user). 최신순, 페이징.
      *
      * <p>{@code statuses}로 거른다 — 생략 시 호출자가 「PENDING 제외 전부」를 넘긴다.

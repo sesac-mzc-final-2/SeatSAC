@@ -4,6 +4,8 @@ import com.seatsac.booking.common.BookingPolicy;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -22,6 +24,8 @@ public record SeatHoldRequest(
     List<@NotNull @Positive Long> seatIds
 ) {
     public SeatHoldRequest {
-        seatIds = seatIds == null ? null : List.copyOf(seatIds);
+        // List.copyOf는 null 원소에서 NPE를 던져 필드 검증(seatIds[i] @NotNull)까지 가지 못한다.
+        // null을 보존하는 불변 복사라야 400 details에 어느 좌석이 문제인지 남는다
+        seatIds = seatIds == null ? null : Collections.unmodifiableList(new ArrayList<>(seatIds));
     }
 }

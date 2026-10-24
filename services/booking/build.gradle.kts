@@ -19,6 +19,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-mysql")
+    implementation("com.github.ben-manes.caffeine:caffeine")   // 회차·좌석 배치 파드 캐시 (버전은 Boot BOM)
     implementation("io.awspring.cloud:spring-cloud-aws-starter-sqs:3.4.0") // SQS 알림 발행 (버전 팀 확정)
     runtimeOnly("com.mysql:mysql-connector-j")
 

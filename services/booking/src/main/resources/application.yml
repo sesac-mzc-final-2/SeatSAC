@@ -39,7 +39,33 @@ spring.flyway:
 # 스케줄러: 선점 만료 스캔 2종 + 아웃박스 릴레이·정리 (지침 2장)
 spring.task.scheduling.pool.size: 3
 
+# 서비스 간 호출 주소·선점 설정 (service-runtime-contract 3장의 이름 그대로)
+app:
+  services:
+    catalog-url: ${APP_SERVICES_CATALOG_URL:http://catalog:8080}
+    payment-url: ${APP_SERVICES_PAYMENT_URL:http://payment:8080}
+  seat-hold:
+    ttl-seconds: ${APP_SEAT_HOLD_TTL_SECONDS:300}
+    strategy: ${APP_SEAT_HOLD_STRATEGY:redis}   # ADR-45 인터페이스. db-lock은 나중
+
 spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}
   port: ${SPRING_DATA_REDIS_PORT:6379}
   ssl.enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache는 true
+
+# Catalog 내부 호출 서킷 — 실패율 50%·10초 (ADR-23·32)
+resilience4j:
+  circuitbreaker:
+    instances:
+      catalog:
+        failure-rate-threshold: 50
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        # 4xx만 무시한다. BusinessException 전체를 무시하면 InternalRestClientFactory가
+        # 타임아웃·5xx를 바꿔 주는 503까지 빠져 Catalog 장애에도 서킷이 열리지 않는다
+        ignore-exceptions:
+          - com.seatsac.booking.common.ScreeningNotFoundException
+          - org.springframework.web.client.HttpClientErrorException

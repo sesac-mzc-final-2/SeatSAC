@@ -458,7 +458,106 @@ docker compose -f infra/compose/docker-compose.yml exec valkey valkey-cli CONFIG
 
 ## 7. staging 5) Cognito·CloudFront·S3 (3.1.11) — ⬜
 
-- [ ] `cinema-gha-frontend-deploy`의 CloudFront 무효화 권한을 배포 ARN으로 좁힘 (global 수정)
+코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito(3.3.x)는 `cognito.tf`에 따로 온다.
+
+| 항목 | 값 |
+| --- | --- |
+| S3 | `cinema-staging-frontend-<계정ID>`, 공개 접근 차단, SSE-S3, 버킷 정책은 이 CloudFront 배포(OAC)만 `GetObject` |
+| CloudFront | 기본 도메인(`*.cloudfront.net`)·기본 인증서, PriceClass_200(한국 포함), HTTP/2·3, IPv6. 접근 로그 없음 |
+| 동작 | `/*` → S3(spa-shell 정책, 보안 헤더) · `/assets/*` → S3(1년) · `/api/screenings/*/seats/stream` → ALB(CachingDisabled, **압축 끔**) · `/api/*` → ALB(CachingDisabled, 모든 메서드) |
+| 캐시 정책 3종 | `cinema-staging-static-assets`(1년) · `cinema-staging-spa-shell`(원본 Cache-Control 따름, 최대 60초) · 관리형 `CachingDisabled`(/api) |
+| 원본 요청 정책 | `cinema-staging-api-origin`: 뷰어 헤더 전부 + `CloudFront-Viewer-Address`, 쿼리 전부, 쿠키 없음 |
+| CloudFront Function | `cinema-staging-spa-rewrite`(viewer-request): 확장자 없는 경로 → `/index.html` |
+| ALB 원본 | gateway Ingress가 만든 ALB를 태그(`ingress.k8s.aws/stack=cinema-staging/gateway`)로 찾는다. HTTP 80, 원본 응답 대기 30초(SSE heartbeat 15초보다 길게) |
+
+### 7-1. envs/staging 1차 apply (S3·CloudFront, ALB 전)
+
+ALB는 gateway Ingress(gitops 3.1.5)가 만든다. 그 전에는 `/api/*` 동작 없이 S3만 배포된다.
+
+```bash
+export AWS_PROFILE=cinema-admin
+cd infra/terraform/envs/staging
+terraform init -backend-config=backend.hcl
+terraform fmt -recursive && terraform validate
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: S3 버킷 1 + 설정 4(공개 차단·소유권·암호화·정책) · OAC 1 · 캐시 정책 2 · 원본 요청 정책 1 · Function 1 · 배포 1. destroy 0
+#       출력 api_origin_domain_name 은 "" (ALB 없음)
+terraform apply plan.out                 # CloudFront 배포 생성 5~10분
+terraform output cloudfront_domain_name          # 출력 이름은 한 번에 하나만 받는다
+terraform output cloudfront_distribution_id      # → 7-2 global.tfvars
+terraform output frontend_github_variables       # → 7-3 GitHub Variables
+```
+
+### 7-2. global — 무효화 권한을 이 배포로 좁힘
+
+```bash
+cd ../../global
+# global.tfvars 의 frontend_distribution_ids = ["<cloudfront_distribution_id 출력값>"] 로 수정하고 커밋(비밀 아님)
+terraform plan -var-file=global.tfvars -out=plan.out    # 기대: aws_iam_role_policy.gha_frontend_deploy 1 update. destroy 0
+terraform apply plan.out
+```
+
+### 7-3. GitHub Variables 등록 (Secrets가 아니라 **Variables** — 비밀 없음)
+
+레포 → Settings → Secrets and variables → Actions → **Variables**
+
+| 이름 | 값 |
+| --- | --- |
+| `FRONTEND_BUCKET` | `frontend_github_variables` 출력 |
+| `CLOUDFRONT_DISTRIBUTION_ID` | 〃 |
+| `VITE_COGNITO_REDIRECT_URI` | 〃 (`https://<배포 도메인>/callback`). Cognito 앱 클라이언트 콜백 URL에도 같은 값 |
+| `VITE_COGNITO_AUTHORITY` · `VITE_COGNITO_CLIENT_ID` · `VITE_COGNITO_DOMAIN` | `cognito.tf`(3.3.x) 출력 |
+
+Secret `AWS_FRONTEND_DEPLOY_ROLE_ARN`은 2-4에서 이미 등록했다.
+
+### 7-4. envs/staging 2차 apply (ALB가 생긴 뒤 — gitops 3.1.5 gateway Ingress 이후)
+
+```bash
+cd ../envs/staging
+aws elbv2 describe-load-balancers --query 'LoadBalancers[].DNSName'     # gateway ALB가 보여야 한다
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: aws_cloudfront_distribution.frontend 1 update(원본 alb-gateway + 동작 2 추가). destroy 0
+terraform apply plan.out                 # 배포 변경 반영 3~5분
+terraform output api_origin_domain_name  # ALB DNS 이름
+```
+
+- 태그로 못 찾으면(출력이 계속 `""`): `aws elbv2 describe-tags --resource-arns <ALB ARN>` 으로 `ingress.k8s.aws/stack` 값을 확인해 `gateway_ingress_stack`을 맞추거나, 임시로 `api_origin_domain_name`에 DNS 이름을 직접 넣는다
+- Ingress를 지우고 다시 만들면 ALB DNS가 바뀐다 → plan에 배포 update가 보이면 apply
+
+### 7-5. 첫 배포·확인
+
+```bash
+# frontend/ 에 package.json·package-lock.json 이 머지된 뒤: Actions → frontend-deploy → Run workflow (main)
+DOMAIN=$(terraform output -raw cloudfront_domain_name)
+curl -sI "https://$DOMAIN/"                       | grep -i -E "^(HTTP|cache-control|x-cache|strict-transport)"   # 200, no-cache
+curl -sI "https://$DOMAIN/movies/1"               | grep -i -E "^(HTTP|content-type)"     # 200 text/html (SPA 라우팅)
+curl -sI "https://$DOMAIN/assets/$(aws s3 ls s3://$(terraform output -raw frontend_bucket)/assets/ | awk 'NR==1{print $4}')" \
+                                                  | grep -i -E "^(HTTP|cache-control)"    # max-age=31536000, immutable
+curl -s  "https://$DOMAIN/api/movies?page=0"      | head -c 200                           # gateway 응답(JSON) — ALB 뒤 gateway가 떠 있어야 함
+curl -sN "https://$DOMAIN/api/screenings/1/seats/stream" --max-time 40                    # SSE: 15초마다 ping이 바로바로 옴 (몰려서 오면 압축·캐시 확인)
+aws s3api get-public-access-block --bucket "$(terraform output -raw frontend_bucket)"     # 4개 모두 true
+```
+
+- [ ] `/` 200 + `cache-control: no-cache` + `x-cache: Miss from cloudfront`(index.html은 캐시 안 됨)
+- [ ] `/movies/1`·`/callback` 200 text/html (Function 동작), `/assets/<없는 파일>` 403(그대로 둔다)
+- [ ] `/assets/*` `max-age=31536000, immutable`, 두 번째 요청 `x-cache: Hit from cloudfront`
+- [ ] `http://` 요청이 `https://`로 301
+- [ ] `/api/*` 응답에 `x-trace-id` 헤더(gateway), `/api/actuator/health` 404(gateway가 막음)
+- [ ] SSE 40초 동안 ping 2회 이상, 끊기지 않음 (인계 #13)
+- [ ] `frontend-deploy` Summary에 무효화 ID, 화면 새로고침으로 변경 반영
+- [ ] developer(`cinema-dev`)로 `aws s3 cp` 업로드 시도 → `AccessDenied` (CI 역할만 쓴다)
+- [ ] 두 번째 `terraform plan`(staging·global) No changes
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| `/`가 403 `AccessDenied`(XML) | 버킷이 비었다(아직 배포 전) / 버킷 정책의 SourceArn 불일치 | `frontend-deploy` 실행 / `terraform plan`으로 정책 확인 |
+| `/api/*`가 404 또는 S3 XML | 2차 apply 전(ALB 원본 없음) | 7-4 |
+| `/api/*` 502·504 | ALB SG가 CloudFront 접두사 목록만 허용 — 정상. gateway 파드 Ready 아님 / ALB 대상 그룹 unhealthy | `kubectl get pods -n cinema-staging`, Ingress 이벤트 |
+| SSE 이벤트가 15초 이상 몰려서 옴 | `/api/screenings/*/seats/stream` 동작이 `/api/*` 뒤에 있거나 compress가 켜짐 | `cloudfront.tf` `api_behaviors` 순서·`compress=false` 확인 |
+| SSE 30초마다 끊김 | booking heartbeat가 30초 넘게 없음 / ALB 유휴 120초 미설정(3.1.5) | 인계 #13 세트 ①~④ 확인 |
+| `frontend-deploy` `AssumeRoleWithWebIdentity` 거부 | main이 아닌 ref에서 실행 / Secret 미등록 | main에서 실행 |
+| `frontend-deploy` `cloudfront:CreateInvalidation` 거부 | `frontend_distribution_ids`에 다른 ID | 7-2 |
+| 새 화면이 안 보임 | 브라우저가 옛 index.html을 메모리 캐시 | 무효화 완료 확인 후 강력 새로고침. CloudFront는 index.html을 캐시하지 않는다 |
 
 ## 8. staging 6) DB 스키마·계정·K8s Secret·시드 (3.1.12)
 
@@ -554,7 +653,7 @@ bash run.sh
 
 | 시드 Job 증상 | 원인 | 해결 |
 | --- | --- | --- |
-| flyway `RSA public key is not available client side (option serverRsaPublicKeyFile not set)` 재시도 후 실패 | flyway 이미지는 MariaDB 드라이버로 붙는데 URL의 `sslMode=REQUIRED`(MySQL 드라이버 값)를 모름 → TLS 없이 접속 → `caching_sha2_password` 실패 | `seed-load-job.yaml`의 `FLYWAY_URL`을 `...?sslMode=trust&connectionTimeZone=UTC`로 (10/24) |
+| flyway `RSA public key is not available client side (option serverRsaPublicKeyFile not set)` 재시도 후 실패 | flyway 이미지는 MariaDB 드라이버로 붙는데 URL의 `sslMode=REQUIRED`(MySQL 드라이버 값)를 모름 → TLS 없이 접속 → `caching_sha2_password` 실패 | `seed-load-job.yaml`의 `FLYWAY_URL`을 `...?useSsl=true&trustServerCertificate=true&sslMode=trust`로. `sslMode=trust`만으로는 MariaDB 드라이버 2.x가 TLS를 켜지 않는다(오류의 `(type=master)` = 2.x) (10/24) |
 | `timed out waiting for the condition` 까지 10분 대기 | run.sh가 Job 완료만 기다림(실패해도 끝까지 대기) | 다른 터미널에서 `kubectl -n cinema-staging get pods -l job-name=catalog-seed-load`로 바로 상태 확인 |
 
 - [ ] `verify.sql` 15개 항목 일치 (극장 132 · 상영관 39 · 좌석 6,767 · 회차 8,360 · 영화 22, UTC 날짜 ≠ 영업일 228건)

@@ -145,8 +145,12 @@ data "aws_iam_policy_document" "frontend_deploy" {
     resources = ["arn:aws:s3:::cinema-staging-frontend-${local.account_id}/*"]
   }
   statement {
-    actions   = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
-    resources = ["*"] # 3.1.11에서 배포 ID가 정해지면 해당 ARN으로 좁힌다
+    actions = ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"]
+    # envs/staging apply 뒤 출력 cloudfront_distribution_id를 global.tfvars frontend_distribution_ids에 적어 이 배포로 좁힌다.
+    # 비어 있으면(staging이 아직 없을 때) 모든 배포 — 좁히기 전까지만
+    resources = (length(var.frontend_distribution_ids) > 0
+      ? [for id in var.frontend_distribution_ids : "arn:aws:cloudfront::${local.account_id}:distribution/${id}"]
+    : ["*"])
   }
 }
 

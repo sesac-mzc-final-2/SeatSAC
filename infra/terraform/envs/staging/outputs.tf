@@ -48,8 +48,8 @@ output "eks_cluster_endpoint" {
 }
 
 output "eks_kubeconfig_command" {
-  description = "팀원은 --profile cinema-dev, 관리자는 cinema-admin"
-  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --profile cinema-dev"
+  description = "팀원 컨텍스트 cinema-dev. 관리자는 --profile cinema-admin --alias cinema-admin --user-alias cinema-admin (런북 4-2)"
+  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --profile cinema-dev --alias cinema-dev --user-alias cinema-dev"
 }
 
 output "eks_node_security_group_id" {
@@ -82,6 +82,37 @@ output "valkey_primary_endpoint" {
   value       = aws_elasticache_replication_group.valkey.primary_endpoint_address
 }
 
+# ---- CloudFront·S3 (3.1.11) → GitHub Variables(frontend-deploy) · global(무효화 권한) ----
+output "cloudfront_domain_name" {
+  description = "화면·API 주소: https://<이 값>/ , https://<이 값>/api/*"
+  value       = aws_cloudfront_distribution.frontend.domain_name
+}
+
+output "cloudfront_distribution_id" {
+  description = "global frontend_distribution_ids(무효화 권한을 이 배포로 좁힘) · GitHub Variables CLOUDFRONT_DISTRIBUTION_ID"
+  value       = aws_cloudfront_distribution.frontend.id
+}
+
+output "frontend_bucket" {
+  description = "GitHub Variables FRONTEND_BUCKET (frontend-deploy가 올리는 곳)"
+  value       = aws_s3_bucket.frontend.bucket
+}
+
+output "api_origin_domain_name" {
+  description = "/api/* 원본(gateway ALB). 비어 있으면 Ingress(gitops 3.1.5)가 아직 없다 → ALB가 생긴 뒤 apply를 한 번 더"
+  value       = local.api_origin_enabled ? local.api_origin_domain_name : ""
+}
+
+output "frontend_github_variables" {
+  description = "레포 Settings → Secrets and variables → Actions → Variables. Cognito 3개(VITE_COGNITO_AUTHORITY·CLIENT_ID·DOMAIN)는 cognito.tf(3.3.x) 출력에서"
+  value = {
+    FRONTEND_BUCKET            = aws_s3_bucket.frontend.bucket
+    CLOUDFRONT_DISTRIBUTION_ID = aws_cloudfront_distribution.frontend.id
+    VITE_COGNITO_REDIRECT_URI  = "https://${aws_cloudfront_distribution.frontend.domain_name}/callback"
+  }
+}
+
+# ---- DB 계정 생성 Job (3.1.12) ------------------------------------------
 output "db_bootstrap_role_arn" {
   description = "3.1.12 DB 계정 생성 Job Pod Identity 역할 (cinema-ops/db-bootstrap, 마스터 Secret 읽기만)"
   value       = module.db_bootstrap_pod_identity.iam_role_arn

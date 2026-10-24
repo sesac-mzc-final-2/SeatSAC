@@ -6,9 +6,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.dto.request.BookingPayRequest;
 import com.seatsac.booking.dto.request.SeatHoldRequest;
+import com.seatsac.booking.dto.response.BookingCancelResponse;
+import com.seatsac.booking.dto.response.PaymentView;
 import com.seatsac.booking.dto.response.SeatHoldResponse;
 import com.seatsac.booking.entity.Booking;
+import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.enums.PaymentMethod;
+import com.seatsac.common.core.time.Times;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import java.time.Instant;
@@ -77,5 +81,28 @@ class BookingDtoJsonTest {
             assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
                 new BookingPayRequest.Card("4111", "13/28", "KIM")))).hasSize(2);     // 자리수, 월
         }
+    }
+
+    /**
+     * 계약의 {@code CancelResult} 하나를 BKG-03·BKG-07이 같이 쓴다 —
+     * 결제가 없는 해제에서는 {@code payment} 키가 아예 빠지고, 취소에서는 담긴다.
+     */
+    @Test
+    void cancelResultOmitsPaymentOnHoldRelease() throws Exception {
+        String release = mapper.writeValueAsString(
+            BookingCancelResponse.ofHoldRelease(5001L, Times.toApi(NOW)));
+
+        assertThat(release).contains("\"status\":\"CANCELED\"")
+            .contains("\"canceledAt\":\"2026-10-20T12:01:10+09:00\"")
+            .doesNotContain("payment");
+
+        String canceled = mapper.writeValueAsString(new BookingCancelResponse(5001L,
+            BookingStatus.CANCELED, Times.toApi(NOW),
+            PaymentView.of("3f2b8a10-0000-4000-8000-000000000001", "CANCELED", "1111",
+                null, NOW, NOW)));
+
+        assertThat(canceled).contains("\"payment\":")
+            .contains("\"cardLast4\":\"1111\"")
+            .doesNotContain("4111111111111111");
     }
 }

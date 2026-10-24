@@ -11,13 +11,24 @@ management:
   endpoints.web.exposure.include: health,prometheus,info
   endpoint.health.probes.enabled: true
   endpoint.health.show-details: never
+  endpoint.health.group.readiness.include: readinessState,db   # 서비스 실행 계약 1장
   metrics.tags.application: catalog
+  metrics.distribution.percentiles-histogram.http.server.requests: true
 logging:
   config: classpath:logback-spring.xml
 
+# 계약 CI 2단계가 /v3/api-docs 생성본과 contracts/openapi/catalog.openapi.yaml 을 비교한다 (계약 확정 #1)
+springdoc:
+  api-docs.version: openapi_3_1
+  api-docs.path: /v3/api-docs
+
+# 캐시에서 읽은 +09:00 시각을 UTC(Z)로 바꾸지 않는다 — 응답 시각은 항상 +09:00 (규약 6장)
+spring.jackson.deserialization.adjust-dates-to-context-time-zone: false
+
 # DB: 서비스별 스키마·계정. 비밀번호는 K8s Secret → 환경변수 (ADR-10)
 spring.datasource:
-  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/catalog_db?serverTimezone=UTC&characterEncoding=utf8}
+  # UTC 저장: 세션 시간대까지 UTC로 맞춘다 (데이터 모델 1장)
+  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/catalog_db?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=utf8}
   username: ${SPRING_DATASOURCE_USERNAME:catalog_app}
   password: ${SPRING_DATASOURCE_PASSWORD:local}
   hikari.maximum-pool-size: 5
@@ -30,7 +41,27 @@ spring.flyway:
   user: ${SPRING_FLYWAY_USER:catalog_migrator}
   password: ${SPRING_FLYWAY_PASSWORD:local}
 
+# Valkey (CAT-05 캐시). 장애 시 조회가 캐시 대기에 묶이지 않게 명령·연결 타임아웃을 짧게 둔다
 spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}
   port: ${SPRING_DATA_REDIS_PORT:6379}
   ssl.enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache는 true
+  timeout: 300ms
+  connect-timeout: 1s
+
+# 서비스 실행 계약 3장 — APP_CACHE_TTL, APP_SERVICES_BOOKING_URL, APP_SERVICES_BOOKING_READ_TIMEOUT
+app:
+  cache:
+    ttl: ${APP_CACHE_TTL:10m}
+  services:
+    booking-url: ${APP_SERVICES_BOOKING_URL:http://booking:8080}
+    booking-read-timeout: ${APP_SERVICES_BOOKING_READ_TIMEOUT:300ms}   # CAT-03 잔여 좌석 300ms 전체
+
+# catalog → booking 서킷 (ADR-23: 실패율 50%, 10초 열림). 열려 있으면 remainingSeatsSource TOTAL
+resilience4j.circuitbreaker.instances.booking:
+  sliding-window-type: COUNT_BASED
+  sliding-window-size: 10
+  minimum-number-of-calls: 5
+  failure-rate-threshold: 50
+  wait-duration-in-open-state: 10s
+  permitted-number-of-calls-in-half-open-state: 2

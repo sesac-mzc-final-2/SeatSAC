@@ -347,7 +347,7 @@
 | `AWS_REGION` | `ap-northeast-2` |
 | `SPRING_DATASOURCE_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` |
 | `SPRING_DATASOURCE_USERNAME` | `{svc}_app` |
-| `FLYWAY_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?sslMode=trust&connectionTimeZone=UTC` — **Flyway Job 전용**(DB 쓰는 서비스만). flyway 이미지는 MySQL Connector/J 대신 MariaDB 드라이버라 TLS 옵션 값이 다르다(`REQUIRED`를 주면 TLS 없이 붙어 `RSA public key is not available`로 실패). 앱은 읽지 않는다 |
+| `FLYWAY_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?useSsl=true&trustServerCertificate=true&sslMode=trust` — **Flyway Job 전용**(DB 쓰는 서비스만). flyway 이미지는 MySQL Connector/J 대신 MariaDB 드라이버(2.x: `useSsl`·`trustServerCertificate`, 3.x: `sslMode=trust`)라 TLS 옵션 이름이 다르다(`REQUIRED`를 주면 TLS 없이 붙어 `RSA public key is not available`로 실패). 앱은 읽지 않는다 |
 | `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` |
 | `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 Flyway 훅 Job) |
 | `SPRING_DATA_REDIS_HOST` / `_PORT` / `_SSL_ENABLED` | `{valkey-primary-endpoint}` / `6379` / `true` (Valkey 쓰는 서비스만) |

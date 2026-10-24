@@ -347,7 +347,7 @@
 | `AWS_REGION` | `ap-northeast-2` |
 | `SPRING_DATASOURCE_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` |
 | `SPRING_DATASOURCE_USERNAME` | `{svc}_app` |
-| `FLYWAY_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&sslMode=verify-full` — **Flyway Job 전용**(DB 쓰는 서비스만, 앱은 읽지 않는다). flyway 11.7 이미지에는 MySQL Connector/J가 없어 MariaDB Connector/J **2.7.x**가 `jdbc:mysql://`를 처리한다. 2.x의 TLS 옵션은 `useSsl`이고(`sslMode`는 3.x 옵션이라 2.x는 무시 → TLS가 켜지지 않아 `RSA public key is not available`로 실패), `serverSslCert`로 준 RDS CA로 **서버 인증서·호스트 이름을 검증**한다. CA는 ConfigMap `rds-ca-bundle`(Terraform `envs/staging-k8s/rds_ca.tf`)을 `/etc/rds-ca`에 마운트. `sslMode=verify-full`은 3.x로 바뀔 때를 위한 것 |
+| `FLYWAY_URL` | `jdbc:mysql://{rds-endpoint}:3306/{svc}_db?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&trustServerCertificate=false&disableSslHostnameVerification=false&sslMode=verify-full` — **Flyway Job 전용**(DB 쓰는 서비스만, 앱은 읽지 않는다). flyway 11.7 이미지에는 MySQL Connector/J가 없어 MariaDB Connector/J **2.7.x**가 `jdbc:mysql://`를 처리한다. 2.x의 TLS 옵션은 `useSsl`이고(`sslMode`는 3.x 옵션이라 2.x는 무시 → TLS가 켜지지 않아 `RSA public key is not available`로 실패), `serverSslCert`로 준 RDS CA로 **서버 인증서·호스트 이름을 검증**한다. `trustServerCertificate=false`·`disableSslHostnameVerification=false`는 2.x 기본값이지만 검증을 끄지 않는다는 뜻을 URL에 명시한다. CA는 ConfigMap `rds-ca-bundle`(Terraform `envs/staging-k8s/rds_ca.tf`)을 `/etc/rds-ca`에 마운트. `sslMode=verify-full`은 3.x로 바뀔 때를 위한 것 |
 | `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` |
 | `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 Flyway 훅 Job) |
 | `SPRING_DATA_REDIS_HOST` / `_PORT` / `_SSL_ENABLED` | `{valkey-primary-endpoint}` / `6379` / `true` (Valkey 쓰는 서비스만) |
@@ -413,6 +413,8 @@ ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
 | `booking_outbox_pending` | gauge | — | booking | 릴레이 밀림 |
 | `catalog_cache_requests_total` | counter | `result`=`hit`·`miss` | catalog | 캐시 적중률 |
 | `catalog_seat_counts_fallback_total` | counter | — | catalog | 300ms 초과 대체 횟수 |
+| `payment_request_total` | counter | `result`=`approved`·`declined`·`processing`·`canceled` | payment | 모의 결제 결과 분포(OPS-05). 자동 롤백은 booking 쪽 `booking_payment_call_total`을 쓴다 |
+| `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
 
 블루/그린 분석(`SeatSAC-gitops/analysis/`):
 
@@ -523,7 +525,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 | 테이블 | 키·제약 | 비고 |
 | --- | --- | --- |
-| `payment` | PK `payment_id` CHAR(36)(booking 발급), **UK `booking_id`**(예매당 1회, ADR-24) | `amount`, `method`, `card_last4`(카드 번호 저장 금지), `status` PROCESSING·APPROVED·FAILED·CANCELED, `failure_code`, `cancel_reason`, `pg_provider`(`MOCK`만, ADR-60), `approved_at`·`canceled_at`. user_id 없음. PROCESSING으로 먼저 INSERT·커밋 → 판정은 트랜잭션 밖 → `UPDATE … WHERE status='PROCESSING'`. 30초 넘게 남은 PROCESSING은 payment 기동 시 `FAILED`(`PROCESSING_TIMEOUT`)로 정리(ADR-60) |
+| `payment` | PK `payment_id` CHAR(36)(booking 발급), **UK `booking_id`**(`uk_payment_booking_id`, 예매당 1회, ADR-24), INDEX (`status`, `created_at`)(기동 정리) | `amount`, `method`, `card_last4`(카드 번호 저장 금지), `status` PROCESSING·APPROVED·FAILED·CANCELED, `failure_code`, `cancel_reason`, `pg_provider`(`MOCK`만, ADR-60), `approved_at`·`canceled_at`. user_id 없음. PROCESSING으로 먼저 INSERT·커밋 → 판정은 트랜잭션 밖 → `UPDATE … WHERE status='PROCESSING'`. 30초 넘게 남은 PROCESSING은 payment 기동 시 `FAILED`(`PROCESSING_TIMEOUT`)로 정리(ADR-60) |
 
 ### 3. 서비스 간 ID 참조 (FK 없음)
 

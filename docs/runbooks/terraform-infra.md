@@ -654,7 +654,7 @@ bash run.sh
 
 | 시드 Job 증상 | 원인 | 해결 |
 | --- | --- | --- |
-| flyway `RSA public key is not available client side (option serverRsaPublicKeyFile not set)` 재시도 후 실패 | flyway 11.7 이미지는 MariaDB Connector/J 2.7.x로 붙는다. 2.x는 `sslMode`(3.x 옵션)를 무시해 TLS가 켜지지 않고, TLS 없는 `caching_sha2_password` 인증이 실패 | `seed-load-job.yaml`의 `FLYWAY_URL`을 `...?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&sslMode=verify-full`로 + ConfigMap `rds-ca-bundle`을 `/etc/rds-ca`에 마운트(서버 인증서 검증). seed 컨테이너 mysql도 `--ssl-mode=VERIFY_IDENTITY --ssl-ca=/etc/rds-ca/rds-ca.pem` (10/24) |
+| flyway `RSA public key is not available client side (option serverRsaPublicKeyFile not set)` 재시도 후 실패 | flyway 11.7 이미지는 MariaDB Connector/J 2.7.x로 붙는다. 2.x는 `sslMode`(3.x 옵션)를 무시해 TLS가 켜지지 않고, TLS 없는 `caching_sha2_password` 인증이 실패 | `seed-load-job.yaml`의 `FLYWAY_URL`을 `...?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&trustServerCertificate=false&disableSslHostnameVerification=false&sslMode=verify-full`로 + ConfigMap `rds-ca-bundle`을 `/etc/rds-ca`에 마운트(서버 인증서 검증). seed 컨테이너 mysql도 `--ssl-mode=VERIFY_IDENTITY --ssl-ca=/etc/rds-ca/rds-ca.pem` (10/24) |
 | `timed out waiting for the condition` 까지 10분 대기 | run.sh가 Job 완료만 기다림(실패해도 끝까지 대기) | 다른 터미널에서 `kubectl -n cinema-staging get pods -l job-name=catalog-seed-load`로 바로 상태 확인 |
 
 - [ ] `verify.sql` 15개 항목 일치 (극장 132 · 상영관 39 · 좌석 6,767 · 회차 8,360 · 영화 22, UTC 날짜 ≠ 영업일 228건)

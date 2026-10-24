@@ -52,7 +52,7 @@
 
 | 테이블 | 키·제약 | 비고 |
 | --- | --- | --- |
-| `payment` | PK `payment_id` CHAR(36)(booking 발급), **UK `booking_id`**(예매당 1회, ADR-24) | `amount`, `method`, `card_last4`(카드 번호 저장 금지), `status` PROCESSING·APPROVED·FAILED·CANCELED, `failure_code`, `cancel_reason`, `pg_provider`(`MOCK`만, ADR-60), `approved_at`·`canceled_at`. user_id 없음. PROCESSING으로 먼저 INSERT·커밋 → 판정은 트랜잭션 밖 → `UPDATE … WHERE status='PROCESSING'`. 30초 넘게 남은 PROCESSING은 payment 기동 시 `FAILED`(`PROCESSING_TIMEOUT`)로 정리(ADR-60) |
+| `payment` | PK `payment_id` CHAR(36)(booking 발급), **UK `booking_id`**(`uk_payment_booking_id`, 예매당 1회, ADR-24), INDEX (`status`, `created_at`)(기동 정리) | `amount`, `method`, `card_last4`(카드 번호 저장 금지), `status` PROCESSING·APPROVED·FAILED·CANCELED, `failure_code`, `cancel_reason`, `pg_provider`(`MOCK`만, ADR-60), `approved_at`·`canceled_at`. user_id 없음. PROCESSING으로 먼저 INSERT·커밋 → 판정은 트랜잭션 밖 → `UPDATE … WHERE status='PROCESSING'`. 30초 넘게 남은 PROCESSING은 payment 기동 시 `FAILED`(`PROCESSING_TIMEOUT`)로 정리(ADR-60) |
 
 ## 3. 서비스 간 ID 참조 (FK 없음)
 

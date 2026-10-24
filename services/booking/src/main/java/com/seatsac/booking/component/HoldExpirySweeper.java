@@ -72,6 +72,7 @@ public class HoldExpirySweeper {
         int expired = 0;
         int orphans = 0;
         int deferred = 0;
+        int failed = 0;
 
         while (handled < BookingPolicy.EXPIRY_SCAN_BATCH) {
             List<ExpiringHold> due;
@@ -86,27 +87,38 @@ public class HoldExpirySweeper {
             }
 
             for (ExpiringHold hold : due) {
-                Long bookingId = expiredBookings.findPendingBookingIdByHoldId(hold.holdId()).orElse(null);
-                if (bookingId == null) {
-                    seatHold.forget(hold.screeningId(), hold.holdId());   // 고아 멤버 — 장부만 정리
-                    orphans++;
-                    handled++;
-                    continue;
-                }
+                // 멤버 하나가 실패해도 주기를 멈추지 않는다. 멈추면 그 멤버가 장부 앞에 남아
+                // 다음 주기도 같은 자리에서 걸리고 뒤의 만료 건을 영영 처리하지 못한다
+                try {
+                    Long bookingId = expiredBookings.findPendingBookingIdByHoldId(hold.holdId())
+                        .orElse(null);
+                    if (bookingId == null) {
+                        seatHold.forget(hold.screeningId(), hold.holdId());   // 고아 — 장부만 정리
+                        orphans++;
+                        handled++;
+                        continue;
+                    }
 
-                Outcome outcome = holdExpiry.expire(bookingId);
-                if (outcome == Outcome.DEFERRED) {
-                    // 결제 중이다. 장부에 남겨 둬야 결제가 끝난 뒤 다시 본다 →
-                    // 그만큼 offset을 밀어 다음 쪽에서 뒤 멤버를 본다
-                    deferred++;
+                    Outcome outcome = holdExpiry.expire(bookingId);
+                    if (outcome == Outcome.DEFERRED) {
+                        // 결제 중이다. 장부에 남겨 둬야 결제가 끝난 뒤 다시 본다 →
+                        // 그만큼 offset을 밀어 다음 쪽에서 뒤 멤버를 본다
+                        deferred++;
+                        offset++;
+                        continue;
+                    }
+                    if (outcome == Outcome.EXPIRED) {
+                        expired++;
+                    }
+                    seatHold.forget(hold.screeningId(), hold.holdId());
+                    handled++;
+                } catch (RuntimeException e) {
+                    // 이 멤버는 다음 주기에 다시 본다. offset을 밀어 뒤 멤버를 가리지 않게 한다
+                    log.warn("만료 처리 실패 screeningId={} holdId={} — 건너뛴다",
+                        hold.screeningId(), hold.holdId(), e);
+                    failed++;
                     offset++;
-                    continue;
                 }
-                if (outcome == Outcome.EXPIRED) {
-                    expired++;
-                }
-                seatHold.forget(hold.screeningId(), hold.holdId());
-                handled++;
             }
 
             if (due.size() < PAGE_SIZE) {
@@ -114,8 +126,9 @@ public class HoldExpirySweeper {
             }
         }
 
-        if (expired + orphans + deferred > 0) {
-            log.info("만료 장부 스캔 expired={} orphans={} deferred={}", expired, orphans, deferred);
+        if (expired + orphans + deferred + failed > 0) {
+            log.info("만료 장부 스캔 expired={} orphans={} deferred={} failed={}",
+                expired, orphans, deferred, failed);
         }
     }
 
@@ -146,11 +159,18 @@ public class HoldExpirySweeper {
         }
 
         int expired = 0;
+        int failed = 0;
         for (Long bookingId : bookingIds) {
-            if (holdExpiry.expire(bookingId) == Outcome.EXPIRED) {
-                expired++;
+            // 하나가 실패해도 다음 예매로 넘어간다 — 멈추면 그 예매가 계속 앞에 남아 뒤를 가린다
+            try {
+                if (holdExpiry.expire(bookingId) == Outcome.EXPIRED) {
+                    expired++;
+                }
+            } catch (RuntimeException e) {
+                log.warn("만료 처리 실패 bookingId={} — 다음 예매로 넘어간다", bookingId, e);
+                failed++;
             }
         }
-        log.info("만료 RDS 스캔 due={} expired={}", bookingIds.size(), expired);
+        log.info("만료 RDS 스캔 due={} expired={} failed={}", bookingIds.size(), expired, failed);
     }
 }

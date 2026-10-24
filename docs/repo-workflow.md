@@ -27,11 +27,14 @@ SeatSAC/
 └── .github/ workflows/ · CODEOWNERS · pull_request_template.md
 
 SeatSAC-gitops/
-├── apps/              App of Apps
-├── platform/          Argo Rollouts, kube-prometheus-stack (LB Controller는 Terraform envs/staging-k8s)
-├── base/{service}/    Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, ServiceMonitor, Flyway 훅 Job(Sync wave -1)
-├── overlays/staging/  이미지 태그, replicas, ConfigMap
-└── analysis/          AnalysisTemplate
+├── apps/                  App of Apps (root.yaml + staging/: project·플랫폼 2·cinema-common·서비스 5)
+├── platform/              Argo Rollouts, kube-prometheus-stack values (LB Controller는 Terraform envs/staging-k8s)
+├── base/{service}/        Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, PodMonitor, Flyway 훅 Job(Sync wave -1)
+├── base/common/           앱 namespace 인바운드 기본 거부 + analysis
+├── overlays/staging/{service}/  이미지 태그, ConfigMap {service}-config (서비스마다 Application 하나)
+├── components/rollout/    kustomize가 Rollout 안 ConfigMap 해시 이름을 바꾸게 하는 설정
+├── analysis/              AnalysisTemplate (booking·gateway)
+└── .github/               CODEOWNERS · PR 템플릿 · gitops-validate
 ```
 
 - `services/ai/`·`lambdas/daily-stats/`는 10/22 삭제(ADR-50·51)
@@ -109,7 +112,7 @@ SeatSAC-gitops/
 | AWS 콘솔에서 리소스를 만들지 않는다. IAM·OIDC는 `infra/terraform/global`, 나머지는 `envs/staging` | 10/21 OIDC 공급자 중복 사례 |
 | `terraform destroy`로 bootstrap·global을 지우지 않는다 | tfstate·팀 접근 상실 |
 | 클러스터 직접 수정 금지(selfHeal이 되돌림). 긴급 시 해당 앱 auto-sync 끄고 작업 → Git 반영 → 스크럼 공유 | GitOps |
-| 팀원 평소 작업은 `cinema-dev` 프로필(MFA). `cinema-admin`은 김종식 + 백업 관리자 남궁일(`nickname`) | ADR-47 |
+| 팀원 평소 작업은 `cinema-dev` 프로필(MFA). `cinema-admin`은 김종식 + 백업 관리자 남궁일 | ADR-47 |
 | 작업·진척은 노션 WBS만. GitHub Issues 안 씀 | 03b |
 | 발표 후 Public 전환 전: gitleaks 전체 이력 스캔, 시드·원본·`.env`·tfvars 없음 확인 | — |
 

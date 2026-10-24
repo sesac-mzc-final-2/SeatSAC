@@ -10,6 +10,7 @@ import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
@@ -214,7 +215,15 @@ public class PaymentClient {
     private record CancelRequest(PaymentCancelReason reason) {
     }
 
-    /** 쓰는 필드만 받는다(모르는 필드는 무시). 시각은 응답의 {@code +09:00}을 그대로 읽는다 */
+    /**
+     * 쓰는 필드만 받는다(모르는 필드는 무시). 시각은 응답의 {@code +09:00}을 그대로 읽는다.
+     *
+     * <p>{@code failureCode}는 payment의 내부 코드다({@code CARD_DECLINED}·
+     * {@code INSUFFICIENT_BALANCE}·{@code PROCESSING_TIMEOUT}). <b>외부 응답으로 그대로 흘리지
+     * 않는다</b> — booking 계약({@code PayResult}·{@code Booking})의 {@code failureCode}는 앞의 두
+     * 값과 null만 허용하므로, 3.2.6에서 응답을 만들 때 그 밖의 값은 null로 바꿔 「결제 실패」로만
+     * 보여 준다({@link #publicFailureCode}).
+     */
     public record PaymentResult(
         String paymentId,
         Long bookingId,
@@ -237,5 +246,17 @@ public class PaymentClient {
         public boolean isCanceled() {
             return "CANCELED".equals(status);
         }
+
+        /**
+         * 화면에 보여도 되는 거절 사유만 남긴다. {@code PROCESSING_TIMEOUT} 같은 운영용 코드는
+         * null이 되어 화면은 「결제 실패」로만 표시한다(booking 계약의 enum을 넓히지 않는 이유).
+         */
+        public String publicFailureCode() {
+            return PUBLIC_FAILURE_CODES.contains(failureCode) ? failureCode : null;
+        }
     }
+
+    /** booking 외부 응답에 담아도 되는 거절 사유 (계약 {@code FailureCode}) */
+    private static final Set<String> PUBLIC_FAILURE_CODES =
+        Set.of("CARD_DECLINED", "INSUFFICIENT_BALANCE");
 }

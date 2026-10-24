@@ -159,6 +159,29 @@ class PaymentClientTest {
         assertThat(metric("timeout")).isZero();
     }
 
+    /**
+     * payment의 내부 코드는 화면에 흘리지 않는다 — booking 계약의 {@code failureCode}는
+     * 거절 사유 두 개와 null만 허용한다(그래서 계약 enum을 넓히지 않았다).
+     */
+    @Test
+    void internalFailureCodesAreNotExposedToClients() {
+        responses.add(Response.ok(paymentJson("FAILED").replace("\"failureCode\":null",
+            "\"failureCode\":\"PROCESSING_TIMEOUT\"")));
+
+        PaymentResult result = client.request(request());
+
+        assertThat(result.failureCode()).isEqualTo("PROCESSING_TIMEOUT");   // 내부에서는 보인다
+        assertThat(result.publicFailureCode()).isNull();                    // 응답에는 담지 않는다
+    }
+
+    @Test
+    void declineReasonsAreExposedToClients() {
+        responses.add(Response.ok(paymentJson("FAILED").replace("\"failureCode\":null",
+            "\"failureCode\":\"CARD_DECLINED\"")));
+
+        assertThat(client.request(request()).publicFailureCode()).isEqualTo("CARD_DECLINED");
+    }
+
     // --- 응답을 못 받은 경우 ---
 
     /** 타임아웃 → 같은 결제 ID로 1회 재호출 → 결과를 받으면 그것이 답이다 */

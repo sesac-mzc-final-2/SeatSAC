@@ -79,10 +79,14 @@ public class InternalBookingController {
         return bookingHistoryService.findByUser(userId, status, page, size);
     }
 
+    /**
+     * 내부 API는 인증을 쓰지 않는다 — {@code userId}는 호출자가 넘기는 <b>쿼리 파라미터</b>다.
+     * 형식이 틀리면 인증 실패(401)가 아니라 400 {@code VALIDATION_FAILED}다(계약의 400 설명).
+     */
     private static void validateUserId(String userId) {
         if (userId == null || !USER_ID_FORMAT.matcher(userId).matches()) {
-            throw BookingErrorCode.USER_HEADER_MISSING.exception(
-                ErrorDetail.of("userId", null, "INVALID_FORMAT"));
+            throw BookingErrorCode.INVALID_USER_ID.exception(
+                ErrorDetail.of("userId", null, BookingErrorCode.INVALID_USER_ID.name()));
         }
     }
 

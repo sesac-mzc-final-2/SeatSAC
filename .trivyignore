@@ -1,0 +1,17 @@
+# Trivy 예외 — .github/scripts/trivy-scan.sh가 읽는다 (pr-check image · build-push)
+# 규칙: 수정 버전이 OSS로 없거나 우리 코드에 해당 기능이 없을 때만. CVE ID + 이유 + 확인한 사람 + 만료일(exp:)
+#       만료일이 지나면 다시 실패한다 → 그때 다시 판단. 추가·연장은 PR 리뷰(김종식 + 해당 서비스 담당)
+# 배경: Spring Boot 3.5(Spring Framework 6.2)는 2026-06-30 OSS 지원 종료. 아래 3개는 7.0.9(Boot 4)에서만 수정
+#       → 발표(11/20) 후 Boot 4.x 이전 또는 서비스 종료 때 정리
+
+# spring-webmvc 6.2.x — XsltView 경로 제한 미흡으로 RCE. 우리 서비스는 REST(JSON)만, 뷰·XsltView 미사용
+# 확인: grep XsltView 0건 (10/25 김종식) · 서비스 담당 확인 필요(한채연·남궁일)
+CVE-2026-47884 exp:2026-11-30
+
+# spring-webmvc/webflux 6.2.x — SSE를 "뷰 렌더링"으로 보낼 때 스트림 손상. BKG-05 SSE는 SseEmitter/ServerSentEvent 데이터 전송(뷰 아님)
+# 확인: 남궁일(booking SSE 구현 시 뷰 렌더링을 쓰지 않을 것)
+CVE-2026-47890 exp:2026-11-30
+
+# spring-webflux 6.2.x — WebFlux 함수형 엔드포인트(RouterFunction) 헤더 조건 우회. gateway는 Spring Cloud Gateway 라우트 조건만, RouterFunction 미사용
+# 확인: grep RouterFunction 0건 (10/25 김종식) · 한채연 확인 필요
+CVE-2026-47892 exp:2026-11-30

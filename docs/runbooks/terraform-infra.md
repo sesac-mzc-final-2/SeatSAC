@@ -225,7 +225,8 @@ terraform output eks_kubeconfig_command
 ### 4-2. 관리자 kubectl 확인
 
 ```bash
-aws eks update-kubeconfig --region ap-northeast-2 --name cinema-staging-eks --profile cinema-admin
+aws eks update-kubeconfig --region ap-northeast-2 --name cinema-staging-eks --profile cinema-admin --alias cinema-admin --user-alias cinema-admin
+kubectl config use-context cinema-admin
 kubectl get nodes -L topology.kubernetes.io/zone,cinema/az     # 2대 Ready, zone a·c 하나씩
 kubectl get pods -n kube-system                                  # aws-node·kube-proxy·coredns·eks-pod-identity-agent·metrics-server Running
 kubectl get daemonset aws-node -n kube-system -o jsonpath='{.spec.template.spec.containers[*].name}'   # aws-network-policy-agent 포함
@@ -270,7 +271,8 @@ kubectl delete hpa,deploy hpa-smoke -n default
 
 ```bash
 aws sts get-caller-identity --profile cinema-dev                 # MFA 입력 → assumed-role/cinema-developer
-aws eks update-kubeconfig --region ap-northeast-2 --name cinema-staging-eks --profile cinema-dev --alias cinema-staging
+aws eks update-kubeconfig --region ap-northeast-2 --name cinema-staging-eks --profile cinema-dev --alias cinema-dev --user-alias cinema-dev
+kubectl config use-context cinema-dev
 kubectl get pods -n cinema-staging                               # 성공 (아직 비어 있음: No resources found)
 kubectl auth can-i create pods/portforward -n cinema-staging     # yes
 kubectl auth can-i get secrets -n cinema-staging                 # no
@@ -467,7 +469,7 @@ docker compose -f infra/compose/docker-compose.yml exec valkey valkey-cli CONFIG
 | 스키마 | `catalog_db`·`booking_db`·`user_db`·`payment_db` (utf8mb4 / utf8mb4_0900_ai_ci) |
 | 계정 | `{svc}_app`(자기 스키마 SELECT·INSERT·UPDATE·DELETE) · `{svc}_migrator`(자기 스키마 ALL), 모두 `@'%'`·`REQUIRE SSL` |
 | 비밀번호 | `random_password` 영숫자 32자 × 8 → **`staging-k8s` tfstate에만** 평문 (2-6 tfstate 거부가 중요한 이유) |
-| 앱 Secret (`cinema-staging`) | `{svc}-secrets`: `SPRING_DATASOURCE_PASSWORD` · `{svc}-migrator-secrets`: `FLYWAY_USER`·`FLYWAY_PASSWORD` (팀원은 이름만 보임) |
+| 앱 Secret (`cinema-staging`) | `{svc}-secrets`: `SPRING_DATASOURCE_PASSWORD` · `{svc}-migrator-secrets`: `FLYWAY_USER`·`FLYWAY_PASSWORD` (팀원은 목록도 볼 수 없음 — 이름은 이 표·문서로 확인) |
 | 계정 생성 Job (`cinema-ops`) | `db-bootstrap-<해시8>`: initContainer(aws-cli)가 Pod Identity `cinema-staging-db-bootstrap-pod`로 마스터 Secret 읽기 → mysql 컨테이너가 멱등 SQL 실행·권한 검증. 입력 Secret `db-bootstrap-accounts`. `cinema-ops`는 팀원 조회 범위 밖 |
 | 다시 도는 조건 | 스크립트·비밀번호·RDS 주소·이미지가 바뀌면 Job 이름(해시)이 바뀌어 새로 실행. 마스터 비밀번호 자동 교체(7일)와는 무관 |
 
@@ -498,24 +500,29 @@ terraform output db_bootstrap_job
 
 ### 8-B. 확인
 
+kubectl만 쓴다(Terraform 자격 증명 불필요). 관리자 컨텍스트로:
+
 ```bash
-export AWS_PROFILE=cinema-admin
-JOB=$(terraform -chdir=infra/terraform/envs/staging-k8s output -raw db_bootstrap_job)
-kubectl -n cinema-ops logs job/$JOB -c fetch-master     # OK: 마스터 접속 정보 준비 (user=cinema_master)
-kubectl -n cinema-ops logs job/$JOB -c bootstrap        # 스키마 4·계정 8 표 + 마지막 줄 PASS
+kubectl config use-context cinema-admin
+JOB=$(kubectl -n cinema-ops get jobs -l app.kubernetes.io/name=db-bootstrap -o name | tail -1)   # job/db-bootstrap-xxxxxxxx
+kubectl -n cinema-ops logs $JOB -c fetch-master     # OK: 마스터 접속 정보 준비 (user=cinema_master)
+kubectl -n cinema-ops logs $JOB -c bootstrap        # 스키마 4·계정 8 표 + 마지막 줄 PASS
 kubectl -n cinema-staging get secrets -l app.kubernetes.io/managed-by=terraform   # 8개 (값은 보지 않는다)
 ```
+
+- Job 이름은 `terraform output db_bootstrap_job`으로도 볼 수 있지만, 그때는 0장 Terraform 자격 증명(`export-credentials`)이 필요하다. `AWS_PROFILE=cinema-admin`만 걸린 터미널에서 `terraform output`을 쓰면 `AssumeRoleTokenProvider session option not set` 오류
+- Job이 여러 개 보이면(입력이 바뀌어 다시 돈 경우) Terraform이 지금 관리하는 것은 최신 1개다. 이전 Job은 apply 때 지워진다
 
 팀원(`cinema-dev`)으로:
 
 ```bash
-kubectl get secrets -n cinema-staging                  # 이름 목록만 (get secret <이름> -o yaml은 Forbidden)
+kubectl get secrets -n cinema-staging                  # Forbidden (AmazonEKSViewPolicy에 secrets 없음 — 이름 목록도 안 보임)
 kubectl get pods -n cinema-ops                         # Forbidden (관리자 namespace)
 ```
 
 - [ ] bootstrap 로그 `time_zone=UTC · require_secure_transport=1`, 마지막 줄 `PASS: 스키마 4 · 계정 8 · 권한 확인 완료`
 - [ ] Secret 8개(`{svc}-secrets` 4 · `{svc}-migrator-secrets` 4)
-- [ ] 팀원: `cinema-staging` Secret 내용 Forbidden, `cinema-ops` Forbidden
+- [ ] 팀원: `cinema-staging` Secret 목록·내용 Forbidden, `cinema-ops` Forbidden
 - [ ] 두 번째 plan(staging-k8s) No changes — Job이 다시 만들어지지 않음
 - [ ] 로그·PR·노션 어디에도 비밀번호가 없음
 
@@ -527,16 +534,28 @@ kubectl get pods -n cinema-ops                         # Forbidden (관리자 na
 
 ```bash
 export AWS_PROFILE=cinema-admin
-cd <lotte-seed>/load
-RDS_HOST=$(terraform -chdir=<SeatSAC>/infra/terraform/envs/staging output -raw rds_endpoint) \
-REPO=<SeatSAC> ./run.sh
+kubectl config use-context cinema-admin
+cd <lotte-seed 클론 경로>/load
+export REPO=<SeatSAC 클론 경로, 레포 루트 절대 경로>       # 예: $HOME/work/SeatSAC (services/ 가 바로 아래 있는 폴더)
+ls "$REPO"/services/catalog/src/main/resources/db/migration/V*.sql   # 파일이 보여야 한다
+export RDS_HOST=$(aws rds describe-db-instances --db-instance-identifier cinema-staging-mysql \
+  --query 'DBInstances[0].Endpoint.Address' --output text)
+bash run.sh
 # 마지막 줄: 완료: catalog_db 시드 적재·검증 통과
 ```
+
+- `RDS_HOST`는 `aws rds`로 구한다. `terraform output`은 이 터미널(`AWS_PROFILE`)에서 MFA 오류가 난다(0장)
+- `REPO`는 PC 어디에 클론했든 그 **레포 루트**면 된다. 실행 전 `git -C "$REPO" switch main && git -C "$REPO" pull`
 
 - 일회성 `kubectl apply`(Job·ConfigMap)는 GitOps 예외로 이 절차만 허용한다. 성공하면 run.sh가 Job·ConfigMap을 지운다(실패 시 Job은 남겨 둠 → 로그 확인 후 `kubectl -n cinema-staging delete job catalog-seed-load`)
 - Job의 initContainer가 catalog Flyway를 먼저 적용한다. 나중에 3.1.5 Flyway 훅 Job은 이력을 보고 그대로 넘어간다(같은 Flyway 11.7.2)
 - 재실행 안전: 이미 들어 있으면 검증만 한다. 다른 데이터가 있으면 손대지 않고 실패한다
 - 시드 ConfigMap이 잠깐 `cinema-staging`에 생긴다(팀원 View로 읽힘). 팀 내부라 허용하되 실행 중에만 존재하게 `KEEP=1`은 쓰지 않는다
+
+| 시드 Job 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| flyway `RSA public key is not available client side (option serverRsaPublicKeyFile not set)` 재시도 후 실패 | flyway 이미지는 MariaDB 드라이버로 붙는데 URL의 `sslMode=REQUIRED`(MySQL 드라이버 값)를 모름 → TLS 없이 접속 → `caching_sha2_password` 실패 | `seed-load-job.yaml`의 `FLYWAY_URL`을 `...?sslMode=trust&connectionTimeZone=UTC`로 (10/24) |
+| `timed out waiting for the condition` 까지 10분 대기 | run.sh가 Job 완료만 기다림(실패해도 끝까지 대기) | 다른 터미널에서 `kubectl -n cinema-staging get pods -l job-name=catalog-seed-load`로 바로 상태 확인 |
 
 - [ ] `verify.sql` 15개 항목 일치 (극장 132 · 상영관 39 · 좌석 6,767 · 회차 8,360 · 영화 22, UTC 날짜 ≠ 영업일 228건)
 - [ ] `kubectl -n cinema-staging get job,configmap | grep catalog-seed` → 없음
@@ -620,6 +639,7 @@ infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드�
 | `Not authorized to perform sts:AssumeRoleWithWebIdentity` | main이 아닌 브랜치에서 실행 / Secret 미등록 | main에서 실행, `AWS_CLUSTER_SCHEDULE_ROLE_ARN` 등록 |
 | `AccessDeniedException ... eks:UpdateNodegroupConfig` | 클러스터 이름이 `eks_cluster_name`과 다름 | global 변수 확인 후 apply |
 | `up`이 10분 넘게 InService 0 | t3.large 용량 부족·SCP·서브넷 IP 부족 | 노드그룹 Health 이슈(`describe-nodegroup`)·ASG 활동 기록 확인 |
+| `desired 1 → 0` 출력 후 `AccessDeniedException … DescribeUpdate` (❌, 노드는 꺼짐) | `eks:DescribeUpdate`는 **클러스터 ARN**이 필수 리소스인데 노드그룹 ARN만 허용했음 (10/24 수정) | global `cluster_schedule.tf` `UpdateRead` 문 확인 후 apply |
 | 노드그룹 `DEGRADED` | 인스턴스 생성 실패·서브넷 IP 부족·IAM 등 건강 문제 | 끄기는 그대로 진행됨(경고만). 켜기는 중단 → 8-1-4 |
 | 예약 실행이 안 보임 | 워크플로가 main에 없음 / 60일간 레포 활동 없음(GitHub가 schedule 중지) | main 머지 확인, Actions에서 워크플로 Enable |
 
@@ -724,6 +744,7 @@ terraform destroy -var-file=staging.tfvars
 | staging plan `no matching SNS topic found` | global(`cinema-alerts`)을 먼저 apply하지 않음 | 5-1 global apply 후 다시 |
 | 경보 메일이 안 옴 | SNS 구독 미확인(`PendingConfirmation`) | 확인 메일의 Confirm 클릭, 스팸함 확인 (5-1) |
 | 클러스터에서 MySQL `ERROR 2003`·Valkey 타임아웃 | SG(노드 SG → 3306·6379) 또는 Valkey에 `--tls` 누락 | `security_groups.tf` 규칙 확인, `--tls` 붙여 다시 |
+| 컨텍스트가 2개인데 둘 다 같은 역할로 접속 (`get-contexts`의 AUTHINFO가 같음) | `--user-alias` 없이 `update-kubeconfig`를 두 번 실행해 사용자 항목이 덮어써짐 | 컨텍스트·사용자 삭제 후 `--alias`·`--user-alias`를 `cinema-dev`/`cinema-admin`으로 다시 (4-2·4-4). `kubectl auth whoami`로 확인 |
 | `aws eks update-kubeconfig` `Unknown options: ... kubectl` | 여러 명령을 한 줄로 붙여 넣음(`\` 뒤 줄바꿈 없음) | 한 줄씩 따로 실행 (4-4) |
 | `kubectl` `dial tcp ...:443: i/o timeout` | 내 공인 IP가 EKS API 허용 목록에 없음 | 4-6 IP 추가 후 apply |
 | `kubectl` `exec plugin` 오류·멈춤 | `aws eks get-token`이 MFA를 묻지 못함 | `aws sts get-caller-identity --profile cinema-dev`로 MFA 세션 먼저 |

@@ -2,7 +2,9 @@ package com.seatsac.booking.repository;
 
 import com.seatsac.booking.entity.Booking;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -33,4 +35,38 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
            and b.currentPaymentId is null
         """)
     int cancelPendingHold(@Param("bookingId") Long bookingId, @Param("now") Instant now);
+
+    /**
+     * BKG-04 만료. 조건부 UPDATE라 세 경로(keyspace·장부 스캔·RDS 스캔)와 여러 파드가 겹쳐도
+     * 한 번만 처리된다. 확정과 경쟁해도 먼저 커밋한 쪽만 이긴다.
+     *
+     * <p>{@code expiresAt <= :now}도 함께 본다 — 장부 점수가 틀어져 아직 만료가 아닌 선점이
+     * 들어와도 지우지 않는다.
+     *
+     * @return 1이면 내가 처리, 0이면 이미 다른 경로가 처리했거나 아직 만료가 아니다
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Booking b
+           set b.status = com.seatsac.booking.enums.BookingStatus.EXPIRED,
+               b.updatedAt = :now
+         where b.bookingId = :bookingId
+           and b.status = com.seatsac.booking.enums.BookingStatus.PENDING
+           and b.expiresAt <= :now
+        """)
+    int expirePendingHold(@Param("bookingId") Long bookingId, @Param("now") Instant now);
+
+    /**
+     * 안전망 2 — 만료 시각이 지난 PENDING 예매. {@code idx_booking_status_expires_at} 범위만 읽는다.
+     *
+     * <p>한 번에 가져오는 양을 묶어 둔다. 노드 0대 구간(ADR-34) 뒤 첫 스윕에서는 밀린 예매가
+     * 한꺼번에 걸리는데, 전부 한 주기에 처리하면 Hikari 연결 5개를 다 쓴다.
+     */
+    @Query("""
+        select b.bookingId from Booking b
+         where b.status = com.seatsac.booking.enums.BookingStatus.PENDING
+           and b.expiresAt <= :now
+         order by b.expiresAt asc
+        """)
+    List<Long> findExpiredPendingIds(@Param("now") Instant now, Pageable pageable);
 }

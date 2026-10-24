@@ -60,13 +60,17 @@ SELECT user, host, ssl_type FROM mysql.user WHERE user REGEXP '_(app|migrator)\$
 
 fail=0
 for s in $DB_SERVICES; do
-  g_app="$(my -N -B -e "SHOW GRANTS FOR '${s}_app'@'%'" | tr '\n' ' ')"
-  g_mig="$(my -N -B -e "SHOW GRANTS FOR '${s}_migrator'@'%'" | tr '\n' ' ')"
+  g_app="$(my -N -B -e "SHOW GRANTS FOR '${s}_app'@'%'")"
+  g_mig="$(my -N -B -e "SHOW GRANTS FOR '${s}_migrator'@'%'")"
   [[ "$g_app" == *"SELECT, INSERT, UPDATE, DELETE ON \`${s}_db\`.*"* ]] || { echo "FAIL: ${s}_app 권한: $g_app"; fail=1; }
   [[ "$g_mig" == *"ALL PRIVILEGES ON \`${s}_db\`.*"* ]] || { echo "FAIL: ${s}_migrator 권한: $g_mig"; fail=1; }
   # 다른 스키마 권한이 붙어 있으면 실패 (서비스별 격리)
   others="$(printf '%s %s' "$g_app" "$g_mig" | grep -oE 'ON `[a-z_]+`' | grep -v "\`${s}_db\`" || true)"
   [[ -z "$others" ]] || { echo "FAIL: ${s} 계정에 다른 스키마 권한: $others"; fail=1; }
+  # 전역 권한(ON *.*) 금지 — 기본으로 붙는 GRANT USAGE ON *.* 만 허용.
+  # CREATE USER IF NOT EXISTS·ALTER USER는 기존 권한을 지우지 않으므로, 누가 손으로 준 전역 권한이 남아 있으면 여기서 잡는다
+  globals="$(printf '%s\n%s\n' "$g_app" "$g_mig" | grep -E '^GRANT .* ON \*\.\* TO' | grep -vE '^GRANT USAGE ON \*\.\* TO' || true)"
+  [[ -z "$globals" ]] || { echo "FAIL: ${s} 계정에 전역 권한: $globals"; fail=1; }
 done
 [[ $fail == 0 ]] || exit 1
 n=$(wc -w <<<"$DB_SERVICES")

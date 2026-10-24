@@ -109,7 +109,7 @@ SeatSAC-gitops/
 | AWS 콘솔에서 리소스를 만들지 않는다. IAM·OIDC는 `infra/terraform/global`, 나머지는 `envs/staging` | 10/21 OIDC 공급자 중복 사례 |
 | `terraform destroy`로 bootstrap·global을 지우지 않는다 | tfstate·팀 접근 상실 |
 | 클러스터 직접 수정 금지(selfHeal이 되돌림). 긴급 시 해당 앱 auto-sync 끄고 작업 → Git 반영 → 스크럼 공유 | GitOps |
-| 팀원 평소 작업은 `cinema-dev` 프로필(MFA). `cinema-admin`은 김종식 + 백업 관리자 남궁일(`sesac-b3`) | ADR-47 |
+| 팀원 평소 작업은 `cinema-dev` 프로필(MFA). `cinema-admin`은 김종식 + 백업 관리자 남궁일(`nickname`) | ADR-47 |
 | 작업·진척은 노션 WBS만. GitHub Issues 안 씀 | 03b |
 | 발표 후 Public 전환 전: gitleaks 전체 이력 스캔, 시드·원본·`.env`·tfvars 없음 확인 | — |
 

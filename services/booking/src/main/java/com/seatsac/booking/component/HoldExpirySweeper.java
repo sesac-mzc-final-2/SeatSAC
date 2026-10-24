@@ -113,11 +113,17 @@ public class HoldExpirySweeper {
                     seatHold.forget(hold.screeningId(), hold.holdId());
                     handled++;
                 } catch (RuntimeException e) {
-                    // 이 멤버는 다음 주기에 다시 본다. offset을 밀어 뒤 멤버를 가리지 않게 한다
+                    // 이 멤버는 다음 주기에 다시 본다. offset을 밀어 뒤 멤버를 가리지 않게 한다.
+                    // 실패도 처리량에 센다 — 안 세면 실패가 이어질 때 한 주기가 장부 끝까지 돈다
                     log.warn("만료 처리 실패 screeningId={} holdId={} — 건너뛴다",
                         hold.screeningId(), hold.holdId(), e);
                     failed++;
                     offset++;
+                    handled++;
+                }
+
+                if (handled >= BookingPolicy.EXPIRY_SCAN_BATCH) {
+                    break;   // 한 주기 상한. 남은 건은 다음 주기가 이어받는다
                 }
             }
 

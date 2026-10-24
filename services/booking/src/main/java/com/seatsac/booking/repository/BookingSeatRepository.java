@@ -41,4 +41,25 @@ public interface BookingSeatRepository extends JpaRepository<BookingSeat, Bookin
          where bs.screeningId = :screeningId
         """)
     List<Object[]> findSeatStatusesByScreeningId(@Param("screeningId") Long screeningId);
+
+    /**
+     * 회차별 선점·확정 좌석 수 (내부 API, 호출자 catalog). <b>한 번의 그룹 집계</b>로 끝낸다 —
+     * catalog는 300ms 안에 받아야 하고, 넘기면 잔여석을 총 좌석 수로 대체한다.
+     *
+     * <p>{@code uk_booking_seat_screening_seat} 범위만 읽고, 예매가 없는 회차는 결과에 안 나온다
+     * (부르는 쪽이 0으로 채운다).
+     *
+     * @return {@code [screeningId, status, count]} 행들
+     */
+    @Query("""
+        select bs.screeningId, b.status, count(bs)
+          from BookingSeat bs
+          join Booking b on b.bookingId = bs.id.bookingId
+         where bs.screeningId in :screeningIds
+           and b.status in :statuses
+         group by bs.screeningId, b.status
+        """)
+    List<Object[]> countSeatsByScreeningIdInAndStatusIn(
+        @Param("screeningIds") List<Long> screeningIds,
+        @Param("statuses") List<BookingStatus> statuses);
 }

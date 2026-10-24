@@ -144,9 +144,11 @@ components:
           enum: [CARD_DECLINED, INSUFFICIENT_BALANCE, PROCESSING_TIMEOUT, null]
           description: |
             CARD_DECLINED·INSUFFICIENT_BALANCE는 모의 판정 결과(5장).
-            PROCESSING_TIMEOUT은 판정 중 파드가 죽어 PROCESSING으로 남은 행을 payment가 기동 시
-            FAILED로 닫은 경우다(명세 3·7장) — 승인된 적이 없으므로 booking은 결제 실패로 보고
-            좌석을 풀면 된다.
+            PROCESSING_TIMEOUT은 판정 중 파드가 죽어 PROCESSING으로 남은 행을 payment가
+            기동 시와 그 뒤 주기 정리(1분)로 FAILED로 닫은 경우다(명세 3·7장) — 승인된 적이
+            없으므로 booking은 결제 실패로 보고 좌석을 풀면 된다.
+            이 값은 내부 코드다. booking은 외부 응답(PayResult·Booking)의 failureCode로
+            그대로 흘리지 않고 null로 바꿔 「결제 실패」로만 보여 준다.
         cancelReason:
           oneOf:
             - type: "null"

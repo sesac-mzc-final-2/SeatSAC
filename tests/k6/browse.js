@@ -33,6 +33,9 @@ export const options = {
     browse_screenings: ["p(95)<100"],
     browse_seats: ["p(95)<200"],
     http_req_failed: ["rate==0"],
+    // check 실패는 그 자체로 run을 실패시키지 않는다. 응답 모양(seq·seats)이 깨지면
+    // 200·p95는 멀쩡해도 측정이 무의미하므로 임계값으로 묶어 둔다
+    checks: ["rate==1"],
   },
 };
 

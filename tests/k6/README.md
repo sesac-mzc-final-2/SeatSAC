@@ -17,7 +17,7 @@
 Cognito 테스트 계정으로 **미리 발급**해 쉼표로 넘긴다. k6 안에서 로그인하지 않는다(인증 쪽에 불필요한 부하를 주지 않기 위해).
 
 ```bash
-K6_TOKENS="eyJ...,eyJ...,eyJ..."
+export K6_TOKENS="eyJ...,eyJ...,eyJ..."   # 아래 실행 예가 이 변수를 그대로 쓴다
 ```
 
 > **같은 좌석 경쟁 시나리오는 토큰이 VU 수만큼 필요하다.** booking은 **회차당 선점 1건**만 허용하므로(`user-hold`), 토큰이 겹치면 두 번째 요청이 좌석 때문이 아니라 사용자 제한(`ACTIVE_HOLD_EXISTS`)으로 막힌다 — 재려던 것이 가려진다. 그래서 스크립트가 `setup()`에서 토큰 수를 확인하고 부족하면 **바로 멈춘다**.
@@ -34,21 +34,23 @@ K6_TOKENS="eyJ...,eyJ...,eyJ..."
 
 ### 다시 돌릴 때
 
-선점 TTL이 **300초**다. 같은 좌석으로 다시 돌리려면 그만큼 기다리거나 `DELETE /bookings/{id}/hold`로 풀어 둔다. `deploy`는 확정(결제 승인)을 만들기 때문에 **같은 좌석을 두 번 쓸 수 없다** — `SEAT_ID_FROM`을 옮기거나 회차를 바꾼다.
+선점 TTL이 **300초**다. 같은 좌석으로 다시 돌리려면 그만큼 기다리거나 `DELETE /bookings/{id}/hold`로 풀어 둔다.
+
+`deploy`는 확정한 예매를 **바로 취소해 좌석을 반납**하므로 한 번 돌리는 동안에는 좌석이 계속 돌아간다(그렇게 하지 않으면 `SEATS_PER_VU`번 반복한 뒤 선점이 전부 409가 되고 결제 경로가 돌지 않는다). 다만 중간에 끊으면 확정된 예매가 남을 수 있으니 다시 돌리기 전에 `hold_conflict_rate`를 보고, 높으면 `SEAT_ID_FROM`을 옮긴다.
 
 ## 실행 예
 
 ```bash
 # 같은 좌석 100명 (토큰 100개 필요)
 k6 run -e BASE_URL=http://gateway:8080 -e SCREENING_ID=5123 -e SEAT_ID=4060121 \
-       -e K6_TOKENS="$TOKENS" tests/k6/seat-hold-contention.js
+       -e K6_TOKENS="$K6_TOKENS" tests/k6/seat-hold-contention.js
 
 # 조회 (토큰 불필요)
 k6 run -e SCREENING_IDS=5123,5124,5125 tests/k6/browse.js
 
 # 배포 중 부하 — 띄워 둔 상태에서 새 버전을 배포한다
 k6 run -e SCREENING_ID=5123 -e SEAT_ID_FROM=4060001 -e VUS=10 -e SEATS_PER_VU=20 \
-       -e DURATION=5m -e K6_TOKENS="$TOKENS" tests/k6/deploy-during-load.js
+       -e DURATION=5m -e K6_TOKENS="$K6_TOKENS" tests/k6/deploy-during-load.js
 ```
 
 ## 읽는 법 — 0이어야 하는 것
@@ -57,7 +59,13 @@ k6 run -e SCREENING_ID=5123 -e SEAT_ID_FROM=4060001 -e VUS=10 -e SEATS_PER_VU=20
 - **`hold_active_hold`** — contention에서 0이 아니면 **토큰이 부족한 것**이고 측정이 무효다
 - **`payment_result_unknown`** — 지연 카드(`9999`)를 쓰지 않았는데 0이 아니면 Payment 응답이 3초를 넘긴 것이다. 그 자체로 오류는 아니지만(예매는 `PENDING`이고 재조회로 확정) 전환 중이라면 들여다볼 신호다
 
-503 `PAYMENT_RESULT_UNKNOWN`은 **실패로 세지 않는다** — 설계상 「결과 미확인」이고 화면이 단건 조회로 복구한다. 그 밖의 5xx는 전부 실패다.
+- **`payment_unresolved`** — 503 뒤 단건 조회로 종료 상태(`CONFIRMED`·`PAYMENT_FAILED`·`EXPIRED`·`CANCELED`)를 끝까지 못 본 건이다. 0이어야 한다
+- **`bookings_canceled`** — 좌석 반납 수. 확정 수와 크게 다르면 취소가 밀린 것이다
+- **`hold_conflict_rate`** — 선점 409 비율. 10%를 넘으면 좌석 구간이 겹쳤거나 반납이 밀렸다
+
+> k6 안에서만 쓰는 메트릭이다(위 `hold_*`·`browse_*`·`server_errors` 포함). Prometheus로 수집하지 않으므로 `docs/conventions.md` 7장의 서비스 메트릭 이름 규칙(`{service}_{대상}_{단위}`)과는 별개다 — k6 Job 로그와 임계값에서만 쓴다.
+
+503 `PAYMENT_RESULT_UNKNOWN`은 **실패로 세지 않는다** — 설계상 「결과 미확인」이고 화면이 단건 조회로 복구한다. 그 밖의 5xx는 전부 실패다 — 배포 중 gateway가 내는 503 `SERVICE_UNAVAILABLE`도 포함이다(면제는 결제 경로의 `PAYMENT_RESULT_UNKNOWN` 하나뿐이다).
 
 ## 아직 k6로 재지 않는 것
 

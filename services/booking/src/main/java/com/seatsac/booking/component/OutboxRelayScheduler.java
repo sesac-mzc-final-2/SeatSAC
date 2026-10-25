@@ -3,7 +3,6 @@ package com.seatsac.booking.component;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -27,8 +26,10 @@ public class OutboxRelayScheduler {
     public void relay() {
         try {
             relay.relayOnce();
-        } catch (DataAccessException e) {
-            // 다음 주기가 이어받는다. 스케줄러 스레드에서 예외가 나가면 이후 주기가 멈춘다
+        } catch (RuntimeException e) {
+            // 마지막 방어선이다. 건별 오류는 OutboxRelay가 eventId와 함께 남기고 넘어가므로
+            // 여기까지 오는 것은 조회 자체가 실패한 경우다. 스케줄러 스레드로 예외가 나가면
+            // fixedDelay 주기가 더 이상 돌지 않으니 반드시 삼킨다
             log.warn("아웃박스 릴레이 주기 실패 — 다음 주기에 다시 본다: {}", e.getMessage());
         }
     }

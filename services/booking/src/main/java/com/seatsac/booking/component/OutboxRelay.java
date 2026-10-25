@@ -85,13 +85,23 @@ public class OutboxRelay {
         }
 
         int sent = 0;
+        int errors = 0;
         for (OutboxMessage message : due) {
-            if (relay(message)) {
-                sent++;
+            // 건별로 감싼다 — 한 건의 DB 오류가 배치를 끊으면 뒤에 있는 메시지는 이 주기에
+            // 아예 처리되지 않고, 앞 건이 계속 실패하면 같은 자리에서 영구히 막힌다
+            // (만료 스캔 HoldExpirySweeper와 같은 이유)
+            try {
+                if (relay(message)) {
+                    sent++;
+                }
+            } catch (RuntimeException e) {
+                errors++;
+                log.error("아웃박스 한 건 처리 실패 — 다음 건으로 넘어간다 eventId={} bookingId={}",
+                    message.getMessageKey(), message.getAggregateId(), e);
             }
         }
-        if (sent > 0 || due.size() > 1) {
-            log.info("아웃박스 릴레이 집은건수={} 보냄={}", due.size(), sent);
+        if (sent > 0 || errors > 0 || due.size() > 1) {
+            log.info("아웃박스 릴레이 집은건수={} 보냄={} 오류={}", due.size(), sent, errors);
         }
         return sent;
     }

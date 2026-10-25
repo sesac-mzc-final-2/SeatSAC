@@ -1,6 +1,8 @@
 package com.seatsac.booking.component;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.doThrow;
@@ -35,7 +37,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 /**
  * 3.2.6 아웃박스 릴레이 — 점유·전송·재시도·한도. SQS는 포트({@link NotificationPublisher})를
@@ -90,8 +94,8 @@ class OutboxRelayFlowTest {
 
     @Autowired
     OutboxRelay relay;
-    @Autowired
-    OutboxMessageRepository outboxRepository;
+    @MockitoSpyBean
+    OutboxMessageRepository outboxRepository;   // 한 건만 DB 예외를 내게 하려고 spy로 받는다
     @Autowired
     MeterRegistry meterRegistry;
     @Autowired
@@ -113,7 +117,7 @@ class OutboxRelayFlowTest {
 
     private OutboxMessage save(long bookingId, Instant nextAttemptAt) {
         OutboxMessage message = OutboxMessage.pending(UUID.randomUUID().toString(),
-            OutboxEventType.BOOKING_CONFIRMED, bookingId, "{\"eventId\":\"x\"}",
+            OutboxEventType.BOOKING_CONFIRMED, bookingId, "{\"bookingId\":" + bookingId + "}",
             "0123456789abcdef0123456789abcdef", nextAttemptAt);
         return outboxRepository.saveAndFlush(message);
     }
@@ -142,7 +146,7 @@ class OutboxRelayFlowTest {
         then(publisher).should().publish(eq("booking.confirmed"),
             eq("0123456789abcdef0123456789abcdef"), payload.capture());
         assertThat(new ObjectMapper().readTree(payload.getValue()))
-            .isEqualTo(new ObjectMapper().readTree("{\"eventId\":\"x\"}"));
+            .isEqualTo(new ObjectMapper().readTree("{\"bookingId\":1001}"));
     }
 
     @Test
@@ -325,6 +329,21 @@ class OutboxRelayFlowTest {
     }
 
     @Test
+    @DisplayName("한 건이 DB 예외로 터져도 나머지를 계속 보낸다 — 앞 건이 배치를 막지 않는다")
+    void oneFailureDoesNotStopBatch() {
+        OutboxMessage first = save(6001L, NOW.minusSeconds(10));   // 먼저 집히는 건
+        save(6002L, NOW.minusSeconds(5));
+        save(6003L, NOW.minusSeconds(1));
+        // 첫 건의 점유에서 DB 오류가 난다. 발행 실패는 relay가 삼켜 재시도로 처리하므로
+        // 배치가 끊기는 경우는 이렇게 relay 안쪽에서 터지는 예외다
+        doThrow(new DataIntegrityViolationException("점유 실패"))
+            .when(outboxRepository).claim(eq(first.getOutboxId()), any(), any(), anyInt(), anyInt());
+
+        assertThat(relay.relayOnce()).isEqualTo(2);   // 나머지 2건은 보냈다
+        assertThat(outboxRepository.countUnsent()).isEqualTo(1);   // 첫 건만 남았다
+    }
+
+    @Test
     @DisplayName("오래 기다린 메시지를 먼저 보낸다 — 노드 0대 구간 뒤 밀린 알림")
     void sendsOldestFirst() {
         OutboxMessage old = save(3001L, NOW.minus(Duration.ofHours(9)));
@@ -365,6 +384,6 @@ class OutboxRelayFlowTest {
         save(5001L, NOW);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> save(5001L, NOW))
-            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            .isInstanceOf(DataIntegrityViolationException.class);
     }
 }

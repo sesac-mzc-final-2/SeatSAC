@@ -86,7 +86,7 @@ public class OutboxRelay {
 
         int sent = 0;
         for (OutboxMessage message : due) {
-            if (relay(message, now)) {
+            if (relay(message)) {
                 sent++;
             }
         }
@@ -96,15 +96,23 @@ public class OutboxRelay {
         return sent;
     }
 
-    /** @return 보냈으면 true. 다른 파드가 먼저 집었거나 실패하면 false */
-    private boolean relay(OutboxMessage message, Instant now) {
+    /**
+     * 한 건. 점유 시각은 <b>건마다 다시 구한다</b> — 배치 시작 시각으로 계산하면 뒤쪽 건의
+     * 실제 점유 시간이 30초보다 짧아져 전송 중에 만료되고, 다른 파드가 이어받아 중복이 늘어난다.
+     *
+     * @return 보냈으면 true. 다른 파드가 먼저 집었거나 실패하면 false
+     */
+    private boolean relay(OutboxMessage message) {
         Long outboxId = message.getOutboxId();
-        Instant claimUntil = now.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT);
-        if (outboxRepository.claim(outboxId, claimUntil, now) == 0) {
-            return false;   // 다른 파드가 집었다
+        Instant claimedAt = clock.instant();
+        Instant claimUntil = claimedAt.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT);
+        if (outboxRepository.claim(outboxId, claimUntil, claimedAt,
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS) == 0) {
+            failIfExhausted(message, claimedAt);
+            return false;   // 다른 파드가 집었거나 한도에 닿았다
         }
 
-        int attempt = message.getAttemptCount() + 1;   // 점유가 올린 값
+        int attempt = message.getAttemptCount() + 1;   // 점유가 올린 값 = 이번 시도의 토큰
         try {
             publisher.publish(message.getEventType().messageType(), message.getTraceId(),
                 message.getPayload());
@@ -113,11 +121,36 @@ public class OutboxRelay {
             return false;
         }
 
-        outboxRepository.markSent(outboxId, clock.instant());
+        if (outboxRepository.markSent(outboxId, attempt, clock.instant()) == 0) {
+            // 내 점유가 만료되고 다른 파드가 이어받았다. 그쪽 상태를 덮어쓰지 않는다
+            log.warn("보냈지만 점유가 이미 넘어갔다 — 중복 발행 가능 eventId={}", message.getMessageKey());
+        }
         count("sent");
         log.info("알림 발행 eventId={} type={} bookingId={} 시도={}", message.getMessageKey(),
             message.getEventType().messageType(), message.getAggregateId(), attempt);
         return true;
+    }
+
+    /**
+     * 점유만 하고 <b>전송 전에 죽은</b> 파드가 남긴 행을 닫는다.
+     *
+     * <p>그 경우 {@link #recordFailure}가 돌지 못해 상태가 {@code SENDING}에 머물고
+     * {@code attempt_count}만 늘어난다. 점유 조건에 한도를 걸어 두면 한도에 닿은 뒤로는
+     * 아무도 집지 못하므로, 여기서 {@code FAILED}로 닫고 경보를 남긴다. 닫지 않으면
+     * 그 행은 영원히 {@code SENDING}으로 남아 {@code booking_outbox_pending}에 쌓인다.
+     */
+    private void failIfExhausted(OutboxMessage message, Instant now) {
+        if (message.getAttemptCount() < BookingPolicy.OUTBOX_MAX_ATTEMPTS) {
+            return;   // 흔한 경우 — 다른 파드가 먼저 집었다. 쿼리를 더 보내지 않는다
+        }
+        int closed = outboxRepository.failExhausted(message.getOutboxId(),
+            "점유 만료 — 재시도 한도 도달(전송 전에 파드가 멈췄을 수 있다)", now,
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS);
+        if (closed > 0) {
+            count("failed");
+            log.error("알림 발행 점유가 한도까지 만료됐다 — 더 보내지 않는다 eventId={} bookingId={} 시도={}",
+                message.getMessageKey(), message.getAggregateId(), message.getAttemptCount());
+        }
     }
 
     /**
@@ -129,7 +162,7 @@ public class OutboxRelay {
         Instant now = clock.instant();
 
         if (attempt >= BookingPolicy.OUTBOX_MAX_ATTEMPTS) {
-            outboxRepository.markFailed(message.getOutboxId(), reason, now);
+            outboxRepository.markFailed(message.getOutboxId(), attempt, reason, now);
             count("failed");
             log.error("알림 발행 {}회 실패 — 더 보내지 않는다 eventId={} bookingId={} 원인={}",
                 attempt, message.getMessageKey(), message.getAggregateId(), reason);
@@ -137,7 +170,7 @@ public class OutboxRelay {
         }
 
         Instant next = now.plus(backoff(attempt));
-        outboxRepository.markRetry(message.getOutboxId(), next, reason, now);
+        outboxRepository.markRetry(message.getOutboxId(), attempt, next, reason, now);
         count("retry");
         log.warn("알림 발행 실패 — {} 뒤 다시 보낸다 eventId={} 시도={} 원인={}",
             backoff(attempt), message.getMessageKey(), attempt, reason);

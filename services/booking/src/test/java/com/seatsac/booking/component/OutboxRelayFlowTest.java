@@ -220,7 +220,8 @@ class OutboxRelayFlowTest {
         OutboxMessage saved = save(1006L, NOW);
         // 다른 파드가 집은 상태를 만든다 (전송 직전에 멈춘 모양)
         assertThat(outboxRepository.claim(saved.getOutboxId(),
-            NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), NOW)).isEqualTo(1);
+            NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), NOW,
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
 
         assertThat(relay.relayOnce()).isZero();
         then(publisher).should(never()).publish(anyString(), anyString(), anyString());
@@ -230,6 +231,63 @@ class OutboxRelayFlowTest {
         assertThat(relay.relayOnce()).isEqualTo(1);
         assertThat(outboxRepository.findById(saved.getOutboxId()).orElseThrow().getAttemptCount())
             .isEqualTo(2);   // 점유마다 1씩 — 죽은 파드의 시도도 센다(펜싱)
+    }
+
+    @Test
+    @DisplayName("점유만 하고 죽어 한도에 닿은 행은 FAILED로 닫고 다시 집지 않는다")
+    void closesExhaustedClaim() {
+        OutboxMessage saved = save(1007L, NOW);
+        // 전송 전에 파드가 죽는 상황을 한도까지 반복한다 — 실패 기록이 남지 않는 경로다
+        Instant at = NOW;
+        for (int i = 0; i < BookingPolicy.OUTBOX_MAX_ATTEMPTS; i++) {
+            assertThat(outboxRepository.claim(saved.getOutboxId(),
+                at.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), at,
+                BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
+            at = at.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT).plusSeconds(1);
+        }
+        OutboxMessage stuck = outboxRepository.findById(saved.getOutboxId()).orElseThrow();
+        assertThat(stuck.getStatus()).isEqualTo(OutboxStatus.SENDING);
+        assertThat(stuck.getAttemptCount()).isEqualTo(BookingPolicy.OUTBOX_MAX_ATTEMPTS);
+        double before = counter("failed");
+
+        testClock().set(at);
+        assertThat(relay.relayOnce()).isZero();
+
+        OutboxMessage after = outboxRepository.findById(saved.getOutboxId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(OutboxStatus.FAILED);
+        assertThat(after.getLastError()).contains("점유 만료");
+        assertThat(counter("failed")).isEqualTo(before + 1);
+        then(publisher).should(never()).publish(anyString(), anyString(), anyString());
+
+        // 닫힌 뒤에는 보내지 않는다 (예전에는 영원히 재점유됐다)
+        testClock().set(at.plusSeconds(600));
+        assertThat(relay.relayOnce()).isZero();
+        assertThat(outboxRepository.countUnsent()).isZero();
+    }
+
+    @Test
+    @DisplayName("점유가 넘어간 뒤 늦게 도착한 결과는 다른 파드의 상태를 덮어쓰지 않는다")
+    void lateResultDoesNotOverwriteNewerClaim() {
+        OutboxMessage saved = save(1008L, NOW);
+        // 내 점유(시도 1)
+        assertThat(outboxRepository.claim(saved.getOutboxId(),
+            NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), NOW,
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
+        // 점유가 만료되고 다른 파드가 이어받는다(시도 2)
+        Instant later = NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT).plusSeconds(1);
+        assertThat(outboxRepository.claim(saved.getOutboxId(),
+            later.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), later,
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
+
+        // 늦게 돌아온 내 결과(시도 1)는 반영되지 않는다
+        assertThat(outboxRepository.markSent(saved.getOutboxId(), 1, later)).isZero();
+        assertThat(outboxRepository.findById(saved.getOutboxId()).orElseThrow().getStatus())
+            .isEqualTo(OutboxStatus.SENDING);
+
+        // 이어받은 쪽(시도 2)의 결과는 반영된다
+        assertThat(outboxRepository.markSent(saved.getOutboxId(), 2, later)).isEqualTo(1);
+        assertThat(outboxRepository.findById(saved.getOutboxId()).orElseThrow().getStatus())
+            .isEqualTo(OutboxStatus.SENT);
     }
 
     @Test

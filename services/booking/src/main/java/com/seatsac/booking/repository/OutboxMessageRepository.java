@@ -47,9 +47,16 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
      * (미리보기 파드에서도 릴레이가 돈다 — 런타임 계약 2장).
      *
      * <p>{@code attempt_count}를 점유 때 올린다. 호출 중에 죽어도 횟수가 늘어나므로
-     * 재시도 한도가 무한정 늘어나지 않는다(펜싱).
+     * 재시도 한도가 무한정 늘어나지 않는다(펜싱). 그 값은 <b>결과를 기록할 때 조건으로 쓰는
+     * 토큰</b>이기도 하다 — 내 점유가 만료되고 다른 파드가 이어받은 뒤에 내가 늦게 결과를
+     * 쓰면 그쪽 상태를 덮어쓰게 되므로, {@code markSent} 등이 이 값을 함께 본다.
      *
-     * @return 1이면 내가 보낼 차례, 0이면 다른 파드가 먼저 집었거나 이미 끝난 메시지다
+     * <p>{@code attemptCount < :maxAttempts} 조건이 필요한 이유: 점유만 하고 전송 전에 죽은
+     * 파드는 실패를 기록하지 못한다. 그 행은 점유가 만료되면 다시 집히는데, 이 조건이 없으면
+     * <b>한도와 무관하게 영원히 재점유</b>된다. 한도에 닿은 행은
+     * {@link #failExhausted}가 닫는다.
+     *
+     * @return 1이면 내가 보낼 차례, 0이면 다른 파드가 먼저 집었거나 한도에 닿은 메시지다
      */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
@@ -63,11 +70,31 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
            and m.status in (com.seatsac.booking.enums.OutboxStatus.PENDING,
                             com.seatsac.booking.enums.OutboxStatus.SENDING)
            and m.nextAttemptAt <= :now
+           and m.attemptCount < :maxAttempts
         """)
     int claim(@Param("outboxId") Long outboxId, @Param("claimUntil") Instant claimUntil,
-              @Param("now") Instant now);
+              @Param("now") Instant now, @Param("maxAttempts") int maxAttempts);
 
-    /** 전송 성공. 점유한 쪽만 기록한다 */
+    /**
+     * 점유만 하고 전송 전에 죽어 <b>한도에 닿은 채 {@code SENDING}으로 남은</b> 행을 닫는다.
+     * 조건(점유 만료 + 한도 도달)을 UPDATE에 걸어, 여러 파드가 동시에 봐도 한 곳만 1을 받는다.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update OutboxMessage m
+           set m.status = com.seatsac.booking.enums.OutboxStatus.FAILED,
+               m.lastError = :lastError,
+               m.updatedAt = :now
+         where m.outboxId = :outboxId
+           and m.status = com.seatsac.booking.enums.OutboxStatus.SENDING
+           and m.nextAttemptAt <= :now
+           and m.attemptCount >= :maxAttempts
+        """)
+    int failExhausted(@Param("outboxId") Long outboxId, @Param("lastError") String lastError,
+                      @Param("now") Instant now, @Param("maxAttempts") int maxAttempts);
+
+    /** 전송 성공. <b>내 점유</b>({@code attemptCount})일 때만 기록한다 */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -78,8 +105,10 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
                m.updatedAt = :now
          where m.outboxId = :outboxId
            and m.status = com.seatsac.booking.enums.OutboxStatus.SENDING
+           and m.attemptCount = :attempt
         """)
-    int markSent(@Param("outboxId") Long outboxId, @Param("now") Instant now);
+    int markSent(@Param("outboxId") Long outboxId, @Param("attempt") int attempt,
+                 @Param("now") Instant now);
 
     /** 전송 실패 — 다음 시도 시각을 두고 되돌린다 */
     @Transactional
@@ -92,8 +121,10 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
                m.updatedAt = :now
          where m.outboxId = :outboxId
            and m.status = com.seatsac.booking.enums.OutboxStatus.SENDING
+           and m.attemptCount = :attempt
         """)
-    int markRetry(@Param("outboxId") Long outboxId, @Param("nextAttemptAt") Instant nextAttemptAt,
+    int markRetry(@Param("outboxId") Long outboxId, @Param("attempt") int attempt,
+                  @Param("nextAttemptAt") Instant nextAttemptAt,
                   @Param("lastError") String lastError, @Param("now") Instant now);
 
     /** 재시도 한도 초과 — 더 보내지 않는다(경보 대상) */
@@ -106,9 +137,10 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
                m.updatedAt = :now
          where m.outboxId = :outboxId
            and m.status = com.seatsac.booking.enums.OutboxStatus.SENDING
+           and m.attemptCount = :attempt
         """)
-    int markFailed(@Param("outboxId") Long outboxId, @Param("lastError") String lastError,
-                   @Param("now") Instant now);
+    int markFailed(@Param("outboxId") Long outboxId, @Param("attempt") int attempt,
+                   @Param("lastError") String lastError, @Param("now") Instant now);
 
     /** 아직 보내지 못한 건수 — 지표 {@code booking_outbox_pending} */
     @Query("""

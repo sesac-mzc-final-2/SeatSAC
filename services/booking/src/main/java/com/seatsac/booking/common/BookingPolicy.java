@@ -33,6 +33,9 @@ public final class BookingPolicy {
     public static final int SCREENING_CACHE_SIZE = 2_000;
     public static final int LAYOUT_CACHE_SIZE = 200;
 
+    /** 내부 좌석 수 조회의 회차 상한 (계약 {@code maxItems: 100}). catalog가 100개씩 나눠 보낸다 */
+    public static final int MAX_SEAT_COUNT_IDS = 100;
+
     /** SSE 하트비트 간격과 재연결 지시 값 */
     /**
      * 고아 키 판정을 유예하는 시간. {@code hold.lua}는 RDS 커밋 <b>전에</b> {@code user-hold}와

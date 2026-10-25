@@ -63,7 +63,7 @@ public class BookingDetailService {
         if (booking.getCurrentPaymentId() == null) {
             return null;
         }
-        PaymentResult payment = paymentClient.find(booking.getCurrentPaymentId()).orElse(null);
+        PaymentResult payment = findPayment(booking.getCurrentPaymentId());
         if (payment == null || booking.getStatus() != BookingStatus.PENDING) {
             return payment;
         }
@@ -75,6 +75,19 @@ public class BookingDetailService {
         }
         // PROCESSING이면 그대로 둔다 — 아직 결과를 모른다
         return payment;
+    }
+
+    /**
+     * 결제 조회. 서킷이 열리면 {@code CallNotPermittedException}이 {@code find()} 밖에서 터지므로
+     * 여기서 삼킨다 — 결제를 못 봐도 <b>예매 조회 자체는 200</b>이어야 한다(화면이 재시도한다).
+     */
+    private PaymentResult findPayment(String paymentId) {
+        try {
+            return paymentClient.find(paymentId).orElse(null);
+        } catch (RuntimeException e) {
+            log.warn("결제 조회 실패(서킷 열림 포함) paymentId={} — 결제 정보 없이 응답한다", paymentId);
+            return null;
+        }
     }
 
     private static boolean holdsSeats(Booking booking) {

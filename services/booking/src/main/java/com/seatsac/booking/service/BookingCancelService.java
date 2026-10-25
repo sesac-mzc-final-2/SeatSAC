@@ -47,7 +47,10 @@ public class BookingCancelService {
             throw BookingErrorCode.NOT_OWNER.exception();
         }
         if (booking.isCanceled()) {
-            return BookingCancelResponse.from(booking, paymentViewOf(booking));   // 멱등
+            // 멱등 응답. 다만 앞선 요청의 환불이 실패했을 수 있다 — 결제가 아직 APPROVED면
+            // 여기서 다시 취소한다(PAY-03은 멱등). 이 재시도 경로가 없으면 「취소된 예매 +
+            // 승인된 결제」가 영구히 남는다
+            return BookingCancelResponse.from(booking, retryRefundIfNeeded(booking));
         }
         if (!booking.isConfirmed()) {
             // 선점 중 취소는 BKG-03 해제다. 결제 실패·만료는 이미 끝난 예매다
@@ -91,11 +94,46 @@ public class BookingCancelService {
         }
     }
 
+    /**
+     * 이미 취소된 예매의 결제가 아직 {@code APPROVED}면 환불을 다시 시도한다.
+     * 앞선 요청에서 환불 호출이 실패한 경우를 이 경로가 복구한다.
+     */
+    private PaymentView retryRefundIfNeeded(Booking booking) {
+        PaymentResult current = findPayment(booking);
+        if (current == null || !"APPROVED".equals(current.status())) {
+            return viewOf(current);
+        }
+        log.warn("취소된 예매의 결제가 아직 승인 상태다 — 환불을 다시 시도한다 bookingId={} paymentId={}",
+            booking.getBookingId(), current.paymentId());
+        PaymentView retried = refund(booking);
+        return retried != null ? retried : viewOf(current);
+    }
+
     private PaymentView paymentViewOf(Booking booking) {
-        return Optional.ofNullable(booking.getCurrentPaymentId())
-            .flatMap(paymentClient::find)
-            .map(result -> PaymentView.of(result.paymentId(), result.status(), result.cardLast4(),
-                result.publicFailureCode(), result.approvedAt(), result.canceledAt()))
+        return viewOf(findPayment(booking));
+    }
+
+    /**
+     * 결제 조회. <b>서킷이 열리면</b> {@code CallNotPermittedException}이 {@code find()} 밖에서
+     * 터진다 — 그것까지 삼켜야 「이미 취소된 예매를 다시 취소」가 200으로 끝난다.
+     */
+    private PaymentResult findPayment(Booking booking) {
+        if (booking.getCurrentPaymentId() == null) {
+            return null;
+        }
+        try {
+            return paymentClient.find(booking.getCurrentPaymentId()).orElse(null);
+        } catch (RuntimeException e) {
+            log.warn("결제 조회 실패(서킷 열림 포함) bookingId={} — 결제 정보 없이 응답한다",
+                booking.getBookingId());
+            return null;
+        }
+    }
+
+    private static PaymentView viewOf(PaymentResult result) {
+        return Optional.ofNullable(result)
+            .map(r -> PaymentView.of(r.paymentId(), r.status(), r.cardLast4(),
+                r.publicFailureCode(), r.approvedAt(), r.canceledAt()))
             .orElse(null);
     }
 

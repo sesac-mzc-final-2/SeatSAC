@@ -65,7 +65,9 @@ public class BookingPaymentService {
             : resultApplier.applyDeclined(booking, now);
 
         return switch (applied) {
-            case CONFIRMED -> response(booking, BookingStatus.CONFIRMED, Times.toApi(now), payment);
+            // 내가 확정했거나, 폴링 경로가 먼저 확정했거나 — 사용자가 원한 결과는 같다
+            case CONFIRMED, ALREADY_CONFIRMED ->
+                response(booking, BookingStatus.CONFIRMED, confirmedAt(bookingId, now), payment);
             case FAILED -> response(booking, BookingStatus.PAYMENT_FAILED, null, payment);
             case EXPIRED_REFUNDED -> throw BookingErrorCode.HOLD_EXPIRED.exception(
                 ErrorDetail.of("status", BookingStatus.EXPIRED.name(),
@@ -111,6 +113,14 @@ public class BookingPaymentService {
         }
         return BookingErrorCode.BOOKING_NOT_PENDING.exception(ErrorDetail.of("status",
             current.getStatus().name(), BookingErrorCode.BOOKING_NOT_PENDING.name()));
+    }
+
+    /** 다른 경로가 확정했다면 그쪽이 쓴 시각을 쓴다 */
+    private java.time.OffsetDateTime confirmedAt(Long bookingId, Instant fallback) {
+        return bookingReader.findById(bookingId)
+            .map(Booking::getConfirmedAt)
+            .map(Times::toApi)
+            .orElse(Times.toApi(fallback));
     }
 
     private static BookingPaymentResponse response(Booking booking, BookingStatus status,

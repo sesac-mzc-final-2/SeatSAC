@@ -42,13 +42,15 @@ public class BookingPaymentResultApplier {
 
     /** 반영 결과 — 부르는 쪽이 응답(200·409)을 고른다 */
     public enum Applied {
-        /** 확정했다 (아웃박스 행도 들어갔다) */
+        /** 내가 확정했다 (아웃박스 행도 들어갔다) */
         CONFIRMED,
-        /** 승인을 받았지만 그 사이 만료돼 확정하지 못했다. 결제는 취소(환불)했다 */
+        /** <b>다른 경로가 이미 확정했다.</b> 환불하지 않는다 — 예매도 결제도 유효하다 */
+        ALREADY_CONFIRMED,
+        /** 승인을 받았지만 확정할 수 없는 상태였다(만료·취소). 결제는 취소(환불)했다 */
         EXPIRED_REFUNDED,
         /** 거절을 반영했다 (좌석을 풀었다) */
         FAILED,
-        /** 이미 다른 경로가 처리했다 (만료·취소 등) */
+        /** 이미 다른 경로가 처리했다 (거절 반영을 못 한 경우) */
         ALREADY_SETTLED
     }
 
@@ -67,7 +69,19 @@ public class BookingPaymentResultApplier {
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(booking.getBookingId());
 
         if (!bookingState.confirmWithOutbox(booking.getBookingId(), messageKey, payload, traceId, now)) {
-            log.warn("승인 뒤 확정 실패(그 사이 만료) — 결제를 취소한다 bookingId={} paymentId={}",
+            // 0행인 이유가 두 가지다 — 만료됐거나, 그 사이 <b>다른 경로가 이미 확정</b>했거나.
+            // 두 경로(BKG-10 응답·단건 조회 폴링)가 겹치면 후자가 생긴다. 그때 환불하면
+            // 「확정된 예매 + 환불된 결제」가 되므로 현재 상태를 반드시 다시 읽는다
+            boolean alreadyConfirmed = bookingReader.findById(booking.getBookingId())
+                .map(Booking::isConfirmed)
+                .orElse(false);
+            if (alreadyConfirmed) {
+                log.info("다른 경로가 먼저 확정했다 — 환불하지 않는다 bookingId={} paymentId={}",
+                    booking.getBookingId(), payment.paymentId());
+                return Applied.ALREADY_CONFIRMED;
+            }
+
+            log.warn("승인 뒤 확정 실패(만료·취소) — 결제를 취소한다 bookingId={} paymentId={}",
                 booking.getBookingId(), payment.paymentId());
             cancelPayment(payment.paymentId(), PaymentCancelReason.HOLD_EXPIRED);
             return Applied.EXPIRED_REFUNDED;

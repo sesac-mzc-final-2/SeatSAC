@@ -3,8 +3,11 @@ package com.seatsac.booking.service;
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.entity.Booking;
 import com.seatsac.booking.entity.BookingSeat;
+import com.seatsac.booking.entity.OutboxMessage;
+import com.seatsac.booking.enums.OutboxEventType;
 import com.seatsac.booking.repository.BookingRepository;
 import com.seatsac.booking.repository.BookingSeatRepository;
+import com.seatsac.booking.repository.OutboxMessageRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +27,7 @@ public class BookingStateService {
 
     private final BookingRepository bookingRepository;
     private final BookingSeatRepository bookingSeatRepository;
+    private final OutboxMessageRepository outboxMessageRepository;
 
     /**
      * BKG-02 6단계 — PENDING 예매와 점유 좌석을 한 트랜잭션으로 저장한다 (명세 5장).
@@ -85,6 +89,65 @@ public class BookingStateService {
             seatLabels = List.copyOf(seatLabels);
         }
     }
+
+    /**
+     * BKG-10 1단계 — 결제 ID를 붙인다. 예매당 1회(ADR-24)를 조건부 UPDATE로 막는다.
+     *
+     * @return 붙였으면 true. false면 이미 결제를 요청했거나 PENDING이 아니거나 선점이 만료됐다
+     */
+    @Transactional
+    public boolean attachPayment(Long bookingId, String paymentId, Instant now) {
+        return bookingRepository.attachPayment(bookingId, paymentId, now) == 1;
+    }
+
+    /**
+     * BKG-06 확정 — <b>한 트랜잭션</b>에서 상태 전이와 아웃박스 INSERT를 함께 한다.
+     * 확정만 커밋되고 알림 행이 없으면 알림이 영영 안 가고, 반대면 없는 예매의 알림이 간다.
+     *
+     * <p>{@code expiresAt > :now}라 승인을 받았는데 그 사이 만료됐으면 0행이다 —
+     * 그때는 아웃박스도 쓰지 않고 부르는 쪽이 결제를 취소(환불)한다.
+     *
+     * @param payload 알림 본문 JSON (Catalog 조회 실패 시 이름·시각이 null인 채로 들어온다)
+     * @return 확정했으면 true
+     */
+    @Transactional
+    public boolean confirmWithOutbox(Long bookingId, String messageKey, String payload,
+                                     String traceId, Instant now) {
+        if (bookingRepository.confirmPending(bookingId, now) == 0) {
+            return false;
+        }
+        outboxMessageRepository.save(OutboxMessage.pending(messageKey,
+            OutboxEventType.BOOKING_CONFIRMED, bookingId, payload, traceId, now));
+        return true;
+    }
+
+    /**
+     * BKG-10 결제 거절 → {@code PAYMENT_FAILED}. 좌석 행을 지워 다른 사용자가 바로 잡을 수 있게 한다.
+     *
+     * @return 처리했으면 true (0행이면 이미 만료·취소가 먼저 끝났다)
+     */
+    @Transactional
+    public boolean failPayment(Long bookingId, Instant now) {
+        if (bookingRepository.failPending(bookingId, now) == 0) {
+            return false;
+        }
+        bookingSeatRepository.deleteByBookingId(bookingId);
+        return true;
+    }
+
+    /**
+     * BKG-07 확정 예매 취소 → {@code CANCELED} + 좌석 행 삭제.
+     * 이미 취소됐으면 0행이라 부르는 쪽이 멱등하게 응답한다.
+     */
+    @Transactional
+    public boolean cancelConfirmed(Long bookingId, Instant now) {
+        if (bookingRepository.cancelConfirmed(bookingId, now) == 0) {
+            return false;
+        }
+        bookingSeatRepository.deleteByBookingId(bookingId);
+        return true;
+    }
+
 
     /**
      * BKG-04 1단계 — 조건부 UPDATE로 EXPIRED로 바꾸고 점유 좌석을 지운다.

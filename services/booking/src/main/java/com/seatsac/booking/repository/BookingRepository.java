@@ -39,6 +39,62 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     int cancelPendingHold(@Param("bookingId") Long bookingId, @Param("now") Instant now);
 
     /**
+     * BKG-10 1단계 — 결제 ID를 붙인다. 예매당 결제 1회(ADR-24)를 여기서 막는다:
+     * {@code current_payment_id}가 비어 있을 때만 1행이고, 두 번째 요청은 0행이라 409다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Booking b
+           set b.currentPaymentId = :paymentId,
+               b.updatedAt = :now
+         where b.bookingId = :bookingId
+           and b.status = com.seatsac.booking.enums.BookingStatus.PENDING
+           and b.currentPaymentId is null
+           and b.expiresAt > :now
+        """)
+    int attachPayment(@Param("bookingId") Long bookingId, @Param("paymentId") String paymentId,
+                      @Param("now") Instant now);
+
+    /**
+     * BKG-06 확정. <b>선점이 아직 살아 있을 때만</b>({@code expiresAt > :now}) 1행이다 —
+     * 승인을 받았는데 그 사이 만료됐으면 0행이고, 부르는 쪽이 결제를 취소한다(환불).
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Booking b
+           set b.status = com.seatsac.booking.enums.BookingStatus.CONFIRMED,
+               b.confirmedAt = :now,
+               b.updatedAt = :now
+         where b.bookingId = :bookingId
+           and b.status = com.seatsac.booking.enums.BookingStatus.PENDING
+           and b.expiresAt > :now
+        """)
+    int confirmPending(@Param("bookingId") Long bookingId, @Param("now") Instant now);
+
+    /** BKG-10 결제 거절 → PAYMENT_FAILED. PENDING일 때만 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Booking b
+           set b.status = com.seatsac.booking.enums.BookingStatus.PAYMENT_FAILED,
+               b.updatedAt = :now
+         where b.bookingId = :bookingId
+           and b.status = com.seatsac.booking.enums.BookingStatus.PENDING
+        """)
+    int failPending(@Param("bookingId") Long bookingId, @Param("now") Instant now);
+
+    /** BKG-07 확정 예매 취소. CONFIRMED일 때만 (멱등: 이미 CANCELED면 0행) */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Booking b
+           set b.status = com.seatsac.booking.enums.BookingStatus.CANCELED,
+               b.canceledAt = :now,
+               b.updatedAt = :now
+         where b.bookingId = :bookingId
+           and b.status = com.seatsac.booking.enums.BookingStatus.CONFIRMED
+        """)
+    int cancelConfirmed(@Param("bookingId") Long bookingId, @Param("now") Instant now);
+
+    /**
      * BKG-04 만료. 조건부 UPDATE라 세 경로(keyspace·장부 스캔·RDS 스캔)와 여러 파드가 겹쳐도
      * 한 번만 처리된다. 확정과 경쟁해도 먼저 커밋한 쪽만 이긴다.
      *

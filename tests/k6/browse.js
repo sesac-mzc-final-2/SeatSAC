@@ -7,11 +7,9 @@
 import http from "k6/http";
 import { check, group } from "k6";
 import { Trend } from "k6/metrics";
-import { BASE } from "./lib/common.js";
+import { BASE, intEnv, intListEnv } from "./lib/common.js";
 
-const SCREENINGS = (__ENV.SCREENING_IDS || "").split(",").filter((s) => s.length > 0);
 const DATE = __ENV.THEATER_DATE || new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
-const THEATER_ID = __ENV.THEATER_ID || "";
 
 const movies = new Trend("browse_movies", true);
 const screenings = new Trend("browse_screenings", true);
@@ -42,15 +40,13 @@ export const options = {
 };
 
 export function setup() {
-  if (SCREENINGS.length === 0) {
-    throw new Error("SCREENING_IDS가 비었다. 시드가 적재된 회차 ID를 쉼표로 넘겨라");
-  }
-  // CAT-03은 date·theaterId 둘 다 required다(contracts/openapi/catalog.openapi.yaml).
-  // 빼고 보내면 400 VALIDATION_FAILED여서 캐시 적중률을 재지 못하고 임계값만 깨진다
-  if (THEATER_ID === "") {
-    throw new Error("THEATER_ID가 비었다. /screenings는 date와 theaterId가 모두 필수다");
-  }
-  return { screeningIds: SCREENINGS.map(Number) };
+  // CAT-03은 date·theaterId 둘 다 required이고 theaterId는 integer다
+  // (contracts/openapi/catalog.openapi.yaml). 빼거나 정수가 아니면 400 VALIDATION_FAILED여서
+  // 캐시 적중률을 재지 못하고 임계값만 깨진다 → 부하를 돌리기 전에 멈춘다
+  return {
+    screeningIds: intListEnv("SCREENING_IDS", "시드가 적재된 회차 ID를 쉼표로 넘겨라"),
+    theaterId: intEnv("THEATER_ID", "/screenings는 date와 theaterId가 모두 필수다"),
+  };
 }
 
 export default function (data) {
@@ -59,7 +55,7 @@ export default function (data) {
     movies.add(list.timings.duration);
     check(list, { "영화 목록 200": (r) => r.status === 200 });
 
-    const byDate = http.get(`${BASE}/screenings?date=${DATE}&theaterId=${THEATER_ID}`, {
+    const byDate = http.get(`${BASE}/screenings?date=${DATE}&theaterId=${data.theaterId}`, {
       tags: { name: "GET /screenings" },
     });
     screenings.add(byDate.timings.duration);

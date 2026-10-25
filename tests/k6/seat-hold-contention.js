@@ -12,7 +12,7 @@
 import http from "k6/http";
 import { check } from "k6";
 import { Counter, Trend } from "k6/metrics";
-import { BASE, authHeaders, reasonOf, requireDistinctTokens, tokenForVu } from "./lib/common.js";
+import { BASE, authHeaders, intEnv, reasonOf, requireDistinctTokens, tokenForVu } from "./lib/common.js";
 
 const VUS = Number(__ENV.VUS || 100);
 
@@ -38,7 +38,11 @@ export const options = {
 
 export function setup() {
   requireDistinctTokens(VUS);
-  return { screeningId: Number(__ENV.SCREENING_ID), seatId: Number(__ENV.SEAT_ID) };
+  // 정수가 아니면 NaN이 URL에 들어가 400이 된다 → 100명을 돌리기 전에 멈춘다
+  return {
+    screeningId: intEnv("SCREENING_ID", "아직 아무도 잡지 않은 회차"),
+    seatId: intEnv("SEAT_ID", "그 회차의 활성 좌석 하나"),
+  };
 }
 
 export default function (data) {

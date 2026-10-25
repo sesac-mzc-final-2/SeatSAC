@@ -18,7 +18,7 @@
 import http from "k6/http";
 import { check, group, sleep } from "k6";
 import { Counter, Rate } from "k6/metrics";
-import { BASE, authHeaders, reasonOf, requireDistinctTokens, tokenForVu } from "./lib/common.js";
+import { BASE, authHeaders, intEnv, reasonOf, requireDistinctTokens, tokenForVu } from "./lib/common.js";
 
 const VUS = Number(__ENV.VUS || 10);
 const SEATS_PER_VU = Number(__ENV.SEATS_PER_VU || 20);
@@ -58,8 +58,8 @@ export const options = {
 export function setup() {
   requireDistinctTokens(VUS);
   return {
-    screeningId: Number(__ENV.SCREENING_ID),
-    seatFrom: Number(__ENV.SEAT_ID_FROM),
+    screeningId: intEnv("SCREENING_ID", "좌석이 VU × SEATS_PER_VU개 이상 남은 회차"),
+    seatFrom: intEnv("SEAT_ID_FROM", "쓸 좌석 ID 시작값 (seat_id = auditorium_id × 10000 + 순번)"),
   };
 }
 

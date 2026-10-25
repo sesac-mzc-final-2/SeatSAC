@@ -66,3 +66,31 @@ export function reasonOf(res) {
     return "";
   }
 }
+
+/**
+ * 양의 정수 환경변수. 비었거나 정수가 아니면 <b>setup에서 바로 멈춘다</b>.
+ *
+ * <p>`Number("abc")`는 NaN이라 그대로 URL에 들어가고, 계약이 `integer`인 경로·쿼리에
+ * 400 VALIDATION_FAILED를 받는다 — 부하를 다 돌린 뒤 임계값이 깨진 이유를 찾는 것보다
+ * 시작 전에 멈추는 게 낫다. ID는 모두 양수다(BIGINT AUTO_INCREMENT).
+ */
+export function intEnv(name, hint) {
+  const raw = (__ENV[name] || "").trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`${name}이 비었거나 양의 정수가 아니다: "${raw}"${hint ? ` — ${hint}` : ""}`);
+  }
+  return Number(raw);
+}
+
+/** 쉼표로 구분한 양의 정수 목록. 하나라도 정수가 아니면 멈춘다 */
+export function intListEnv(name, hint) {
+  const items = (__ENV[name] || "").split(",").map((v) => v.trim()).filter((v) => v.length > 0);
+  if (items.length === 0) {
+    throw new Error(`${name}이 비었다${hint ? ` — ${hint}` : ""}`);
+  }
+  const bad = items.filter((v) => !/^\d+$/.test(v));
+  if (bad.length > 0) {
+    throw new Error(`${name}에 양의 정수가 아닌 값이 있다: ${bad.join(", ")}`);
+  }
+  return items.map(Number);
+}

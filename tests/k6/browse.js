@@ -2,6 +2,7 @@
 //
 // 인증이 필요 없는 경로만 쓴다 — 토큰 없이 돌 수 있어 데모 전 점검에 가볍다.
 //   SCREENING_IDS  쉼표로 구분한 회차 ID 목록 (여러 개여야 캐시 적중률이 의미가 있다)
+//   THEATER_ID     /screenings 조회에 쓸 극장 ID — 계약에서 date와 함께 필수다
 //   THEATER_DATE   /screenings 조회에 쓸 영업일 (기본: 오늘, KST)
 import http from "k6/http";
 import { check, group } from "k6";
@@ -10,6 +11,7 @@ import { BASE } from "./lib/common.js";
 
 const SCREENINGS = (__ENV.SCREENING_IDS || "").split(",").filter((s) => s.length > 0);
 const DATE = __ENV.THEATER_DATE || new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+const THEATER_ID = __ENV.THEATER_ID || "";
 
 const movies = new Trend("browse_movies", true);
 const screenings = new Trend("browse_screenings", true);
@@ -43,6 +45,11 @@ export function setup() {
   if (SCREENINGS.length === 0) {
     throw new Error("SCREENING_IDS가 비었다. 시드가 적재된 회차 ID를 쉼표로 넘겨라");
   }
+  // CAT-03은 date·theaterId 둘 다 required다(contracts/openapi/catalog.openapi.yaml).
+  // 빼고 보내면 400 VALIDATION_FAILED여서 캐시 적중률을 재지 못하고 임계값만 깨진다
+  if (THEATER_ID === "") {
+    throw new Error("THEATER_ID가 비었다. /screenings는 date와 theaterId가 모두 필수다");
+  }
   return { screeningIds: SCREENINGS.map(Number) };
 }
 
@@ -52,7 +59,7 @@ export default function (data) {
     movies.add(list.timings.duration);
     check(list, { "영화 목록 200": (r) => r.status === 200 });
 
-    const byDate = http.get(`${BASE}/screenings?date=${DATE}`, {
+    const byDate = http.get(`${BASE}/screenings?date=${DATE}&theaterId=${THEATER_ID}`, {
       tags: { name: "GET /screenings" },
     });
     screenings.add(byDate.timings.duration);

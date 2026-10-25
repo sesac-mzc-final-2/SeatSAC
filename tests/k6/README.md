@@ -27,7 +27,7 @@ export K6_TOKENS="eyJ...,eyJ...,eyJ..."   # 아래 실행 예가 이 변수를 �
 | 시나리오 | 환경변수 | 조건 |
 | --- | --- | --- |
 | contention | `SCREENING_ID`, `SEAT_ID` | 아직 아무도 잡지 않은 회차의 활성 좌석 하나 |
-| browse | `SCREENING_IDS`(쉼표), `THEATER_DATE` | 시드가 적재된 회차 여러 개 |
+| browse | `SCREENING_IDS`(쉼표), **`THEATER_ID`**, `THEATER_DATE` | 시드가 적재된 회차 여러 개 + 그 극장 ID (`/screenings`는 `date`·`theaterId` 둘 다 필수) |
 | deploy | `SCREENING_ID`, `SEAT_ID_FROM`, `VUS`, `SEATS_PER_VU` | 좌석이 **VU × SEATS_PER_VU**개 이상 남은 회차 |
 
 `seat_id = auditorium_id × 10000 + 순번`이다(시드 규칙). 상영관 하나가 100~300석이라 `deploy`는 VU 10 × 20석 = 200석을 쓰므로 **큰 상영관**을 고른다.
@@ -46,7 +46,7 @@ k6 run -e BASE_URL=http://gateway:8080 -e SCREENING_ID=5123 -e SEAT_ID=4060121 \
        -e K6_TOKENS="$K6_TOKENS" tests/k6/seat-hold-contention.js
 
 # 조회 (토큰 불필요)
-k6 run -e SCREENING_IDS=5123,5124,5125 tests/k6/browse.js
+k6 run -e SCREENING_IDS=5123,5124,5125 -e THEATER_ID=1004 tests/k6/browse.js
 
 # 배포 중 부하 — 띄워 둔 상태에서 새 버전을 배포한다
 k6 run -e SCREENING_ID=5123 -e SEAT_ID_FROM=4060001 -e VUS=10 -e SEATS_PER_VU=20 \

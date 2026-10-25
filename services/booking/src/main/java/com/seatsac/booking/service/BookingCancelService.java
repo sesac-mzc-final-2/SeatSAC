@@ -99,34 +99,51 @@ public class BookingCancelService {
      * 앞선 요청에서 환불 호출이 실패한 경우를 이 경로가 복구한다.
      */
     private PaymentView retryRefundIfNeeded(Booking booking) {
-        PaymentResult current = findPayment(booking);
-        if (current == null || !"APPROVED".equals(current.status())) {
-            return viewOf(current);
+        if (booking.getCurrentPaymentId() == null) {
+            return null;
         }
-        log.warn("취소된 예매의 결제가 아직 승인 상태다 — 환불을 다시 시도한다 bookingId={} paymentId={}",
-            booking.getBookingId(), current.paymentId());
+        Lookup lookup = findPayment(booking);
+        if (lookup.succeeded() && !lookup.isApproved()) {
+            return viewOf(lookup.result());   // 이미 취소됐거나 아직 승인 전 — 할 일이 없다
+        }
+
+        // 승인 상태이거나, <b>조회를 못 해서 모르는</b> 경우다. 조회 실패를 「환불 불필요」로
+        // 읽으면 복구 경로가 다시 막힌다 — 취소는 멱등이니(PAY-03) 한 번 더 부른다
+        log.warn("취소된 예매의 환불을 다시 시도한다 bookingId={} paymentId={} 결제상태={}",
+            booking.getBookingId(), booking.getCurrentPaymentId(),
+            lookup.succeeded() ? lookup.result().status() : "조회실패");
         PaymentView retried = refund(booking);
-        return retried != null ? retried : viewOf(current);
+        return retried != null ? retried : viewOf(lookup.result());
     }
 
     private PaymentView paymentViewOf(Booking booking) {
-        return viewOf(findPayment(booking));
+        return viewOf(findPayment(booking).result());
+    }
+
+    /**
+     * 결제 조회 결과. <b>조회 실패와 「결제 없음」을 구분한다</b> — 둘을 {@code null} 하나로
+     * 합치면 일시적 실패가 「환불할 게 없다」로 읽힌다.
+     */
+    private record Lookup(PaymentResult result, boolean succeeded) {
+        boolean isApproved() {
+            return result != null && "APPROVED".equals(result.status());
+        }
     }
 
     /**
      * 결제 조회. <b>서킷이 열리면</b> {@code CallNotPermittedException}이 {@code find()} 밖에서
      * 터진다 — 그것까지 삼켜야 「이미 취소된 예매를 다시 취소」가 200으로 끝난다.
      */
-    private PaymentResult findPayment(Booking booking) {
+    private Lookup findPayment(Booking booking) {
         if (booking.getCurrentPaymentId() == null) {
-            return null;
+            return new Lookup(null, true);
         }
         try {
-            return paymentClient.find(booking.getCurrentPaymentId()).orElse(null);
+            return new Lookup(paymentClient.find(booking.getCurrentPaymentId()).orElse(null), true);
         } catch (RuntimeException e) {
             log.warn("결제 조회 실패(서킷 열림 포함) bookingId={} — 결제 정보 없이 응답한다",
                 booking.getBookingId());
-            return null;
+            return new Lookup(null, false);
         }
     }
 

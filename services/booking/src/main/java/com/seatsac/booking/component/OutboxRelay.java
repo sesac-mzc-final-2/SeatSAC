@@ -106,13 +106,15 @@ public class OutboxRelay {
         Long outboxId = message.getOutboxId();
         Instant claimedAt = clock.instant();
         Instant claimUntil = claimedAt.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT);
+        // 조회 시점의 attemptCount를 기대값으로 걸어(compare-and-set) 점유한다 →
+        // 성공하면 DB 값이 반드시 조회값+1이므로 아래 attempt 토큰이 실제 값과 어긋나지 않는다
         if (outboxRepository.claim(outboxId, claimUntil, claimedAt,
-            BookingPolicy.OUTBOX_MAX_ATTEMPTS) == 0) {
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS, message.getAttemptCount()) == 0) {
             failIfExhausted(message, claimedAt);
             return false;   // 다른 파드가 집었거나 한도에 닿았다
         }
 
-        int attempt = message.getAttemptCount() + 1;   // 점유가 올린 값 = 이번 시도의 토큰
+        int attempt = message.getAttemptCount() + 1;   // 점유가 올린 값(기대값+1) = 이번 시도의 토큰
         try {
             publisher.publish(message.getEventType().messageType(), message.getTraceId(),
                 message.getPayload());

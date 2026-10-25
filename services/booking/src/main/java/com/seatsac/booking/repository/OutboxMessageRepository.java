@@ -51,6 +51,12 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
      * 토큰</b>이기도 하다 — 내 점유가 만료되고 다른 파드가 이어받은 뒤에 내가 늦게 결과를
      * 쓰면 그쪽 상태를 덮어쓰게 되므로, {@code markSent} 등이 이 값을 함께 본다.
      *
+     * <p>{@code attemptCount = :expectedAttempt}(조회 시점 값)를 조건에 넣어 <b>compare-and-set</b>으로
+     * 만든다. 이것이 없으면 조회와 점유 사이에 다른 파드가 집었다가 점유까지 만료된 경우
+     * 내 점유도 성공하면서 DB 값은 조회값+2가 되는데 내 토큰은 조회값+1이라, 결과 기록이
+     * 0행이 되어 <b>전송은 끝났는데 행이 {@code SENDING}에 남는다</b>. 조건을 걸면 그런 행은
+     * 점유가 0행으로 거절되고, 점유 중인 파드가 처리하거나 다음 주기가 다시 집는다.
+     *
      * <p>{@code attemptCount < :maxAttempts} 조건이 필요한 이유: 점유만 하고 전송 전에 죽은
      * 파드는 실패를 기록하지 못한다. 그 행은 점유가 만료되면 다시 집히는데, 이 조건이 없으면
      * <b>한도와 무관하게 영원히 재점유</b>된다. 한도에 닿은 행은
@@ -71,9 +77,11 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
                             com.seatsac.booking.enums.OutboxStatus.SENDING)
            and m.nextAttemptAt <= :now
            and m.attemptCount < :maxAttempts
+           and m.attemptCount = :expectedAttempt
         """)
     int claim(@Param("outboxId") Long outboxId, @Param("claimUntil") Instant claimUntil,
-              @Param("now") Instant now, @Param("maxAttempts") int maxAttempts);
+              @Param("now") Instant now, @Param("maxAttempts") int maxAttempts,
+              @Param("expectedAttempt") int expectedAttempt);
 
     /**
      * 점유만 하고 전송 전에 죽어 <b>한도에 닿은 채 {@code SENDING}으로 남은</b> 행을 닫는다.

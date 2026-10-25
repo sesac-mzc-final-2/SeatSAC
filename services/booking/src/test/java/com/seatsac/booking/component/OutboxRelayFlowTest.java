@@ -221,7 +221,7 @@ class OutboxRelayFlowTest {
         // 다른 파드가 집은 상태를 만든다 (전송 직전에 멈춘 모양)
         assertThat(outboxRepository.claim(saved.getOutboxId(),
             NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), NOW,
-            BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS, 0)).isEqualTo(1);
 
         assertThat(relay.relayOnce()).isZero();
         then(publisher).should(never()).publish(anyString(), anyString(), anyString());
@@ -242,7 +242,7 @@ class OutboxRelayFlowTest {
         for (int i = 0; i < BookingPolicy.OUTBOX_MAX_ATTEMPTS; i++) {
             assertThat(outboxRepository.claim(saved.getOutboxId(),
                 at.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), at,
-                BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
+                BookingPolicy.OUTBOX_MAX_ATTEMPTS, i)).isEqualTo(1);
             at = at.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT).plusSeconds(1);
         }
         OutboxMessage stuck = outboxRepository.findById(saved.getOutboxId()).orElseThrow();
@@ -272,12 +272,12 @@ class OutboxRelayFlowTest {
         // 내 점유(시도 1)
         assertThat(outboxRepository.claim(saved.getOutboxId(),
             NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), NOW,
-            BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS, 0)).isEqualTo(1);
         // 점유가 만료되고 다른 파드가 이어받는다(시도 2)
         Instant later = NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT).plusSeconds(1);
         assertThat(outboxRepository.claim(saved.getOutboxId(),
             later.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), later,
-            BookingPolicy.OUTBOX_MAX_ATTEMPTS)).isEqualTo(1);
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS, 1)).isEqualTo(1);
 
         // 늦게 돌아온 내 결과(시도 1)는 반영되지 않는다
         assertThat(outboxRepository.markSent(saved.getOutboxId(), 1, later)).isZero();
@@ -288,6 +288,25 @@ class OutboxRelayFlowTest {
         assertThat(outboxRepository.markSent(saved.getOutboxId(), 2, later)).isEqualTo(1);
         assertThat(outboxRepository.findById(saved.getOutboxId()).orElseThrow().getStatus())
             .isEqualTo(OutboxStatus.SENT);
+    }
+
+    @Test
+    @DisplayName("조회 시점과 attemptCount가 다르면 점유가 거절된다 — 토큰이 어긋난 전송을 막는다")
+    void rejectsClaimWhenAttemptCountMoved() {
+        OutboxMessage saved = save(1009L, NOW);
+        // 다른 파드가 집었고(1) 그 점유까지 만료된 상태
+        assertThat(outboxRepository.claim(saved.getOutboxId(),
+            NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), NOW,
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS, 0)).isEqualTo(1);
+        Instant later = NOW.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT).plusSeconds(1);
+
+        // 조회 시점 값(0)으로 집으려 하면 거절된다 — 성공시키면 DB는 2, 내 토큰은 1이 되어
+        // 결과 기록이 0행이 되고 보낸 메시지가 SENDING에 남는다
+        assertThat(outboxRepository.claim(saved.getOutboxId(),
+            later.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT), later,
+            BookingPolicy.OUTBOX_MAX_ATTEMPTS, 0)).isZero();
+        assertThat(outboxRepository.findById(saved.getOutboxId()).orElseThrow().getAttemptCount())
+            .isEqualTo(1);
     }
 
     @Test

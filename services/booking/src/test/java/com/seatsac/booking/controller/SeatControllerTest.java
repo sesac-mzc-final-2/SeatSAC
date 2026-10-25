@@ -20,6 +20,7 @@ import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.enums.SeatStatus;
 import com.seatsac.booking.service.SeatHoldService;
 import com.seatsac.booking.service.SeatSnapshotService;
+import com.seatsac.booking.service.SeatStreamService;
 import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.core.http.Headers;
 import com.seatsac.common.core.time.Times;
@@ -55,6 +56,10 @@ class SeatControllerTest {
 
     @MockitoBean
     SeatHoldService holdService;
+
+    /** SSE 서비스는 Valkey 구독·메트릭을 들고 있다. 스트림 동작은 {@code SeatStreamFlowTest}가 본다 */
+    @MockitoBean
+    SeatStreamService seatStreamService;
 
     // --- BKG-01 좌석 현황 (인증 불필요) ---
 

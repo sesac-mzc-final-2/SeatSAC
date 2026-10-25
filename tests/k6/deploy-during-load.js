@@ -147,7 +147,10 @@ export default function (data) {
       JSON.stringify({ method: "CARD", card: { number: CARD, expiry: "12/28", holder: "K6" } }),
       { headers: authHeaders(token), tags: { name: "POST /bookings/{id}/pay" } }
     ), { allowResultUnknown: true });
-    check(res, { "결제 200 또는 409·503": (r) => [200, 409, 503].includes(r.status) });
+    // 409를 통과로 두면 안 된다. 이 흐름은 예매마다 결제를 한 번만 부르므로
+    // PAYMENT_ALREADY_REQUESTED가 나올 수 없고, 남는 409는 BOOKING_STATE_CONFLICT
+    // (결제 전에 선점이 사라졌다) 뿐이다 — 잡아야 하는 신호다
+    check(res, { "결제 200 또는 503": (r) => [200, 503].includes(r.status) });
 
     if (res.status === 200) {
       settled = res.json("status");

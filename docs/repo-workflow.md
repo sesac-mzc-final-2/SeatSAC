@@ -1,7 +1,7 @@
 # 레포·브랜치·PR·CI 규칙
 
 > 기준 2026-10-22 (회의록2 결정 반영, ADR-49~64). 03b 레포·브랜치·PR 개정 확정본 + 08 공통 코드(B안, ADR-56) + 브랜치 WBS ID(ADR-48) + 레포·일정(ADR-64) + 2.2.7 계약 CI.
-> 전제: staging 하나가 곧 데모 환경이라 **main 머지 = 배포**다(`build-push` 자동 트리거는 3.1.4에서 켠다. 그 전에는 수동).
+> 전제: staging 하나가 곧 데모 환경이라 **main 머지 = 배포**다(3.1.4부터 `build-push`가 main 머지마다 자동으로 돈다).
 
 ---
 
@@ -10,7 +10,7 @@
 | 레포 | 공개 | 내용 |
 | --- | --- | --- |
 | `sesac-mzc-final-2/SeatSAC` (앱, 03b의 `cinema`) | 개발 중 Private → 발표 후 Public | 서비스, frontend, 계약, Terraform, Lambda, 테스트, 문서 |
-| `SeatSAC-gitops` | Private | Kustomize 매니페스트, ArgoCD Application. CI 봇이 이미지 태그 커밋 |
+| `SeatSAC-gitops` | ⚠️ **Public** (무료 플랜 ruleset, ADR-66) — 계정 ID·엔드포인트·키 금지(`gitops-validate`가 막음) | Kustomize 매니페스트, 플랫폼 ArgoCD Application. CI 앱 봇이 이미지 태그만 커밋. 서비스 Application·엔드포인트는 Terraform `envs/staging-k8s` |
 | `lotte-seed` | **항상 Private** | 수집 스크립트, 원본 스냅샷, 좌석 배치·편성 시드 SQL |
 
 ```
@@ -24,14 +24,14 @@ SeatSAC/
 ├── infra/terraform/{bootstrap,global,envs/staging,envs/staging-k8s}/ · infra/compose/
 ├── tests/k6/
 ├── docs/   conventions.md · contracts.md · service-runtime-contract.md · data-model.md · decisions.md · repo-workflow.md · runbooks/
-└── .github/ workflows/ · CODEOWNERS · pull_request_template.md
+└── .github/ workflows/ · scripts/(서비스 고르기·Trivy, pr-check·build-push 공용) · CODEOWNERS · pull_request_template.md
 
 SeatSAC-gitops/
-├── apps/                  App of Apps (root.yaml + staging/: project·플랫폼 2·cinema-common·서비스 5)
+├── apps/                  App of Apps (root.yaml + staging/: project·플랫폼 2·cinema-common). 서비스 Application 5개는 Terraform(레지스트리 주소)
 ├── platform/              Argo Rollouts, kube-prometheus-stack values (LB Controller는 Terraform envs/staging-k8s)
 ├── base/{service}/        Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, PodMonitor, Flyway 훅 Job(Sync wave -1)
 ├── base/common/           앱 namespace 인바운드 기본 거부 + analysis
-├── overlays/staging/{service}/  이미지 태그, ConfigMap {service}-config (서비스마다 Application 하나)
+├── overlays/staging/{service}/  ConfigMap {service}-config(엔드포인트는 ${키}) + image-tag/(newTag만)
 ├── components/rollout/    kustomize가 Rollout 안 ConfigMap 해시 이름을 바꾸게 하는 설정
 ├── analysis/              AnalysisTemplate (booking·gateway)
 └── .github/               CODEOWNERS · PR 템플릿 · gitops-validate
@@ -44,7 +44,7 @@ SeatSAC-gitops/
 
 | 항목 | 규칙 |
 | --- | --- |
-| 기본 브랜치 | `main` 보호(ruleset), 직접 push 금지. **main 머지 = staging 자동 배포** — 단 지금은 `build-push`가 수동 실행(`workflow_dispatch`)만 켜져 있다. 서비스 골격·ECR이 생기는 3.1.4에서 main push 트리거를 켠다 |
+| 기본 브랜치 | `main` 보호(ruleset), 직접 push 금지. **main 머지 = staging 자동 배포**(`services/**`가 바뀐 머지 → `build-push`, 3.1.4) |
 | 브랜치 이름 | `{type}/{기능ID}-{설명}`. 기능 ID가 없으면 **WBS ID** (ADR-48) |
 | type | `feat` · `fix` · `refactor` · `test` · `docs` · `infra` · `ci` · `chore` |
 | 예 | `feat/BKG-02-seat-hold`, `fix/CAT-05-cache-key`, `infra/3.1.3-rds-valkey`, `ci/2.2.7-contract-ci`, `docs/ADR-47` |
@@ -59,7 +59,7 @@ SeatSAC-gitops/
 | 항목 | 규칙 |
 | --- | --- |
 | 승인 | 1명 (11/13 이후 2명). `libs/`·`build-logic/` 변경은 2명(김종식 + 영향받는 서비스 담당) |
-| 필수 검사 (ruleset) | `java`·`gitleaks`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 네 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
+| 필수 검사 (ruleset) | `java`·`gitleaks`·`image`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 다섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
 | 크기 | 400줄 이하 권장(생성 코드·lock 제외) |
 | 리뷰 응답 | 24시간 이내(주말 제외) |
 | 머지 후 | 작성자가 ArgoCD Synced·Healthy(또는 frontend 배포 완료)까지 확인 |
@@ -89,17 +89,19 @@ SeatSAC-gitops/
 
 | 워크플로 | 트리거 | 하는 일 |
 | --- | --- | --- |
-| `pr-check` | PR | 바뀐 서비스 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ), `libs/**` 변경 시 5개 전부, Trivy, gitleaks. 2단계: springdoc 생성본 vs 계약 diff |
+| `pr-check` | PR | `java`: 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ) · `gitleaks` · `image`: 바뀐 서비스만 bootJar → `docker build` → 비루트 확인 → Trivy(push 안 함, AWS 권한 없음. `build-logic/`·`gradle/`·이미지 스크립트·워크플로가 바뀌면 5개 전부). 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행. 2단계: springdoc 생성본 vs 계약 diff |
 | `contract-check` | PR (항상, 변경 없으면 건너뜀) | Redocly lint, JSON Schema·예시 검증, oasdiff·스키마 하위 호환 |
-| `build-push` | **현재 수동**(`workflow_dispatch`). 3.1.4부터 main 머지(바뀐 서비스만) | x86 이미지 → ECR(OIDC `cinema-gha-ecr-push`) → `SeatSAC-gitops`에 `kustomize edit set image` 커밋 |
+| `build-push` | main 머지(`services/**`, 바뀐 서비스만) + 수동(`services`=all 또는 목록, main에서만) | bootJar → x86 이미지 → Trivy(CRITICAL·수정 가능이면 실패) → ECR `cinema/{svc}:{sha7}`(OIDC `cinema-gha-ecr-push`, 같은 태그 있으면 건너뜀) → `SeatSAC-gitops` `overlays/staging/{svc}/image-tag`의 **`newTag`만** yq로 GitHub App `seatsac-build-push`(gitops에만 설치, Contents 쓰기) 토큰으로 main에 커밋(조직 정책상 Deploy key 불가). 레지스트리(계정 ID)는 gitops에 쓰지 않는다(Public, ADR-66) — Terraform ArgoCD Application이 붙인다. booking·gateway가 같이 바뀌면 booking만(블루/그린 동시 금지) |
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |
 | `lambda-deploy` | main 머지(`lambdas/**`) | 패키징 → 배포 → 별칭 갱신 |
 | `infra-plan` | PR(`infra/terraform/**`, 필수 검사 아님) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |
 | `cluster-schedule` | 월~금 08:23 켜기 · 23:07 끄기(KST) + 수동(up·down·status) | 노드그룹 desired 1 ↔ 0 (ng-a·ng-c, OIDC `cinema-gha-cluster-schedule`). 데모 주간 11/16~20과 Variables `CLUSTER_KEEP_ON=true`이면 예약 끄기 건너뜀. 스크립트 `infra/scripts/cluster-scale.sh` |
-| `gitops-validate` (gitops 레포) | PR | `kustomize build` + kubeconform |
+| `gitops-validate` (gitops 레포) | PR | `kustomize build` + kubeconform, Secret 매니페스트·계정 ID·`*.amazonaws.com`·`newName` 금지, gitleaks |
 
 - OIDC 역할 세션 이름 `gha-${{ github.actor }}-${{ github.run_id }}`(CloudTrail에 실행자)
-- 공통 모듈만 바뀐 머지는 배포하지 않는다. 급하면 `build-push` 수동 실행으로 한 서비스씩
+- 이미지는 두 번 빌드된다: PR의 `image`(검사용, 버림)와 main의 `build-push`(진짜, 태그 = main 커밋 SHA). 서비스 고르기·Trivy는 `.github/scripts/`를 같이 쓴다
+- 공통 모듈(`libs/`·`build-logic/`·`gradle/`)만 바뀐 머지는 배포하지 않는다. 급하면 `build-push` 수동 실행으로 한 서비스씩
+- 롤백 = `SeatSAC-gitops`에서 해당 태그 커밋을 revert하는 PR. ECR 이미지는 저장소당 최근 30개가 남는다
 
 ## 5. 지켜야 할 것
 

@@ -7,6 +7,7 @@
 #   - 블루/그린 동시 금지(노드 2대): booking·gateway가 함께 바뀌면 booking만 태그를 올리고 gateway는 수동 실행으로
 #   - 서비스 고르기·Trivy는 .github/scripts/ (pr-check의 image job과 같은 스크립트)
 #   - 레포가 Public → 로그에 계정 ID가 나오지 않게 mask-aws-account-id, 요약에는 cinema/{svc}:{tag}만
+#   - SeatSAC-gitops도 Public → gitops에는 newTag만 커밋한다. 레지스트리 주소는 ArgoCD Application(Terraform)이 붙인다
 #   - 사람이 ECR에 직접 올리지 않는다(저장소 정책이 막음). 롤백 = gitops 태그 커밋 revert PR
 name: build-push
 
@@ -187,18 +188,6 @@ jobs:
           echo "name=${SLUG}[bot]" >> "$GITHUB_OUTPUT"
           echo "email=${uid}+${SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
 
-      - uses: aws-actions/configure-aws-credentials@v4
-        if: steps.key.outputs.ok == 'true'
-        with:
-          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
-          role-session-name: gha-${{ github.actor }}-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: true
-
-      - uses: aws-actions/amazon-ecr-login@v2
-        if: steps.key.outputs.ok == 'true'
-        id: ecr
-
       - name: kustomize 설치
         if: steps.key.outputs.ok == 'true'
         run: |
@@ -211,7 +200,6 @@ jobs:
         if: steps.key.outputs.ok == 'true'
         working-directory: gitops
         env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
           BOT_NAME: ${{ steps.bot.outputs.name }}
           BOT_EMAIL: ${{ steps.bot.outputs.email }}
         run: |
@@ -228,12 +216,17 @@ jobs:
           changed=()
           for s in "${deploy[@]}"; do
             dir="overlays/staging/$s"
-            [ -f "$dir/kustomization.yaml" ] || { echo "::error::$GITOPS_REPO 에 $dir/kustomization.yaml 이 없다"; exit 1; }
-            # kustomize edit set image는 파일 전체를 다시 써서 주석·순서가 사라진다 → yq로 images 두 값만 바꾼다
-            IMG_NAME="cinema/$s" NEW_NAME="$REGISTRY/cinema/$s" \
-              yq -i '(.images[] | select(.name == strenv(IMG_NAME))) |= (.newName = strenv(NEW_NAME) | .newTag = strenv(TAG))' "$dir/kustomization.yaml"
-            got=$(IMG_NAME="cinema/$s" yq '.images[] | select(.name == strenv(IMG_NAME)) | .newTag' "$dir/kustomization.yaml")
-            [ "$got" = "$TAG" ] || { echo "::error::$dir 의 images에 name: cinema/$s 항목이 없다"; exit 1; }
+            tagf="$dir/image-tag/kustomization.yaml" # 태그만 담은 Component (gitops README)
+            [ -f "$tagf" ] || { echo "::error::$GITOPS_REPO 에 $tagf 이 없다"; exit 1; }
+            # gitops는 Public → 레지스트리(계정 ID)는 쓰지 않고 newTag만 바꾼다. 레지스트리는 Terraform이 만든 ArgoCD Application의
+            # kustomize.images가 붙인다(envs/staging-k8s/argocd_apps.tf). newName이 있으면 계정 ID가 들어가므로 실패시킨다
+            # kustomize edit set image는 파일 전체를 다시 써서 주석·순서가 사라진다 → yq로 newTag 한 값만 바꾼다
+            has_name=$(IMG_NAME="cinema/$s" yq '.images[] | select(.name == strenv(IMG_NAME)) | has("newName")' "$tagf")
+            [ "$has_name" != "true" ] || { echo "::error::$tagf 에 newName이 있다. Public 레포라 지운다(newTag만)"; exit 1; }
+            IMG_NAME="cinema/$s" \
+              yq -i '(.images[] | select(.name == strenv(IMG_NAME))).newTag = strenv(TAG)' "$tagf"
+            got=$(IMG_NAME="cinema/$s" yq '.images[] | select(.name == strenv(IMG_NAME)) | .newTag' "$tagf")
+            [ "$got" = "$TAG" ] || { echo "::error::$tagf 의 images에 name: cinema/$s 항목이 없다"; exit 1; }
             kustomize build "$dir" > /dev/null # 깨진 매니페스트는 커밋하지 않는다
             changed+=("$s")
           done

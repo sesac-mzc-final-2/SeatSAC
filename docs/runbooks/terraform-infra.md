@@ -466,7 +466,7 @@ docker compose -f infra/compose/docker-compose.yml exec valkey valkey-cli CONFIG
 | `force_delete` | `true` — 11장 재생성 리허설에서 destroy가 이미지 때문에 멈추지 않게. 지운 뒤에는 `build-push` 수동 실행 `services=all` |
 | 태그 | git SHA 7자리. 같은 태그가 이미 있으면 빌드·push를 건너뜀(재실행 안전) |
 | Trivy | 0.69.3 고정(0.69.4는 2026-03 공급망 사고 버전). HIGH 이상은 실행 요약에 표, **CRITICAL + 수정 버전 있음**이면 실패 |
-| gitops 커밋 | `overlays/staging/{svc}/kustomization.yaml`의 `images[cinema/{svc}]` `newName`·`newTag`만 yq로 바꿔 GitHub App `seatsac-build-push` 토큰으로 main에 직접 커밋(`deploy(staging): {svc} → {tag}`). `kustomize build`가 깨지면 커밋하지 않는다 |
+| gitops 커밋 | `overlays/staging/{svc}/image-tag/kustomization.yaml`의 `newTag` **하나만** yq로 바꿔 GitHub App `seatsac-build-push` 토큰으로 main에 직접 커밋(`deploy(staging): {svc} → {tag}`). gitops가 Public이라 레지스트리(계정 ID)는 쓰지 않는다 — `newName`이 있으면 실패. 레지스트리는 Terraform ArgoCD Application이 붙인다(6-C). `kustomize build`가 깨지면 커밋하지 않는다 |
 | 블루/그린 동시 금지 | booking·gateway가 한 머지에 같이 바뀌면 booking만 커밋 → booking 전환 뒤 수동 실행 `services=gateway` |
 
 #### 6-A-0. PR 이미지 검사 (`pr-check` → `image`)
@@ -507,7 +507,7 @@ terraform output ecr_repository_urls
 | 단계 | 어디서 | 값 |
 | --- | --- | --- |
 | 1. 앱 만들기 (Owner) | 조직 Settings → Developer settings → GitHub Apps → **New GitHub App** | 이름 `seatsac-build-push` · Homepage URL `https://github.com/sesac-mzc-final-2/SeatSAC` · Callback·Setup URL 비움 · OAuth during installation 끔 · Device Flow 끔 · **Webhook Active 끔** · Repository permissions **Contents: Read and write**만(Metadata 읽기 자동) · 나머지 No access · **Only on this account** |
-| 2. 키 받기 | 앱 General 페이지 **왼쪽 탭 Credentials** → **Key pairs** → Generate a private key | `.pem`이 브라우저 다운로드 폴더에 한 번만 받아진다(못 받았으면 생긴 키를 Delete하고 다시 Generate) |
+| 2. 키 받기 | 앱 General 페이지 **맨 아래 Private keys** → Generate a private key | `.pem`이 브라우저 다운로드 폴더에 한 번만 받아진다(못 받았으면 생긴 키를 Delete하고 다시 Generate) |
 | 3. 설치 | 앱 왼쪽 **Install App** → `sesac-mzc-final-2` Install → **Only select repositories → SeatSAC-gitops** | SeatSAC 등 다른 레포는 고르지 않는다 |
 | 4. SeatSAC에 등록 | SeatSAC → Settings → Secrets and variables → Actions | 6-A-2 표: Variable `GITOPS_APP_ID`, **Secret** `GITOPS_APP_PRIVATE_KEY` |
 | 5. 키 파일 지우기 | 로컬 | 다운로드 폴더의 `.pem` 삭제(휴지통 비우기). 레포 폴더·노션·메신저에 두지 않는다 |
@@ -515,7 +515,7 @@ terraform output ecr_repository_urls
 
 - 워크플로는 `actions/create-github-app-token`으로 **SeatSAC-gitops에만 쓰는 설치 토큰**(1시간)을 받아 checkout·push한다. 커밋 작성자는 `seatsac-build-push[bot]`
 - 키 교체: 앱 Private keys에서 새로 Generate → Secret 덮어쓰기 → 옛 키 Delete. 키가 Variable·로그·문서에 노출됐으면 **바로 교체**
-- 3.1.5 ArgoCD가 SeatSAC-gitops를 읽을 때도 Deploy key 대신 GitHub App 자격 증명을 쓴다(같은 정책)
+- ArgoCD는 SeatSAC-gitops를 **HTTPS로 읽는다**(Public이라 레포 자격 증명 없음, 6-C). 이 앱은 build-push 쓰기 전용이다
 
 #### 6-A-4. 첫 실행 (수동)
 
@@ -534,6 +534,10 @@ done
 ```bash
 aws ecr get-login-password --profile cinema-admin | docker login --username AWS --password-stdin <레지스트리>
 docker push <레지스트리>/cinema/booking:test   # denied ... explicit deny in a resource-based policy
+
+# Docker 없이 (API 하나만 호출)
+aws ecr initiate-layer-upload --repository-name cinema/booking --profile cinema-admin
+# AccessDeniedException ... with an explicit deny in a resource-based policy   ← 정상
 ```
 
 #### 6-A-5. 확인
@@ -552,7 +556,49 @@ docker push <레지스트리>/cinema/booking:test   # denied ... explicit deny i
 - `build-push`는 **main에서만** 실행된다(역할 신뢰 정책). 다른 브랜치에서 Run workflow 하면 첫 단계에서 멈춘다
 - 롤백은 SeatSAC-gitops에서 태그 커밋을 revert하는 PR. ECR 이미지는 지우지 않는다(최근 30개 유지)
 - Trivy가 CRITICAL로 막으면: 베이스 이미지(`eclipse-temurin:21-jre`) 갱신이나 의존성 버전 업으로 고친다. 당장 고칠 수 없는 오탐만 레포 루트 `.trivyignore`에 CVE ID + 이유 주석(PR 리뷰)
+- Trivy가 알려 준 "수정 버전"이 Maven Central에 아직 없으면(릴리스 투표 실패 등, 10/25 tomcat 10.1.58) 빌드가 `Could not find …`로 깨진다 → 실제로 배포된 다음 버전으로 올린다(`https://repo1.maven.org/maven2/<그룹 경로>/<이름>/`에서 확인)
 - 레포가 Public이라 Actions 로그도 공개된다. 워크플로가 계정 ID를 가리지만(`mask-aws-account-id`), 실행 로그·요약을 노션·PR에 붙일 때 레지스트리 주소가 없는지 한 번 더 본다
+
+### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-66)
+
+SeatSAC-gitops는 Public이다(무료 플랜에서 ruleset을 쓰려면 Public이어야 한다). 그래서 **계정 ID·엔드포인트를 gitops에 두지 않고** 둘 다 `envs/staging-k8s`가 클러스터에 넣는다.
+
+| 무엇 | 어디서 | gitops에는 |
+| --- | --- | --- |
+| RDS·Valkey·SQS·Cognito 주소 | ConfigMap `cinema-infra-endpoints`(`cinema-staging`) — `infra_endpoints.tf`. 키 `DB_HOST`·`VALKEY_HOST`·`SQS_NOTIFICATION_URL`·`COGNITO_ISSUER_URI`·`COGNITO_CLIENT_ID` | `{svc}-config`에 `${DB_HOST}` 같은 자리만. 파드가 두 ConfigMap을 envFrom으로 받고 Spring이 치환. Flyway Job은 `$(DB_HOST)` |
+| ECR 레지스트리(계정 ID) | 서비스 Application 5개 `cinema-{svc}` — `argocd_apps.tf`의 `kustomize.images` `cinema/{svc}=<레지스트리>/cinema/{svc}` | `image-tag/`에 `newTag`만 |
+| 플랫폼·`cinema-common`·AppProject | gitops `apps/staging`(root 앱) 그대로 | — |
+
+#### 6-C-1. ConfigMap (지금, ArgoCD 전)
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명) — envs/staging(3.1.3)이 apply된 뒤
+cd infra/terraform/envs/staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out   # 예상: ConfigMap cinema-infra-endpoints 1 add, 다른 변경 없음
+terraform apply plan.out
+terraform output infra_endpoints_keys
+kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.DB_HOST}{"\n"}'   # RDS 주소 (화면에만, 붙여 넣지 않는다)
+```
+
+- `COGNITO_*`는 Cognito(3.3.x) 전까지 빈 값이다. 만든 뒤 `staging-k8s.tfvars`에 `cognito_enabled = true` → plan(ConfigMap 1 change) → apply
+- SQS URL은 큐 이름으로 정해져서 3.1.8 전에도 들어간다(큐가 없으면 booking 발행만 실패)
+- 값이 바뀌어도 파드는 자동으로 다시 뜨지 않는다 → ArgoCD에서 해당 앱 **Restart**(또는 다음 배포)
+
+#### 6-C-2. 서비스 Application (3.1.5 ArgoCD 설치·root 앱 sync 뒤)
+
+1. ArgoCD 설치 → `apps/root.yaml` 적용 → `cinema` AppProject·`argo-rollouts`가 Synced인지 확인 (Rollout CRD)
+2. `staging-k8s.tfvars`에 `argocd_apps_enabled = true` → plan(`kubernetes_manifest` 5 add) → apply
+3. 확인
+
+```bash
+kubectl -n argocd get applications            # cinema-{gateway,catalog,booking,user,payment} + root·플랫폼·cinema-common
+kubectl -n cinema-staging get rollout,deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}' \
+  | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'        # <ACCOUNT_ID>.dkr.ecr…/cinema/{svc}:{sha7}
+```
+
+- `argocd_apps_enabled = true`를 ArgoCD 전에 켜면 plan이 `no matches for kind "Application"`으로 멈춘다(13장)
+- 이미지 태그는 Terraform이 관리하지 않는다(build-push → gitops → ArgoCD). 태그가 바뀌어도 이 폴더 plan은 No changes
+- 이 레포 로그·PR·노션에 이미지 주소를 붙일 때는 계정 ID를 `<ACCOUNT_ID>`로 가린다
 
 ### 6-B. SQS·Lambda (3.1.8·3.1.9) — ⬜
 
@@ -959,6 +1005,13 @@ terraform destroy -var-file=staging.tfvars
 | PR `image` 실패 `Dockerfile USER가 숫자 UID(0 아님)가 아니다` | `USER app`처럼 이름이거나 USER 없음 | `USER 10001` (K8s `runAsNonRoot`는 숫자 UID여야 확인 가능) |
 | ruleset에서 필수 검사 `image`가 목록에 없음 | 아직 한 번도 실행되지 않음 | 아무 PR에서 `pr-check`가 한 번 돈 뒤 추가 |
 | `tag invalid: The image tag ... already exists ... immutable` | 같은 태그로 다시 push (보통 일어나지 않음: 있으면 건너뜀) | 같은 SHA면 정상 — 새 커밋으로 |
+| `build-push` `image-tag/kustomization.yaml 이 없다`·`newName이 있다` | gitops가 이전 구조(overlay `images`에 `newName`·`newTag`) | gitops에 Public 구조 PR(`chore/3.1.4-gitops-public`) 머지 |
+| 빌드 `Could not find org.apache.tomcat.embed:…:10.1.58` 등 | Trivy가 알려 준 수정 버전이 실제로는 배포되지 않음(릴리스 투표 실패) | Maven Central에 있는 다음 버전으로 (6-A-6) |
+| 파드 기동 실패 `Could not resolve placeholder 'DB_HOST'` | ConfigMap `cinema-infra-endpoints`가 없거나 envFrom에서 빠짐 | 6-C-1 apply, gitops `base/{svc}` envFrom 확인 |
+| 파드 `CreateContainerConfigError` `configmap "cinema-infra-endpoints" not found` | 위와 같음(Flyway Job 포함) | 6-C-1 |
+| 파드 `ImagePullBackOff` 이미지 `cinema/{svc}:…`(레지스트리 없음) | ArgoCD Application에 `kustomize.images`가 없음 — 서비스 앱을 gitops나 손으로 만듦 | gitops `apps/staging`에서 서비스 앱 제거, 6-C-2 Terraform으로 |
+| 파드 `ImagePullBackOff` 태그 `CHANGE_ME` | build-push가 아직 그 서비스 태그를 커밋하지 않음 | `build-push` 수동 실행 `services={svc}` |
+| staging-k8s plan `no matches for kind "Application" in group "argoproj.io"` | ArgoCD 설치 전에 `argocd_apps_enabled = true` | false로 두고 3.1.5 뒤 6-C-2 |
 | plan에 `-/+ replace`가 나옴 | 교체가 필요한 값 변경(서브넷 CIDR, SG description 등) | 멈추고 원인 확인. 의존 리소스까지 다시 만들어질 수 있음 |
 
 ---

@@ -23,3 +23,13 @@ output "db_bootstrap_job" {
   description = "마지막으로 실행된 DB 계정 생성 Job (kubectl -n cinema-ops logs job/<이름>)"
   value       = kubernetes_job_v1.db_bootstrap.metadata[0].name
 }
+
+output "infra_endpoints_keys" {
+  description = "ConfigMap cinema-infra-endpoints 키 (값은 kubectl -n cinema-staging get cm cinema-infra-endpoints -o yaml)"
+  value       = sort(keys(kubernetes_config_map_v1.infra_endpoints.data))
+}
+
+output "argocd_service_apps" {
+  description = "Terraform이 만든 서비스 ArgoCD Application (argocd_apps_enabled = false면 빈 목록)"
+  value       = sort([for a in kubernetes_manifest.argocd_service_app : a.manifest.metadata.name])
+}

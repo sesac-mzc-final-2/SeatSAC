@@ -54,6 +54,7 @@
 | 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets·Loki는 확장 |
 | 36 · 39 | AWS 아키텍처 = 위 결정들의 합. 노션 ADR-36(10/18 v3)은 이전 스냅샷 | |
 | 46 | GitHub Actions → AWS OIDC. 역할 `cinema-gha-ecr-push`·`cinema-gha-tf-plan`·`cinema-gha-frontend-deploy`·`cinema-gha-cluster-schedule`(3.1.14). CI는 apply 안 함 | `infra/terraform/global` |
+| 66 | ⚠️ `SeatSAC-gitops` **Public**(GitHub 무료 플랜은 Private 레포에 ruleset을 적용하지 않음). 계정 ID·엔드포인트는 gitops에 두지 않는다: 엔드포인트 = Terraform ConfigMap `cinema-infra-endpoints` + `${키}`, ECR 레지스트리 = Terraform이 만드는 서비스 ArgoCD Application의 `kustomize.images`, gitops에는 태그만. ArgoCD는 HTTPS로 읽음(자격 증명 없음) | 10/25. 대안: Private + ruleset 없이 운영(직접 push 위험), 유료 플랜 |
 | 47 | 팀 접근: IAM 역할 + MFA(Identity Center 미사용). `cinema-admin` = 김종식 + **백업 남궁일**, `cinema-developer` = 전원. 프로필 `seatsac-user`·`cinema-dev`·`cinema-admin` | 회의록3 |
 
 ## 5. 인증·화면·코드·프로세스
@@ -67,3 +68,5 @@
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
 
 <노션 반영 필요> ADR-7 선택안 "t3.large 2대(ng-a 1·ng-c 1)", ADR-10 제목·선택안 일치, ADR-22 본문 "ADR-21" → "ADR-44", ADR-23 "도입함" → "도입하지 않음", ADR-31에 "ADR-37·63으로 대체", ADR-33에 "Valkey t4g.micro(ADR-59)·Single-AZ(ADR-61)", ADR-34 데모 주간 11/16~20, ADR-36 "10/18 스냅샷" 콜아웃, 37·38·46 결론 채우기, ADR-65(중복) 삭제 여부
+
+<노션 반영 필요> ADR-66 새로 추가(10/25): SeatSAC-gitops Public 전환과 값 분리(위 표 그대로). 번호가 노션 DB와 다르면 노션 번호로 맞춘다

@@ -84,3 +84,45 @@ variable "awscli_image" {
   type        = string
   default     = "public.ecr.aws/aws-cli/aws-cli:2.33.6"
 }
+
+# ---- 앱 엔드포인트 ConfigMap · 서비스 ArgoCD Application (gitops Public, ADR-66) ----
+variable "valkey_replication_group_id" {
+  description = "envs/staging Valkey 복제 그룹 ID (3.1.3). primary 엔드포인트를 이 이름으로 조회한다"
+  type        = string
+  default     = "cinema-staging-valkey"
+}
+
+variable "notification_queue_name" {
+  description = "알림 SQS 큐 이름 (docs/conventions.md 5장, 3.1.8). URL은 계정·리전·이름으로 만든다"
+  type        = string
+  default     = "cinema-staging-notification-events"
+}
+
+variable "cognito_enabled" {
+  description = "Cognito 사용자 풀(3.3.x)을 만든 뒤 true. false면 COGNITO_ISSUER_URI·COGNITO_CLIENT_ID가 빈 값"
+  type        = bool
+  default     = false
+}
+
+variable "cognito_user_pool_name" {
+  description = "Cognito 사용자 풀 이름 (docs/conventions.md 9장)"
+  type        = string
+  default     = "cinema-staging-users"
+}
+
+variable "argocd_apps_enabled" {
+  description = "ArgoCD 설치(3.1.5)·root 앱 sync 뒤 true. Application CRD가 없을 때 true면 plan이 실패한다"
+  type        = bool
+  default     = false
+}
+
+variable "argocd_namespace" {
+  type    = string
+  default = "argocd"
+}
+
+variable "gitops_repo_url" {
+  description = "SeatSAC-gitops (Public → HTTPS, ArgoCD 레포 자격 증명 없음)"
+  type        = string
+  default     = "https://github.com/sesac-mzc-final-2/SeatSAC-gitops.git"
+}

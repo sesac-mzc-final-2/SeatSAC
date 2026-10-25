@@ -53,6 +53,18 @@ app:
   seat-hold:
     ttl-seconds: ${APP_SEAT_HOLD_TTL_SECONDS:300}
     strategy: ${APP_SEAT_HOLD_STRATEGY:redis}   # ADR-45 인터페이스. db-lock은 나중
+  sqs:
+    notification-queue-url: ${APP_SQS_NOTIFICATION_QUEUE_URL:http://localhost:9324/queue/cinema-staging-notification-events}
+  outbox:
+    # 큐(3.1.8)가 생기기 전에 켜면 확정마다 10회 재시도 끝에 FAILED가 되어 손으로 되살려야 한다.
+    # 꺼 두면 PENDING으로 쌓여 있다가 켜는 순간 흘러간다 (booking_outbox_pending으로 보인다)
+    relay-enabled: ${APP_OUTBOX_RELAY_ENABLED:false}
+    relay-interval: ${APP_OUTBOX_RELAY_INTERVAL:1s}
+
+# SQS: 자격 증명은 Pod Identity(액세스 키 없음). 로컬은 ElasticMQ
+spring.cloud.aws:
+  region.static: ${AWS_REGION:ap-northeast-2}
+  sqs.enabled: true
 
 spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}

@@ -30,6 +30,6 @@ output "infra_endpoints_keys" {
 }
 
 output "argocd_service_apps" {
-  description = "Terraform이 만든 서비스 ArgoCD Application (argocd_apps_enabled = false면 빈 목록)"
+  description = "Terraform이 만든 서비스 ArgoCD Application (argocd_apps_enabled = false면 빈 목록, cognito_enabled = false면 gateway 없음)"
   value       = sort([for a in kubernetes_manifest.argocd_service_app : a.manifest.metadata.name])
 }

@@ -580,22 +580,31 @@ terraform output infra_endpoints_keys
 kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.DB_HOST}{"\n"}'   # RDS 주소 (화면에만, 붙여 넣지 않는다)
 ```
 
-- `COGNITO_*`는 Cognito(3.3.x) 전까지 빈 값이다. 만든 뒤 `staging-k8s.tfvars`에 `cognito_enabled = true` → plan(ConfigMap 1 change) → apply
+- `COGNITO_*`는 Cognito(3.3.x) 전까지 빈 값이다. 만든 뒤 `staging-k8s.tfvars`에 `cognito_enabled = true` → plan(ConfigMap 1 change, `argocd_apps_enabled = true`면 gateway Application 1 add) → apply
 - SQS URL은 큐 이름으로 정해져서 3.1.8 전에도 들어간다(큐가 없으면 booking 발행만 실패)
 - 값이 바뀌어도 파드는 자동으로 다시 뜨지 않는다 → ArgoCD에서 해당 앱 **Restart**(또는 다음 배포)
 
 #### 6-C-2. 서비스 Application (3.1.5 ArgoCD 설치·root 앱 sync 뒤)
 
-1. ArgoCD 설치 → `apps/root.yaml` 적용 → `cinema` AppProject·`argo-rollouts`가 Synced인지 확인 (Rollout CRD)
-2. `staging-k8s.tfvars`에 `argocd_apps_enabled = true` → plan(`kubernetes_manifest` 5 add) → apply
+| 사전 조건 | 확인 |
+| --- | --- |
+| ArgoCD 설치 · `apps/root.yaml` 적용 | `cinema` AppProject·`argo-rollouts`가 Synced (Rollout CRD) |
+| 6-C-1 ConfigMap | `kubectl -n cinema-staging get cm cinema-infra-endpoints` |
+| **gateway만**: Cognito(7장) apply + `cognito_enabled = true` | ConfigMap의 `COGNITO_ISSUER_URI`·`COGNITO_CLIENT_ID`가 빈 값이 아님. 빈 값이면 gateway가 기동 실패(런타임 계약 3장)라 Terraform이 gateway Application을 만들지 않는다 |
+
+1. `staging-k8s.tfvars`에 `argocd_apps_enabled = true` → plan → apply
+   - Cognito 전: `kubernetes_manifest` **4 add**(catalog·booking·user·payment)
+   - Cognito 후(`cognito_enabled = true`): ConfigMap 1 change + gateway 1 add (처음부터 둘 다 켰으면 5 add)
+2. Cognito를 나중에 켰다면 gateway는 그때가 첫 배포다 → gitops `overlays/staging/gateway/image-tag`의 태그가 `CHANGE_ME`면 `build-push` 수동 실행 `services=gateway`
 3. 확인
 
 ```bash
-kubectl -n argocd get applications            # cinema-{gateway,catalog,booking,user,payment} + root·플랫폼·cinema-common
+kubectl -n argocd get applications            # cinema-{catalog,booking,user,payment}(+ gateway: cognito_enabled일 때) + root·플랫폼·cinema-common
 kubectl -n cinema-staging get rollout,deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}' \
   | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'        # <ACCOUNT_ID>.dkr.ecr…/cinema/{svc}:{sha7}
 ```
 
+- `terraform output argocd_service_apps`에 `cinema-gateway`가 없으면 `cognito_enabled = false`인 상태(정상, 위 사전 조건)
 - `argocd_apps_enabled = true`를 ArgoCD 전에 켜면 plan이 `no matches for kind "Application"`으로 멈춘다(13장)
 - 이미지 태그는 Terraform이 관리하지 않는다(build-push → gitops → ArgoCD). 태그가 바뀌어도 이 폴더 plan은 No changes
 - 이 레포 로그·PR·노션에 이미지 주소를 붙일 때는 계정 ID를 `<ACCOUNT_ID>`로 가린다

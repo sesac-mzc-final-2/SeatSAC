@@ -46,7 +46,7 @@
 
 - [ ] 없음
 - [ ] 환경변수 · Secret 추가/변경 → 
-- [ ] `cinema-gitops` 수정 필요 → 
+- [ ] `SeatSAC-gitops` 수정 필요 → 
 - [ ] CloudFront 캐시 무효화 필요
 - [ ] 수동 작업 (Terraform apply · 콘솔) → 
 

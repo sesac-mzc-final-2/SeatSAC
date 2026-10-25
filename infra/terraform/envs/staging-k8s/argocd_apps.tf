@@ -8,9 +8,14 @@
 #   kubernetes_manifest는 plan 때 Application CRD가 있어야 한다 → ArgoCD 설치(3.1.5)와 root 앱 sync 뒤
 #   argocd_apps_enabled = true 로 바꿔 apply (런북 6-B). 그 전에는 아무것도 만들지 않는다
 #   이미지 태그는 Terraform이 관리하지 않는다(build-push → gitops 커밋 → ArgoCD). 그래서 태그가 바뀌어도 plan 변경 없음
+#   gateway는 cognito_enabled = true일 때만 만든다: COGNITO_ISSUER_URI·CLIENT_ID가 빈 값이면 기동 실패라
+#   (런타임 계약 3장) Application을 먼저 만들면 staging이 Degraded로 남는다. 나머지 4개는 Cognito와 무관
 # ------------------------------------------------------------------
 locals {
-  argocd_services = toset(["gateway", "catalog", "booking", "user", "payment"])
+  argocd_services = toset(concat(
+    var.cognito_enabled ? ["gateway"] : [],
+    ["catalog", "booking", "user", "payment"],
+  ))
 }
 
 resource "kubernetes_manifest" "argocd_service_app" {

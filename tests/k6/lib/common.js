@@ -76,10 +76,19 @@ export function reasonOf(res) {
  */
 export function intEnv(name, hint) {
   const raw = (__ENV[name] || "").trim();
-  if (!/^\d+$/.test(raw)) {
-    throw new Error(`${name}이 비었거나 양의 정수가 아니다: "${raw}"${hint ? ` — ${hint}` : ""}`);
+  const value = Number(raw);
+  if (!/^\d+$/.test(raw) || !isValidId(value)) {
+    throw new Error(`${name}이 비었거나 쓸 수 없는 ID다: "${raw}"${hint ? ` — ${hint}` : ""}`);
   }
-  return Number(raw);
+  return value;
+}
+
+/**
+ * ID로 쓸 수 있는 값인지. 0은 ID가 아니고, 2^53보다 큰 정수는 Number로 바꾸면 값이 달라져
+ * (예: 9007199254740993 → ...992) <b>다른 좌석·회차를 조용히 가리킨다</b>.
+ */
+function isValidId(value) {
+  return Number.isSafeInteger(value) && value > 0;
 }
 
 /** 쉼표로 구분한 양의 정수 목록. 하나라도 정수가 아니면 멈춘다 */
@@ -88,9 +97,9 @@ export function intListEnv(name, hint) {
   if (items.length === 0) {
     throw new Error(`${name}이 비었다${hint ? ` — ${hint}` : ""}`);
   }
-  const bad = items.filter((v) => !/^\d+$/.test(v));
+  const bad = items.filter((v) => !/^\d+$/.test(v) || !isValidId(Number(v)));
   if (bad.length > 0) {
-    throw new Error(`${name}에 양의 정수가 아닌 값이 있다: ${bad.join(", ")}`);
+    throw new Error(`${name}에 ID로 쓸 수 없는 값이 있다: ${bad.join(", ")}`);
   }
   return items.map(Number);
 }

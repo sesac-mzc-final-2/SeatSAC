@@ -344,6 +344,15 @@ class OutboxRelayFlowTest {
     }
 
     @Test
+    @DisplayName("조회 자체가 실패해도 예외를 밖으로 내지 않는다 — 다음 주기가 멈추면 안 된다")
+    void swallowsQueryFailure() {
+        doThrow(new DataIntegrityViolationException("조회 실패"))
+            .when(outboxRepository).findDue(any(), any());
+
+        assertThat(relay.relayOnce()).isZero();   // 예외가 나가면 fixedDelay 주기가 멈춘다
+    }
+
+    @Test
     @DisplayName("오래 기다린 메시지를 먼저 보낸다 — 노드 0대 구간 뒤 밀린 알림")
     void sendsOldestFirst() {
         OutboxMessage old = save(3001L, NOW.minus(Duration.ofHours(9)));

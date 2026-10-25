@@ -1,7 +1,6 @@
 package com.seatsac.booking.component;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -14,7 +13,6 @@ import org.springframework.stereotype.Component;
  * 한다. 꺼 두면 아웃박스에 {@code PENDING}으로 쌓여 있다가 켜는 순간 그대로 흘러간다
  * (쌓인 양은 {@code booking_outbox_pending}으로 보인다).
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "app.outbox", name = "relay-enabled", havingValue = "true")
@@ -22,15 +20,13 @@ public class OutboxRelayScheduler {
 
     private final OutboxRelay relay;
 
+    /**
+     * {@link OutboxRelay#relayOnce()}는 예외를 밖으로 내지 않는다(실패를 자기 traceId 안에서
+     * 로그로 남기고 0을 돌려준다). 그래서 여기서 다시 감싸지 않는다 — 감싸면 그 로그에
+     * traceId가 빠지고, 스케줄러 스레드로 예외가 나가 주기가 멈추는 일도 없다.
+     */
     @Scheduled(fixedDelayString = "${app.outbox.relay-interval:1s}")
     public void relay() {
-        try {
-            relay.relayOnce();
-        } catch (RuntimeException e) {
-            // 마지막 방어선이다. 건별 오류는 OutboxRelay가 eventId와 함께 남기고 넘어가므로
-            // 여기까지 오는 것은 조회 자체가 실패한 경우다. 스케줄러 스레드로 예외가 나가면
-            // fixedDelay 주기가 더 이상 돌지 않으니 반드시 삼킨다
-            log.warn("아웃박스 릴레이 주기 실패 — 다음 주기에 다시 본다: {}", e.getMessage());
-        }
+        relay.relayOnce();
     }
 }

@@ -65,12 +65,22 @@ public class OutboxRelay {
         }
     }
 
-    /** 한 바퀴. 보낸 건수를 돌려준다(테스트·로그용) */
+    /**
+     * 한 바퀴. 보낸 건수를 돌려주고 <b>예외를 밖으로 내지 않는다</b>.
+     *
+     * <p>실패를 여기서 삼키고 로그까지 남기는 이유는 두 가지다. ① 스케줄러 스레드로 예외가
+     * 나가면 {@code fixedDelay} 주기가 더 이상 돌지 않는다. ② 조회 자체가 실패한 경우
+     * 부르는 쪽에서 로그를 남기면 {@code finally}가 MDC를 이미 비운 뒤라
+     * <b>traceId 없는 로그</b>가 된다 — 요청 밖 작업도 추적 ID를 남겨야 한다(명세 12.2).
+     */
     public int relayOnce() {
-        String traceId = TraceIds.newId();   // 요청 밖 작업도 추적 ID를 남긴다 (명세 12.2)
-        MDC.put(TraceKeys.MDC_TRACE_ID, traceId);
+        MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.newId());
         try {
             return relayBatch();
+        } catch (RuntimeException e) {
+            // 건별 오류는 relayBatch가 eventId와 함께 남긴다. 여기까지 오는 것은 조회 실패다
+            log.warn("아웃박스 릴레이 주기 실패 — 다음 주기에 다시 본다: {}", e.getMessage(), e);
+            return 0;
         } finally {
             MDC.remove(TraceKeys.MDC_TRACE_ID);
         }

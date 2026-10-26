@@ -13,9 +13,10 @@ app:
   services:
     # 통합 테스트가 @DynamicPropertySource로 가짜 booking 주소를 넣는다. 기본값은 바로 연결 거부되는 포트
     booking-url: http://127.0.0.1:1
-    # staging은 300ms(계약)이지만 테스트에서는 1.5초로 둔다 — 300ms는 CI 러너에서 첫 호출
-    # 오버헤드(RestClient 초기화 등)만으로도 넘어서, 「booking이 답하면 BOOKING을 쓴다」는
+    # staging은 300ms(계약)이지만 테스트에서는 1.5초로 둔다 — CI 러너에서는 첫 호출 비용
+    # (클래스 로딩·JIT 등으로 추정)만으로 300ms를 넘겨, 「booking이 답하면 BOOKING을 쓴다」는
     # 검증이 CI 속도에 따라 흔들렸다(2026-10-26 세 번 실패). 대체 경로는 스텁이 2초를 쉬어
-    # 이 값보다 확실히 넘기므로 두 분기 모두 의도대로 검증된다
+    # 이 값을 확실히 넘기므로 두 분기 모두 의도대로 검증된다.
+    # 이 값이 실제로 바인딩되는지는 bookingReadTimeoutIsBoundFromProperties가 지킨다
     booking-read-timeout: 1500ms
 logging.level.org.hibernate.SQL: INFO

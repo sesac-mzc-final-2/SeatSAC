@@ -13,6 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
 import com.sun.net.httpserver.HttpServer;
+import com.seatsac.catalog.config.CatalogProperties;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -91,7 +93,13 @@ class CatalogApiIntegrationTest {
                     Thread.sleep(2_000);   // 테스트 프로필의 응답 타임아웃(1.5초)을 넘긴다
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                    exchange.close();   // @AfterAll의 shutdownNow — 멈춘 서버에 쓰지 않는다
+                    return;
                 }
+                // 클라이언트는 이미 타임아웃으로 포기했다. 닫힌 소켓에 본문을 쓰면
+                // IOException이 핸들러 밖으로 나가 Gradle 로그에 스택이 섞인다
+                exchange.close();
+                return;
             }
             byte[] body;
             int status;
@@ -136,10 +144,18 @@ class CatalogApiIntegrationTest {
     StringRedisTemplate redis;
     @Autowired
     MeterRegistry meterRegistry;
+    @Autowired
+    CircuitBreakerRegistry circuitBreakers;
+    @Autowired
+    CatalogProperties catalogProperties;
 
     @BeforeEach
     void fixture() {
         bookingMode = BookingMode.OK;
+        // 서킷은 공유 컨텍스트에 살아 있어 테스트 사이에 상태가 넘어온다. booking 호출이
+        // 이 클래스 전체에서 5번(성공 3·실패 2 = 40%)이라 실패가 하나 더 생기면 60%로
+        // 열리고(10초) 그 뒤 테스트가 전부 대체값(TOTAL)으로 깨진다 → 매번 초기화한다
+        circuitBreakers.circuitBreaker("booking").reset();
         redis.getConnectionFactory().getConnection().serverCommands().flushAll();
 
         jdbc.update("DELETE FROM screening");
@@ -259,6 +275,15 @@ class CatalogApiIntegrationTest {
         assertThat(redis.hasKey("catalog:theaters:true:all")).isTrue();
         assertThat(redis.hasKey("catalog:theaters:false:all")).isTrue();
         assertThat(redis.keys("catalog:theaters:*")).hasSize(2);
+    }
+
+    @Test
+    void bookingReadTimeoutIsBoundFromProperties() {
+        // 1.5초로 올리면 300ms가 이 경로에서 더는 검증되지 않는다. 300ms 동작 자체는
+        // BookingSeatCountClientTest가 보고, 여기서는 app.services.booking-read-timeout이
+        // 실제로 바인딩되는지만 지킨다 — 이름이 바뀌면 staging에서 조용히 기본값이 쓰인다
+        assertThat(catalogProperties.services().bookingReadTimeout())
+            .isEqualTo(java.time.Duration.ofMillis(1_500));
     }
 
     @Test

@@ -45,7 +45,8 @@ jobs:
       - run: terraform fmt -check -recursive ..   # envs/staging + envs/staging-k8s
       # staging-k8s는 plan 하지 않는다(클러스터 접근·state 권한 없음, apply는 관리자 로컬). 문법만 확인
       - run: terraform -chdir=../staging-k8s init -backend=false -input=false && terraform -chdir=../staging-k8s validate
-      - run: terraform init -backend-config=backend.hcl -input=false
+      # backend.hcl은 커밋하지 않는다(계정 ID). 버킷 이름은 bootstrap 규칙 cinema-tfstate-{계정ID} → 위에서 가린 ACCOUNT_ID로 만든다
+      - run: terraform init -backend-config="bucket=cinema-tfstate-${ACCOUNT_ID}" -input=false
       - run: terraform validate
       - id: plan
         run: |

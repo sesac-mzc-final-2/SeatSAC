@@ -67,11 +67,17 @@ terraform output                # tfstate_bucket = cinema-tfstate-<계정ID>
 - 이 폴더만 로컬 state를 쓴다. `bootstrap/terraform.tfstate`는 커밋하지 않고 **destroy 하지 않는다** (`prevent_destroy`)
 - 이미 버킷이 있으면 이 단계를 건너뛴다
 
-**다음 단계 준비**: 출력된 버킷 이름을 `global/backend.hcl`, `envs/staging/backend.hcl`에 적는다.
+**다음 단계 준비**: `global`·`envs/staging`·`envs/staging-k8s`에 `backend.hcl`을 만든다. **커밋하지 않는다**(`.gitignore`) — 버킷 이름에 계정 ID가 들어가고 이 레포는 Public이다. 각 폴더의 `backend.hcl.example`과 같은 한 줄이다.
 
-```hcl
-bucket = "cinema-tfstate-<계정ID>"
+```bash
+# infra/terraform 에서 (cinema-admin 자격 증명으로)
+B="cinema-tfstate-$(aws sts get-caller-identity --query Account --output text)"
+for d in global envs/staging envs/staging-k8s; do echo "bucket = \"$B\"" > "$d/backend.hcl"; done
 ```
+
+- key·region·암호화·잠금은 각 폴더 `versions.tf`의 `backend "s3"` 블록에 있다
+- CI(`infra-plan`)는 파일 없이 `-backend-config="bucket=cinema-tfstate-${ACCOUNT_ID}"`로 넘긴다(계정 ID는 마스킹)
+- 새로 clone했거나 `git pull` 뒤 파일이 사라졌으면(예전에 커밋돼 있던 파일) 위 명령을 다시 실행한다
 
 ---
 
@@ -1025,7 +1031,7 @@ terraform destroy -var-file=staging.tfvars
 | --- | --- | --- |
 | `init`·`plan`에서 `assume role with MFA enabled, but AssumeRoleTokenProvider session option not set` | `AWS_PROFILE`(MFA 프로필)을 Terraform이 직접 쓰려 함. Terraform은 MFA 입력을 못 받는다 | 2-5 "Terraform 실행 전": `export-credentials`로 환경변수 설정 → `unset AWS_PROFILE` |
 | `ExpiredToken`·`The security token included in the request is expired` | 위에서 넘긴 임시 키가 8시간 지나 만료 | `export-credentials` 다시 실행 |
-| `init`에서 `bucket - The name of the S3 bucket` 입력 요구 | `-backend-config=backend.hcl` 누락 또는 bootstrap 전 | 1장 → `backend.hcl` 채우기 → `init -backend-config=backend.hcl` |
+| `init`에서 `bucket - The name of the S3 bucket` 입력 요구 | `-backend-config=backend.hcl` 누락, `backend.hcl` 없음(커밋하지 않는 파일 — clone·pull 직후) 또는 bootstrap 전 | 1장 "다음 단계 준비"로 `backend.hcl` 만들기 → `init -backend-config=backend.hcl` |
 | `CreateOpenIDConnectProvider ... 409 EntityAlreadyExists` | 계정에 GitHub OIDC 공급자가 이미 있음 | 2-2 표대로 import 또는 data 참조 |
 | `Resource already managed by Terraform` (import 시) | 그 리소스를 이미 다른(또는 같은) state가 관리 중 | `terraform state list`로 어느 폴더 state인지 확인 → 12장 |
 | `AccessDenied ... sts:AssumeRole` (팀원) | `global.tfvars` 사용자 목록에 없음 / MFA 없이 시도 / 이름 대소문자 | tfvars 수정 후 apply, `mfa_serial` 확인 |

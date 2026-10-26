@@ -15,7 +15,7 @@ export AWS_PROFILE=cinema-admin   # Terraform은 이 환경변수로 자격 증�
 
 cd infra/terraform/bootstrap
 terraform init && terraform apply          # tfstate 버킷
-# 출력 tfstate_bucket 값을 ../envs/staging/backend.hcl 에 적는다
+# 출력 tfstate_bucket 값으로 global·envs/staging·envs/staging-k8s 에 backend.hcl 을 만든다(커밋 안 함, backend.hcl.example 참고)
 ```
 
 ## 되돌리기

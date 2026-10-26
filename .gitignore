@@ -50,3 +50,5 @@ kubeconfig
 .trivycache/
 # 시드 적재 도구는 lotte-seed에만 (실수로 복사해 왔을 때)
 /load/
+# kotlin 에러 로그
+.kotlin/

@@ -28,5 +28,8 @@ const stop = () => {
 };
 mock.on("exit", stop);
 vite.on("exit", stop);
+// spawn 자체가 실패하면(npx 없음 등) exit 가 안 올 수 있어 error 에서도 형제 프로세스를 정리한다
+mock.on("error", stop);
+vite.on("error", stop);
 process.on("SIGINT", stop);
 process.on("SIGTERM", stop);

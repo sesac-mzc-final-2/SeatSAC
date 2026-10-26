@@ -70,7 +70,18 @@ const todayIso = () => {
   const p = todayKst();
   return `${p.year}-${p.month}-${p.day}`;
 };
-const isIsoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s ?? "");
+/** `YYYY-MM-DD` 형식이고 달력에 있는 날짜인지 (2026-10-32 같은 값은 400 으로) */
+const isIsoDate = (s) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? "");
+  if (!match) return false;
+  const [year, month, day] = match.slice(1).map(Number);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1];
+};
+/** 계약의 integer(int64) ID: 양의 정수 문자열만 */
+const isPositiveIntId = (s) => /^\d+$/.test(s ?? "") && Number(s) > 0;
+const isNonNegativeInt = (s) => /^\d+$/.test(s ?? "");
 const dayNumber = (iso) => Math.floor(Date.UTC(...iso.split("-").map((v, i) => Number(v) - (i === 1 ? 1 : 0))) / 86400000);
 const addMinutes = (iso, hhmm, minutes) => {
   const [h, m] = hhmm.split(":").map(Number);
@@ -83,11 +94,15 @@ const addMinutes = (iso, hhmm, minutes) => {
 const inSeedRange = (dateIso) => Math.abs(dayNumber(dateIso) - dayNumber(todayIso())) <= SEED_RANGE_DAYS;
 const traceId = () => randomUUID().replace(/-/g, "");
 
-const json = (res, status, body) => {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "X-Trace-Id": traceId() });
+const json = (res, status, body, responseTraceId = traceId()) => {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "X-Trace-Id": responseTraceId });
   res.end(JSON.stringify(body));
 };
-const fail = (res, status, code, message, details = []) => json(res, status, { code, message, traceId: traceId(), details });
+/** 오류는 헤더 X-Trace-Id 와 본문 traceId 가 같은 값 (실제 Gateway 와 동일) */
+const fail = (res, status, code, message, details = []) => {
+  const responseTraceId = traceId();
+  return json(res, status, { code, message, traceId: responseTraceId, details }, responseTraceId);
+};
 
 // ---------- 응답 조립 ----------
 
@@ -143,7 +158,7 @@ function screeningsOn(dateIso) {
         layoutVersion: 1,
         businessDate: dateIso,
         startsAt: addMinutes(dateIso, start, 0),
-        endsAt: addMinutes(dateIso, start, m.slotMinutes - 10),
+        endsAt: addMinutes(dateIso, start, m.slotMinutes),
         filmFormat: "2D",
         totalSeats: a.totalSeats,
         ...remaining(id, a.totalSeats),
@@ -192,11 +207,15 @@ createServer((req, res) => {
 
   if (path === "/api/movies") {
     const status = q.get("status") ?? "NOW_SHOWING";
-    const page = Number(q.get("page") ?? 0);
-    const size = Number(q.get("size") ?? 20);
-    if (!["NOW_SHOWING", "COMING_SOON"].includes(status) || !(page >= 0) || !(size >= 1 && size <= 50)) {
-      return fail(res, 400, "VALIDATION_FAILED", "bad query", [{ field: "status", reason: "ENUM" }]);
-    }
+    const pageRaw = q.get("page") ?? "0";
+    const sizeRaw = q.get("size") ?? "20";
+    const details = [];
+    if (!["NOW_SHOWING", "COMING_SOON"].includes(status)) details.push({ field: "status", reason: "ENUM" });
+    if (!isNonNegativeInt(pageRaw)) details.push({ field: "page", reason: "MIN_0_INTEGER" });
+    if (!isNonNegativeInt(sizeRaw) || Number(sizeRaw) < 1 || Number(sizeRaw) > 50) details.push({ field: "size", reason: "RANGE_1_50_INTEGER" });
+    if (details.length > 0) return fail(res, 400, "VALIDATION_FAILED", "bad query", details);
+    const page = Number(pageRaw);
+    const size = Number(sizeRaw);
     const all = status === "NOW_SHOWING" ? movies.map(movieSummary) : [];
     return json(res, 200, {
       content: all.slice(page * size, page * size + size),
@@ -214,17 +233,25 @@ createServer((req, res) => {
   }
 
   if (path === "/api/theaters") {
-    const hasLayout = q.get("hasLayout") ?? "true";
+    const rawHasLayout = q.get("hasLayout");
+    if (rawHasLayout !== null && rawHasLayout !== "true" && rawHasLayout !== "false") {
+      return fail(res, 400, "VALIDATION_FAILED", "hasLayout must be boolean", [{ field: "hasLayout", reason: "BOOLEAN" }]);
+    }
+    const hasLayout = rawHasLayout ?? "true";
     return json(res, 200, { items: theaters.filter((t) => hasLayout === "false" || t.hasLayout) });
   }
 
   if (path === "/api/screenings") {
     const date = q.get("date");
-    const theaterId = Number(q.get("theaterId"));
-    const movieId = q.get("movieId") ? Number(q.get("movieId")) : null;
-    if (!isIsoDate(date) || !theaterId) {
-      return fail(res, 400, "VALIDATION_FAILED", "date·theaterId required", [{ field: "date", reason: "REQUIRED" }]);
-    }
+    const theaterRaw = q.get("theaterId");
+    const movieRaw = q.get("movieId");
+    const details = [];
+    if (!isIsoDate(date)) details.push({ field: "date", reason: date ? "DATE" : "REQUIRED" });
+    if (!isPositiveIntId(theaterRaw)) details.push({ field: "theaterId", reason: theaterRaw ? "INTEGER" : "REQUIRED" });
+    if (movieRaw !== null && movieRaw !== "" && !isPositiveIntId(movieRaw)) details.push({ field: "movieId", reason: "INTEGER" });
+    if (details.length > 0) return fail(res, 400, "VALIDATION_FAILED", "bad query", details);
+    const theaterId = Number(theaterRaw);
+    const movieId = movieRaw ? Number(movieRaw) : null;
     if (!inSeedRange(date)) return json(res, 200, { items: [] });
     const now = Date.now();
     const isToday = date === todayIso();

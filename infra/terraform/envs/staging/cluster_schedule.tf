@@ -32,7 +32,7 @@ locals {
       cron     = "cron(7 23 ? * MON-FRI *)"
       desired  = 0
       state    = var.cluster_keep_on ? "DISABLED" : "ENABLED"
-      end_date = "${var.cluster_schedule_demo_start}T00:00:00+09:00" # 데모 주간부터 끄지 않는다
+      end_date = timeadd("${var.cluster_schedule_demo_start}T00:00:00Z", "-9h") # 데모 시작일 0시 KST = 전날 15:00 UTC. AWS가 UTC(Z)로 돌려주므로 Z로 넘겨야 diff가 없다
     }
   }
 
@@ -62,7 +62,8 @@ resource "aws_iam_role" "cluster_scheduler" {
       Condition = {
         StringEquals = {
           "aws:SourceAccount" = local.account_id
-          "aws:SourceArn"     = aws_scheduler_schedule_group.cluster.arn # 일정 그룹 ARN (일정 ARN이 아니다)
+          # Scheduler가 넘기는 SourceArn은 일정 그룹 ARN이다(일정 ARN이 아니다 — 10/27 ValidationException으로 확인)
+          "aws:SourceArn" = aws_scheduler_schedule_group.cluster.arn
         }
       }
     }]
@@ -90,7 +91,7 @@ resource "aws_scheduler_schedule" "cluster" {
   group_name  = aws_scheduler_schedule_group.cluster.name
   description = "${each.value.action}: ${each.value.node_group} desired ${each.value.desired} (월~금 KST, 3.1.14)"
   state       = each.value.state
-  end_date    = each.value.end_date == null ? null : timeadd(each.value.end_date, "0s") # RFC3339(UTC)로 정규화
+  end_date    = each.value.end_date
 
   schedule_expression          = each.value.cron
   schedule_expression_timezone = "Asia/Seoul"

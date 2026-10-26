@@ -22,6 +22,11 @@
   box-sizing: border-box;
 }
 .fallbackTitle {
+  /* 아주 긴 제목이 아래 안내 문구와 겹치지 않게 4줄에서 말줄임 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
   font-size: 18px;
   font-weight: 700;
   line-height: 1.3;

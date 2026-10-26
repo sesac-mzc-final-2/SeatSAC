@@ -15,17 +15,16 @@
   opacity: 0.92;
 }
 .title {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  /* 제목은 1줄, 넘치면 말줄임(…). 전체 제목은 title 툴팁·상세 화면에서 */
+  display: block;
   overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--color-text);
   text-decoration: none;
   font-size: 16px;
   font-weight: 700;
   line-height: 1.35;
-  /* 제목이 1줄이든 2줄이든 같은 높이를 차지해 아래 「예매」 버튼이 카드마다 같은 선에 놓인다 */
-  min-height: calc(1.35em * 2);
 }
 .title:hover {
   color: var(--color-primary);

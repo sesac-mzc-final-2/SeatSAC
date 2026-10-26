@@ -11,7 +11,7 @@ interface Props {
   actions?: ReactNode;
 }
 
-/** W1 목록 카드: 포스터(없으면 제목 카드) + 등급 + 제목. 러닝타임은 표시하지 않는다 (W-2) */
+/** W1 목록 카드: 포스터(없으면 제목 카드) + 등급 + 제목(1줄, 말줄임). 러닝타임은 표시하지 않는다 (W-2) */
 export function MovieCard({ movie, actions }: Props) {
   const detailHref = routes.movie(movie.movieId);
   return (
@@ -19,7 +19,8 @@ export function MovieCard({ movie, actions }: Props) {
       <Link to={detailHref} className={styles.posterLink} aria-label={`${movie.title} 상세`}>
         <MoviePoster movie={movie} showGrade />
       </Link>
-      <Link to={detailHref} className={styles.title}>
+      {/* 1줄을 넘는 제목은 말줄임(…)되므로 전체 제목은 title 툴팁으로 */}
+      <Link to={detailHref} className={styles.title} title={movie.title}>
         {movie.title}
       </Link>
       {actions && <div className={styles.actions}>{actions}</div>}

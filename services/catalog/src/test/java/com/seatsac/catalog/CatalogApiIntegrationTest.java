@@ -22,6 +22,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -63,6 +65,7 @@ class CatalogApiIntegrationTest {
 
     static volatile BookingMode bookingMode = BookingMode.OK;
     static HttpServer booking;
+    static ExecutorService bookingPool;
 
     @TestConfiguration(proxyBeanMethods = false)
     static class FixedClock {
@@ -76,12 +79,16 @@ class CatalogApiIntegrationTest {
     @BeforeAll
     static void startBookingStub() throws Exception {
         booking = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        // 기본 실행기는 요청을 한 스레드에서 차례로 처리한다 → SLOW 모드가 쉬는 동안 다음
+        // 테스트의 요청이 뒤에 밀려 같이 타임아웃된다(대체값으로 떨어져 엉뚱한 테스트가 깨진다)
+        bookingPool = Executors.newCachedThreadPool();
+        booking.setExecutor(bookingPool);
         booking.createContext("/internal/screenings/seat-counts", exchange -> {
             String ids = Objects.requireNonNullElse(exchange.getRequestURI().getQuery(), "");
             BookingMode mode = bookingMode;
             if (mode == BookingMode.SLOW) {
                 try {
-                    Thread.sleep(700);   // 응답 타임아웃 300ms를 넘긴다
+                    Thread.sleep(2_000);   // 테스트 프로필의 응답 타임아웃(1.5초)을 넘긴다
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
@@ -113,6 +120,7 @@ class CatalogApiIntegrationTest {
     @AfterAll
     static void stopBookingStub() {
         booking.stop(0);
+        bookingPool.shutdownNow();
     }
 
     @DynamicPropertySource

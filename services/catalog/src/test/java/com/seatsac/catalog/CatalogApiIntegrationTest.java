@@ -12,10 +12,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.seatsac.catalog.config.CatalogProperties;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -96,10 +98,10 @@ class CatalogApiIntegrationTest {
                     exchange.close();   // @AfterAll의 shutdownNow — 멈춘 서버에 쓰지 않는다
                     return;
                 }
-                // 클라이언트는 이미 타임아웃으로 포기했다. 닫힌 소켓에 본문을 쓰면
-                // IOException이 핸들러 밖으로 나가 Gradle 로그에 스택이 섞인다
-                exchange.close();
-                return;
+                // 늦더라도 <b>정상 응답을 보낸다.</b> 응답 없이 닫으면 읽기 타임아웃이 걸리지
+                // 않아도(= 회귀) 클라이언트가 연결 오류로 대체값에 떨어져 이 테스트가 통과한다 —
+                // 그러면 타임아웃 경로를 검증하지 못한다. 쓰기는 아래 sendResponse가 IOException만
+                // 삼키므로(클라이언트가 이미 끊었다) 로그에 스택이 남지 않는다
             }
             byte[] body;
             int status;
@@ -116,13 +118,25 @@ class CatalogApiIntegrationTest {
                     .collect(Collectors.joining(","));
                 body = ("{\"items\":[" + items + "]}").getBytes(StandardCharsets.UTF_8);
             }
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            sendResponse(exchange, status, body);
+        });
+        booking.start();
+    }
+
+    /**
+     * 응답을 쓴다. 클라이언트가 타임아웃으로 먼저 끊은 경우(SLOW 모드)의 {@code IOException}만
+     * 삼킨다 — 그것까지 핸들러 밖으로 나가면 Gradle 로그에 스택이 섞인다. 다른 예외는 그대로 둔다.
+     */
+    private static void sendResponse(HttpExchange exchange, int status, byte[] body) {
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        try {
             exchange.sendResponseHeaders(status, body.length);
             try (OutputStream out = exchange.getResponseBody()) {
                 out.write(body);
             }
-        });
-        booking.start();
+        } catch (IOException e) {
+            exchange.close();   // 클라이언트가 이미 포기했다
+        }
     }
 
     @AfterAll

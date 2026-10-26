@@ -14,9 +14,17 @@ const vite = spawn(npx, ["vite"], {
   env: { ...process.env, DEV_API_PROXY: `http://localhost:${port}` },
 });
 
+let stopping = false;
 const stop = () => {
+  if (stopping) return;
+  stopping = true;
   mock.kill();
-  vite.kill();
+  // Windows 는 shell(cmd.exe) 로 띄워 vite.pid 가 셸 PID 다 → 트리째 끝내야 5173 이 풀린다
+  if (process.platform === "win32" && vite.pid) {
+    spawn("taskkill", ["/PID", String(vite.pid), "/T", "/F"], { stdio: "ignore" });
+  } else {
+    vite.kill();
+  }
 };
 mock.on("exit", stop);
 vite.on("exit", stop);

@@ -11,6 +11,8 @@ import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.MOCK_PORT ?? 8089);
 const KST = "+09:00";
+/** 편성이 있는 기간: 오늘 ±30일. 밖은 계약대로 `{ items: [] }`, 단건도 404 (목록·단건 범위 동일) */
+const SEED_RANGE_DAYS = 30;
 
 // ---------- 데이터 ----------
 
@@ -78,6 +80,7 @@ const addMinutes = (iso, hhmm, minutes) => {
   const k = new Date(d.getTime() + 9 * 3600 * 1000);
   return `${k.getUTCFullYear()}-${pad(k.getUTCMonth() + 1)}-${pad(k.getUTCDate())}T${pad(k.getUTCHours())}:${pad(k.getUTCMinutes())}:00${KST}`;
 };
+const inSeedRange = (dateIso) => Math.abs(dayNumber(dateIso) - dayNumber(todayIso())) <= SEED_RANGE_DAYS;
 const traceId = () => randomUUID().replace(/-/g, "");
 
 const json = (res, status, body) => {
@@ -151,9 +154,9 @@ function screeningsOn(dateIso) {
 }
 
 function findScreening(id) {
-  // 오늘 기준 ±30일 안에서 찾는다 (ID 에 날짜번호가 들어 있다)
+  // 편성 기간(오늘 ±SEED_RANGE_DAYS) 안에서 찾는다 (ID 에 날짜번호가 들어 있다)
   const today = dayNumber(todayIso());
-  for (let d = -30; d <= 30; d++) {
+  for (let d = -SEED_RANGE_DAYS; d <= SEED_RANGE_DAYS; d++) {
     const dayNo = today + d;
     if (dayNo % 1000 !== Math.floor(id / 1000000)) continue;
     const date = new Date(dayNo * 86400000);
@@ -222,6 +225,7 @@ createServer((req, res) => {
     if (!isIsoDate(date) || !theaterId) {
       return fail(res, 400, "VALIDATION_FAILED", "date·theaterId required", [{ field: "date", reason: "REQUIRED" }]);
     }
+    if (!inSeedRange(date)) return json(res, 200, { items: [] });
     const now = Date.now();
     const isToday = date === todayIso();
     const items = screeningsOn(date)

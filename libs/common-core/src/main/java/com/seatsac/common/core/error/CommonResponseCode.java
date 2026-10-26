@@ -28,7 +28,9 @@ public enum CommonResponseCode implements ErrorCode {
     INTERNAL_ERROR(500, "서버 오류입니다."),
     SERVICE_UNAVAILABLE(503, "일시적으로 처리할 수 없습니다. 잠시 후 다시 시도해 주세요."),
     PAYMENT_RESULT_UNKNOWN(503, "결제 결과를 확인하지 못했습니다. 잠시 후 예매 상태를 확인해 주세요."),
-    BOOKING_UNAVAILABLE(503, "예매 정보를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    BOOKING_UNAVAILABLE(503, "예매 정보를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."),
+    /** user — 프로필 첫 생성 때 Cognito GetUser 실패 (규약 6장, ADR-54) */
+    IDENTITY_UNAVAILABLE(503, "사용자 정보를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
     private final int status;
     private final String message;

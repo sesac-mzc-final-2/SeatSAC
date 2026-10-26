@@ -102,7 +102,8 @@ jobs:
             *) echo "::error::이미지 빌드·Trivy 실패 — image-build 로그 확인 (런북 13장)"; exit 1 ;;
           esac
 
-  # ---- 3.3.5 frontend 검사: frontend/** 가 바뀐 PR만 (frontend-deploy 와 같은 node 20 · npm ci · npm run build) ----
+  # ---- 3.3.5 frontend 검사: frontend/** 가 바뀐 PR만 (frontend-deploy 와 같은 node 24 · npm ci · npm run build) ----
+  # node 는 24 (jsdom 30·vitest 가 22.22+ 를 요구, 로컬 개발도 24). 올릴 때 frontend-deploy 와 같이 올린다
   # 필수 검사 이름은 "frontend". frontend 변경이 없으면 건너뜀 = 성공 (contract-check 의 변경 감지와 같은 방식).
   # 이 워크플로 자체가 바뀐 PR도 돌리되, frontend 프로젝트(package-lock.json)가 아직 없으면 건너뛴다.
   frontend-changes:
@@ -141,7 +142,7 @@ jobs:
         run: test -f package-lock.json || { echo "::error::frontend/package-lock.json 이 없다 (npm ci 에 필요. 커밋한다)"; exit 1; }
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci

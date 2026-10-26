@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------
 # bootstrap: tfstate 버킷 1회 생성 (이 디렉터리만 로컬 state를 쓴다)
 #   cd infra/terraform/bootstrap && terraform init && terraform apply
-#   → 출력된 bucket 이름을 envs/staging/backend.hcl 에 적는다
+#   → 출력된 bucket 이름으로 global·envs/*/backend.hcl 을 만든다(커밋 안 함, backend.hcl.example)
 # ------------------------------------------------------------------
 terraform {
   required_version = ">= 1.10"

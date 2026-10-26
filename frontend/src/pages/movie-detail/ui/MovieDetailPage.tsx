@@ -10,11 +10,12 @@ import styles from "./MovieDetailPage.module.css";
 
 const CAST_LIMIT = 5;
 
+const NOT_FOUND_TITLE = "영화를 찾을 수 없습니다";
+
 function MovieNotFound() {
-  useDocumentTitle("영화를 찾을 수 없습니다");
   return (
     <EmptyState
-      title="영화를 찾을 수 없습니다"
+      title={NOT_FOUND_TITLE}
       description="주소가 잘못되었거나 상영이 끝난 영화입니다."
       action={<ButtonLink to={routes.home()}>영화 목록으로</ButtonLink>}
     />
@@ -27,9 +28,11 @@ export function MovieDetailPage() {
   const id = Number(movieId);
   const validId = Number.isInteger(id) && id > 0;
   const query = useQuery({ ...movieDetailQuery(id), enabled: validId });
-  useDocumentTitle(query.data?.title);
+  const notFound = !validId || isApiError(query.error, 404);
+  // 문서 제목은 부모에서 한 번만 정한다 (자식 effect 뒤에 부모 effect 가 돌아 덮어쓰는 문제 방지)
+  useDocumentTitle(notFound ? NOT_FOUND_TITLE : query.data?.title);
 
-  if (!validId || isApiError(query.error, 404)) return <MovieNotFound />;
+  if (notFound) return <MovieNotFound />;
   if (query.isPending) return <LoadingBlock label="영화 정보를 불러오는 중…" />;
   if (query.isError) {
     return <ErrorState error={query.error} title="영화 정보를 불러오지 못했습니다" onRetry={() => query.refetch()} />;

@@ -12,8 +12,9 @@ type Props = {
 
 /** TMDB 포스터. posterUrl이 null이거나 못 불러오면 제목 카드 (롯데시네마 이미지는 쓰지 않는다) */
 export function MoviePoster({ movie, showGrade = false, className }: Props) {
-  const [failed, setFailed] = useState(false);
-  const showImage = movie.posterUrl !== null && !failed;
+  // 실패는 URL 단위로 기억한다 — 같은 자리에 다른 posterUrl 이 오면 다시 시도한다
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showImage = movie.posterUrl !== null && failedUrl !== movie.posterUrl;
 
   return (
     <div className={[styles.frame, className].filter(Boolean).join(" ")}>
@@ -24,7 +25,7 @@ export function MoviePoster({ movie, showGrade = false, className }: Props) {
           alt=""
           loading="lazy"
           decoding="async"
-          onError={() => setFailed(true)}
+          onError={() => setFailedUrl(movie.posterUrl)}
         />
       ) : (
         <div className={styles.fallback} aria-hidden="true">

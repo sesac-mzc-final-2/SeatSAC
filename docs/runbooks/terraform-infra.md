@@ -576,20 +576,22 @@ SeatSAC-gitops는 Public이다(무료 플랜에서 ruleset을 쓰려면 Public�
 | ECR 레지스트리(계정 ID) | 서비스 Application 5개 `cinema-{svc}` — `argocd_apps.tf`의 `kustomize.images` `cinema/{svc}=<레지스트리>/cinema/{svc}` | `image-tag/`에 `newTag`만 |
 | 플랫폼·`cinema-common`·AppProject | gitops `apps/staging` — root 앱 `cinema-root`(Terraform)가 sync | 매니페스트 |
 
-#### 6-C-1. ConfigMap (지금, ArgoCD 전)
+#### 6-C-1. ConfigMap 확인 (apply 없음)
+
+ConfigMap `cinema-infra-endpoints`는 3.1.4에서 이미 만들었다. 3.1.5부터 `envs/staging-k8s`를 apply하면 **ArgoCD·Application도 같이 만들어지므로**(6-C-2), 여기서는 apply하지 않고 상태만 확인한다. 처음 만드는 환경이면 6-C-2의 한 번의 apply에서 같이 생긴다.
 
 ```bash
-# 터미널 B (0장 Terraform 자격 증명) — envs/staging(3.1.3)이 apply된 뒤
-cd infra/terraform/envs/staging-k8s
-terraform plan -var-file=staging-k8s.tfvars -out=plan.out   # 예상: ConfigMap cinema-infra-endpoints 1 add, 다른 변경 없음
-terraform apply plan.out
-terraform output infra_endpoints_keys
-kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.DB_HOST}{"\n"}'   # RDS 주소 (화면에만, 붙여 넣지 않는다)
+# 터미널 A (cinema-admin)
+kubectl -n cinema-staging get cm cinema-infra-endpoints \
+  -o go-template='{{range $k, $v := .data}}{{$k}}{{"\t"}}{{if $v}}set{{else}}EMPTY{{end}}{{"\n"}}{{end}}'
+# 기대(Cognito 전): DB_HOST·VALKEY_HOST·SQS_NOTIFICATION_URL = set, COGNITO_ISSUER_URI·COGNITO_CLIENT_ID = EMPTY
 ```
 
+- 값은 화면에 출력하지 않는다(위 명령은 키와 set/EMPTY만 보여 준다)
 - `COGNITO_*`는 Cognito(3.3.x) 전까지 빈 값이다. 만든 뒤 `staging-k8s.tfvars`에 `cognito_enabled = true` → plan(ConfigMap 1 change + `argocd-apps` 1 change(gateway Application 추가)) → apply
 - SQS URL은 큐 이름으로 정해져서 3.1.8 전에도 들어간다(큐가 없으면 booking 발행만 실패)
 - 값이 바뀌어도 파드는 자동으로 다시 뜨지 않는다 → ArgoCD에서 해당 앱 **Restart**(또는 다음 배포)
+- ConfigMap이 없거나 값이 틀리면 **6-C-2 사전 조건을 모두 확인한 뒤** 6-C-2의 plan·apply 한 번으로 고친다(ConfigMap만 따로 apply하지 않는다)
 
 #### 6-C-2. ArgoCD 설치 · root 앱 · 서비스 Application (3.1.5)
 
@@ -601,7 +603,7 @@ kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.DB_H
 | --- | --- | --- |
 | 노드 켜짐 | `kubectl get nodes` 2대 Ready | Helm 대기·Job이 시간 초과 (13장) → `infra/scripts/cluster-scale.sh up` |
 | 3.1.12 계정·Secret | 8-B `PASS … (VERIFY_IDENTITY)` | Flyway 훅 Job 실패 → 앱 sync 중단 |
-| 6-C-1 ConfigMap | `kubectl -n cinema-staging get cm cinema-infra-endpoints` | 같은 apply에서 같이 만들어진다 |
+| 6-C-1 ConfigMap | 6-C-1 확인 명령 (DB_HOST·VALKEY_HOST·SQS = set) | 이 apply에서 같이 만들어진다 |
 | ECR 이미지 · gitops 태그 | 6-A-4 수동 실행 `services=all` → gitops `image-tag`에 sha7 | `CHANGE_ME` 태그 → `ImagePullBackOff` |
 | gitops PR `infra/3.1.5-argocd` 머지 | 플랫폼 차트 버전 고정·gateway Ingress·project wave | 플랫폼 앱이 `CHANGE_ME` 리비전으로 실패 |
 | 차트 버전이 실제로 있는지 | `helm search repo argo/argo-cd --versions \| head -3` · `argo/argocd-apps` · `argo/argo-rollouts` · `prometheus-community/kube-prometheus-stack` | `Could not find` (3.1.4 tomcat 사례) → tfvars·gitops를 있는 버전으로 |

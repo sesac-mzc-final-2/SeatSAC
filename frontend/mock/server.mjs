@@ -80,8 +80,8 @@ const isIsoDate = (s) => {
   return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1];
 };
 /** 계약의 integer(int64) ID: 양의 정수 문자열만 */
-const isPositiveIntId = (s) => /^\d+$/.test(s ?? "") && Number(s) > 0;
-const isNonNegativeInt = (s) => /^\d+$/.test(s ?? "");
+const isNonNegativeInt = (s) => /^\d+$/.test(s ?? "") && Number.isSafeInteger(Number(s));
+const isPositiveIntId = (s) => isNonNegativeInt(s) && Number(s) > 0;
 const dayNumber = (iso) => Math.floor(Date.UTC(...iso.split("-").map((v, i) => Number(v) - (i === 1 ? 1 : 0))) / 86400000);
 const addMinutes = (iso, hhmm, minutes) => {
   const [h, m] = hhmm.split(":").map(Number);
@@ -248,7 +248,8 @@ createServer((req, res) => {
     const details = [];
     if (!isIsoDate(date)) details.push({ field: "date", reason: date ? "DATE" : "REQUIRED" });
     if (!isPositiveIntId(theaterRaw)) details.push({ field: "theaterId", reason: theaterRaw ? "INTEGER" : "REQUIRED" });
-    if (movieRaw !== null && movieRaw !== "" && !isPositiveIntId(movieRaw)) details.push({ field: "movieId", reason: "INTEGER" });
+    // 선택 파라미터라도 "있으면" 양의 정수여야 한다 (?movieId= 빈 값도 400)
+    if (movieRaw !== null && !isPositiveIntId(movieRaw)) details.push({ field: "movieId", reason: "INTEGER" });
     if (details.length > 0) return fail(res, 400, "VALIDATION_FAILED", "bad query", details);
     const theaterId = Number(theaterRaw);
     const movieId = movieRaw ? Number(movieRaw) : null;

@@ -8,6 +8,8 @@
   },
   "scripts": {
     "dev": "vite",
+    "mock": "node mock/server.mjs",
+    "dev:mock": "node mock/dev.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",

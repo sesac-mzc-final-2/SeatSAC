@@ -1,0 +1,32 @@
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.label {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pill {
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 22px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.pill:hover {
+  border-color: var(--color-text);
+}
+.pill[aria-pressed="true"] {
+  border-color: var(--color-text);
+  background: var(--color-text);
+  color: #fff;
+}

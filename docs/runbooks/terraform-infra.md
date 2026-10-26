@@ -896,9 +896,9 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 | 시각 (KST) | 동작 | 비고 |
 | --- | --- | --- |
 | 월~금 08:23 | **EventBridge** 노드그룹마다 desired 1 | 노드 Ready까지 2~3분, 파드 Ready까지 5~10분 더 |
-| 월~금 08:53 | GitHub 백업 `up` (이미 켜져 있으면 no-op) | 07~10시(KST)에 도착한 실행만 동작 |
+| 월~금 08:53 | GitHub 백업 `up` (이미 켜져 있으면 no-op) | 월~금 07~10시(KST)에 도착한 실행만 동작 — 토요일 아침에 늦게 온 켜기는 건너뜀 |
 | 월~금 23:07 | **EventBridge** desired 0 | 금요일 밤에 꺼져 월요일 아침까지 0대 |
-| 월~금 23:37 · 다음 날 00:37 | GitHub 백업 `down` (no-op 또는 대신 끄기) | 22~05시(KST)에 도착한 실행만 동작 — 늦게 온 끄기가 근무 시간에 끄지 않게 |
+| 월~금 23:37 · 다음 날 00:37 | GitHub 백업 `down` (no-op 또는 대신 끄기) | 월~금 22~23시·화~토 0~5시(KST)에 도착한 실행만 동작 — 늦게 온 끄기가 근무 시간에 끄지 않게 |
 | 데모 주간 11/16~20 | 예약 끄기 멈춤 (24시간) | EventBridge 끄기는 `cluster_schedule_demo_start` 0시에 끝남(end_date), 백업도 날짜로 건너뜀. 발표 후 수동 `down` |
 | 임시로 밤에도 켜 둠 | `envs/staging` tfvars `cluster_keep_on = true` → apply | EventBridge 끄기 DISABLED → 백업도 그 상태를 보고 건너뜀. 끝나면 `false` → apply. (예전 Variables `CLUSTER_KEEP_ON`은 쓰지 않음 — 지운다) |
 
@@ -918,11 +918,20 @@ terraform output github_secrets        # AWS_CLUSTER_SCHEDULE_ROLE_ARN → 레�
 
 ```bash
 # 터미널 B (0장 Terraform 자격 증명)
-cd infra/terraform/global && terraform plan -var-file=global.tfvars -out=plan.out   # 기대: 정책 1 change (SchedulerRead) → apply → rm plan.out
+# 1) global — 반드시 apply까지 끝낸 뒤 staging으로 (안 하면 백업 워크플로가 scheduler:ListSchedules AccessDenied)
+cd infra/terraform/global
+terraform plan -var-file=global.tfvars -out=plan.out
+# 기대: aws_iam_role_policy.gha_cluster_schedule 1 change (SchedulerRead 문 추가). add·destroy 0
+terraform apply plan.out
+rm -f plan.out
+
+# 2) envs/staging
 cd ../envs/staging
 terraform plan -var-file=staging.tfvars -out=plan.out
-# 기대: schedule group 1 · IAM 역할 1 · 인라인 정책 1 · 일정 4(ng-a·ng-c × up·down) add. destroy 0
-terraform apply plan.out && rm -f plan.out
+# 기대: schedule group 1 · IAM 역할 1 · 인라인 정책 1 · 일정 4(ng-a·ng-c × up·down) = 7 add. destroy 0
+#   노드그룹 2 change가 같이 보이면 release_version(AMI) 갱신 — 노드 0대(밤)일 때만 같이 apply, 낮이면 노드 교체가 생긴다
+terraform apply plan.out
+rm -f plan.out
 terraform output cluster_schedules      # {<노드그룹>-up = ENABLED, <노드그룹>-down = ENABLED} × 2
 ```
 
@@ -963,6 +972,7 @@ infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드�
 | 예약 실행이 안 보임·몇 시간 늦음 (GitHub) | GitHub schedule은 부하에 따라 늦거나 빠진다(10/23·10/26 실제 발생) / 60일간 레포 활동 없음 | 정시 실행은 EventBridge가 하므로 영향 없음. 늦게 온 백업은 시각 확인으로 건너뜀. 둘 다 안 돌았으면 수동 실행 |
 | 08:23·23:07에 노드가 안 바뀜 (EventBridge) | 일정 DISABLED(`cluster_keep_on`)·end_date 지남·역할 권한·노드그룹 이름 바뀜(교체 후 apply 안 함) | `aws scheduler list-schedules --group-name cinema-staging-cluster`, CloudWatch `TargetErrorCount`, staging plan으로 일정 입력값 확인 |
 | 백업 `EventBridge 끄기 일정 확인`에서 `AccessDenied scheduler:ListSchedules` | global 정책(SchedulerRead) apply 전 | global apply |
+| staging apply `ValidationException: The execution role you provide must allow AWS EventBridge Scheduler to assume the role` | 실행 역할 trust 조건 `aws:SourceArn`이 **일정 그룹 ARN**과 다름(일정 ARN을 넣으면 거절, 10/27) | `cluster_schedule.tf` trust를 `aws_scheduler_schedule_group.cluster.arn`으로. 방금 바꿨으면 IAM 전파 10~20초 뒤 다시 apply |
 
 
 ### 8-1-4. 노드그룹 DEGRADED·변경 거부 복구

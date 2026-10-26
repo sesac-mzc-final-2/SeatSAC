@@ -55,6 +55,7 @@ jobs:
         run: |
           today=$(TZ=Asia/Seoul date +%F)
           hour=$(TZ=Asia/Seoul date +%-H)
+          dow=$(TZ=Asia/Seoul date +%u)   # 1=월 … 7=일
           desired=1
           skip() { echo "$1 — 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; action=skip; }
           if [ "$EVENT" = "workflow_dispatch" ]; then
@@ -65,12 +66,14 @@ jobs:
               "37 14 * * 1-5"|"37 15 * * 1-5") action=down ;;
               *) echo "::error::모르는 schedule: $SCHEDULE"; exit 1 ;;
             esac
-            # 시각 확인: GitHub schedule은 몇 시간씩 늦게 돌 수 있다. 늦게 온 끄기가 근무 시간에 클러스터를 끄지 않게
-            #   끄기는 22시~05시대(KST), 켜기는 07시~10시대에만 실행한다
-            if [ "$action" = "down" ] && ! { [ "$hour" -ge 22 ] || [ "$hour" -le 5 ]; }; then
-              skip "끄기 백업이 ${hour}시(KST)에 늦게 도착"
-            elif [ "$action" = "up" ] && ! { [ "$hour" -ge 7 ] && [ "$hour" -le 10 ]; }; then
-              skip "켜기 백업이 ${hour}시(KST)에 늦게 도착"
+            # 시각·요일 확인: GitHub schedule은 몇 시간(하루를 넘길 수도) 늦게 돌 수 있고, github.event.schedule에는
+            #   원래 예약 날짜가 없다 → 지금 KST 시각이 그 동작이 맞는 창일 때만 실행한다
+            #   끄기: 월~금 22~23시 또는 화~토 0~5시 (금요일 밤 끄기가 토요일 새벽에 와도 끈다)
+            #   켜기: 월~금 7~10시만 (금요일 켜기가 토요일 아침에 와서 주말 내내 켜 두는 일을 막는다)
+            if [ "$action" = "down" ] && ! { { [ "$hour" -ge 22 ] && [ "$dow" -le 5 ]; } || { [ "$hour" -le 5 ] && [ "$dow" -ge 2 ] && [ "$dow" -le 6 ]; }; }; then
+              skip "끄기 백업이 요일 ${dow} ${hour}시(KST)에 늦게 도착"
+            elif [ "$action" = "up" ] && ! { [ "$hour" -ge 7 ] && [ "$hour" -le 10 ] && [ "$dow" -le 5 ]; }; then
+              skip "켜기 백업이 요일 ${dow} ${hour}시(KST)에 늦게 도착"
             fi
             if [ "$action" = "down" ] && ! [[ "$today" < "$DEMO_START" ]] && ! [[ "$today" > "$DEMO_END" ]]; then
               skip "데모 주간($DEMO_START~$DEMO_END) 예약 끄기"
@@ -79,7 +82,7 @@ jobs:
           if ! [[ "$desired" =~ ^[1-2]$ ]]; then echo "::error::desired는 1 또는 2"; exit 1; fi
           echo "action=$action" >> "$GITHUB_OUTPUT"
           echo "desired=$desired" >> "$GITHUB_OUTPUT"
-          echo "오늘(KST) $today ${hour}시 · 이벤트 $EVENT · 할 일 $action"
+          echo "오늘(KST) $today(요일 $dow) ${hour}시 · 이벤트 $EVENT · 할 일 $action"
 
       - uses: actions/checkout@v4
         if: steps.decide.outputs.action != 'skip'

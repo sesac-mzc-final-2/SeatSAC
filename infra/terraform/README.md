@@ -20,9 +20,12 @@ IAM Identity Center는 쓰지 않는다(학원 조직의 멤버 계정이라 계
 export AWS_PROFILE=cinema-admin          # MFA 코드 입력, 8시간 캐시
 
 # Terraform은 MFA 코드를 묻지 못한다 → CLI가 만든 임시 키를 환경변수로 넘긴다 (터미널 B)
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN   # 이전에 넘긴 키가 남아 있으면 그것이 먼저 쓰인다
 eval "$(aws configure export-credentials --profile cinema-admin --format env)"
 unset AWS_PROFILE
-aws sts get-caller-identity              # assumed-role/cinema-admin 이어야 한다. 만료되면 다시(Unauthorized·ExpiredToken)
+aws sts get-caller-identity --query Arn --output text
+# arn:aws:sts::<계정ID>:assumed-role/cinema-admin/... 이고 계정이 SeatSAC 계정일 때만 terraform 실행
+# 만료되면 위 4줄 다시 (Unauthorized·ExpiredToken)
 ```
 
 - `bootstrap`·처음 `global`은 역할이 아직 없으므로 **IAM 사용자 자격 증명**으로 실행한다(런북 1·2장)
@@ -31,8 +34,12 @@ aws sts get-caller-identity              # assumed-role/cinema-admin 이어야 �
 ## 처음 한 번
 
 ```bash
+# IAM 사용자 자격 증명(default 프로필)만 쓰도록 남은 환경변수를 지운다
+unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+aws sts get-caller-identity --query Arn --output text    # arn:aws:iam::<계정ID>:user/<내 이름> 일 때만 진행
+
 cd infra/terraform/bootstrap
-terraform init && terraform apply          # tfstate 버킷 (IAM 사용자 자격 증명)
+terraform init && terraform apply          # tfstate 버킷
 
 # backend.hcl은 커밋하지 않는다(버킷 이름에 계정 ID) — 세 폴더에 만든다 (런북 1장)
 cd ..
@@ -42,16 +49,26 @@ for d in global envs/staging envs/staging-k8s; do echo "bucket = \"$B\"" > "$d/b
 
 ## 매번
 
+| 디렉터리 | `-var-file` |
+| --- | --- |
+| `global/` | `global.tfvars` |
+| `envs/staging/` | `staging.tfvars` |
+| `envs/staging-k8s/` | `staging-k8s.tfvars` |
+
 ```bash
 cd infra/terraform/envs/staging                         # 또는 global · envs/staging-k8s
+VARS=staging.tfvars                                     # 위 표대로 (global.tfvars · staging-k8s.tfvars)
 git pull && git log -1 --oneline                        # 최신 main에서 (오래된 코드로 plan하면 destroy가 보인다)
 terraform init -backend-config=backend.hcl
 terraform fmt -recursive && terraform validate
-terraform plan -var-file=staging.tfvars -out=plan.out   # 바뀌는 것 확인 (PR에 첨부할 때 계정 ID는 <ACCOUNT_ID>로)
+terraform plan -var-file="$VARS" -out=plan.out          # 바뀌는 것 확인
 terraform apply plan.out
-rm -f plan.out                                          # 저장된 plan에는 비밀 값이 평문으로 있다
+rm -f plan.out                                          # 저장된 plan에는 비밀 값이 평문으로 있다 — 공유·첨부 금지
 terraform output                                        # 런북 14장 실행 기록에
 ```
+
+- **PR·노션에는 plan 원문이나 `plan.out`을 붙이지 않는다.** 계정 ID를 가려도 plan에는 비밀 값(비밀번호·키)이 평문으로 나올 수 있다. 붙일 것은 요약만: `Plan: N to add, N to change, N to destroy`와 바뀌는 리소스 주소(예: `aws_scheduler_schedule.cluster["ng-a-up"]`), 그리고 바뀐 속성 이름
+- `envs/staging` PR은 CI `infra-plan`이 계정 ID를 가린 plan을 코멘트로 단다(비밀 값은 `sensitive`로 가려진다). 로컬 plan을 따로 붙일 필요 없다
 
 ## 규칙
 

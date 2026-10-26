@@ -95,7 +95,7 @@ SeatSAC-gitops/
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |
 | `lambda-deploy` | main 머지(`lambdas/**`) | 패키징 → 배포 → 별칭 갱신 |
 | `infra-plan` | PR(`infra/terraform/**`, 필수 검사 아님) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |
-| `cluster-schedule` | **백업** 월~금 08:53 켜기 · 23:37·00:37 끄기(KST) + 수동(up·down·status) | 정시 켜기·끄기(08:23·23:07)는 **AWS EventBridge Scheduler**(`envs/staging/cluster_schedule.tf`)가 한다 — GitHub schedule은 몇 시간씩 늦거나 빠져서(10/23·10/26) 이 워크플로는 30분 뒤 백업·수동용. 백업은 늦게 도착하면(끄기 22~05시·켜기 07~10시 밖) 건너뛰고, 데모 주간 11/16~20·EventBridge 끄기 DISABLED(`cluster_keep_on`)면 끄기 건너뜀. 노드그룹 desired 1 ↔ 0 (OIDC `cinema-gha-cluster-schedule`), 스크립트 `infra/scripts/cluster-scale.sh` |
+| `cluster-schedule` | **백업** 월~금 08:53 켜기 · 23:37·00:37 끄기(KST) + 수동(up·down·status) | 정시 켜기·끄기(08:23·23:07)는 **AWS EventBridge Scheduler**(`envs/staging/cluster_schedule.tf`)가 한다 — GitHub schedule은 몇 시간씩 늦거나 빠져서(10/23·10/26) 이 워크플로는 30분 뒤 백업·수동용. 백업은 늦게 도착하면(끄기 월~금 22~23시·화~토 0~5시, 켜기 월~금 7~10시 밖) 건너뛰고, 데모 주간 11/16~20·EventBridge 끄기 DISABLED(`cluster_keep_on`)면 끄기 건너뜀. 노드그룹 desired 1 ↔ 0 (OIDC `cinema-gha-cluster-schedule`), 스크립트 `infra/scripts/cluster-scale.sh` |
 | `gitops-validate` (gitops 레포) | PR | `kustomize build` + kubeconform, Secret 매니페스트·계정 ID·`*.amazonaws.com`·`newName` 금지, gitleaks |
 
 - OIDC 역할 세션 이름 `gha-${{ github.actor }}-${{ github.run_id }}`(CloudTrail에 실행자)

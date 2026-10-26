@@ -30,6 +30,19 @@ output "infra_endpoints_keys" {
 }
 
 output "argocd_service_apps" {
-  description = "Terraform이 만든 서비스 ArgoCD Application (argocd_apps_enabled = false면 빈 목록, cognito_enabled = false면 gateway 없음)"
-  value       = sort([for a in kubernetes_manifest.argocd_service_app : a.manifest.metadata.name])
+  description = "Terraform이 만든 서비스 ArgoCD Application (cognito_enabled = false면 gateway 없음)"
+  value       = sort(keys(local.argocd_service_apps))
+}
+
+output "argocd_chart_version" {
+  value = helm_release.argocd.version
+}
+
+output "argocd_access" {
+  description = "ArgoCD 화면 (port-forward 전용)"
+  value = {
+    port_forward   = "kubectl -n ${var.argocd_namespace} port-forward svc/argocd-server 8080:80"
+    url            = "http://localhost:8080"
+    admin_password = "kubectl -n ${var.argocd_namespace} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d   # 관리자만"
+  }
 }

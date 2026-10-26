@@ -4,6 +4,7 @@
 #     kubernetes·helm provider 때문에 깨지지 않게 하려는 것.
 #   - 3.1.2: namespace · 팀원 port-forward RBAC · AWS Load Balancer Controller
 #   - 3.1.12: DB 스키마·계정(클러스터 안 Job) · {svc}-secrets · {svc}-migrator-secrets (db_bootstrap.tf)
+#   - 3.1.4·3.1.5: 엔드포인트 ConfigMap(infra_endpoints.tf) · ArgoCD(argocd.tf) · root·서비스 Application(argocd_apps.tf)
 #     ⚠️ 이 state에는 DB 계정 비밀번호가 평문으로 있다 → 읽기는 관리자만
 #   - 실행: 김종식(또는 백업 관리자)이 로컬에서 cinema-admin으로만. CI infra-plan 대상 아님
 #     (infra-plan은 envs/staging만, plan 역할의 state 권한도 staging/* 뿐)

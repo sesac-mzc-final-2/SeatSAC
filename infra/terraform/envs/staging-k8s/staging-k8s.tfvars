@@ -11,3 +11,7 @@ developer_namespaces = ["cinema-staging", "monitoring"]               # 팀원 p
 # ⬇ apply 전에 helm search 결과로 바꾼다 (variables.tf 설명 참고). 형식이 틀리면 plan이 멈춘다
 lbc_chart_version = "3.6.1"
 lbc_replicas      = 1
+
+# ⬇ 3.1.5 ArgoCD 차트 버전 — apply 전에 helm search로 실제 있는 버전인지 확인 (variables.tf 설명)
+argocd_chart_version      = "10.11.1"
+argocd_apps_chart_version = "2.0.7"

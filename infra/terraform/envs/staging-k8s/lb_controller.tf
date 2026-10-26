@@ -4,10 +4,10 @@
 #     kube-system/aws-load-balancer-controller). 여기서는 같은 이름의 ServiceAccount로 설치만
 #   - Terraform으로 설치하는 이유: gateway Ingress(ArgoCD, 3.1.5)보다 먼저 있어야 하고,
 #     clusterName·vpcId가 Terraform 값이라서. 삭제 시에도 ALB를 먼저 정리할 수 있다
-#   - ALB는 gateway Ingress가 만들 때 생긴다. Ingress 주석(3.1.5에서 사용):
+#   - ALB는 gateway Ingress(gitops base/gateway/ingress.yaml, 3.1.5)가 만들 때 생긴다. 주석:
 #       alb.ingress.kubernetes.io/scheme: internet-facing
 #       alb.ingress.kubernetes.io/target-type: ip
-#       alb.ingress.kubernetes.io/security-groups: <envs/staging 출력 sg_alb_id>
+#       alb.ingress.kubernetes.io/security-groups: cinema-staging-alb   (SG 이름 — gitops가 Public이라 ID를 쓰지 않는다)
 #       alb.ingress.kubernetes.io/manage-backend-security-group-rules: "false"
 #       alb.ingress.kubernetes.io/healthcheck-path: /actuator/health/readiness
 #       alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=120   # SSE

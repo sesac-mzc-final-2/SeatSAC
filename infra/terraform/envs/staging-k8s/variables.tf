@@ -85,7 +85,7 @@ variable "awscli_image" {
   default     = "public.ecr.aws/aws-cli/aws-cli:2.33.6"
 }
 
-# ---- 앱 엔드포인트 ConfigMap · 서비스 ArgoCD Application (gitops Public, ADR-66) ----
+# ---- 앱 엔드포인트 ConfigMap · 서비스 ArgoCD Application (gitops Public, ADR-74) ----
 variable "valkey_replication_group_id" {
   description = "envs/staging Valkey 복제 그룹 ID (3.1.3). primary 엔드포인트를 이 이름으로 조회한다"
   type        = string
@@ -110,12 +110,6 @@ variable "cognito_user_pool_name" {
   default     = "cinema-staging-users"
 }
 
-variable "argocd_apps_enabled" {
-  description = "ArgoCD 설치(3.1.5)·root 앱 sync 뒤 true. Application CRD가 없을 때 true면 plan이 실패한다"
-  type        = bool
-  default     = false
-}
-
 variable "argocd_namespace" {
   type    = string
   default = "argocd"
@@ -125,4 +119,30 @@ variable "gitops_repo_url" {
   description = "SeatSAC-gitops (Public → HTTPS, ArgoCD 레포 자격 증명 없음)"
   type        = string
   default     = "https://github.com/sesac-mzc-final-2/SeatSAC-gitops.git"
+}
+
+# ---- 3.1.5 ArgoCD ----
+variable "argocd_chart_version" {
+  description = <<-EOT
+    argo-cd Helm 차트 버전(고정). apply 전에 실제로 있는 버전인지 확인한다(3.1.4 tomcat 10.1.58 교훈):
+      helm repo add argo https://argoproj.github.io/argo-helm && helm repo update
+      helm search repo argo/argo-cd --versions | head -5
+    CHART VERSION 열의 값(APP VERSION 아님)
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.argocd_chart_version))
+    error_message = "argocd_chart_version에 helm search로 확인한 차트 버전(예: 1.2.3)을 적는다."
+  }
+}
+
+variable "argocd_apps_chart_version" {
+  description = "argocd-apps Helm 차트 버전(고정, 2.x 이상 — applications가 map 형식). helm search repo argo/argocd-apps --versions"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[2-9][0-9]*\\.[0-9]+\\.[0-9]+$", var.argocd_apps_chart_version))
+    error_message = "argocd_apps_chart_version은 2.x 이상 차트 버전(예: 2.0.7)."
+  }
 }

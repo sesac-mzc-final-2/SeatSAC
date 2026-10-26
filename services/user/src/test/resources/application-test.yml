@@ -1,0 +1,19 @@
+# Testcontainers 프로필. DB 접속 값은 common-test의 @ServiceConnection이 넣어 준다.
+spring:
+  flyway:
+    # 로컬·테스트는 계정 하나로 기동 시 Flyway. MySQLContainer 기본 계정 = test/test
+    enabled: true
+    user: test
+    password: test
+  jpa:
+    open-in-view: false
+    hibernate.ddl-auto: validate
+    properties.hibernate.jdbc.time_zone: UTC
+app:
+  services:
+    # 통합 테스트가 @DynamicPropertySource로 가짜 booking·catalog 주소를 넣는다. 기본값은 바로 연결 거부되는 포트
+    booking-url: http://127.0.0.1:1
+    catalog-url: http://127.0.0.1:1
+  cognito:
+    endpoint: http://127.0.0.1:1
+logging.level.org.hibernate.SQL: INFO

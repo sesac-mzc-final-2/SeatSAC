@@ -73,8 +73,14 @@ public class BookingPaymentService {
                 ErrorDetail.of("status", BookingStatus.EXPIRED.name(),
                     BookingErrorCode.HOLD_EXPIRED.name()),
                 ErrorDetail.of("refunded", true));
-            // 결제 호출 사이에 상태가 바뀌었다 → 그 시점 상태로 다시 판단한다
-            case ALREADY_SETTLED -> throw conflictFor(bookingId, clock.instant());
+            // 거절을 단건 조회 폴링이 먼저 반영했을 수 있다. 그때는 이 요청의 결과와 같으므로
+            // 409가 아니라 200 PAYMENT_FAILED다(같은 요청에 같은 답). 그 밖의 경합은 409
+            case ALREADY_SETTLED -> {
+                if (declinedAlready(bookingId, paymentId)) {
+                    yield response(booking, BookingStatus.PAYMENT_FAILED, null, payment);
+                }
+                throw conflictFor(bookingId, clock.instant());
+            }
         };
     }
 
@@ -117,6 +123,17 @@ public class BookingPaymentService {
     }
 
     /** 다른 경로가 확정했다면 그쪽이 쓴 시각을 쓴다 */
+    /**
+     * <b>같은 결제</b>의 거절을 다른 경로(단건 조회 폴링)가 먼저 반영했는지. 그렇다면 이 요청의
+     * 결과와 같으니 409가 아니라 200 {@code PAYMENT_FAILED}로 답한다 — 같은 요청에 같은 답이다.
+     */
+    private boolean declinedAlready(Long bookingId, String paymentId) {
+        return bookingReader.findById(bookingId)
+            .filter(b -> b.getStatus() == BookingStatus.PAYMENT_FAILED)
+            .filter(b -> paymentId.equals(b.getCurrentPaymentId()))
+            .isPresent();
+    }
+
     private java.time.OffsetDateTime confirmedAt(Long bookingId) {
         return bookingReader.findById(bookingId)
             .map(Booking::getConfirmedAt)

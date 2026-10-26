@@ -65,14 +65,18 @@ public class BookingPaymentResultApplier {
     private final Clock clock;
 
     public Applied applyApproved(Booking booking, PaymentResult payment) {
-        // 시각은 <b>여기서</b> 구한다. 부르는 쪽(BKG-10)이 결제 요청 전에 구한 값을 쓰면,
-        // 결제 호출(연결 1초·응답 3초 + 1회 재시도) 사이에 선점이 만료돼도 확정 조건
-        // (expiresAt > :now)이 통과해 「만료된 선점을 확정」하고 환불 경로를 건너뛴다
-        Instant now = clock.instant();
         String messageKey = BookingConfirmedEvent.newMessageKey();
         String traceId = traceId();
-        String payload = payloadOf(messageKey, booking, traceId, now);
+        // 느린 일(Catalog 조회·좌석 ID 읽기)을 먼저 끝낸다
+        CatalogClient.Screening screening = findScreening(booking);
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(booking.getBookingId());
+
+        // 시각은 <b>확정 바로 앞에서</b> 구한다. 부르는 쪽이 결제 요청 전에 구한 값이나
+        // Catalog 조회(연결 1초·응답 3초) 전에 구한 값을 쓰면, 그 사이 선점이 만료돼도
+        // 확정 조건(expiresAt > :now)이 통과해 「만료된 선점을 확정」하고 환불을 건너뛴다.
+        // 이 한 시각을 만료 조건·confirmedAt·아웃박스 payload에 함께 쓴다
+        Instant now = clock.instant();
+        String payload = payloadOf(messageKey, booking, screening, traceId, now);
 
         if (!bookingState.confirmWithOutbox(booking.getBookingId(), messageKey, payload, traceId, now)) {
             // 0행인 이유가 두 가지다 — 만료됐거나, 그 사이 <b>다른 경로가 이미 확정</b>했거나.
@@ -115,14 +119,19 @@ public class BookingPaymentResultApplier {
     }
 
     /** Catalog 실패는 알림 본문만 비운다 — 결제가 승인됐으니 확정을 멈출 수 없다 (명세 5장) */
-    private String payloadOf(String messageKey, Booking booking, String traceId, Instant now) {
-        CatalogClient.Screening screening = null;
+    /** 알림 본문에 넣을 회차 정보. 실패해도 확정은 진행한다(이름·시각이 null인 채로 간다) */
+    private CatalogClient.Screening findScreening(Booking booking) {
         try {
-            screening = catalogClient.findScreening(booking.getScreeningId());
+            return catalogClient.findScreening(booking.getScreeningId());
         } catch (RuntimeException e) {
             log.warn("알림 본문의 Catalog 조회 실패 — 이름·시각을 비우고 확정은 진행한다 screeningId={}",
                 booking.getScreeningId());
+            return null;
         }
+    }
+
+    private String payloadOf(String messageKey, Booking booking, CatalogClient.Screening screening,
+                             String traceId, Instant now) {
         try {
             return objectMapper.writeValueAsString(
                 BookingConfirmedEvent.of(messageKey, booking, screening, traceId, now));

@@ -1,0 +1,5 @@
+# 커밋하지 않는다(.gitignore) — 버킷 이름에 계정 ID가 들어간다(Public 레포, ADR-74).
+# 만들기: cp backend.hcl.example backend.hcl 후 <ACCOUNT_ID>를 바꾸거나, 이 폴더에서
+#   echo "bucket = \"cinema-tfstate-$(aws sts get-caller-identity --query Account --output text)\"" > backend.hcl
+# key·region·암호화·잠금은 versions.tf의 backend "s3" 블록에 있다. CI(infra-plan)는 -backend-config="bucket=..."로 넘긴다
+bucket = "cinema-tfstate-<ACCOUNT_ID>"

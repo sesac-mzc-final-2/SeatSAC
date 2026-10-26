@@ -47,7 +47,8 @@ bootstrap (state 버킷)                       ← 이게 있어야 나머지 st
             ├─ 3) RDS·Valkey (3.1.3)
             ├─ 4) ECR·SQS·Lambda (3.1.4·3.1.8·3.1.9)
             ├─ 5) Cognito·CloudFront·S3 (3.3.x·3.1.11)
-            └─ 6) DB 스키마·계정·K8s Secret (3.1.12, staging-k8s) → 시드 적재 → ArgoCD 부트스트랩(3.1.5)
+            └─ 6) DB 스키마·계정·K8s Secret (3.1.12, staging-k8s) → 시드 적재
+                 └─ ArgoCD·root 앱·서비스 Application (3.1.5, staging-k8s 같은 apply, 6-C-2) → CloudFront /api (7-4)
 ```
 
 ---
@@ -66,11 +67,17 @@ terraform output                # tfstate_bucket = cinema-tfstate-<계정ID>
 - 이 폴더만 로컬 state를 쓴다. `bootstrap/terraform.tfstate`는 커밋하지 않고 **destroy 하지 않는다** (`prevent_destroy`)
 - 이미 버킷이 있으면 이 단계를 건너뛴다
 
-**다음 단계 준비**: 출력된 버킷 이름을 `global/backend.hcl`, `envs/staging/backend.hcl`에 적는다.
+**다음 단계 준비**: `global`·`envs/staging`·`envs/staging-k8s`에 `backend.hcl`을 만든다. **커밋하지 않는다**(`.gitignore`) — 버킷 이름에 계정 ID가 들어가고 이 레포는 Public이다. 각 폴더의 `backend.hcl.example`과 같은 한 줄이다.
 
-```hcl
-bucket = "cinema-tfstate-<계정ID>"
+```bash
+# infra/terraform 에서 (cinema-admin 자격 증명으로)
+B="cinema-tfstate-$(aws sts get-caller-identity --query Account --output text)"
+for d in global envs/staging envs/staging-k8s; do echo "bucket = \"$B\"" > "$d/backend.hcl"; done
 ```
+
+- key·region·암호화·잠금은 각 폴더 `versions.tf`의 `backend "s3"` 블록에 있다
+- CI(`infra-plan`)는 파일 없이 `-backend-config="bucket=cinema-tfstate-${ACCOUNT_ID}"`로 넘긴다(계정 ID는 마스킹)
+- 새로 clone했거나 `git pull` 뒤 파일이 사라졌으면(예전에 커밋돼 있던 파일) 위 명령을 다시 실행한다
 
 ---
 
@@ -559,7 +566,7 @@ aws ecr initiate-layer-upload --repository-name cinema/booking --profile cinema-
 - Trivy가 알려 준 "수정 버전"이 Maven Central에 아직 없으면(릴리스 투표 실패 등, 10/25 tomcat 10.1.58) 빌드가 `Could not find …`로 깨진다 → 실제로 배포된 다음 버전으로 올린다(`https://repo1.maven.org/maven2/<그룹 경로>/<이름>/`에서 확인)
 - 레포가 Public이라 Actions 로그도 공개된다. 워크플로가 계정 ID를 가리지만(`mask-aws-account-id`), 실행 로그·요약을 노션·PR에 붙일 때 레지스트리 주소가 없는지 한 번 더 본다
 
-### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-66)
+### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-74)
 
 SeatSAC-gitops는 Public이다(무료 플랜에서 ruleset을 쓰려면 Public이어야 한다). 그래서 **계정 ID·엔드포인트를 gitops에 두지 않고** 둘 다 `envs/staging-k8s`가 클러스터에 넣는다.
 
@@ -567,47 +574,82 @@ SeatSAC-gitops는 Public이다(무료 플랜에서 ruleset을 쓰려면 Public�
 | --- | --- | --- |
 | RDS·Valkey·SQS·Cognito 주소 | ConfigMap `cinema-infra-endpoints`(`cinema-staging`) — `infra_endpoints.tf`. 키 `DB_HOST`·`VALKEY_HOST`·`SQS_NOTIFICATION_URL`·`COGNITO_ISSUER_URI`·`COGNITO_CLIENT_ID` | `{svc}-config`에 `${DB_HOST}` 같은 자리만. 파드가 두 ConfigMap을 envFrom으로 받고 Spring이 치환. Flyway Job은 `$(DB_HOST)` |
 | ECR 레지스트리(계정 ID) | 서비스 Application 5개 `cinema-{svc}` — `argocd_apps.tf`의 `kustomize.images` `cinema/{svc}=<레지스트리>/cinema/{svc}` | `image-tag/`에 `newTag`만 |
-| 플랫폼·`cinema-common`·AppProject | gitops `apps/staging`(root 앱) 그대로 | — |
+| 플랫폼·`cinema-common`·AppProject | gitops `apps/staging` — root 앱 `cinema-root`(Terraform)가 sync | 매니페스트 |
 
-#### 6-C-1. ConfigMap (지금, ArgoCD 전)
+#### 6-C-1. ConfigMap 확인 (apply 없음)
+
+ConfigMap `cinema-infra-endpoints`는 3.1.4에서 이미 만들었다. 3.1.5부터 `envs/staging-k8s`를 apply하면 **ArgoCD·Application도 같이 만들어지므로**(6-C-2), 여기서는 apply하지 않고 상태만 확인한다. 처음 만드는 환경이면 6-C-2의 한 번의 apply에서 같이 생긴다.
 
 ```bash
-# 터미널 B (0장 Terraform 자격 증명) — envs/staging(3.1.3)이 apply된 뒤
-cd infra/terraform/envs/staging-k8s
-terraform plan -var-file=staging-k8s.tfvars -out=plan.out   # 예상: ConfigMap cinema-infra-endpoints 1 add, 다른 변경 없음
-terraform apply plan.out
-terraform output infra_endpoints_keys
-kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.DB_HOST}{"\n"}'   # RDS 주소 (화면에만, 붙여 넣지 않는다)
+# 터미널 A (cinema-admin)
+kubectl -n cinema-staging get cm cinema-infra-endpoints \
+  -o go-template='{{range $k, $v := .data}}{{$k}}{{"\t"}}{{if $v}}set{{else}}EMPTY{{end}}{{"\n"}}{{end}}'
+# 기대(Cognito 전): DB_HOST·VALKEY_HOST·SQS_NOTIFICATION_URL = set, COGNITO_ISSUER_URI·COGNITO_CLIENT_ID = EMPTY
 ```
 
-- `COGNITO_*`는 Cognito(3.3.x) 전까지 빈 값이다. 만든 뒤 `staging-k8s.tfvars`에 `cognito_enabled = true` → plan(ConfigMap 1 change, `argocd_apps_enabled = true`면 gateway Application 1 add) → apply
+- 값은 화면에 출력하지 않는다(위 명령은 키와 set/EMPTY만 보여 준다)
+- `COGNITO_*`는 Cognito(3.3.x) 전까지 빈 값이다. 만든 뒤 `staging-k8s.tfvars`에 `cognito_enabled = true` → plan(ConfigMap 1 change + `argocd-apps` 1 change(gateway Application 추가)) → apply
 - SQS URL은 큐 이름으로 정해져서 3.1.8 전에도 들어간다(큐가 없으면 booking 발행만 실패)
 - 값이 바뀌어도 파드는 자동으로 다시 뜨지 않는다 → ArgoCD에서 해당 앱 **Restart**(또는 다음 배포)
+- ConfigMap이 없거나 값이 틀리면 **6-C-2 사전 조건을 모두 확인한 뒤** 6-C-2의 plan·apply 한 번으로 고친다(ConfigMap만 따로 apply하지 않는다)
 
-#### 6-C-2. 서비스 Application (3.1.5 ArgoCD 설치·root 앱 sync 뒤)
+#### 6-C-2. ArgoCD 설치 · root 앱 · 서비스 Application (3.1.5)
 
-| 사전 조건 | 확인 |
-| --- | --- |
-| ArgoCD 설치 · `apps/root.yaml` 적용 | `cinema` AppProject·`argo-rollouts`가 Synced (Rollout CRD) |
-| 6-C-1 ConfigMap | `kubectl -n cinema-staging get cm cinema-infra-endpoints` |
-| **gateway만**: Cognito(7장) apply + `cognito_enabled = true` | ConfigMap의 `COGNITO_ISSUER_URI`·`COGNITO_CLIENT_ID`가 빈 값이 아님. 빈 값이면 gateway가 기동 실패(런타임 계약 3장)라 Terraform이 gateway Application을 만들지 않는다 |
+코드: `envs/staging-k8s/argocd.tf`(ArgoCD Helm·팀원 조회 Role) · `argocd_apps.tf`(Helm `argocd-apps`: root + 서비스) · gitops `apps/staging`·`base/gateway/ingress.yaml`
 
-1. `staging-k8s.tfvars`에 `argocd_apps_enabled = true` → plan → apply
-   - Cognito 전: `kubernetes_manifest` **4 add**(catalog·booking·user·payment)
-   - Cognito 후(`cognito_enabled = true`): ConfigMap 1 change + gateway 1 add (처음부터 둘 다 켰으면 5 add)
-2. Cognito를 나중에 켰다면 gateway는 그때가 첫 배포다 → gitops `overlays/staging/gateway/image-tag`의 태그가 `CHANGE_ME`면 `build-push` 수동 실행 `services=gateway`
-3. 확인
+**한 번의 apply**로 ArgoCD → Application이 만들어진다(3.1.4의 `argocd_apps_enabled` 두 단계는 없앴다 — `kubernetes_manifest`는 CRD가 있어야 plan이 되지만 Helm은 순서만 지키면 된다).
+
+| 사전 조건 | 확인 | 없으면 |
+| --- | --- | --- |
+| 노드 켜짐 | `kubectl get nodes` 2대 Ready | Helm 대기·Job이 시간 초과 (13장) → `infra/scripts/cluster-scale.sh up` |
+| 3.1.12 계정·Secret | 8-B `PASS … (VERIFY_IDENTITY)` | Flyway 훅 Job 실패 → 앱 sync 중단 |
+| 6-C-1 ConfigMap | 6-C-1 확인 명령 (DB_HOST·VALKEY_HOST·SQS = set) | 이 apply에서 같이 만들어진다 |
+| ECR 이미지 · gitops 태그 | 6-A-4 수동 실행 `services=all` → gitops `image-tag`에 sha7 | `CHANGE_ME` 태그 → `ImagePullBackOff` |
+| gitops PR `infra/3.1.5-argocd` 머지 | 플랫폼 차트 버전 고정·gateway Ingress·project wave | 플랫폼 앱이 `CHANGE_ME` 리비전으로 실패 |
+| 차트 버전이 실제로 있는지 | `helm search repo argo/argo-cd --versions \| head -3` · `argo/argocd-apps` · `argo/argo-rollouts` · `prometheus-community/kube-prometheus-stack` | `Could not find` (3.1.4 tomcat 사례) → tfvars·gitops를 있는 버전으로 |
+| **gateway만**: Cognito(7장) + `cognito_enabled = true` | ConfigMap `COGNITO_*`가 빈 값이 아님 | Terraform이 gateway Application을 만들지 않는다(정상) |
 
 ```bash
-kubectl -n argocd get applications            # cinema-{catalog,booking,user,payment}(+ gateway: cognito_enabled일 때) + root·플랫폼·cinema-common
-kubectl -n cinema-staging get rollout,deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}' \
-  | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'        # <ACCOUNT_ID>.dkr.ecr…/cinema/{svc}:{sha7}
+# 터미널 B (0장 Terraform 자격 증명)
+cd infra/terraform/envs/staging-k8s
+terraform init -upgrade -backend-config=backend.hcl
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out
+# 기대(Cognito 전): namespace 1(argocd) · helm_release 2(argocd·argocd-apps) · Role 1 · RoleBinding 1. destroy 0
+#   plan의 argocd-apps values에 ECR 레지스트리(계정 ID)가 보인다 → 붙여 넣을 때 <ACCOUNT_ID>로 가린다
+terraform apply plan.out          # ArgoCD 3~5분 + Application 생성
+rm -f plan.out                    # 저장된 plan에는 비밀 값이 평문으로 있다
 ```
 
-- `terraform output argocd_service_apps`에 `cinema-gateway`가 없으면 `cognito_enabled = false`인 상태(정상, 위 사전 조건)
-- `argocd_apps_enabled = true`를 ArgoCD 전에 켜면 plan이 `no matches for kind "Application"`으로 멈춘다(13장)
+**확인** (터미널 A, `cinema-admin`)
+
+```bash
+kubectl -n argocd get pods                                  # application-controller·repo-server·server·redis·applicationset Running
+kubectl -n argocd get applications -w                       # 10~20분: 아래 순서로 Synced·Healthy
+#   cinema-root → (wave -20) project → (-10) argo-rollouts·kube-prometheus-stack → (-5) cinema-common
+#   cinema-catalog·booking·user·payment: CRD가 생길 때까지 재시도(최대 10회) 뒤 Synced·Healthy
+kubectl -n cinema-staging get jobs                          # {svc}-flyway Complete (catalog·booking·user·payment)
+kubectl -n cinema-staging get rollout,deploy,pods
+kubectl -n cinema-staging get rollout,deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}' \
+  | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'                      # <ACCOUNT_ID>.dkr.ecr…/cinema/{svc}:{sha7}
+terraform output argocd_service_apps                        # Cognito 전: catalog·booking·user·payment
+```
+
+**ArgoCD 화면** (port-forward 전용, Ingress 없음)
+
+| 누가 | 방법 | 할 수 있는 것 |
+| --- | --- | --- |
+| 팀원 (`cinema-dev`) | `kubectl -n argocd port-forward svc/argocd-server 8080:80` → http://localhost:8080 (로그인 없이) | 읽기 전용 (anonymous → `role:readonly`). `kubectl -n argocd get applications`도 가능 |
+| 관리자 | 같은 주소에서 `admin` / `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` | sync·Restart·롤백 버튼. 비밀번호는 화면에만, 붙여 넣지 않는다 |
+
+**gateway (Cognito 뒤)**
+
+1. `cognito_enabled = true` → plan(ConfigMap 1 change · `argocd-apps` 1 change) → apply
+2. gitops `overlays/staging/gateway/image-tag`가 `CHANGE_ME`면 `build-push` 수동 실행 `services=gateway`
+3. `kubectl -n cinema-staging get ingress gateway` ADDRESS에 ALB DNS → 7-4(CloudFront `/api`)
+
 - 이미지 태그는 Terraform이 관리하지 않는다(build-push → gitops → ArgoCD). 태그가 바뀌어도 이 폴더 plan은 No changes
-- 이 레포 로그·PR·노션에 이미지 주소를 붙일 때는 계정 ID를 `<ACCOUNT_ID>`로 가린다
+- 앱 설정은 gitops PR, ArgoCD 화면에서 손으로 고친 값은 selfHeal이 되돌린다. 급할 때만 관리자가 해당 앱 auto-sync를 끄고 작업 → Git 반영 → 다시 켬
+- 로그·PR·노션에 이미지 주소·ALB DNS를 붙일 때는 계정 ID를 `<ACCOUNT_ID>`로 가린다
 
 ### 6-B. SQS·Lambda (3.1.8·3.1.9) — ⬜
 
@@ -954,13 +996,19 @@ terraform apply plan.out                                # apply는 김종식(또
 
 ```bash
 export AWS_PROFILE=cinema-admin
-cd infra/terraform/envs/staging-k8s && terraform destroy -var-file=staging-k8s.tfvars   # 먼저 (4-5)
+cd infra/terraform/envs/staging-k8s
+# 1) Application 먼저: finalizer로 ArgoCD가 만든 리소스(gateway Ingress → ALB 포함)를 지운다. 컨트롤러가 살아 있어야 한다
+terraform destroy -var-file=staging-k8s.tfvars -target=helm_release.argocd_apps
+kubectl -n argocd get applications                       # 모두 사라질 때까지 (수 분)
+aws elbv2 describe-load-balancers --names cinema-staging-gateway   # LoadBalancerNotFound면 ALB 정리 완료
+# 2) 나머지 (ArgoCD·LB Controller·Secret·namespace)
+terraform destroy -var-file=staging-k8s.tfvars           # (4-5)
 cd ../staging
 terraform plan -destroy -var-file=staging.tfvars     # 지워질 목록 확인
 terraform destroy -var-file=staging.tfvars
 ```
 
-- 순서: ArgoCD 앱 정리(LB Controller가 만든 ALB·대상 그룹이 남지 않게) → staging destroy
+- 순서: ArgoCD Application(-target) → staging-k8s 나머지 → staging. 1)을 건너뛰면 ArgoCD가 먼저 지워져 Application의 finalizer가 풀리지 않고(`argocd` namespace가 Terminating에 멈춤) ALB가 남아 staging VPC 삭제가 막힌다
 - **global·bootstrap은 지우지 않는다.** 팀 접근·CI 역할·state 버킷은 계속 쓴다
 - 삭제 후 확인: EIP·ENI·ALB·EBS 볼륨이 남지 않았는지 (`aws ec2 describe-addresses`, `describe-volumes`)
 
@@ -985,7 +1033,7 @@ terraform destroy -var-file=staging.tfvars
 | --- | --- | --- |
 | `init`·`plan`에서 `assume role with MFA enabled, but AssumeRoleTokenProvider session option not set` | `AWS_PROFILE`(MFA 프로필)을 Terraform이 직접 쓰려 함. Terraform은 MFA 입력을 못 받는다 | 2-5 "Terraform 실행 전": `export-credentials`로 환경변수 설정 → `unset AWS_PROFILE` |
 | `ExpiredToken`·`The security token included in the request is expired` | 위에서 넘긴 임시 키가 8시간 지나 만료 | `export-credentials` 다시 실행 |
-| `init`에서 `bucket - The name of the S3 bucket` 입력 요구 | `-backend-config=backend.hcl` 누락 또는 bootstrap 전 | 1장 → `backend.hcl` 채우기 → `init -backend-config=backend.hcl` |
+| `init`에서 `bucket - The name of the S3 bucket` 입력 요구 | `-backend-config=backend.hcl` 누락, `backend.hcl` 없음(커밋하지 않는 파일 — clone·pull 직후) 또는 bootstrap 전 | 1장 "다음 단계 준비"로 `backend.hcl` 만들기 → `init -backend-config=backend.hcl` |
 | `CreateOpenIDConnectProvider ... 409 EntityAlreadyExists` | 계정에 GitHub OIDC 공급자가 이미 있음 | 2-2 표대로 import 또는 data 참조 |
 | `Resource already managed by Terraform` (import 시) | 그 리소스를 이미 다른(또는 같은) state가 관리 중 | `terraform state list`로 어느 폴더 state인지 확인 → 12장 |
 | `AccessDenied ... sts:AssumeRole` (팀원) | `global.tfvars` 사용자 목록에 없음 / MFA 없이 시도 / 이름 대소문자 | tfvars 수정 후 apply, `mfa_serial` 확인 |
@@ -1020,7 +1068,14 @@ terraform destroy -var-file=staging.tfvars
 | 파드 `CreateContainerConfigError` `configmap "cinema-infra-endpoints" not found` | 위와 같음(Flyway Job 포함) | 6-C-1 |
 | 파드 `ImagePullBackOff` 이미지 `cinema/{svc}:…`(레지스트리 없음) | ArgoCD Application에 `kustomize.images`가 없음 — 서비스 앱을 gitops나 손으로 만듦 | gitops `apps/staging`에서 서비스 앱 제거, 6-C-2 Terraform으로 |
 | 파드 `ImagePullBackOff` 태그 `CHANGE_ME` | build-push가 아직 그 서비스 태그를 커밋하지 않음 | `build-push` 수동 실행 `services={svc}` |
-| staging-k8s plan `no matches for kind "Application" in group "argoproj.io"` | ArgoCD 설치 전에 `argocd_apps_enabled = true` | false로 두고 3.1.5 뒤 6-C-2 |
+| staging-k8s apply `job: cinema-ops/db-bootstrap-… is not in complete state`, describe에 `DeadlineExceeded`, 파드 로그 없음 | 노드 0대(23:07 끄기 이후)라 파드가 Pending으로 600초를 넘김 | `cluster-scale.sh up` → 노드 Ready → 다시 apply (Job은 tainted로 교체) |
+| `helm_release.argocd` `context deadline exceeded`·`timed out waiting for the condition` | 노드 0대 / 이미지 pull 실패 / 노드 메모리 부족 | `kubectl -n argocd get pods`·`describe pod`. 노드가 있으면 다시 apply |
+| Helm `chart "…" version "…" not found` | tfvars·gitops 차트 버전이 실제로 없음 | `helm search repo … --versions`로 있는 버전 → PR |
+| 플랫폼 앱 `InvalidSpecError … project cinema … does not exist` | AppProject가 늦게 생김 | 정상이면 몇 초 뒤 사라진다. 계속되면 gitops `project.yaml` sync-wave `-20` 확인 |
+| 서비스 앱 `no matches for kind "Rollout"`·`"PodMonitor"`, `Retrying attempt #…` | 플랫폼 CRD 설치 전 | 재시도로 맞춘다(최대 약 20분). 10회 다 쓰면 관리자가 화면에서 Sync |
+| `{svc}-flyway` Job 실패 → 앱 sync 중단 | `{svc}-migrator-secrets`·`rds-ca-bundle`·`cinema-infra-endpoints` 없음 / 마이그레이션 SQL 오류 | `kubectl -n cinema-staging logs job/{svc}-flyway -c flyway`. 고친 SQL은 새 V 번호로 |
+| gateway Ingress ADDRESS가 비어 있음 | LB Controller 권한 / SG 이름 `cinema-staging-alb`을 못 찾음 / 서브넷 태그 | `kubectl -n kube-system logs deploy/aws-load-balancer-controller \| tail`, `kubectl -n cinema-staging describe ingress gateway` |
+| `argocd` namespace가 Terminating에서 멈춤 | 11장 1)을 건너뛰어 Application finalizer가 남음 | 관리자: ArgoCD를 다시 apply해 Application을 정상 삭제하거나, 마지막 수단으로 Application의 finalizer 제거 |
 | plan에 `-/+ replace`가 나옴 | 교체가 필요한 값 변경(서브넷 CIDR, SG description 등) | 멈추고 원인 확인. 의존 리소스까지 다시 만들어질 수 있음 |
 
 ---

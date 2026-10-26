@@ -1,0 +1,8 @@
+# 커밋하지 않는다(.gitignore) — 버킷 이름에 계정 ID가 들어간다(Public 레포, ADR-74).
+# 만들기: cp backend.hcl.example backend.hcl 후 <ACCOUNT_ID>를 바꾼다 (런북 terraform-infra 1장)
+# CI(infra-plan)는 이 파일 없이 -backend-config="bucket=cinema-tfstate-${ACCOUNT_ID}"로 넘긴다
+bucket       = "cinema-tfstate-<ACCOUNT_ID>"
+key          = "staging-k8s/terraform.tfstate"   # staging은 staging/terraform.tfstate
+region       = "ap-northeast-2"
+use_lockfile = true
+encrypt      = true

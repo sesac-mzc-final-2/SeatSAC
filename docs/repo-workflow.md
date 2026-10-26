@@ -10,7 +10,7 @@
 | 레포 | 공개 | 내용 |
 | --- | --- | --- |
 | `sesac-mzc-final-2/SeatSAC` (앱, 03b의 `cinema`) | 개발 중 Private → 발표 후 Public | 서비스, frontend, 계약, Terraform, Lambda, 테스트, 문서 |
-| `SeatSAC-gitops` | ⚠️ **Public** (무료 플랜 ruleset, ADR-66) — 계정 ID·엔드포인트·키 금지(`gitops-validate`가 막음) | Kustomize 매니페스트, 플랫폼 ArgoCD Application. CI 앱 봇이 이미지 태그만 커밋. 서비스 Application·엔드포인트는 Terraform `envs/staging-k8s` |
+| `SeatSAC-gitops` | ⚠️ **Public** (무료 플랜 ruleset, ADR-74) — 계정 ID·엔드포인트·키 금지(`gitops-validate`가 막음) | Kustomize 매니페스트, 플랫폼 ArgoCD Application. CI 앱 봇이 이미지 태그만 커밋. 서비스 Application·엔드포인트는 Terraform `envs/staging-k8s` |
 | `lotte-seed` | **항상 Private** | 수집 스크립트, 원본 스냅샷, 좌석 배치·편성 시드 SQL |
 
 ```
@@ -27,7 +27,7 @@ SeatSAC/
 └── .github/ workflows/ · scripts/(서비스 고르기·Trivy, pr-check·build-push 공용) · CODEOWNERS · pull_request_template.md
 
 SeatSAC-gitops/
-├── apps/                  App of Apps (root.yaml + staging/: project·플랫폼 2·cinema-common). 서비스 Application 5개는 Terraform(레지스트리 주소)
+├── apps/staging/          App of Apps 대상(project·플랫폼 2·cinema-common). root 앱·서비스 Application 5개는 SeatSAC Terraform(staging-k8s argocd_apps.tf)
 ├── platform/              Argo Rollouts, kube-prometheus-stack values (LB Controller는 Terraform envs/staging-k8s)
 ├── base/{service}/        Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, PodMonitor, Flyway 훅 Job(Sync wave -1)
 ├── base/common/           앱 namespace 인바운드 기본 거부 + analysis
@@ -62,7 +62,7 @@ SeatSAC-gitops/
 | 필수 검사 (ruleset) | `java`·`gitleaks`·`image`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 다섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
 | 크기 | 400줄 이하 권장(생성 코드·lock 제외) |
 | 리뷰 응답 | 24시간 이내(주말 제외) |
-| 머지 후 | 작성자가 ArgoCD Synced·Healthy(또는 frontend 배포 완료)까지 확인 |
+| 머지 후 | 작성자가 ArgoCD Synced·Healthy(또는 frontend 배포 완료)까지 확인 — `kubectl -n argocd get applications` 또는 `kubectl -n argocd port-forward svc/argocd-server 8080:80`(읽기 전용 화면) |
 | 템플릿 | 변경 요약 · WBS ID·기능 ID · 테스트 방법 · 스크린샷(화면) · **계약 변경 여부** · **DB 마이그레이션 단계(확장·전환·정리)** · **배포 영향(env·Secret·gitops·CloudFront 캐시)** |
 | 계약 깨는 변경 | 구현 전 설계 변경만 라벨 `contract-break-ok` + CODEOWNERS 승인, PR 본문에 이유 |
 
@@ -91,7 +91,7 @@ SeatSAC-gitops/
 | --- | --- | --- |
 | `pr-check` | PR | `java`: 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ) · `gitleaks` · `image`: 바뀐 서비스만 bootJar → `docker build` → 비루트 확인 → Trivy(push 안 함, AWS 권한 없음. `build-logic/`·`gradle/`·이미지 스크립트·워크플로가 바뀌면 5개 전부). 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행. 2단계: springdoc 생성본 vs 계약 diff |
 | `contract-check` | PR (항상, 변경 없으면 건너뜀) | Redocly lint, JSON Schema·예시 검증, oasdiff·스키마 하위 호환 |
-| `build-push` | main 머지(`services/**`, 바뀐 서비스만) + 수동(`services`=all 또는 목록, main에서만) | bootJar → x86 이미지 → Trivy(CRITICAL·수정 가능이면 실패) → ECR `cinema/{svc}:{sha7}`(OIDC `cinema-gha-ecr-push`, 같은 태그 있으면 건너뜀) → `SeatSAC-gitops` `overlays/staging/{svc}/image-tag`의 **`newTag`만** yq로 GitHub App `seatsac-build-push`(gitops에만 설치, Contents 쓰기) 토큰으로 main에 커밋(조직 정책상 Deploy key 불가). 레지스트리(계정 ID)는 gitops에 쓰지 않는다(Public, ADR-66) — Terraform ArgoCD Application이 붙인다. booking·gateway가 같이 바뀌면 booking만(블루/그린 동시 금지) |
+| `build-push` | main 머지(`services/**`, 바뀐 서비스만) + 수동(`services`=all 또는 목록, main에서만) | bootJar → x86 이미지 → Trivy(CRITICAL·수정 가능이면 실패) → ECR `cinema/{svc}:{sha7}`(OIDC `cinema-gha-ecr-push`, 같은 태그 있으면 건너뜀) → `SeatSAC-gitops` `overlays/staging/{svc}/image-tag`의 **`newTag`만** yq로 GitHub App `seatsac-build-push`(gitops에만 설치, Contents 쓰기) 토큰으로 main에 커밋(조직 정책상 Deploy key 불가). 레지스트리(계정 ID)는 gitops에 쓰지 않는다(Public, ADR-74) — Terraform ArgoCD Application이 붙인다. booking·gateway가 같이 바뀌면 booking만(블루/그린 동시 금지) |
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |
 | `lambda-deploy` | main 머지(`lambdas/**`) | 패키징 → 배포 → 별칭 갱신 |
 | `infra-plan` | PR(`infra/terraform/**`, 필수 검사 아님) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |

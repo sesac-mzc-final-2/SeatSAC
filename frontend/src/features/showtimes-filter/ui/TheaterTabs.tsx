@@ -7,7 +7,7 @@ interface Props {
   onChange: (theaterId: number) => void;
 }
 
-/** 극장 선택 (배치 있는 4곳). 지역이 다른 극장은 이름 뒤에 지역을 덧붙인다 */
+/** 극장 선택 (배치 있는 4곳). 버튼에는 이름만(와이어프레임 W3), 지역은 title 로 보조 표시 */
 export function TheaterTabs({ theaters, value, onChange }: Props) {
   return (
     <div className={styles.group} role="group" aria-label="극장 선택">

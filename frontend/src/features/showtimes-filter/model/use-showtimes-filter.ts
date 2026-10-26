@@ -18,13 +18,25 @@ function parseId(value: string | null): number | null {
 /**
  * W3 필터 상태는 URL(`/showtimes?theaterId&date&movieId`)이 원본이다.
  * 새로고침·공유·W2 「예매하기」(movieId만 넘김)가 모두 같은 주소로 들어온다.
+ *
+ * @param selectableTheaterIds 선택할 수 있는 극장 ID 목록. 아직 못 받았으면(null) URL 값을 그대로 쓰지 않고 theaterId 를 null 로 둔다.
+ *   URL 의 theaterId 가 목록에 없으면 첫 번째 극장으로 대체한다.
  */
-export function useShowtimesFilter(defaultTheaterId: number | null) {
+export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
   const [params, setParams] = useSearchParams();
+
+  const requestedTheaterId = parseId(params.get("theaterId"));
+  let theaterId: number | null = null;
+  if (selectableTheaterIds && selectableTheaterIds.length > 0) {
+    theaterId =
+      requestedTheaterId !== null && selectableTheaterIds.includes(requestedTheaterId)
+        ? requestedTheaterId
+        : selectableTheaterIds[0];
+  }
 
   const rawDate = params.get("date");
   const filter: ShowtimesFilter = {
-    theaterId: parseId(params.get("theaterId")) ?? defaultTheaterId,
+    theaterId,
     date: isValidIsoDate(rawDate) ? rawDate : todayKst(),
     movieId: parseId(params.get("movieId")),
   };

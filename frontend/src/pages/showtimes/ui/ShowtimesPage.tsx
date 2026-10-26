@@ -19,7 +19,11 @@ export function ShowtimesPage() {
 
   const theatersQuery = useQuery(theaterListQuery({ hasLayout: true }));
   const theaters = useMemo(() => theatersQuery.data?.items ?? [], [theatersQuery.data]);
-  const { filter, setTheater, setDate, setMovie } = useShowtimesFilter(theaters[0]?.theaterId ?? null);
+  const theaterIds = useMemo(
+    () => (theatersQuery.isSuccess ? theaters.map((t) => t.theaterId) : null),
+    [theatersQuery.isSuccess, theaters],
+  );
+  const { filter, setTheater, setDate, setMovie } = useShowtimesFilter(theaterIds);
 
   const screeningsQuery = useQuery({
     ...screeningListQuery({ date: filter.date, theaterId: filter.theaterId ?? 0 }),

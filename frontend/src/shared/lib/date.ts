@@ -14,9 +14,11 @@ const kstDateFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
-/** 오늘의 KST 영업일 `YYYY-MM-DD` */
+/** 오늘의 KST 영업일 `YYYY-MM-DD`. 로케일 출력 형식에 기대지 않고 부분(year·month·day)을 직접 조합한다 */
 export function todayKst(now: Date = new Date()): string {
-  return kstDateFormatter.format(now);
+  const parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
+  for (const part of kstDateFormatter.formatToParts(now)) parts[part.type] = part.value;
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 export function isValidIsoDate(value: string | null | undefined): value is string {

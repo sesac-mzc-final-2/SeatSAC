@@ -3,7 +3,7 @@ import styles from "./TraceCode.module.css";
 
 /**
  * 문의 코드 (2.2.5 결정 W-6): traceId 앞 8자리를 보여 주고, 누르면 32자리 전체를 복사한다.
- * 로그 검색은 32자리로 한다.
+ * 로그 검색은 32자리로 한다. 복사 결과는 버튼 밖 live region 으로 알린다 (aria-label 이 버튼 안 문구를 덮는다).
  */
 export function TraceCode({ traceId }: { traceId: string }) {
   const [copied, setCopied] = useState(false);
@@ -24,15 +24,19 @@ export function TraceCode({ traceId }: { traceId: string }) {
   };
 
   return (
-    <button
-      type="button"
-      className={styles.code}
-      onClick={copy}
-      title={traceId}
-      aria-label={`문의 코드 ${traceId.slice(0, 8)}. 누르면 전체 코드를 복사합니다`}
-    >
-      문의 코드 <code>{traceId.slice(0, 8)}</code>
-      {copied && <span className={styles.copied}>복사됨</span>}
-    </button>
+    <span className={styles.wrap}>
+      <button
+        type="button"
+        className={styles.code}
+        onClick={copy}
+        title={traceId}
+        aria-label={`문의 코드 ${traceId.slice(0, 8)}. 누르면 전체 코드를 복사합니다`}
+      >
+        문의 코드 <code>{traceId.slice(0, 8)}</code>
+      </button>
+      <span className={styles.copied} role="status" aria-live="polite">
+        {copied ? "문의 코드를 복사했습니다" : ""}
+      </span>
+    </span>
   );
 }

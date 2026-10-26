@@ -34,7 +34,8 @@ describe("ErrorState", () => {
     expect(button).not.toHaveTextContent("89abcdef0123456789abcdef");
     await userEvent.click(button);
     expect(writeText).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef");
-    expect(button).toHaveTextContent("복사됨");
+    // 복사 결과는 버튼 밖 live region 으로 알린다 (aria-label 이 버튼 안 문구를 덮으므로)
+    expect(screen.getByRole("status")).toHaveTextContent("문의 코드를 복사했습니다");
   });
 
   it("traceId가 없으면(네트워크 오류) 문의 코드를 숨긴다", () => {

@@ -24,6 +24,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .spinner {
-    animation-duration: 2s;
+    animation: none;
   }
 }

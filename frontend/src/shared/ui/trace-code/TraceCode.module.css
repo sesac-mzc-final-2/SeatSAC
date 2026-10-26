@@ -19,6 +19,12 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: var(--color-text);
 }
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .copied {
+  font-size: 13px;
   color: var(--color-primary);
 }

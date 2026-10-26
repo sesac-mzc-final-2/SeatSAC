@@ -55,7 +55,7 @@
 | 메시지 | 내부 브로커 없음. 좌석 이벤트는 Valkey Pub/Sub → SSE, 예매 알림만 SQS |
 | 서비스 간 통신 | REST (HTTP/1.1 + JSON), K8s DNS, RestClient + Resilience4j (연결 1s · 응답 3s) |
 | 인프라 | EKS (t3.large 2대) · ALB · Terraform |
-| 배포 | GitHub Actions → ECR → `cinema-gitops`(Kustomize) → ArgoCD · Argo Rollouts (booking·gateway 블루/그린) |
+| 배포 | GitHub Actions → ECR → `SeatSAC-gitops`(Kustomize, Public) → ArgoCD · Argo Rollouts (booking·gateway 블루/그린) |
 | 관측 | Prometheus · Grafana |
 
 설계 근거는 노션 🧭 결정 기록(ADR)과 「MSA x Infra/DevOps 설계 판단 가이드」에 있습니다.
@@ -77,7 +77,7 @@ seatsac/
 └── docs/              conventions · runbook
 ```
 
-배포 매니페스트는 이 레포가 아니라 **`cinema-gitops`** 레포에 있습니다. 좌석 배치 원본·시드는 비공개 **`lotte-seed`** 레포에 있고 이 레포에는 절대 올리지 않습니다.
+배포 매니페스트는 이 레포가 아니라 **`SeatSAC-gitops`** 레포(Public — 계정 ID·엔드포인트는 두지 않고 Terraform이 클러스터에 넣음)에 있습니다. 좌석 배치 원본·시드는 비공개 **`lotte-seed`** 레포에 있고 이 레포에는 절대 올리지 않습니다.
 
 ---
 
@@ -244,13 +244,13 @@ git push --force-with-lease
 | --- | --- | --- | --- |
 | `pr-check` | 모든 PR | `./gradlew build` (컴파일 · 단위 테스트 · Testcontainers), gitleaks(비밀 유출 검사) | 머지 불가. 로그의 첫 에러부터 확인 |
 | `infra-plan` | `infra/terraform/**` 바뀐 PR | `terraform fmt · validate · plan` 결과를 PR 코멘트로 | 김종식 확인 |
-| `build-push` | main 머지 | 서비스 이미지 빌드 → ECR → `cinema-gitops` 태그 커밋 → ArgoCD 자동 배포 | 김종식 확인 |
+| `build-push` | main 머지 (`services/**`) | 바뀐 서비스만 이미지 빌드 → Trivy → ECR. GitHub App 설정(`GITOPS_APP_ID`·`GITOPS_APP_PRIVATE_KEY`)이 있을 때만 → `SeatSAC-gitops` 태그 커밋 → ArgoCD 자동 배포 (없으면 경고 후 ECR push까지만) | 김종식 확인 |
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`assets/*` 1년 · `index.html` no-cache) → CloudFront 무효화 | 레포 Variables·`package-lock.json` 확인 (런북 7장) |
 | `cluster-schedule` | 월~금 08:23 켜기 · 23:07 끄기(KST) + 수동 | EKS 노드그룹 desired 1 ↔ 0 | 김종식 확인 |
 
-**추가될 예정** — OpenAPI diff(계약 깨짐 차단) · Trivy(이미지 취약점) · `lambda-deploy`
+**추가될 예정** — OpenAPI diff(계약 깨짐 차단) · `lambda-deploy`
 
-> 현재 `build-push`와 `infra-plan`은 AWS OIDC 역할(WBS 3.1.10)이 생기기 전이라 실패하거나 꺼져 있을 수 있습니다. PR에서는 **`pr-check`만 통과하면 됩니다.**
+> `build-push`는 main 머지 뒤에 돈다(PR에서는 돌지 않음). 서비스 PR은 **`pr-check`만 통과하면 됩니다.** 머지 후 Actions의 `build-push`가 초록인지, gitops 커밋이 생겼는지 확인하세요. 초록인데 gitops 커밋이 없고 요약에 "gitops 태그 커밋을 건너뛴다" 경고가 있으면 GitHub App 설정이 없어 배포되지 않은 상태입니다 → 김종식에게 알려 주세요(런북 6-A-2·6-A-3).
 
 ### 실패했을 때
 
@@ -318,7 +318,7 @@ git push --force-with-lease
 
 ### 5-7. 클러스터와 배포
 
-- **클러스터를 직접 고치지 않습니다** (`kubectl edit/apply` 금지). ArgoCD가 Git 상태로 되돌립니다. 바꿀 게 있으면 `cinema-gitops`에 PR
+- **클러스터를 직접 고치지 않습니다** (`kubectl edit/apply` 금지). ArgoCD가 Git 상태로 되돌립니다. 바꿀 게 있으면 `SeatSAC-gitops`에 PR
 - 내 PR이 머지되면 몇 분 안에 staging에 반영됩니다. 깨진 걸 발견하면 **revert PR**이 가장 빠른 롤백입니다
 - 이미지를 직접 빌드해 ECR에 올리지 않습니다 (Mac ARM 이미지는 클러스터에서 안 뜸). 반드시 CI로
 

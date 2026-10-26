@@ -14,19 +14,93 @@ jobs:
       - run: ./gradlew build --no-daemon      # Testcontainers 는 ubuntu 러너의 Docker 사용
   gitleaks:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     env:
       GITLEAKS_VERSION: "8.21.2"   # 버전 고정 (올릴 때 여기만)
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }   # PR 커밋 범위를 보려면 전체 이력 필요
-      - name: Install gitleaks
+      - name: Install gitleaks (체크섬 확인)
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tgz="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "$base/$tgz"
+          curl -sSfL "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " $tgz\$" | sha256sum -c -
+          tar -xzf "$tgz" -C /usr/local/bin gitleaks
           gitleaks version
       - name: Scan PR commits
         run: |
           gitleaks git --redact --verbose --exit-code 1 \
             --log-opts="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+  # ---- 3.1.4 이미지 검사: 바뀐 서비스만 docker build + Trivy (push 안 함, AWS 권한 없음) --------
+  # main 머지 뒤 build-push가 같은 Dockerfile·같은 스크립트로 진짜 이미지를 만든다 → 여기서 먼저 깨지는지 본다
+  # 필수 검사 이름은 집계 job "image" 하나 (서비스별 matrix 이름은 PR마다 달라서 ruleset에 걸 수 없다)
+  image-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      services: ${{ steps.pick.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: 이미지 검사 대상 고르기
+        id: pick
+        env:
+          MODE: pr
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/changed-services.sh
+
+  image-build:
+    needs: image-changes
+    if: needs.image-changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.image-changes.outputs.services) }}
+    env:
+      SVC: ${{ matrix.service }}
+      IMG: pr-check/${{ matrix.service }}:pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { cache-read-only: true } # PR은 캐시를 읽기만 (main 캐시를 PR이 덮어쓰지 않게)
+      - name: bootJar
+        run: ./gradlew ":services:$SVC:bootJar" --no-daemon -x test # 테스트는 java job
+      - name: 이미지 빌드 (x86, push 안 함)
+        run: docker build --platform linux/amd64 -t "$IMG" "services/$SVC"
+      - name: 비루트 확인 (런타임 계약 1장 runAsNonRoot)
+        run: |
+          user=$(docker image inspect -f '{{.Config.User}}' "$IMG")
+          [[ "$user" =~ ^[0-9]+$ && "$user" != 0 ]] || { echo "::error::Dockerfile USER가 숫자 UID(0 아님)가 아니다: '$user' (docs/service-runtime-contract.md 4장)"; exit 1; }
+          echo "USER $user"
+      - name: Trivy
+        run: bash .github/scripts/trivy-scan.sh "$IMG" "cinema/$SVC (PR)"
+
+  image:
+    # ruleset 필수 검사는 이 job. 대상이 없으면(건너뜀) 성공, 하나라도 실패·취소면 실패
+    needs: [image-changes, image-build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: 결과
+        env:
+          CHANGES: ${{ needs.image-changes.result }}
+          BUILD: ${{ needs.image-build.result }}
+          SERVICES: ${{ needs.image-changes.outputs.services }}
+        run: |
+          echo "대상 $SERVICES · image-changes=$CHANGES · image-build=$BUILD"
+          [ "$CHANGES" = success ] || { echo "::error::대상 고르기 실패"; exit 1; }
+          case "$BUILD" in
+            success|skipped) echo "이미지 검사 통과" ;;
+            *) echo "::error::이미지 빌드·Trivy 실패 — image-build 로그 확인 (런북 13장)"; exit 1 ;;
+          esac
+
   # 계약 lint·하위 호환은 contract-check.yml (2.2.7)
-  # TODO: 구현-계약 일치(springdoc 생성본 vs contracts/openapi, oasdiff) — 서비스 구현 후, Trivy(build-push)
+  # TODO: 구현-계약 일치(springdoc 생성본 vs contracts/openapi, oasdiff) — 서비스 구현 후

@@ -65,7 +65,8 @@ for s in $DB_SERVICES; do
   [[ "$g_app" == *"SELECT, INSERT, UPDATE, DELETE ON \`${s}_db\`.*"* ]] || { echo "FAIL: ${s}_app 권한: $g_app"; fail=1; }
   [[ "$g_mig" == *"ALL PRIVILEGES ON \`${s}_db\`.*"* ]] || { echo "FAIL: ${s}_migrator 권한: $g_mig"; fail=1; }
   # 다른 스키마 권한이 붙어 있으면 실패 (서비스별 격리)
-  others="$(printf '%s %s' "$g_app" "$g_mig" | grep -oE 'ON `[a-z_]+`' | grep -v "\`${s}_db\`" || true)"
+  # 스키마 이름은 백틱 안 아무 문자나(숫자·대문자·$ 포함, 예: archive2_db), 루틴 권한(ON PROCEDURE·FUNCTION)도 본다
+  others="$(printf '%s\n%s\n' "$g_app" "$g_mig" | grep -oE 'ON (PROCEDURE |FUNCTION )?`[^`]+`' | grep -vx "ON \`${s}_db\`" || true)"
   [[ -z "$others" ]] || { echo "FAIL: ${s} 계정에 다른 스키마 권한: $others"; fail=1; }
   # 전역 권한(ON *.*) 금지 — 기본으로 붙는 GRANT USAGE ON *.* 만 허용.
   # CREATE USER IF NOT EXISTS·ALTER USER는 기존 권한을 지우지 않으므로, 누가 손으로 준 전역 권한이 남아 있으면 여기서 잡는다

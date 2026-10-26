@@ -1,0 +1,18 @@
+.footer {
+  border-top: 1px solid var(--color-border);
+  margin-top: auto;
+}
+.inner {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 20px;
+  padding-bottom: 20px;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+.links {
+  display: flex;
+  gap: 16px;
+}

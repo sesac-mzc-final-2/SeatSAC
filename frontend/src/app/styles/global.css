@@ -1,0 +1,87 @@
+/* 디자인 토큰 — 2.2.5 와이어프레임 색 그대로 */
+:root {
+  --color-text: #1f2328;
+  --color-muted: #5b6470;
+  --color-border: #d0d5dd;
+  --color-surface: #eef0f3;
+  --color-primary: #1f5fcc;
+  --color-primary-hover: #174a9f;
+  --color-primary-soft: #e8effb;
+  --color-weekend: #b54708;
+  --color-danger: #b42318;
+  --container-max: 1200px;
+  --container-gutter: 24px;
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--color-text);
+  font-family:
+    "Noto Sans KR",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--color-primary);
+}
+a:hover {
+  color: var(--color-primary-hover);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.container {
+  width: 100%;
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding-left: var(--container-gutter);
+  padding-right: var(--container-gutter);
+}
+
+@media (max-width: 480px) {
+  :root {
+    --container-gutter: 16px;
+  }
+}

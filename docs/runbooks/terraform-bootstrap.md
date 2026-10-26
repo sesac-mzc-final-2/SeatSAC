@@ -4,14 +4,15 @@
 | --- | --- |
 | 목적 | 최초 1회 bootstrap으로 state 버킷 생성 |
 | 언제 | 최초 시작 시 |
-| 담당 / 권한 | 김종식 / cinema-admin 역할 (MFA) |
+| 담당 / 권한 | 김종식 / IAM 사용자 자격 증명 (역할은 global 이후) |
 | 예상 소요 | 약 10초 (실측 기록 아래) |
 | 마지막 검증 | 2026-10-20, 소요 5초 |
 
 ```bash
-aws configure sso            # 프로필 이름: cinema-admin (IAM Identity Center, 3.1.10)
-aws sso login --profile cinema-admin
-export AWS_PROFILE=cinema-admin   # Terraform은 이 환경변수로 자격 증명을 찾는다 (코드에 프로필 없음)
+# 자격 증명: IAM 사용자 키(default 프로필). cinema-admin 역할은 다음 단계(global)에서 생기므로 여기서는 쓰지 않는다
+#   IAM Identity Center는 쓰지 않는다(학원 조직의 멤버 계정, ADR-47·런북 terraform-infra 0장)
+unset AWS_PROFILE
+aws sts get-caller-identity       # arn:aws:iam::<계정ID>:user/... 이면 진행
 
 cd infra/terraform/bootstrap
 terraform init && terraform apply          # tfstate 버킷

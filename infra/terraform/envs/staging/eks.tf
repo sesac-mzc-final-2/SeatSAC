@@ -2,7 +2,7 @@
 # 3.1.2 EKS 클러스터 · 노드그룹 · 애드온 · 팀 접근(Access Entry) · ALB 준비
 #   - Kubernetes 1.36 (표준 지원 ~2027-08), 인증 모드 API(Access Entry만, aws-auth ConfigMap 없음)
 #   - 노드: On-Demand t3.large × 2 = ng-a(AZ a) 1대 + ng-c(AZ c) 1대 (ADR-7·34)
-#     밤·주말 0대는 cluster-schedule 워크플로가 desired_size만 바꾼다(3.1.14). 모듈이 desired_size 변경을 무시하므로 drift 없음
+#     밤·주말 0대는 EventBridge Scheduler(cluster_schedule.tf)·cluster-schedule 워크플로(백업·수동)가 desired_size만 바꾼다(3.1.14). 모듈이 desired_size 변경을 무시하므로 drift 없음
 #   - 애드온: vpc-cni(NetworkPolicy 켬) · coredns · kube-proxy · eks-pod-identity-agent · metrics-server(HPA)
 #   - 파드 권한은 Pod Identity만 (IRSA 안 씀)
 #   - ALB 자체는 gateway Ingress가 만들 때 AWS Load Balancer Controller가 생성한다.

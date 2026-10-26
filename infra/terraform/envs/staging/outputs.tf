@@ -117,3 +117,13 @@ output "db_bootstrap_role_arn" {
   description = "3.1.12 DB 계정 생성 Job Pod Identity 역할 (cinema-ops/db-bootstrap, 마스터 Secret 읽기만)"
   value       = module.db_bootstrap_pod_identity.iam_role_arn
 }
+
+output "cluster_schedules" {
+  description = "3.1.14 EventBridge Scheduler 일정(노드그룹 켜기·끄기) — 이름 · 상태"
+  value       = { for k, s in aws_scheduler_schedule.cluster : s.name => s.state }
+}
+
+output "cluster_schedule_group" {
+  description = "GitHub cluster-schedule 백업이 끄기 상태를 확인하는 일정 그룹"
+  value       = aws_scheduler_schedule_group.cluster.name
+}

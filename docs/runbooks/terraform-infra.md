@@ -889,14 +889,18 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 
 ## 8-1. 가동 정책 — 노드 0대 스케줄·Budgets (3.1.14, OPS-13)
 
-코드: `.github/workflows/cluster-schedule.yml` · `infra/scripts/cluster-scale.sh` · `infra/terraform/global/{cluster_schedule,budgets}.tf`
+코드: `infra/terraform/envs/staging/cluster_schedule.tf`(EventBridge Scheduler, **정시 실행**) · `.github/workflows/cluster-schedule.yml`(백업·수동) · `infra/scripts/cluster-scale.sh` · `infra/terraform/global/{cluster_schedule,budgets}.tf`
+
+> 10/27 변경: GitHub Actions schedule이 몇 시간씩 늦거나 빠졌다(10/23 끄기 4시간·10/26 켜기 6시간 지연, 10/26 끄기 누락). 정시 실행을 **EventBridge Scheduler**(KST 타임존, `eks:UpdateNodegroupConfig` 직접 호출)로 옮기고, 워크플로는 30분 뒤 백업으로 남겼다. 둘 다 멱등이라 같이 돌아도 안전하다
 
 | 시각 (KST) | 동작 | 비고 |
 | --- | --- | --- |
-| 월~금 08:23 | 노드그룹마다 desired 1 (`up`) | 인스턴스 InService까지 대기(최대 10분) → 파드 Ready까지 5~10분 더 |
-| 월~금 23:07 | desired 0 (`down`) | 금요일 밤에 꺼져 월요일 아침까지 0대 |
-| 데모 주간 11/16~20 | 예약 끄기 건너뜀 (24시간) | 발표 후 수동 `down` |
-| 임시로 밤에도 켜 둠 | 레포 Variables `CLUSTER_KEEP_ON=true` | 예약 끄기만 건너뜀. 끝나면 `false` |
+| 월~금 08:23 | **EventBridge** 노드그룹마다 desired 1 | 노드 Ready까지 2~3분, 파드 Ready까지 5~10분 더 |
+| 월~금 08:53 | GitHub 백업 `up` (이미 켜져 있으면 no-op) | 07~10시(KST)에 도착한 실행만 동작 |
+| 월~금 23:07 | **EventBridge** desired 0 | 금요일 밤에 꺼져 월요일 아침까지 0대 |
+| 월~금 23:37 · 다음 날 00:37 | GitHub 백업 `down` (no-op 또는 대신 끄기) | 22~05시(KST)에 도착한 실행만 동작 — 늦게 온 끄기가 근무 시간에 끄지 않게 |
+| 데모 주간 11/16~20 | 예약 끄기 멈춤 (24시간) | EventBridge 끄기는 `cluster_schedule_demo_start` 0시에 끝남(end_date), 백업도 날짜로 건너뜀. 발표 후 수동 `down` |
+| 임시로 밤에도 켜 둠 | `envs/staging` tfvars `cluster_keep_on = true` → apply | EventBridge 끄기 DISABLED → 백업도 그 상태를 보고 건너뜀. 끝나면 `false` → apply. (예전 Variables `CLUSTER_KEEP_ON`은 쓰지 않음 — 지운다) |
 
 ### 8-1-1. global 적용 (역할·Budgets)
 
@@ -909,6 +913,21 @@ terraform plan -var-file=global.tfvars -out=plan.out
 terraform apply plan.out
 terraform output github_secrets        # AWS_CLUSTER_SCHEDULE_ROLE_ARN → 레포 Actions Secrets에 등록
 ```
+
+**EventBridge Scheduler (10/27 추가, envs/staging)** — global 다음(백업 워크플로가 `scheduler:ListSchedules`를 쓰므로 global 먼저)
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명)
+cd infra/terraform/global && terraform plan -var-file=global.tfvars -out=plan.out   # 기대: 정책 1 change (SchedulerRead) → apply → rm plan.out
+cd ../envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: schedule group 1 · IAM 역할 1 · 인라인 정책 1 · 일정 4(ng-a·ng-c × up·down) add. destroy 0
+terraform apply plan.out && rm -f plan.out
+terraform output cluster_schedules      # {<노드그룹>-up = ENABLED, <노드그룹>-down = ENABLED} × 2
+```
+
+- 레포 Variables `CLUSTER_KEEP_ON`이 남아 있으면 지운다(더 이상 읽지 않음)
+- `cluster_schedule_demo_start`가 지난 뒤에는 끄기 일정의 end_date가 과거라 **새로 만들기가 거절될 수 있다**(재생성 리허설은 데모 주간 전에)
 
 - Budgets 메일 주소마다 확인 메일은 오지 않는다(바로 발송). 스팸함 확인
 - `budget_monthly_usd`·`budget_daily_usd`는 `global.tfvars`에서 팀과 정한 값으로. 평소 하루 비용(컨트롤 플레인·NAT·RDS·Valkey·ALB + 낮 시간 노드)보다 조금 높게 둔다
@@ -928,7 +947,9 @@ infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드�
 - [ ] 워크플로가 main에 머지된 뒤 Actions → cluster-schedule → Run workflow `status` 성공 (역할·Secret 확인)
 - [ ] 수동 `down` → Summary 표 desired 0 · InService 0, `kubectl get nodes` → No resources
 - [ ] 수동 `up` → InService 1씩, `kubectl get nodes` 2대 Ready, ArgoCD 앱이 다시 Healthy
-- [ ] 다음 날 아침 예약 `up`이 실행됐는지 Actions 기록 확인 (schedule은 수~십수 분 늦을 수 있음)
+- [ ] EventBridge 실행 확인: 08:23·23:07 직후 `infra/scripts/cluster-scale.sh status`(desired) · CloudWatch 지표 `AWS/Scheduler` `InvocationAttemptCount`·`TargetErrorCount`(이미 같은 값이면 "No changes needed"로 오류 1건 = 정상)
+- [ ] 백업 확인: Actions → cluster-schedule 예약 실행 Summary가 "이미 desired" 또는 "늦게 도착 — 건너뜀"
+- [ ] `cluster_keep_on = true` apply → `terraform output cluster_schedules`의 `-down`이 DISABLED, 그날 밤 백업 Summary "DISABLED — 백업도 건너뜀" → `false`로 되돌림
 - [ ] `aws budgets describe-budgets --account-id <계정ID>` 에 `cinema-monthly`·`cinema-daily`
 - [ ] 두 번째 `terraform plan`(staging) No changes — desired 변경은 Terraform이 무시
 
@@ -939,7 +960,9 @@ infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드�
 | `up`이 10분 넘게 InService 0 | t3.large 용량 부족·SCP·서브넷 IP 부족 | 노드그룹 Health 이슈(`describe-nodegroup`)·ASG 활동 기록 확인 |
 | `desired 1 → 0` 출력 후 `AccessDeniedException … DescribeUpdate` (❌, 노드는 꺼짐) | `eks:DescribeUpdate`는 **클러스터 ARN**이 필수 리소스인데 노드그룹 ARN만 허용했음 (10/24 수정) | global `cluster_schedule.tf` `UpdateRead` 문 확인 후 apply |
 | 노드그룹 `DEGRADED` | 인스턴스 생성 실패·서브넷 IP 부족·IAM 등 건강 문제 | 끄기는 그대로 진행됨(경고만). 켜기는 중단 → 8-1-4 |
-| 예약 실행이 안 보임 | 워크플로가 main에 없음 / 60일간 레포 활동 없음(GitHub가 schedule 중지) | main 머지 확인, Actions에서 워크플로 Enable |
+| 예약 실행이 안 보임·몇 시간 늦음 (GitHub) | GitHub schedule은 부하에 따라 늦거나 빠진다(10/23·10/26 실제 발생) / 60일간 레포 활동 없음 | 정시 실행은 EventBridge가 하므로 영향 없음. 늦게 온 백업은 시각 확인으로 건너뜀. 둘 다 안 돌았으면 수동 실행 |
+| 08:23·23:07에 노드가 안 바뀜 (EventBridge) | 일정 DISABLED(`cluster_keep_on`)·end_date 지남·역할 권한·노드그룹 이름 바뀜(교체 후 apply 안 함) | `aws scheduler list-schedules --group-name cinema-staging-cluster`, CloudWatch `TargetErrorCount`, staging plan으로 일정 입력값 확인 |
+| 백업 `EventBridge 끄기 일정 확인`에서 `AccessDenied scheduler:ListSchedules` | global 정책(SchedulerRead) apply 전 | global apply |
 
 
 ### 8-1-4. 노드그룹 DEGRADED·변경 거부 복구

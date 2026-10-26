@@ -141,16 +141,19 @@ npm install && npm run dev
 
 ### 2-5. AWS 접근 (클러스터 확인이 필요할 때)
 
-개인 액세스 키는 만들지 않습니다. IAM Identity Center(SSO)로 로그인합니다. 초대 메일은 김종식이 보냅니다.
+IAM Identity Center(SSO)는 쓰지 않습니다(학원 계정 제약). **IAM 사용자 + MFA로 `cinema-developer` 역할**을 씁니다(ADR-47). 계정·초기 비밀번호는 김종식이 전달하고, MFA·프로필 설정은 각자 5분입니다 — 런북 `docs/runbooks/terraform-infra.md` 2-5.
 
 ```bash
-aws configure sso                     # 프로필 이름: cinema
-aws sso login --profile cinema
-aws eks update-kubeconfig --name cinema-staging-eks --region ap-northeast-2 --profile cinema
+aws configure                         # IAM 사용자 액세스 키 (default 프로필, 자기 PC에서만 입력)
+# ~/.aws/config 에 cinema-dev 프로필 추가 (김종식이 주는 예시, mfa_serial만 자기 값으로)
+aws sts get-caller-identity --profile cinema-dev   # MFA 코드 → assumed-role/cinema-developer (8시간)
+aws eks update-kubeconfig --name cinema-staging-eks --region ap-northeast-2 --profile cinema-dev
 kubectl get pods -n cinema-staging    # 읽기·로그·port-forward 가능, 변경은 GitOps로만
 ```
 
-> 클러스터는 **평일 낮에만** 켜져 있습니다. 밤·주말에 필요하면 Actions의 「cluster-schedule」을 수동 실행하거나 김종식에게 말해 주세요.
+- 액세스 키·MFA 코드는 어디에도 붙여 넣지 않습니다. 키가 샜으면 바로 김종식에게
+
+> 클러스터는 **평일 낮(08:23~23:07 KST)에만** 켜져 있습니다. 밤·주말에 필요하면 Actions의 「cluster-schedule」을 수동 실행(`up`)하거나 김종식에게 말해 주세요.
 
 ---
 

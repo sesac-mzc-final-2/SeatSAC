@@ -30,6 +30,7 @@ import com.seatsac.common.test.WithCurrentUser;
 import com.seatsac.common.web.CommonWebAutoConfiguration;
 import java.time.Instant;
 import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -63,6 +64,13 @@ class BookingControllerTest {
      */
     @MockitoBean
     IdempotencyStore idempotencyStore;
+
+    /** BKG-10에 {@code @Idempotent}가 붙어 advice가 올라온다 — 여기서는 「처리권을 잡았다」로만 둔다 */
+    @BeforeEach
+    void acquireIdempotencyKey() {
+        when(idempotencyStore.begin(anyString(), anyString(), any()))
+            .thenReturn(IdempotencyStore.Begin.acquired("owner-for-http-layer-test"));
+    }
     /** 3.2.6 엔드포인트의 흐름은 {@code BookingPaymentFlowTest}가 본다 — 여기서는 HTTP 층만 */
     @MockitoBean
     BookingDetailService bookingDetailService;

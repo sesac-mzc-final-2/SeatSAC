@@ -1,6 +1,7 @@
 package com.seatsac.booking.controller;
 
 import com.seatsac.booking.dto.request.BookingPayRequest;
+import com.seatsac.booking.idempotency.Idempotent;
 import com.seatsac.booking.dto.response.BookingCancelResponse;
 import com.seatsac.booking.dto.response.BookingDetailResponse;
 import com.seatsac.booking.dto.response.BookingPaymentResponse;
@@ -51,9 +52,13 @@ public class BookingController {
     /**
      * BKG-10 결제 요청 → BKG-06 확정. <b>거절도 200</b>이고 {@code status}로 구분한다.
      * 결과를 끝까지 알 수 없으면 503 {@code PAYMENT_RESULT_UNKNOWN}이고 예매는 {@code PENDING}이다.
+     *
+     * <p>{@code @Idempotent}가 같은 {@code Idempotency-Key}의 재요청에 <b>첫 응답을 그대로</b>
+     * 돌려준다(ADR-19). 결제는 예매당 1회(ADR-24)라 두 번 긁히면 안 되는데, 화면이
+     * 503·타임아웃 뒤 재시도하는 경로가 있어 여기에는 반드시 필요하다. 저장된 응답이
+     * 없고 처리 중이면 409 {@code IDEMPOTENCY_IN_PROGRESS}다.
      */
-    // TODO(3.2.4 머지 후): @Idempotent를 붙인다. PR #31의 멱등 처리가 들어오면 같은 키 재요청이
-    // 저장된 첫 응답을 받는다. 지금은 헤더만 필수(없으면 400)이고 재생은 아직 동작하지 않는다
+    @Idempotent
     @PostMapping("/bookings/{bookingId}/pay")
     public BookingPaymentResponse pay(@CurrentUser String userId, @PathVariable Long bookingId,
                                       @RequestHeader(Headers.IDEMPOTENCY_KEY) String idempotencyKey,

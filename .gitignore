@@ -23,6 +23,7 @@ __pycache__/
 *.tfplan
 plan.out
 crash.log
+backend.hcl
 .terraform.tfstate.lock.info
 *.auto.tfvars
 secret*.tfvars

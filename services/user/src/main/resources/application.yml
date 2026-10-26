@@ -11,13 +11,21 @@ management:
   endpoints.web.exposure.include: health,prometheus,info
   endpoint.health.probes.enabled: true
   endpoint.health.show-details: never
+  endpoint.health.group.readiness.include: readinessState,db   # 서비스 실행 계약 1장
   metrics.tags.application: user
+  metrics.distribution.percentiles-histogram.http.server.requests: true
 logging:
   config: classpath:logback-spring.xml
 
+# 계약 CI 2단계가 /v3/api-docs 생성본과 contracts/openapi/user.openapi.yaml 을 비교한다 (계약 확정 #1)
+springdoc:
+  api-docs.version: openapi_3_1
+  api-docs.path: /v3/api-docs
+
 # DB: 서비스별 스키마·계정. 비밀번호는 K8s Secret → 환경변수 (ADR-10)
 spring.datasource:
-  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/user_db?serverTimezone=UTC&characterEncoding=utf8}
+  # UTC 저장: 세션 시간대까지 UTC로 맞춘다 (데이터 모델 1장)
+  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/user_db?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=utf8}
   username: ${SPRING_DATASOURCE_USERNAME:user_app}
   password: ${SPRING_DATASOURCE_PASSWORD:local}
   hikari.maximum-pool-size: 5
@@ -29,3 +37,28 @@ spring.flyway:
   enabled: ${APP_FLYWAY_ON_STARTUP:true}   # 클러스터에서는 PreSync Job이 돌리므로 false
   user: ${SPRING_FLYWAY_USER:user_migrator}
   password: ${SPRING_FLYWAY_PASSWORD:local}
+
+# 서비스 실행 계약 3장 — APP_SERVICES_BOOKING_URL, APP_SERVICES_CATALOG_URL, APP_COGNITO_ENDPOINT(선택)
+app:
+  services:
+    booking-url: ${APP_SERVICES_BOOKING_URL:http://booking:8080}
+    catalog-url: ${APP_SERVICES_CATALOG_URL:http://catalog:8080}
+  cognito:
+    # 프로필 첫 생성 때 GetUser. 기본값은 AWS_REGION(공통 ConfigMap)으로 만든다 — 사용자 풀 ID는 필요 없다(토큰이 풀을 안다)
+    endpoint: ${APP_COGNITO_ENDPOINT:https://cognito-idp.${AWS_REGION:ap-northeast-2}.amazonaws.com}
+
+# user → booking·catalog 서킷 (ADR-23: 실패율 50%, 10초 열림). booking 열림 → 503 BOOKING_UNAVAILABLE, catalog 열림 → screening null·극장 검증 생략
+resilience4j.circuitbreaker:
+  configs:
+    default:
+      sliding-window-type: COUNT_BASED
+      sliding-window-size: 10
+      minimum-number-of-calls: 5
+      failure-rate-threshold: 50
+      wait-duration-in-open-state: 10s
+      permitted-number-of-calls-in-half-open-state: 2
+  instances:
+    booking:
+      base-config: default
+    catalog:
+      base-config: default

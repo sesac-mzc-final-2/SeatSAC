@@ -1,0 +1,34 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.posterLink {
+  display: block;
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+}
+.posterLink:hover {
+  opacity: 0.92;
+}
+.title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--color-text);
+  text-decoration: none;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.title:hover {
+  color: var(--color-primary);
+}
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

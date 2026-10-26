@@ -1,0 +1,47 @@
+.button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 112px;
+  min-height: 60px;
+  padding: 6px 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+.button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.button:disabled {
+  cursor: not-allowed;
+  background: var(--color-surface);
+  color: var(--color-muted);
+}
+.time {
+  font-size: 17px;
+  font-weight: 700;
+}
+.seats {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.seats[data-tone="low"] {
+  color: var(--color-weekend);
+}
+.seats[data-tone="soldout"] {
+  color: var(--color-danger);
+  font-weight: 700;
+}
+.seats[data-tone="unknown"] {
+  font-style: italic;
+}

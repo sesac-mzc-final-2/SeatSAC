@@ -1,0 +1,51 @@
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.movie {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.movieHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.movieTitle {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--color-text);
+  text-decoration: none;
+}
+.movieTitle:hover {
+  color: var(--color-primary);
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: flex-start;
+  padding-left: 4px;
+}
+.hall {
+  flex: 0 0 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hallName {
+  font-size: 15px;
+  font-weight: 700;
+}
+.hallMeta {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+.times {
+  flex: 1 1 400px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}

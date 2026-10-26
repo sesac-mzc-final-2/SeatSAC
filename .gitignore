@@ -52,3 +52,5 @@ kubeconfig
 /load/
 # kotlin 에러 로그
 .kotlin/
+# frontend 예시 env (공개 값만) — .env.* 무시 규칙의 예외
+!frontend/.env.example

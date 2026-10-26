@@ -1,0 +1,41 @@
+.list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+.day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: 64px;
+  min-height: 60px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+.day:hover {
+  border-color: var(--color-primary);
+}
+.day[data-weekend="true"] {
+  color: var(--color-weekend);
+}
+.day[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+.dow {
+  font-size: 12px;
+}
+.num {
+  font-size: 18px;
+  font-weight: 700;
+}

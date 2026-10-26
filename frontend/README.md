@@ -1,11 +1,45 @@
-# frontend — React (Vite)
+# frontend — React (Vite) · FSD
 
 - 빌드 결과는 S3 + CloudFront (OAC). 컨테이너 없음. `frontend-deploy` 워크플로가 업로드·무효화한다.
-- API는 같은 도메인의 `/api/*` → `VITE_API_BASE_URL=/api`. 로컬은 Vite 프록시 `/api` → `http://localhost:8080`.
-- 로그인은 Cognito Hosted UI (PKCE), `react-oidc-context`. Access Token 을 `Authorization: Bearer` 로.
-- SSE: 연결 → BKG-01 스냅샷 → seq 보다 큰 이벤트만 적용. 재연결 때마다 스냅샷 다시.
+- API는 같은 도메인의 `/api/*` → `VITE_API_BASE_URL=/api`. 로컬은 Vite 프록시 `/api` → `http://localhost:8080`(gateway).
+- 로그인은 Cognito Hosted UI (PKCE), `react-oidc-context`. Access Token 을 `Authorization: Bearer` 로. 토큰은 메모리에만(ADR-63).
+- SSE: 연결 → BKG-01 스냅샷 → seq 보다 큰 이벤트만 적용. 재연결 때마다 스냅샷 다시. (좌석 화면, 남궁일)
+
+## 실행
 
 ```bash
-npm create vite@latest . -- --template react-ts   # 최초 1회 (이 README 를 덮어쓰지 않게 주의)
-npm install && npm run dev
+npm ci
+npm run dev                 # http://localhost:5173, /api → localhost:8080
+DEV_API_PROXY=http://localhost:8089 npm run dev   # 다른 백엔드(목 서버 등)로 프록시
+npm run check               # typecheck + eslint + FSD 검사(steiger) + vitest
+npm run build               # tsc -b && vite build → dist/
 ```
+
+환경 변수는 `.env.example` 참고 (전부 공개 값, `VITE_` 는 빌드에 포함된다). `VITE_COGNITO_*` 가 비어 있으면 로그인 버튼이
+비활성화되고 조회 화면만 동작한다. 값은 `docs/service-runtime-contract.md` 3장 frontend 표.
+
+## 구조 — Feature-Sliced Design
+
+`src/` 는 FSD 계층으로 나뉜다. 위 계층만 아래 계층을 import 하고(app → pages → widgets → features → entities → shared),
+슬라이스는 `index.ts` 공개 API로만 쓴다. `npm run lint:fsd`(steiger)가 검사한다.
+
+| 계층 | 슬라이스 | 내용 |
+| --- | --- | --- |
+| `app` | `providers` · `routes` · `styles` | 진입점, 토스트·쿼리·인증(Cognito) 프로바이더, 라우터, 전역 CSS 토큰 |
+| `pages` | `home`(W1) · `movie-detail`(W2) · `showtimes`(W3) · `credits`(W10) · `auth-callback`(W7 최소) · `not-found` | 화면 한 장 = 슬라이스 하나 |
+| `widgets` | `header` · `footer` · `page-layout` · `movie-catalog` · `showtime-board` | 여러 엔티티·기능을 합친 블록 |
+| `features` | `login` · `showtimes-filter` · `enter-seat-select` | 사용자 행동 (로그인 이동, 극장·날짜·영화 필터, 회차 클릭 → 로그인 확인 → 좌석 선택) |
+| `entities` | `movie` · `theater` · `screening` · `session` | 계약(`contracts/openapi/catalog.openapi.yaml`) 타입, API 함수, 쿼리 옵션, 표시용 작은 UI |
+| `shared` | `api` · `config` · `lib` · `ui` | `/api` 클라이언트·오류(`error.v1`), 경로·환경, KST 날짜, 버튼·배지·빈 상태·오류 블록(문의 코드)·토스트 |
+
+- 엔티티끼리는 import 하지 않는다. 꼭 필요하면 `entities/{슬라이스}/@x/{쓰는 슬라이스}.ts` 로만 연다 (`movie/@x/screening`).
+- 슬라이스 안에서는 상대 경로, 계층을 넘을 때는 `@/계층/슬라이스` 별칭을 쓴다.
+- 다른 담당 화면 경로(W4 `/screenings/:id`, W8 `/me`)는 `shared/config/routes.ts` 에 링크 대상으로만 둔다.
+
+## 화면 규칙 (2.2.5 와이어프레임 결정)
+
+- 시각은 응답의 `+09:00` 문자열을 그대로 KST로 표시한다. `date` 는 KST 영업일.
+- 오류는 `code` 로 문구를 고르고 `message` 는 표시하지 않는다. 오류 블록 아래 「문의 코드」 = traceId 앞 8자리, 누르면 32자리 복사.
+- 401 → 토큰 1회 갱신 후 재시도, 또 401이면 로그인. 503 → 공통 토스트 + 다시 시도.
+- 러닝타임은 상세의 `runtimeMinutes` 만 표시(null이면 숨김). `slotMinutes` 는 회차 간격이라 쓰지 않는다 (W-2).
+- 상영예정 탭 없음 (W-1). 포스터 `null` → 제목 카드. 잔여석 `remainingSeatsSource=TOTAL` 이면 전체 좌석 수만 회색.

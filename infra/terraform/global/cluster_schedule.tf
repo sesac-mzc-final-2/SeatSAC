@@ -19,8 +19,17 @@ data "aws_iam_policy_document" "cluster_schedule" {
   }
   statement {
     sid       = "NodegroupScale"
-    actions   = ["eks:DescribeNodegroup", "eks:UpdateNodegroupConfig", "eks:DescribeUpdate"]
+    actions   = ["eks:DescribeNodegroup", "eks:UpdateNodegroupConfig"]
     resources = ["arn:aws:eks:${var.region}:${local.account_id}:nodegroup/${var.eks_cluster_name}/*/*"]
+  }
+  statement {
+    # DescribeUpdate는 클러스터 ARN이 필수 리소스(cluster*)다. 노드그룹 ARN만 주면 AccessDenied (10/24 down 실행에서 확인)
+    sid     = "UpdateRead"
+    actions = ["eks:DescribeUpdate"]
+    resources = [
+      "arn:aws:eks:${var.region}:${local.account_id}:cluster/${var.eks_cluster_name}",
+      "arn:aws:eks:${var.region}:${local.account_id}:nodegroup/${var.eks_cluster_name}/*/*",
+    ]
   }
   statement {
     sid       = "AsgRead"

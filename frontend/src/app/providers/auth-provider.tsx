@@ -1,9 +1,8 @@
 import { InMemoryWebStorage, WebStorageStateStore, type User } from "oidc-client-ts";
 import { useEffect, useMemo, type ReactNode } from "react";
-import { AuthProvider as OidcProvider, useAuth, type AuthProviderProps } from "react-oidc-context";
+import { AuthProvider as OidcProvider, hasAuthParams, useAuth, type AuthProviderProps } from "react-oidc-context";
 import {
   SessionContext,
-  roleFromAccessToken,
   unavailableSession,
   type Session,
   type SessionStatus,
@@ -14,7 +13,7 @@ import { env, isCognitoConfigured } from "@/shared/config";
 
 /**
  * Cognito Hosted UI (code + PKCE, ADR-37). 토큰은 메모리에만 둔다 (InMemoryWebStorage, ADR-63) —
- * 새로고침하면 Cognito 세션으로 다시 받는다. PKCE state(sessionStorage 기본값)는 토큰이 아니다.
+ * 새로고침하면 Cognito 세션 쿠키로 다시 받는다. PKCE state(sessionStorage 기본값)는 토큰이 아니다.
  */
 const oidcConfig: AuthProviderProps = {
   authority: env.cognito.authority,
@@ -30,6 +29,29 @@ const oidcConfig: AuthProviderProps = {
   },
 };
 
+/**
+ * "이 브라우저에서 로그인한 적 있음" 표시. 토큰이 아니라 새로고침 뒤 Cognito 세션으로 자동 재발급(signinRedirect)을
+ * 시도할지 정하는 플래그다. 없으면 비로그인 방문자를 Hosted UI 로 보내지 않는다.
+ */
+const SIGNED_IN_FLAG = "seatsac.signedIn";
+const signedInFlag = {
+  get: (): boolean => {
+    try {
+      return window.localStorage.getItem(SIGNED_IN_FLAG) === "1";
+    } catch {
+      return false;
+    }
+  },
+  set: (value: boolean): void => {
+    try {
+      if (value) window.localStorage.setItem(SIGNED_IN_FLAG, "1");
+      else window.localStorage.removeItem(SIGNED_IN_FLAG);
+    } catch {
+      // 저장소를 못 쓰면 자동 복구만 포기한다
+    }
+  },
+};
+
 interface SigninState {
   returnTo?: unknown;
 }
@@ -41,6 +63,8 @@ function readReturnTo(state: unknown): string | null {
   return returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : null;
 }
 
+const currentPath = (): string => `${window.location.pathname}${window.location.search}`;
+
 function toSessionUser(user: User): SessionUser {
   const profile = user.profile;
   const username = profile["cognito:username"];
@@ -48,7 +72,6 @@ function toSessionUser(user: User): SessionUser {
     id: profile.sub,
     name: profile.name ?? (typeof username === "string" ? username : null),
     email: profile.email ?? null,
-    role: roleFromAccessToken(user.access_token),
   };
 }
 
@@ -65,14 +88,36 @@ function cognitoLogoutUrl(): string | null {
 function SessionBridge({ children }: { children: ReactNode }) {
   const auth = useAuth();
 
+  // 401 처리: 1회 갱신 → 그래도 401 이면 세션 만료로 보고 로그인 흐름 시작 (2.2.5 공통 규칙)
   useEffect(() => {
     configureHttpAuth({
       getAccessToken: () => auth.user?.access_token ?? null,
       onUnauthorized: async () => {
-        const renewed = await auth.signinSilent();
+        const renewed = await auth.signinSilent().catch(() => null);
         return renewed?.access_token ?? null;
       },
+      onSessionExpired: () => {
+        void auth.removeUser().then(() => auth.signinRedirect({ state: { returnTo: currentPath() } }));
+      },
     });
+  }, [auth]);
+
+  // 로그인 상태 플래그 유지 + 새로고침 복구: 전에 로그인했던 브라우저라면 초기화가 끝난 익명 상태에서 Cognito 세션으로 다시 받는다
+  useEffect(() => {
+    if (auth.isLoading || auth.activeNavigator || hasAuthParams()) return;
+    if (auth.isAuthenticated) {
+      signedInFlag.set(true);
+      return;
+    }
+    if (auth.error) {
+      // 복구 시도가 실패하면(로그인 취소·Cognito 세션 만료) 플래그를 지워 무한 재시도를 막는다
+      signedInFlag.set(false);
+      return;
+    }
+    if (signedInFlag.get()) {
+      signedInFlag.set(false);
+      void auth.signinRedirect({ state: { returnTo: currentPath() } });
+    }
   }, [auth]);
 
   const session = useMemo<Session>(() => {
@@ -86,6 +131,7 @@ function SessionBridge({ children }: { children: ReactNode }) {
         void auth.signinRedirect({ state: { returnTo: returnTo ?? "/" } });
       },
       signOut: () => {
+        signedInFlag.set(false);
         void auth.removeUser().then(() => {
           const logoutUrl = cognitoLogoutUrl();
           if (logoutUrl) window.location.assign(logoutUrl);

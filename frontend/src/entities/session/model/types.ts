@@ -1,12 +1,8 @@
-/** X-User-Role 값 (docs/conventions.md 6장). Cognito 그룹 ADMIN → ADMIN, 그 외 USER */
-export type UserRole = "USER" | "ADMIN";
-
 export interface SessionUser {
   /** Cognito sub (= X-User-Id) */
   id: string;
   name: string | null;
   email: string | null;
-  role: UserRole;
 }
 
 /**
@@ -14,6 +10,8 @@ export interface SessionUser {
  * - anonymous: 로그인 안 됨
  * - authenticated: Access Token 있음
  * - unavailable: Cognito 설정이 없어 로그인 기능을 쓸 수 없음 (로컬 기본)
+ *
+ * 역할(USER·ADMIN)은 토큰을 파싱하지 않고 `GET /users/me` 응답(`role`)에서 받는다 (3.3.6, W8·W9).
  */
 export type SessionStatus = "loading" | "anonymous" | "authenticated" | "unavailable";
 

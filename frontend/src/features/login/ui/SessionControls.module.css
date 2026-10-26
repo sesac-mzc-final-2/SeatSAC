@@ -11,10 +11,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.role {
-  font-size: 12px;
-  color: var(--color-muted);
-}
 .link {
   color: var(--color-text);
   text-decoration: none;

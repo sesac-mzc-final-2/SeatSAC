@@ -42,17 +42,22 @@ export class NetworkError extends Error {
 type AccessTokenProvider = () => string | null;
 /** 401을 받았을 때 토큰을 1회 갱신해 돌려준다. null이면 재시도하지 않는다 (2.2.5 공통 규칙) */
 type UnauthorizedHandler = () => Promise<string | null>;
+/** 갱신 실패 또는 재시도도 401 → 세션이 끝난 것. 인증 프로바이더가 로그인 화면으로 보낸다 ("또 401이면 로그인") */
+type SessionExpiredHandler = () => void;
 
 let getAccessToken: AccessTokenProvider = () => null;
 let onUnauthorized: UnauthorizedHandler | null = null;
+let onSessionExpired: SessionExpiredHandler | null = null;
 
 /** app 계층(인증 프로바이더)이 토큰 공급자를 꽂는다. 화면 코드는 호출하지 않는다. */
 export function configureHttpAuth(options: {
   getAccessToken?: AccessTokenProvider;
   onUnauthorized?: UnauthorizedHandler | null;
+  onSessionExpired?: SessionExpiredHandler | null;
 }): void {
   if (options.getAccessToken) getAccessToken = options.getAccessToken;
   if (options.onUnauthorized !== undefined) onUnauthorized = options.onUnauthorized;
+  if (options.onSessionExpired !== undefined) onSessionExpired = options.onSessionExpired;
 }
 
 export type QueryValue = string | number | boolean | null | undefined;
@@ -114,6 +119,8 @@ export async function http<T>(path: string, options: RequestOptions = {}): Promi
   if (response.status === 401 && auth && onUnauthorized) {
     const refreshed = await onUnauthorized().catch(() => null);
     if (refreshed) response = await send(refreshed);
+    // 갱신이 안 되거나 새 토큰으로도 401 → 로그인 흐름 시작 (오류는 그대로 던져 화면도 알게 한다)
+    if (response.status === 401) onSessionExpired?.();
   }
 
   if (!response.ok) throw new ApiError(response.status, await parseErrorBody(response));

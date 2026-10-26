@@ -7,7 +7,7 @@ const jsonResponse = (status: number, body: unknown) =>
 describe("http", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    configureHttpAuth({ getAccessToken: () => null, onUnauthorized: null });
+    configureHttpAuth({ getAccessToken: () => null, onUnauthorized: null, onSessionExpired: null });
   });
 
   it("buildUrl은 /api 접두사를 붙이고 빈 쿼리는 뺀다", () => {
@@ -54,6 +54,30 @@ describe("http", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondHeaders = (fetchMock.mock.calls[1]?.[1] as RequestInit).headers as Record<string, string>;
     expect(secondHeaders.Authorization).toBe("Bearer new");
+  });
+
+  it("갱신 뒤에도 401이면 세션 만료 처리기를 부르고 ApiError를 던진다", async () => {
+    const unauthorized = (traceId: string) =>
+      jsonResponse(401, { code: "UNAUTHORIZED", message: "", traceId, details: [] });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(unauthorized("a".repeat(32)))
+      .mockResolvedValueOnce(unauthorized("b".repeat(32)));
+    const onSessionExpired = vi.fn();
+    configureHttpAuth({ getAccessToken: () => "old", onUnauthorized: async () => "new", onSessionExpired });
+
+    const error = (await http("/users/me").catch((e: unknown) => e)) as ApiError;
+    expect(error.status).toBe(401);
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it("갱신이 실패(null)해도 세션 만료 처리기를 부른다", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(401, { code: "UNAUTHORIZED", message: "", traceId: "c".repeat(32), details: [] }),
+    );
+    const onSessionExpired = vi.fn();
+    configureHttpAuth({ getAccessToken: () => "old", onUnauthorized: async () => null, onSessionExpired });
+    await expect(http("/users/me")).rejects.toBeInstanceOf(ApiError);
+    expect(onSessionExpired).toHaveBeenCalledTimes(1);
   });
 
   it("auth: false면 Authorization을 붙이지 않는다", async () => {

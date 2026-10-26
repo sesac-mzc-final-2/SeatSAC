@@ -22,7 +22,6 @@ export function SessionControls() {
       <div className={styles.user}>
         <span className={styles.name} title={session.user.email ?? undefined}>
           {label}
-          {session.user.role === "ADMIN" && <span className={styles.role}> · 관리자</span>}
         </span>
         <Link to={routes.myPage()} className={styles.link}>
           마이페이지

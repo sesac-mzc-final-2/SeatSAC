@@ -28,6 +28,7 @@ class CatalogClientTest {
     private static final Pattern ID = Pattern.compile("\\d+");
 
     private StubHttpServer catalog;
+    private CircuitBreakerRegistry breakers;
     private CatalogClient client;
 
     @BeforeEach
@@ -57,7 +58,7 @@ class CatalogClientTest {
                 .collect(Collectors.joining(","));
             return "{\"items\":[" + items + "]}";
         });
-        CircuitBreakerRegistry breakers = CircuitBreakerRegistry.of(CircuitBreakerConfig.custom()
+        breakers = CircuitBreakerRegistry.of(CircuitBreakerConfig.custom()
             .slidingWindowSize(4).minimumNumberOfCalls(2).failureRateThreshold(50)
             .waitDurationInOpenState(Duration.ofSeconds(10)).build());
         client = new CatalogClient(new InternalRestClientFactory().create(catalog.baseUrl(), Duration.ofMillis(500)),
@@ -105,9 +106,13 @@ class CatalogClientTest {
         assertThat(client.screeningSummaries(List.of(5001L))).isEmpty();
         assertThat(client.existingTheaterIds(List.of(1004L))).isEmpty();
 
+        // 위 503 두 번으로 서킷이 열렸다 — 닫고 기록을 비워 타임아웃 분기가 실제 HTTP 호출로 검증되게 한다
+        breakers.circuitBreaker("catalog").reset();
+        catalog.received.clear();
         catalog.status = 200;
         catalog.delayMillis = 1500;
         assertThat(client.existingTheaterIds(List.of(1004L))).isEmpty();
+        assertThat(catalog.received).hasSize(1);
     }
 
     @Test

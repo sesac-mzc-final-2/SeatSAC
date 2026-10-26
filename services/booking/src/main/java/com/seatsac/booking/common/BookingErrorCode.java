@@ -31,6 +31,7 @@ public enum BookingErrorCode implements ErrorCode {
     INVALID_STATUS(CommonResponseCode.VALIDATION_FAILED, "조회 조건이 올바르지 않습니다."),
     INVALID_PAGE(CommonResponseCode.VALIDATION_FAILED, "페이지 값이 올바르지 않습니다."),
     INVALID_IDS(CommonResponseCode.VALIDATION_FAILED, "ID 목록이 올바르지 않습니다."),
+    INVALID_USER_ID(CommonResponseCode.VALIDATION_FAILED, "사용자 ID 형식이 올바르지 않습니다."),
 
     // 400 SCREENING_STARTED
     SCREENING_CLOSED(CommonResponseCode.SCREENING_STARTED, "이미 상영이 시작된 회차입니다."),

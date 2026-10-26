@@ -1,9 +1,11 @@
 package com.seatsac.booking.repository;
 
 import com.seatsac.booking.entity.Booking;
+import com.seatsac.booking.enums.BookingStatus;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -69,4 +71,21 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
          order by b.expiresAt asc
         """)
     List<Long> findExpiredPendingIds(@Param("now") Instant now, Pageable pageable);
+
+    /**
+     * BKG-14 사용자 예매 내역 (호출자 user). 최신순, 페이징.
+     *
+     * <p>{@code statuses}로 거른다 — 생략 시 호출자가 「PENDING 제외 전부」를 넘긴다.
+     * {@code booking} 테이블만 읽는다: 좌석 번호는 {@code seat_labels}에 있고, 끝난 예매는
+     * {@code booking_seat} 행이 없다.
+     */
+    @Query("""
+        select b from Booking b
+         where b.userId = :userId
+           and b.status in :statuses
+         order by b.createdAt desc, b.bookingId desc
+        """)
+    Page<Booking> findByUserIdAndStatusIn(@Param("userId") String userId,
+                                          @Param("statuses") List<BookingStatus> statuses,
+                                          Pageable pageable);
 }

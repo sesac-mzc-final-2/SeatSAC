@@ -1,0 +1,97 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+.back {
+  font-size: 14px;
+  align-self: flex-start;
+}
+.hero {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 40px;
+  align-items: flex-start;
+}
+.poster {
+  flex: 0 0 280px;
+  max-width: 280px;
+}
+@media (max-width: 480px) {
+  .poster {
+    flex-basis: 200px;
+  }
+}
+.info {
+  flex: 999 1 480px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--color-muted);
+}
+.title {
+  font-size: 34px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.titleEn {
+  color: var(--color-muted);
+  font-size: 15px;
+}
+.rows {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  row-gap: 10px;
+  column-gap: 16px;
+  font-size: 15px;
+}
+.rows dt {
+  color: var(--color-muted);
+}
+.rows dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.synopsis {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 820px;
+}
+.synopsisTitle {
+  font-size: 20px;
+}
+.synopsisText {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-line;
+}
+.note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+.attribution {
+  font-size: 13px;
+  color: var(--color-muted);
+}

@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.dto.response.BookingCancelResponse;
+import com.seatsac.booking.idempotency.IdempotencyStore;
 import com.seatsac.booking.service.SeatReleaseService;
 import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.core.time.Times;
@@ -37,6 +38,13 @@ class BookingControllerTest {
 
     @MockitoBean
     SeatReleaseService releaseService;
+
+    /**
+     * {@code @ControllerAdvice}인 멱등 advice가 함께 올라오는데 이 슬라이스에는 Valkey가 없다.
+     * 멱등 동작 자체는 {@code SeatHoldIdempotencyTest}가 본다.
+     */
+    @MockitoBean
+    IdempotencyStore idempotencyStore;
 
     @Test
     void releaseReturnsCanceledWithoutPaymentField() throws Exception {

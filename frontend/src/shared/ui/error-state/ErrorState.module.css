@@ -1,0 +1,35 @@
+.box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid #f0b4a8;
+  border-radius: 8px;
+  background: #fff7f5;
+}
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+.title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.message {
+  font-size: 14px;
+  color: var(--color-muted);
+  line-height: 1.5;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.trace {
+  flex-basis: 100%;
+}

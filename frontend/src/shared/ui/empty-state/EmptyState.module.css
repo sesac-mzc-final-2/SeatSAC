@@ -1,0 +1,25 @@
+.box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border: 1px dashed #98a2b3;
+  border-radius: 8px;
+}
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.description {
+  font-size: 14px;
+  color: var(--color-muted);
+  line-height: 1.5;
+}

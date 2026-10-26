@@ -13,6 +13,7 @@ import com.seatsac.booking.entity.Booking;
 import com.seatsac.booking.enums.SeatEventType;
 import com.seatsac.common.core.trace.TraceIds;
 import com.seatsac.common.core.trace.TraceKeys;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -61,8 +62,13 @@ public class BookingPaymentResultApplier {
     private final SeatHoldStrategy seatHold;
     private final SeatEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final Clock clock;
 
-    public Applied applyApproved(Booking booking, PaymentResult payment, Instant now) {
+    public Applied applyApproved(Booking booking, PaymentResult payment) {
+        // 시각은 <b>여기서</b> 구한다. 부르는 쪽(BKG-10)이 결제 요청 전에 구한 값을 쓰면,
+        // 결제 호출(연결 1초·응답 3초 + 1회 재시도) 사이에 선점이 만료돼도 확정 조건
+        // (expiresAt > :now)이 통과해 「만료된 선점을 확정」하고 환불 경로를 건너뛴다
+        Instant now = clock.instant();
         String messageKey = BookingConfirmedEvent.newMessageKey();
         String traceId = traceId();
         String payload = payloadOf(messageKey, booking, traceId, now);
@@ -94,7 +100,8 @@ public class BookingPaymentResultApplier {
         return Applied.CONFIRMED;
     }
 
-    public Applied applyDeclined(Booking booking, Instant now) {
+    public Applied applyDeclined(Booking booking) {
+        Instant now = clock.instant();
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(booking.getBookingId());
         if (!bookingState.failPayment(booking.getBookingId(), now)) {
             log.info("결제 거절을 반영하지 못했다(이미 처리됨) bookingId={}", booking.getBookingId());

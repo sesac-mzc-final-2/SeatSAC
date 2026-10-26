@@ -69,9 +69,9 @@ public class BookingDetailService {
         }
 
         if (payment.isApproved()) {
-            resultApplier.applyApproved(booking, payment, clock.instant());
+            resultApplier.applyApproved(booking, payment);
         } else if (!payment.isProcessing()) {
-            resultApplier.applyDeclined(booking, clock.instant());
+            resultApplier.applyDeclined(booking);
         }
         // PROCESSING이면 그대로 둔다 — 아직 결과를 모른다
         return payment;

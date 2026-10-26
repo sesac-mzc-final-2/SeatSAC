@@ -61,19 +61,20 @@ public class BookingPaymentService {
             booking.getAmount(), request.method(), card(request)));
 
         Applied applied = payment.isApproved()
-            ? resultApplier.applyApproved(booking, payment, now)
-            : resultApplier.applyDeclined(booking, now);
+            ? resultApplier.applyApproved(booking, payment)
+            : resultApplier.applyDeclined(booking);
 
         return switch (applied) {
             // 내가 확정했거나, 폴링 경로가 먼저 확정했거나 — 사용자가 원한 결과는 같다
             case CONFIRMED, ALREADY_CONFIRMED ->
-                response(booking, BookingStatus.CONFIRMED, confirmedAt(bookingId, now), payment);
+                response(booking, BookingStatus.CONFIRMED, confirmedAt(bookingId), payment);
             case FAILED -> response(booking, BookingStatus.PAYMENT_FAILED, null, payment);
             case EXPIRED_REFUNDED -> throw BookingErrorCode.HOLD_EXPIRED.exception(
                 ErrorDetail.of("status", BookingStatus.EXPIRED.name(),
                     BookingErrorCode.HOLD_EXPIRED.name()),
                 ErrorDetail.of("refunded", true));
-            case ALREADY_SETTLED -> throw conflictFor(bookingId, now);
+            // 결제 호출 사이에 상태가 바뀌었다 → 그 시점 상태로 다시 판단한다
+            case ALREADY_SETTLED -> throw conflictFor(bookingId, clock.instant());
         };
     }
 
@@ -116,11 +117,11 @@ public class BookingPaymentService {
     }
 
     /** 다른 경로가 확정했다면 그쪽이 쓴 시각을 쓴다 */
-    private java.time.OffsetDateTime confirmedAt(Long bookingId, Instant fallback) {
+    private java.time.OffsetDateTime confirmedAt(Long bookingId) {
         return bookingReader.findById(bookingId)
             .map(Booking::getConfirmedAt)
             .map(Times::toApi)
-            .orElse(Times.toApi(fallback));
+            .orElseGet(() -> Times.toApi(clock.instant()));
     }
 
     private static BookingPaymentResponse response(Booking booking, BookingStatus status,

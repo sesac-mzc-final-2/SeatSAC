@@ -669,7 +669,7 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 ```bash
 # 터미널 A (cinema-admin, 노드 켜짐)
 kubectl get daemonset -n kube-system aws-node -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'   # aws-node aws-eks-nodeagent (정책 에이전트)
-kubectl -n cinema-staging get networkpolicy                  # default-deny-ingress + {svc}-ingress 5개
+kubectl -n cinema-staging get networkpolicy                  # Cognito 전: default-deny-ingress + catalog·booking·user·payment-ingress 4개 (gateway 앱이 아직 없음) · 뒤: + gateway-ingress = 5개
 infra/scripts/np-check.sh                                    # 서비스 파드 안에서 서로 8080에 붙어 본다 (get·exec만, 읽기)
 # Cognito 뒤(gateway 배포 후): REQUIRE_GATEWAY=1 infra/scripts/np-check.sh   — gateway 파드가 없으면 실패
 ```
@@ -705,7 +705,16 @@ payment  → user      BLOCKED  BLOCKED  ✅
 - 종료 코드: `0` 모두 기대대로 · `1` 기대와 다르거나 판단 불가(필수 서비스 파드 없음, 검사 0개 포함) · `2` 클러스터 조회 실패(권한·연결 — "파드 없음"으로 착각하지 않게 바로 멈춤)
 - 필수 서비스: catalog·booking·user·payment. gateway는 Cognito 전에는 없어도 되고, 뒤에는 `REQUIRE_GATEWAY=1`로 필수
 
-- **Cognito 뒤(gateway 배포 후) 다시 실행**: `gateway → payment BLOCKED`(인계 #14 완료 조건), `gateway → catalog·booking·user OPEN`, 그리고 다른 서비스 → gateway가 **BLOCKED**인지(ALB 대역만 허용)도 같이 본다. 화면에서 CloudFront `/api` 호출이 되는지(ALB → gateway)
+- **Cognito 뒤(gateway 배포 후) 다시 실행**: `gateway → payment BLOCKED`(인계 #14 완료 조건), `gateway → catalog·booking·user OPEN`, 그리고 다른 서비스 → gateway가 **BLOCKED**인지(ALB 대역만 허용)도 같이 본다(20개 검사)
+- **ALB → gateway 실경로는 `np-check.sh`가 보지 않는다**(스크립트는 앱 파드끼리만). public 서브넷 대역 규칙은 아래로 따로 확인한다 — 인계 #14 완료 조건
+  ```bash
+  kubectl -n cinema-staging get pods -l app.kubernetes.io/name=gateway -o wide     # gateway 파드 IP
+  aws elbv2 describe-target-health --target-group-arn "$(aws elbv2 describe-target-groups \
+    --query "TargetGroups[?contains(TargetGroupName,'cinemast-gateway')].TargetGroupArn | [0]" --output text)" \
+    --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output text   # 파드 IP healthy
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api/movies"   # 200 (CAT-01, 인증 없음)
+  ```
+  대상 그룹 이름은 LB Controller가 `k8s-cinemast-gateway-…`처럼 줄여 만든다. 못 찾으면 `aws elbv2 describe-target-groups --query 'TargetGroups[].TargetGroupName'`으로 확인
 - Prometheus Targets가 모두 UP이면 `monitoring` 허용은 확인된 것(6-D-1)
 - BLOCKED는 연결이 버려져 `TIMEOUT`(기본 3초) 뒤에 나온다 → 전체 1분 안팎
 

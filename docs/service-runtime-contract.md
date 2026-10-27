@@ -170,7 +170,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 11 | `seat-event`·`booking.confirmed` 발행 테스트 (examples로 검증) | 남궁일 | 김종식 (Lambda 소비), 화면 | 3.2.3·3.2.6 | 발행 테스트가 `contracts/events` 스키마 통과 |
 | 12 | CloudFront·S3·`frontend-deploy` + `VITE_` 값 | 김종식 (3.1.11) | 한채연·남궁일 화면 | 화면 첫 배포 | CloudFront 도메인 새로고침·`/api` 동작 |
 | 13 | SSE 경로 세트(6장 SSE ①~④): ALB 유휴 120초(3.1.5 Ingress)·CloudFront 캐시·압축 끔(3.1.11)·Gateway 라우트 타임아웃 없음·`/api` StripPrefix | 김종식(ALB·CloudFront) · 한채연(라우트) | 남궁일 BKG-05 | 3.2.3 SSE 확인 (3.1.5·3.1.11 작업 때 같이 확인) | CloudFront 경유 `curl -N`으로 15초 ping이 몰리지 않고 바로바로 옴 |
-| 14 | NetworkPolicy 허용 목록 (6장) | 김종식 (3.1.13) | 전 서비스 내부 호출 | 내부 API 통합 후 | `infra/scripts/np-check.sh` 전부 ✅ — Cognito 뒤 `REQUIRE_GATEWAY=1`로 gateway → payment BLOCKED까지 |
+| 14 | NetworkPolicy 허용 목록 (6장) | 김종식 (3.1.13) | 전 서비스 내부 호출 | 내부 API 통합 후 | `infra/scripts/np-check.sh` 전부 ✅ — Cognito 뒤 `REQUIRE_GATEWAY=1`로 gateway → payment BLOCKED까지. **그리고** ALB → gateway 실경로(스크립트 밖): ALB 대상 그룹 gateway healthy + CloudFront `/api/movies` 200 (런북 6-E) |
 | 15 | 부하 테스트 시나리오 대상 API·데이터 | 남궁일 | 김종식 OPS-10 (k6 Job) | 4.2.1 전 | k6 스크립트 dry-run |
 
 ## 8. 인프라 쪽 남은 정리

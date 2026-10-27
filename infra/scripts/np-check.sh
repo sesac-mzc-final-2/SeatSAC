@@ -36,11 +36,12 @@ ERR=$(mktemp); trap 'rm -f "$ERR"' EXIT
 # 클러스터 조회 자체가 되는지 먼저 (권한·연결 오류를 '파드 없음'으로 착각하지 않게)
 kubectl -n "$NS" get pods -o name >/dev/null 2>"$ERR" || die "kubectl get pods 실패: $(head -1 "$ERR") — cinema-admin 자격 증명·노드 켜짐 확인"
 
-pod_of() {   # Running 파드 이름. 조회 실패는 종료 코드 2
+pod_of() {   # Running 파드 이름(없으면 빈 값). 조회 실패는 종료 코드 2
   local out
+  # .items[0]은 목록이 비면 jsonpath 오류(array index out of bounds)라 [*]로 받고 첫 이름만 쓴다
   out=$(kubectl -n "$NS" get pods -l "app.kubernetes.io/name=$1" --field-selector=status.phase=Running \
-    -o jsonpath='{.items[0].metadata.name}' 2>"$ERR") || die "$1 파드 조회 실패: $(head -1 "$ERR")"
-  echo "$out"
+    -o jsonpath='{.items[*].metadata.name}' 2>"$ERR") || die "$1 파드 조회 실패: $(head -1 "$ERR")"
+  echo "${out%% *}"
 }
 
 ready_endpoints() {   # 대상 Service의 Ready 엔드포인트 수 (0이면 연결 실패가 정책 때문인지 알 수 없다)
@@ -66,12 +67,17 @@ probe() {   # $1 파드 $2 대상 서비스 $3 컨테이너(= 서비스 이름) 
   esac
 }
 
-# 서비스별 Running 파드를 한 번만 조회한다 (조회 실패는 여기서 종료 코드 2)
+# 서비스별 Running 파드·Ready 엔드포인트 수를 한 번만 조회한다.
+# die는 $( ) 안에서는 그 서브셸만 끝내므로 조회마다 종료 상태를 받아 여기서 종료 코드 2로 멈춘다
 for svc in $SERVICES; do
   p=$(pod_of "$svc") || exit 2
   printf -v "POD_$svc" '%s' "$p"
+  e=0
+  if [ -n "$p" ]; then e=$(ready_endpoints "$svc") || exit 2; fi
+  printf -v "READY_$svc" '%s' "$e"
 done
 pod_var() { local v="POD_$1"; echo "${!v}"; }
+ready_var() { local v="READY_$1"; echo "${!v}"; }
 
 fail=0; checked=0; missing=""
 printf '%-8s → %-8s  %-8s %-14s %s\n' "from" "to" "기대" "결과" ""
@@ -89,7 +95,7 @@ for from in $SERVICES; do
     [ "$to" = "$from" ] && continue
     [ -z "$(pod_var "$to")" ] && continue              # 대상 파드가 없으면(gateway) 위에서 이미 판단
     case "$ok" in *" $to "*) want=OPEN ;; *) want=BLOCKED ;; esac
-    if [ "$(ready_endpoints "$to")" -eq 0 ]; then
+    if [ "$(ready_var "$to")" -eq 0 ]; then
       got="ERROR:NOT_READY"
     else
       got=$(probe "$pod" "$to" "$from")

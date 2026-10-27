@@ -12,8 +12,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.seatsac.catalog.config.CatalogProperties;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -22,6 +26,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -63,6 +69,7 @@ class CatalogApiIntegrationTest {
 
     static volatile BookingMode bookingMode = BookingMode.OK;
     static HttpServer booking;
+    static ExecutorService bookingPool;
 
     @TestConfiguration(proxyBeanMethods = false)
     static class FixedClock {
@@ -76,15 +83,25 @@ class CatalogApiIntegrationTest {
     @BeforeAll
     static void startBookingStub() throws Exception {
         booking = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        // 기본 실행기는 요청을 한 스레드에서 차례로 처리한다 → SLOW 모드가 쉬는 동안 다음
+        // 테스트의 요청이 뒤에 밀려 같이 타임아웃된다(대체값으로 떨어져 엉뚱한 테스트가 깨진다)
+        bookingPool = Executors.newCachedThreadPool();
+        booking.setExecutor(bookingPool);
         booking.createContext("/internal/screenings/seat-counts", exchange -> {
             String ids = Objects.requireNonNullElse(exchange.getRequestURI().getQuery(), "");
             BookingMode mode = bookingMode;
             if (mode == BookingMode.SLOW) {
                 try {
-                    Thread.sleep(700);   // 응답 타임아웃 300ms를 넘긴다
+                    Thread.sleep(2_000);   // 테스트 프로필의 응답 타임아웃(1.5초)을 넘긴다
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                    exchange.close();   // @AfterAll의 shutdownNow — 멈춘 서버에 쓰지 않는다
+                    return;
                 }
+                // 늦더라도 <b>정상 응답을 보낸다.</b> 응답 없이 닫으면 읽기 타임아웃이 걸리지
+                // 않아도(= 회귀) 클라이언트가 연결 오류로 대체값에 떨어져 이 테스트가 통과한다 —
+                // 그러면 타임아웃 경로를 검증하지 못한다. 쓰기는 아래 sendResponse가 IOException만
+                // 삼키므로(클라이언트가 이미 끊었다) 로그에 스택이 남지 않는다
             }
             byte[] body;
             int status;
@@ -101,18 +118,31 @@ class CatalogApiIntegrationTest {
                     .collect(Collectors.joining(","));
                 body = ("{\"items\":[" + items + "]}").getBytes(StandardCharsets.UTF_8);
             }
-            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            sendResponse(exchange, status, body);
+        });
+        booking.start();
+    }
+
+    /**
+     * 응답을 쓴다. 클라이언트가 타임아웃으로 먼저 끊은 경우(SLOW 모드)의 {@code IOException}만
+     * 삼킨다 — 그것까지 핸들러 밖으로 나가면 Gradle 로그에 스택이 섞인다. 다른 예외는 그대로 둔다.
+     */
+    private static void sendResponse(HttpExchange exchange, int status, byte[] body) {
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        try {
             exchange.sendResponseHeaders(status, body.length);
             try (OutputStream out = exchange.getResponseBody()) {
                 out.write(body);
             }
-        });
-        booking.start();
+        } catch (IOException e) {
+            exchange.close();   // 클라이언트가 이미 포기했다
+        }
     }
 
     @AfterAll
     static void stopBookingStub() {
         booking.stop(0);
+        bookingPool.shutdownNow();
     }
 
     @DynamicPropertySource
@@ -128,10 +158,18 @@ class CatalogApiIntegrationTest {
     StringRedisTemplate redis;
     @Autowired
     MeterRegistry meterRegistry;
+    @Autowired
+    CircuitBreakerRegistry circuitBreakers;
+    @Autowired
+    CatalogProperties catalogProperties;
 
     @BeforeEach
     void fixture() {
         bookingMode = BookingMode.OK;
+        // 서킷은 공유 컨텍스트에 살아 있어 테스트 사이에 상태가 넘어온다. booking 호출이
+        // 이 클래스 전체에서 5번(성공 3·실패 2 = 40%)이라 실패가 하나 더 생기면 60%로
+        // 열리고(10초) 그 뒤 테스트가 전부 대체값(TOTAL)으로 깨진다 → 매번 초기화한다
+        circuitBreakers.circuitBreaker("booking").reset();
         redis.getConnectionFactory().getConnection().serverCommands().flushAll();
 
         jdbc.update("DELETE FROM screening");
@@ -251,6 +289,15 @@ class CatalogApiIntegrationTest {
         assertThat(redis.hasKey("catalog:theaters:true:all")).isTrue();
         assertThat(redis.hasKey("catalog:theaters:false:all")).isTrue();
         assertThat(redis.keys("catalog:theaters:*")).hasSize(2);
+    }
+
+    @Test
+    void bookingReadTimeoutIsBoundFromProperties() {
+        // 1.5초로 올리면 300ms가 이 경로에서 더는 검증되지 않는다. 300ms 동작 자체는
+        // BookingSeatCountClientTest가 보고, 여기서는 app.services.booking-read-timeout이
+        // 실제로 바인딩되는지만 지킨다 — 이름이 바뀌면 staging에서 조용히 기본값이 쓰인다
+        assertThat(catalogProperties.services().bookingReadTimeout())
+            .isEqualTo(java.time.Duration.ofMillis(1_500));
     }
 
     @Test

@@ -135,4 +135,12 @@ public class Booking {
     public boolean isExpiredAt(Instant now) {
         return !expiresAt.isAfter(now);
     }
+
+    public boolean isConfirmed() {
+        return status == BookingStatus.CONFIRMED;
+    }
+
+    public boolean isCanceled() {
+        return status == BookingStatus.CANCELED;
+    }
 }

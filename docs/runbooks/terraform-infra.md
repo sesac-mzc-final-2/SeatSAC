@@ -726,6 +726,123 @@ payment  → user      BLOCKED  BLOCKED  ✅
 | `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
 | `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
 | gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
+### 6-D. 블루/그린 배포·자동 롤백 확인 (3.1.6, OPS-03·04)
+
+코드: SeatSAC-gitops `base/{booking,gateway}/rollout.yaml` · `analysis/` (AnalysisTemplate + 분석 트래픽 k6 `analysis/smoke/`) · `base/{booking,gateway}/networkpolicy.yaml`(`rollout-smoke` 허용). Terraform 변경 없음
+
+| 단계 | 일어나는 일 |
+| --- | --- |
+| 1 | 새 태그 커밋(build-push) 또는 설정 PR → Rollout이 **preview** ReplicaSet을 띄움(active는 그대로 트래픽 처리) |
+| 2 | preview Ready → `prePromotionAnalysis` 시작: 분석 Job이 `{svc}-preview:8080`에 조회 4분 30초(200이 95% 미만이면 실패), Prometheus 지표 2분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
+| 3a | 통과 → active Service를 preview 해시로 전환 → 이전 버전 60초 뒤 축소 |
+| 3b | 실패 → **abort**: active 그대로(= 자동 롤백, 사용자 영향 없음), preview 30초 뒤 축소. Rollout·ArgoCD 앱이 `Degraded` |
+
+**사전 조건**: 6-C-2 확인 완료(앱 Synced·Healthy), 시드 적재(8-C)·**분석 회차 ID(6-D-0)**, `kube-prometheus-stack`이 booking·gateway PodMonitor를 수집(6-D-1), gateway는 Cognito 뒤. 첫 배포(이전 버전 없음)는 분석 없이 바로 active가 된다
+
+**도구** (터미널 A, 한 번): Argo Rollouts kubectl 플러그인 — 컨트롤러 차트 2.43.8과 같은 릴리스 계열
+
+```bash
+brew install argoproj/tap/kubectl-argo-rollouts     # macOS. Linux: GitHub 릴리스 바이너리
+kubectl argo rollouts version
+```
+
+#### 6-D-0. 분석 회차 ID 고르기 (`SMOKE_SCREENING_ID`, 시드 적재 뒤 1회)
+
+booking 분석 Job은 `GET /screenings/{id}/seats`가 **200**이어야 통과한다. 없는 회차면 404 → k6 checks 50% → Job 실패 → **정상 배포도 전부 abort**. 그래서 gitops `analysis/booking-prepromotion.yaml`의 `SMOKE_SCREENING_ID`는 `CHANGE_ME`로 두고, `gitops-validate`가 숫자가 아니면 PR을 막는다. 아래로 실제 회차를 골라 넣는다.
+
+| 조건 | 이유 |
+| --- | --- |
+| 시드(lotte-seed)에 있는 회차 | catalog가 404를 돌려주지 않게 |
+| **좌석 배치가 있는 극장**(`hasLayout: true`, 4곳)·`totalSeats > 0` | 좌석 현황이 Valkey·RDS 집계까지 끝까지 탄다 |
+| 날짜는 상관없음 | 좌석 현황은 지난 회차도 200(`SCREENING_STARTED`는 선점 경로에만). 한 번 정하면 고정 |
+| (나중에) 결제 경로를 넣을 때는 **미래 회차** + 분석 전용 회차 | 선점이 `SCREENING_STARTED`로 막히고, 진짜 예매가 생겼다 취소되므로 데모 데이터와 섞이지 않게 (#37 이후, 남궁일) |
+
+```bash
+# 터미널 A (cinema-admin, 노드 켜짐). 응답은 화면에서만 보고 PR·노션에 붙이지 않는다(시드 내용)
+kubectl -n cinema-staging port-forward svc/catalog 18081:8080 &
+kubectl -n cinema-staging port-forward svc/booking 18082:8080 &
+
+# 1) 좌석 배치가 있는 극장
+curl -s localhost:18081/theaters | jq -r '.items[] | select(.hasLayout) | "\(.theaterId)\t\(.name)"'
+
+# 2) 그 극장의 회차 — 시드 영업일을 모르면 최근 날짜를 훑는다 (시드는 하루 편성)
+T=<1)에서 고른 theaterId>
+for d in $(for i in $(seq 0 30); do date -d "-$i day" +%F 2>/dev/null || date -v-${i}d +%F; done); do
+  n=$(curl -s "localhost:18081/screenings?date=$d&theaterId=$T" | jq '.items | length')
+  [ "${n:-0}" -gt 0 ] && { echo "영업일 $d: 회차 $n개"; break; }
+done
+curl -s "localhost:18081/screenings?date=$d&theaterId=$T" \
+  | jq -r '.items[] | select(.totalSeats > 0) | "\(.screeningId)\t\(.totalSeats)석\t\(.startsAt)"' | head -3
+
+# 3) booking으로 확인 — 둘 다 200, 좌석 목록이 비어 있지 않아야 한다
+S=<2)에서 고른 screeningId>
+curl -s -o /dev/null -w 'seats %{http_code}\n' localhost:18082/screenings/$S/seats
+curl -s -o /dev/null -w 'seat-counts %{http_code}\n' "localhost:18082/internal/screenings/seat-counts?ids=$S"
+curl -s localhost:18082/screenings/$S/seats | jq 'keys'     # 좌석 필드가 있는지만 본다
+
+kill %1 %2
+```
+
+- 영업일 훑기가 비면: 시드 적재 확인(8-C `PASS`)부터. 영업일은 lotte-seed 적재 결과 또는 한채연에게 묻는다(시드 SQL·원본은 레포·PR에 붙이지 않는다)
+- 고른 ID를 gitops PR로 `SMOKE_SCREENING_ID`에 넣는다(숫자만, 따옴표 안). 회차 ID는 숫자일 뿐이라 Public 레포에 두어도 된다
+- 시드를 다시 적재(재생성 리허설 3.1.15 등)해 ID가 바뀌면 이 절을 다시 하고 gitops를 고친다
+
+#### 6-D-1. 수집 확인 (분석이 볼 지표가 있는지)
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+# http://localhost:9090 → Status > Targets 에 podMonitor/cinema-staging/booking UP
+# 쿼리: http_server_requests_seconds_count{application="booking"} 에 rollouts_pod_template_hash 라벨이 있어야 한다
+```
+
+#### 6-D-2. 정상 배포 (통과 → 전환)
+
+```bash
+# SeatSAC main에 booking 변경 머지 → build-push가 gitops 태그 커밋 (또는 수동 실행 services=booking)
+kubectl argo rollouts get rollout booking -n cinema-staging --watch
+#   기대: Preview(새 해시) Running → AnalysisRun Running(약 5분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
+kubectl -n cinema-staging get analysisrun -l rollouts-pod-template-hash          # 최신 Successful
+kubectl -n cinema-staging get jobs | grep -i preview-traffic                       # 분석 Job Complete
+```
+
+- 데모(무중단 배포)는 이 단계 동안 k6 `tests/k6/deploy-during-load.js`(OPS-10)를 active(gateway)로 돌려 오류율 0%를 본다
+
+#### 6-D-3. 실패 버전 시연 (abort → 자동 롤백)
+
+앱 코드를 고치지 않고 **gitops 설정 PR**로 preview만 망가뜨린다. 설정이 바뀌면 ConfigMap 해시가 바뀌어 새 ReplicaSet(preview)이 뜬다. active 파드는 이전 ConfigMap을 그대로 쓴다
+
+```yaml
+# SeatSAC-gitops overlays/staging/booking/kustomization.yaml — 시연용 PR (제목에 [시연·revert 예정])
+      - APP_SERVICES_CATALOG_URL=http://catalog-unavailable:8080   # 원래 http://catalog:8080
+```
+
+1. 위 PR 머지 → `kubectl argo rollouts get rollout booking -n cinema-staging --watch`
+2. preview는 Ready가 된다(readiness = DB만). 분석 Job의 `GET /screenings/{id}/seats`가 catalog를 못 찾아 503 → `http-5xx-ratio` 실패 → **Aborted**, active는 이전 버전 그대로
+3. 그동안 사용자 화면·k6(active)는 오류 없음 = 자동 롤백 확인
+4. **시연 PR을 revert하는 PR** 머지 → Rollout이 안정 버전과 같은 템플릿으로 돌아와 `Healthy`(새 배포 없음)
+
+- 같은 방식으로 gateway도 가능(`gateway-config`의 `APP_SERVICES_CATALOG_URL`) — Cognito 뒤
+- 결제 경로 실패(`booking_payment_call_total` timeout·error)로 시연하려면 분석 트래픽에 결제 경로가 들어가야 한다(BKG-10 #37 이후, 남궁일과 정함)
+
+#### 6-D-4. 이미지 버전이 실패했을 때 되돌리기
+
+| 상황 | 할 일 |
+| --- | --- |
+| 분석 실패로 Aborted | active는 안전. gitops에서 **해당 `deploy(staging): {svc} → {sha7}` 커밋을 revert하는 PR** → 머지하면 `Healthy`. 앱 수정은 SeatSAC에서 고쳐 다시 머지(새 태그) |
+| 전환된 뒤 문제 발견(60초 안) | ArgoCD 화면(admin) → Rollout → **Abort**는 전환 전에만 의미. 전환 후에는 revert PR이 원칙 |
+| preview가 10분 안에 Ready 안 됨 | `progressDeadlineAbort`로 자동 abort. `kubectl -n cinema-staging describe rollout booking`·preview 파드 로그 확인 → revert PR |
+
+- `kubectl argo rollouts abort/promote/undo`는 클러스터 직접 조작이다 → 평소에 쓰지 않는다(selfHeal·Git과 어긋남). 긴급 시 관리자만, 스크럼 공유
+
+#### 6-D-5. 자주 막히는 곳
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| gitops PR에서 `블루/그린 분석 회차 ID (숫자)` 실패 | `SMOKE_SCREENING_ID`가 `CHANGE_ME`이거나 숫자가 아님 | 6-D-0으로 실제 회차를 골라 넣는다 |
+| `preview-requests` 실패(결과 0) | 분석 Job이 preview에 못 닿음(NetworkPolicy·Job ImagePull) 또는 PodMonitor 미수집 | `kubectl -n cinema-staging logs job/<…preview-traffic…>`, 6-D-1 Targets |
+| `preview-traffic` 실패 | ① 조회가 200이 아님(k6 `checks` < 95%, 종료 코드 99) — 새 버전의 경로·라우트 고장 또는 `SMOKE_SCREENING_ID`가 시드에 없는 회차(404) ② Job 파드 오류(이미지 `grafana/k6:1.7.1` pull, ConfigMap `rollout-smoke-scripts` 없음) | Job 로그의 k6 요약에서 `✗ seats 200` 같은 실패 check 확인. ②는 `kubectl -n cinema-staging get cm rollout-smoke-scripts`(cinema-common 앱) |
+| AnalysisRun `Error`(Failed 아님) | Prometheus 주소·쿼리 오류 | `kubectl -n cinema-staging describe analysisrun <이름>` 메시지 |
+| booking·gateway가 동시에 preview | 블루/그린 동시 금지(노드 2대) | build-push가 booking만 커밋. 사람 PR도 하나씩 |
 
 ### 6-B. SQS·Lambda (3.1.8·3.1.9) — ⬜
 

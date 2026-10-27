@@ -3,10 +3,11 @@ import { useMemo } from "react";
 import { movieDetailQuery } from "@/entities/movie";
 import { moviesIn, screeningListQuery, type Screening } from "@/entities/screening";
 import { theaterListQuery } from "@/entities/theater";
+import { BookingSteps } from "@/features/booking-steps";
 import { useEnterSeatSelect } from "@/features/enter-seat-select";
 import { DateTabs, MovieSelect, TheaterTabs, useShowtimesFilter } from "@/features/showtimes-filter";
 import { formatDateDots, useDocumentTitle } from "@/shared/lib";
-import { BookingSteps, Button, EmptyState, ErrorState, LoadingBlock, PageHeading } from "@/shared/ui";
+import { Button, EmptyState, ErrorState, LoadingBlock, PageHeading } from "@/shared/ui";
 import { ShowtimeBoard } from "@/widgets/showtime-board";
 import styles from "./ShowtimesPage.module.css";
 

@@ -6,6 +6,6 @@ export { EmptyState, type HeadingLevel } from "./empty-state/EmptyState";
 export { ErrorState } from "./error-state/ErrorState";
 export { TraceCode } from "./trace-code/TraceCode";
 export { PageHeading } from "./page-heading/PageHeading";
-export { BookingSteps } from "./booking-steps/BookingSteps";
+export { Stepper } from "./stepper/Stepper";
 export { ToastProvider } from "./toast/ToastProvider";
 export { useToast, type ToastApi, type ToastOptions } from "./toast/toast-context";

@@ -32,7 +32,7 @@ npm run build               # tsc -b && vite build → dist/
 | `app` | `providers` · `routes` · `styles` | 진입점, 토스트·쿼리·인증(Cognito) 프로바이더, 라우터, 전역 CSS 토큰 |
 | `pages` | `home`(W1) · `movie-detail`(W2) · `showtimes`(W3) · `credits`(W10) · `auth-callback`(W7 최소) · `not-found` | 화면 한 장 = 슬라이스 하나 |
 | `widgets` | `header` · `footer` · `page-layout` · `movie-catalog` · `showtime-board` | 여러 엔티티·기능을 합친 블록 |
-| `features` | `login` · `showtimes-filter` · `enter-seat-select` | 사용자 행동 (로그인 이동, 극장·날짜·영화 필터, 회차 클릭 → 로그인 확인 → 좌석 선택) |
+| `features` | `login` · `showtimes-filter` · `enter-seat-select` · `booking-steps` | 사용자 행동 (로그인 이동, 극장·날짜·영화 필터, 회차 클릭 → 로그인 확인 → 좌석 선택, 예매 단계 표시) |
 | `entities` | `movie` · `theater` · `screening` · `session` | 계약(`contracts/openapi/catalog.openapi.yaml`) 타입, API 함수, 쿼리 옵션, 표시용 작은 UI |
 | `shared` | `api` · `config` · `lib` · `ui` | `/api` 클라이언트·오류(`error.v1`), 경로·환경, KST 날짜, 버튼·배지·빈 상태·오류 블록(문의 코드)·토스트 |
 

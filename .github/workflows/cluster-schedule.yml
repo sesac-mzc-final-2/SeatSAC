@@ -103,9 +103,19 @@ jobs:
         id: keep
         if: steps.decide.outputs.action == 'down' && github.event_name == 'schedule'
         run: |
+          # 일정 그룹이 없으면(staging apply 전·destroy 뒤) ResourceNotFoundException → "없음"으로 보고 백업이 끈다
+          #   그 밖의 조회 오류(권한 등)는 그대로 실패시킨다 — 상태를 모르면서 끄지도 건너뛰지도 않게
+          err="$RUNNER_TEMP/list-schedules.err"
           # shellcheck disable=SC2016  # JMESPath 리터럴(백틱)
-          states=$(aws scheduler list-schedules --group-name "$SCHEDULE_GROUP" \
-            --query 'Schedules[?ends_with(Name, `-down`)].State' --output text)
+          if states=$(aws scheduler list-schedules --group-name "$SCHEDULE_GROUP" \
+              --query 'Schedules[?ends_with(Name, `-down`)].State' --output text 2>"$err"); then
+            :
+          elif grep -q ResourceNotFoundException "$err"; then
+            states=
+          else
+            cat "$err" >&2
+            exit 1
+          fi
           echo "EventBridge 끄기 일정 상태: ${states:-없음}"
           if [ -z "$states" ]; then
             echo "::warning::$SCHEDULE_GROUP 에 끄기 일정이 없다(envs/staging apply 전?) — 백업이 끈다"

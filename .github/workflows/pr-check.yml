@@ -102,5 +102,67 @@ jobs:
             *) echo "::error::이미지 빌드·Trivy 실패 — image-build 로그 확인 (런북 13장)"; exit 1 ;;
           esac
 
+  # ---- 3.3.5 frontend 검사: frontend/** 가 바뀐 PR만 (frontend-deploy 와 같은 node 24 · npm ci · npm run build) ----
+  # node 는 24 (jsdom 30·vitest 가 22.22+ 를 요구, 로컬 개발도 24). 올릴 때 frontend-deploy 와 같이 올린다
+  # 필수 검사 이름은 "frontend". frontend 변경이 없으면 건너뜀 = 성공 (contract-check 의 변경 감지와 같은 방식).
+  # 이 워크플로 자체가 바뀐 PR도 돌리되, frontend 프로젝트(package-lock.json)가 아직 없으면 건너뛴다.
+  frontend-changes:
+    name: frontend 변경 감지
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # --no-renames: frontend/ 밖으로 옮긴 파일도 이전 경로(삭제)로 잡힌다
+          # -z: 한글 경로가 core.quotePath로 "frontend/\354..." 처럼 인용되지 않게 NUL 구분으로 받아 줄바꿈으로 바꾼다
+          files=$(git diff --no-renames --name-only -z "$BASE" HEAD | tr '\0' '\n')
+          if grep -qE '^frontend/' <<<"$files"; then
+            echo "frontend/ 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif grep -qxF '.github/workflows/pr-check.yml' <<<"$files" && [ -f frontend/package-lock.json ]; then
+            echo "워크플로 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend 변경 없음 → 건너뜀"; echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  frontend:
+    # ruleset 필수 검사는 이 job. 변경 감지가 실패하면(skipped = 통과로 새지 않게) 여기서 실패시킨다
+    needs: frontend-changes
+    if: always() && (needs.frontend-changes.result != 'success' || needs.frontend-changes.outputs.changed == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: 변경 감지 결과 확인
+        if: needs.frontend-changes.result != 'success'
+        working-directory: .
+        run: |
+          echo "::error::frontend 변경 감지 실패 (result=${{ needs.frontend-changes.result }}) — frontend-changes 로그 확인"
+          exit 1
+      - uses: actions/checkout@v4
+      - name: package-lock.json 확인
+        run: test -f package-lock.json || { echo "::error::frontend/package-lock.json 이 없다 (npm ci 에 필요. 커밋한다)"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: check (tsc -b · eslint · steiger FSD · vitest)
+        run: npm run check
+      - name: build (vite)
+        env:
+          VITE_API_BASE_URL: /api
+        run: |
+          npm run build
+          test -f dist/index.html || { echo "::error::dist/index.html 이 없다 (vite build outDir 확인)"; exit 1; }
+
   # 계약 lint·하위 호환은 contract-check.yml (2.2.7)
   # TODO: 구현-계약 일치(springdoc 생성본 vs contracts/openapi, oasdiff) — 서비스 구현 후

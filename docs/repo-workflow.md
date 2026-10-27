@@ -59,7 +59,7 @@ SeatSAC-gitops/
 | 항목 | 규칙 |
 | --- | --- |
 | 승인 | 1명 (11/13 이후 2명). `libs/`·`build-logic/` 변경은 2명(김종식 + 영향받는 서비스 담당) |
-| 필수 검사 (ruleset) | `java`·`gitleaks`·`image`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 다섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
+| 필수 검사 (ruleset) | `java`·`gitleaks`·`image`·`frontend`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 여섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공. `frontend`도 같은 방식: `frontend 변경 감지` job이 `frontend/**` 변경이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가 |
 | 크기 | 400줄 이하 권장(생성 코드·lock 제외) |
 | 리뷰 응답 | 24시간 이내(주말 제외) |
 | 머지 후 | 작성자가 ArgoCD Synced·Healthy(또는 frontend 배포 완료)까지 확인 — `kubectl -n argocd get applications` 또는 `kubectl -n argocd port-forward svc/argocd-server 8080:80`(읽기 전용 화면) |
@@ -89,7 +89,7 @@ SeatSAC-gitops/
 
 | 워크플로 | 트리거 | 하는 일 |
 | --- | --- | --- |
-| `pr-check` | PR | `java`: 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ) · `gitleaks` · `image`: 바뀐 서비스만 bootJar → `docker build` → 비루트 확인 → Trivy(push 안 함, AWS 권한 없음. `build-logic/`·`gradle/`·이미지 스크립트·워크플로가 바뀌면 5개 전부). 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행. 2단계: springdoc 생성본 vs 계약 diff |
+| `pr-check` | PR | `java`: 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ) · `gitleaks` · `image`: 바뀐 서비스만 bootJar → `docker build` → 비루트 확인 → Trivy(push 안 함, AWS 권한 없음. `build-logic/`·`gradle/`·이미지 스크립트·워크플로가 바뀌면 5개 전부) · `frontend`: `frontend/**`가 바뀐 PR만 node 24 → `npm ci` → `npm run check`(tsc -b · eslint · steiger FSD · vitest) → `npm run build`(`dist/index.html` 확인). frontend-deploy와 같은 node·npm 설정, AWS 권한 없음. 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행. 2단계: springdoc 생성본 vs 계약 diff |
 | `contract-check` | PR (항상, 변경 없으면 건너뜀) | Redocly lint, JSON Schema·예시 검증, oasdiff·스키마 하위 호환 |
 | `build-push` | main 머지(`services/**`, 바뀐 서비스만) + 수동(`services`=all 또는 목록, main에서만) | bootJar → x86 이미지 → Trivy(CRITICAL·수정 가능이면 실패) → ECR `cinema/{svc}:{sha7}`(OIDC `cinema-gha-ecr-push`, 같은 태그 있으면 건너뜀) → `SeatSAC-gitops` `overlays/staging/{svc}/image-tag`의 **`newTag`만** yq로 GitHub App `seatsac-build-push`(gitops에만 설치, Contents 쓰기) 토큰으로 main에 커밋(조직 정책상 Deploy key 불가). 레지스트리(계정 ID)는 gitops에 쓰지 않는다(Public, ADR-74) — Terraform ArgoCD Application이 붙인다. booking·gateway가 같이 바뀌면 booking만(블루/그린 동시 금지) |
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |

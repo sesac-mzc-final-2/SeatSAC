@@ -52,7 +52,8 @@ describe("MovieCatalog (W1)", () => {
     expect(screen.getByRole("article", { name: "영화 2" })).toBeInTheDocument();
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/movies?status=NOW_SHOWING&page=0&size=20");
 
-    const more = screen.getByRole("button", { name: "더 보기 (1 / 2 페이지)" });
+    const more = screen.getByRole("button", { name: /더 보기/ });
+    expect(more).toHaveTextContent("+20");
     await userEvent.click(more);
 
     expect(await screen.findByRole("article", { name: "영화 3" })).toBeInTheDocument();
@@ -60,16 +61,16 @@ describe("MovieCatalog (W1)", () => {
     expect(screen.queryByRole("button", { name: /더 보기/ })).not.toBeInTheDocument();
   });
 
-  it("「예매」는 movieId를 넘겨 상영시간 화면으로 보낸다", async () => {
+  it("「예매하기」는 movieId를 넘겨 상영시간 화면으로 보낸다", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(page(0, [movie(7)], 1)));
     renderCatalog();
-    const link = await screen.findByRole("link", { name: "예매" });
+    const link = await screen.findByRole("link", { name: "예매하기" });
     expect(link).toHaveAttribute("href", "/showtimes?movieId=7");
   });
 
   it("빈 목록", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(page(0, [], 0)));
     renderCatalog();
-    expect(await screen.findByText("상영 중인 영화가 없습니다")).toBeInTheDocument();
+    expect(await screen.findByText("상영 중인 영화가 없어요")).toBeInTheDocument();
   });
 });

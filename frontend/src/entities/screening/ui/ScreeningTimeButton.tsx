@@ -8,7 +8,7 @@ interface Props {
   onSelect: (screening: Screening) => void;
 }
 
-/** W3 회차 버튼: 시작 시각 + 잔여석. 무엇을 할지(로그인 확인 → 좌석 선택)는 feature가 정한다 */
+/** W3 회차 버튼: 시작 시각 · ~종료 · 잔여석. 무엇을 할지(로그인 확인 → 좌석 선택)는 feature가 정한다 */
 export function ScreeningTimeButton({ screening, onSelect }: Props) {
   const start = timeOfIso(screening.startsAt);
   const end = timeOfIso(screening.endsAt);
@@ -20,12 +20,18 @@ export function ScreeningTimeButton({ screening, onSelect }: Props) {
       disabled={!remaining.selectable}
       onClick={() => onSelect(screening)}
       aria-label={`${start} 시작 ${end} 종료, ${remaining.text}`}
-      title={`${start} ~ ${end}`}
     >
-      <span className={styles.time}>{start}</span>
-      <span className={styles.seats} data-tone={remaining.tone}>
-        {remaining.text}
-      </span>
+      <strong className={styles.time}>{start}</strong>
+      <span className={styles.end}>~ {end}</span>
+      <small className={styles.seats} data-tone={remaining.tone}>
+        {remaining.tone === "ok" || remaining.tone === "low" ? (
+          <>
+            <b>{screening.remainingSeats}</b> / {screening.totalSeats}석
+          </>
+        ) : (
+          remaining.text
+        )}
+      </small>
     </button>
   );
 }

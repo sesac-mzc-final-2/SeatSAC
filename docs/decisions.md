@@ -48,7 +48,7 @@
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 7 · 34 | EKS On-Demand **t3.large 2대**(ng-a 1 · ng-c 1). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
+| 7 · 34 | EKS On-Demand **t3.large 2대**(ng-a 1 · ng-c 1). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14 — 실행은 EventBridge Scheduler, GitHub Actions는 백업·수동), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
 | 8 · 35 · 58 | Kustomize + ArgoCD. booking·gateway만 블루/그린(5xx 1%·결제 timeout/error 5% 롤백, scaleDown 60초), 나머지 롤링. 프로브·자원·HPA·메트릭·Secret·NetworkPolicy는 `docs/service-runtime-contract.md` | 동시 블루/그린 금지 |
 | 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음 | 31의 httpOnly 쿠키는 37·63으로 대체 |
 | 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets·Loki는 확장 |
@@ -72,3 +72,5 @@
 <노션 반영 필요> ADR-74(10/25 노션 등록, 상태 열림): 팀 확인 후 노션 상태를 「결정됨」으로
 
 <노션 반영 필요> ADR-69·74 본문(10/25 3.1.5): 서비스 Application은 `kubernetes_manifest`(+`argocd_apps_enabled` 두 단계) 대신 Helm `argocd-apps`로 ArgoCD와 한 번의 apply, root 앱 `cinema-root`도 Terraform(gitops `apps/root.yaml` 삭제). ArgoCD 화면은 port-forward 전용, 팀원은 로그인 없이 읽기 전용(anonymous → `role:readonly`) + `argocd` namespace Application 조회 Role
+
+<노션 반영 필요> ADR-34(10/27 3.1.14 후속): 가동 정책 실행 수단을 GitHub Actions schedule → **AWS EventBridge Scheduler**(KST 정각, `eks:UpdateNodegroupConfig` 직접 호출)로 변경. GitHub 워크플로는 30분 뒤 백업(시각 확인)·수동용. 이유: GitHub schedule 지연·누락(10/23 끄기 4시간·10/26 켜기 6시간 지연, 10/26 끄기 누락). 임시 24시간 가동은 Variables `CLUSTER_KEEP_ON` 대신 `envs/staging` `cluster_keep_on = true` apply

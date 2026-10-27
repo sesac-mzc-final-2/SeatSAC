@@ -152,3 +152,20 @@ variable "ops_namespace" {
   type        = string
   default     = "cinema-ops"
 }
+
+# 3.1.14 가동 정책 — EventBridge Scheduler (cluster_schedule.tf)
+variable "cluster_keep_on" {
+  description = "true면 예약 끄기(EventBridge·GitHub 백업 둘 다)를 멈춘다. 밤에도 켜 둘 때만 잠깐 true → apply, 끝나면 false → apply"
+  type        = bool
+  default     = false
+}
+
+variable "cluster_schedule_demo_start" {
+  description = "데모 주간 시작일(KST). 이날 0시부터 예약 끄기가 멈춘다(24시간 가동, ADR-34). 켜기는 계속"
+  type        = string
+  default     = "2026-11-16"
+  validation {
+    condition     = can(regex("^\\d{4}-\\d{2}-\\d{2}$", var.cluster_schedule_demo_start))
+    error_message = "YYYY-MM-DD 형식"
+  }
+}

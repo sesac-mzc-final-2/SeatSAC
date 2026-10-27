@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------
-# 3.1.14 EKS 노드그룹 켜기·끄기 (cluster-schedule 워크플로와 사람이 같은 스크립트를 쓴다)
+# 3.1.14 EKS 노드그룹 켜기·끄기 (cluster-schedule 워크플로와 사람이 같은 스크립트를 쓴다. 정시 실행은 EventBridge Scheduler)
 #   사용: infra/scripts/cluster-scale.sh up|down|status [desired]
 #     up     : 모든 노드그룹 desired = 1 (또는 [desired]) → 인스턴스 InService까지 대기
 #     down   : 모든 노드그룹 desired = 0

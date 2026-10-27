@@ -120,7 +120,8 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           # --no-renames: frontend/ 밖으로 옮긴 파일도 이전 경로(삭제)로 잡힌다
-          files=$(git diff --no-renames --name-only "$BASE" HEAD)
+          # -z: 한글 경로가 core.quotePath로 "frontend/\354..." 처럼 인용되지 않게 NUL 구분으로 받아 줄바꿈으로 바꾼다
+          files=$(git diff --no-renames --name-only -z "$BASE" HEAD | tr '\0' '\n')
           if grep -qE '^frontend/' <<<"$files"; then
             echo "frontend/ 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
           elif grep -qxF '.github/workflows/pr-check.yml' <<<"$files" && [ -f frontend/package-lock.json ]; then

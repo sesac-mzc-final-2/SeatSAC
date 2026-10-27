@@ -1,20 +1,24 @@
 import type { ReactNode } from "react";
+import { Icon, type IconName } from "../icon/Icon";
 import styles from "./EmptyState.module.css";
 
 interface Props {
   title: string;
   description?: ReactNode;
   action?: ReactNode;
+  icon?: IconName;
 }
 
-export function EmptyState({ title, description, action }: Props) {
+/** 가운데 정렬 빈 상태 (둥근 아이콘 + 제목 + 설명 + 버튼) */
+export function EmptyState({ title, description, action, icon = "film" }: Props) {
   return (
     <div className={styles.box}>
-      <div className={styles.text}>
-        <strong className={styles.title}>{title}</strong>
-        {description && <span className={styles.description}>{description}</span>}
+      <div className={styles.icon}>
+        <Icon name={icon} size={28} strokeWidth={1.5} />
       </div>
-      {action}
+      <h3 className={styles.title}>{title}</h3>
+      {description && <p className={styles.description}>{description}</p>}
+      {action && <div className={styles.action}>{action}</div>}
     </div>
   );
 }

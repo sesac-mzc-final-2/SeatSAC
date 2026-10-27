@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Icon } from "../icon/Icon";
 import styles from "./TraceCode.module.css";
 
 /**
@@ -32,7 +33,8 @@ export function TraceCode({ traceId }: { traceId: string }) {
         title={traceId}
         aria-label={`문의 코드 ${traceId.slice(0, 8)}. 누르면 전체 코드를 복사합니다`}
       >
-        문의 코드 <code>{traceId.slice(0, 8)}</code>
+        문의 코드 <code>{traceId.slice(0, 8)}</code> · 복사
+        <Icon name="copy" size={13} />
       </button>
       <span className={styles.copied} role="status" aria-live="polite">
         {copied ? "문의 코드를 복사했습니다" : ""}

@@ -1,35 +1,41 @@
 .box {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 20px;
-  border: 1px solid #f0b4a8;
-  border-radius: 8px;
-  background: #fff7f5;
-}
-.text {
+  min-height: 300px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  flex: 1 1 320px;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 44px 20px;
+  text-align: center;
+}
+.icon {
+  width: 65px;
+  height: 65px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 5px;
+  border: 1px solid #343945;
+  border-radius: 50%;
+  background: #20232a;
+  color: #c5c9d2;
 }
 .title {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
 }
 .message {
-  font-size: 14px;
+  max-width: 480px;
   color: var(--color-muted);
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.8;
 }
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  justify-content: center;
+  gap: 10px;
 }
 .trace {
-  flex-basis: 100%;
+  margin-top: 4px;
 }

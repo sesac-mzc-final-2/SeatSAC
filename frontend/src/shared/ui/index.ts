@@ -1,8 +1,11 @@
 export { Button, ButtonLink, type ButtonProps, type ButtonLinkProps } from "./button/Button";
 export { Badge, type BadgeTone } from "./badge/Badge";
+export { Icon, type IconName } from "./icon/Icon";
 export { Spinner, LoadingBlock } from "./spinner/Spinner";
 export { EmptyState } from "./empty-state/EmptyState";
 export { ErrorState } from "./error-state/ErrorState";
 export { TraceCode } from "./trace-code/TraceCode";
+export { PageHeading } from "./page-heading/PageHeading";
+export { BookingSteps } from "./booking-steps/BookingSteps";
 export { ToastProvider } from "./toast/ToastProvider";
 export { useToast, type ToastApi, type ToastOptions } from "./toast/toast-context";

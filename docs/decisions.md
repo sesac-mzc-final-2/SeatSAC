@@ -68,12 +68,6 @@
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 | `docs/repo-workflow.md` |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
 
-<노션 반영 필요> ADR-7 선택안 "t3.large 2대(ng-a 1·ng-c 1)", ADR-10 제목·선택안 일치, ADR-22 본문 "ADR-21" → "ADR-44", ADR-23 "도입함" → "도입하지 않음", ADR-31에 "ADR-37·63으로 대체", ADR-33에 "Valkey t4g.micro(ADR-59)·Single-AZ(ADR-61)", ADR-34 데모 주간 11/16~20, ADR-36 "10/18 스냅샷" 콜아웃, 37·38·46 결론 채우기, ADR-65(중복) 삭제 여부
+- <노션 반영 필요> ADR-78(10/26 3.1.6) 새로 등록(상태 열림): 블루/그린 분석 트래픽 Job·최소 요청 20건·actuator 제외·실패 시 abort + revert PR·실패 버전 시연 방식. 대안(분석 중 실사용자 트래픽 일부를 preview로 = 카나리 전환, k6 부하 Job을 preview로 = OPS-10과 중복)과 기각 이유는 3.1.6 WBS 기록
 
-<노션 반영 필요> ADR-74(10/25 노션 등록, 상태 열림): 팀 확인 후 노션 상태를 「결정됨」으로
-
-<노션 반영 필요> ADR-69·74 본문(10/25 3.1.5): 서비스 Application은 `kubernetes_manifest`(+`argocd_apps_enabled` 두 단계) 대신 Helm `argocd-apps`로 ArgoCD와 한 번의 apply, root 앱 `cinema-root`도 Terraform(gitops `apps/root.yaml` 삭제). ArgoCD 화면은 port-forward 전용, 팀원은 로그인 없이 읽기 전용(anonymous → `role:readonly`) + `argocd` namespace Application 조회 Role
-
-<노션 반영 필요> ADR-78(10/26 3.1.6) 새로 등록(상태 열림): 블루/그린 분석 트래픽 Job·최소 요청 20건·actuator 제외·실패 시 abort + revert PR·실패 버전 시연 방식. 대안(분석 중 실사용자 트래픽 일부를 preview로 = 카나리 전환, k6 부하 Job을 preview로 = OPS-10과 중복)과 기각 이유는 3.1.6 WBS 기록
-
-<노션 반영 필요> ADR-34(10/27 3.1.14 후속): 가동 정책 실행 수단을 GitHub Actions schedule → **AWS EventBridge Scheduler**(KST 정각, `eks:UpdateNodegroupConfig` 직접 호출)로 변경. GitHub 워크플로는 30분 뒤 백업(시각 확인)·수동용. 이유: GitHub schedule 지연·누락(10/23 끄기 4시간·10/26 켜기 6시간 지연, 10/26 끄기 누락). 임시 24시간 가동은 Variables `CLUSTER_KEEP_ON` 대신 `envs/staging` `cluster_keep_on = true` apply
+- `docs/decisions.md`: `<노션 반영 필요>` 4줄 삭제 — 10/27 노션 ADR-7·10·22·23·31·33·34·36·37·38·46·69·74 반영 완료(ADR-78 줄은 남김). main(#50)에 남은 충돌 표시 `=======`도 함께 제거

@@ -79,9 +79,11 @@ const isIsoDate = (s) => {
   const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1];
 };
-/** 계약의 integer(int64) ID: 양의 정수 문자열만 */
+/** page·size: 0 이상의 안전 정수 */
 const isNonNegativeInt = (s) => /^\d+$/.test(s ?? "") && Number.isSafeInteger(Number(s));
-const isPositiveIntId = (s) => isNonNegativeInt(s) && Number(s) > 0;
+/** 계약의 integer(int64) ID: 1 ~ 2^63-1 (BigInt 로 범위만 확인. 목 데이터 ID 는 작아 이후 비교는 Number 로 충분) */
+const INT64_MAX = 9223372036854775807n;
+const isPositiveIntId = (s) => /^\d+$/.test(s ?? "") && BigInt(s) > 0n && BigInt(s) <= INT64_MAX;
 const dayNumber = (iso) => Math.floor(Date.UTC(...iso.split("-").map((v, i) => Number(v) - (i === 1 ? 1 : 0))) / 86400000);
 const addMinutes = (iso, hhmm, minutes) => {
   const [h, m] = hhmm.split(":").map(Number);

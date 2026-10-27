@@ -1134,10 +1134,25 @@ terraform destroy -var-file=staging.tfvars
 
 ## 14. 실행 기록
 
-| 날짜 | 실행자 | 단계 | 소요 | 문제 | 런북 수정 |
+> 시각은 KST. "PR"은 그 단계 코드가 main에 들어간 PR. 소요는 apply 시작~확인 끝(미측정은 다음 실행 때 채운다)
+
+| 날짜 | 실행자 | 단계 (PR) | 소요 | 문제 | 런북 수정 |
 | --- | --- | --- | --- | --- | --- |
-| 10/20 | 김종식 | 1 bootstrap · 3 네트워크 | ⬜ | init 때 버킷 입력 요구 | 1장 "다음 단계 준비" 추가 |
-| 10/21 | 김종식 | 2 global | ⬜ | OIDC 공급자 409, import 시 already managed | 2-2·12장·13장 추가 |
-| ⬜ | 김종식 | 4 EKS (staging · staging-k8s) | ⬜ | | |
-| ⬜ | 김종식 | 5 RDS·Valkey (global SNS · staging) | ⬜ | | |
-| ⬜ | 김종식 · 한채연 | 8 DB 계정·Secret · 시드 | ⬜ | | |
+| 10/20 | 김종식 | 1 bootstrap (state 버킷) | 5초 | `init`에서 버킷 이름 입력 요구 | 1장 "다음 단계 준비"(backend.hcl) 추가 |
+| 10/20 | 김종식 | 3 네트워크 — VPC·서브넷·SG (#1, 10/20 22:19) | 미측정 | 없음 | — |
+| 10/21 | 김종식 | 2 global — 팀 역할·GitHub OIDC·CI 역할 (#2, 10/21 14:58) | 미측정 | ① `CreateOpenIDConnectProvider 409 EntityAlreadyExists`(계정에 OIDC 공급자가 이미 있음) ② import 시 `Resource already managed by Terraform` ③ (추정) Terraform이 MFA 프로필을 직접 써서 `AssumeRoleTokenProvider session option not set` | 2-2(OIDC 공급자 확인 표)·12장(state 이동)·13장 추가, 0장·2-5에 "Terraform 실행 전 `export-credentials` → `unset AWS_PROFILE`" |
+| 10/22 | 김종식 | 4 EKS — staging(EKS·노드그룹·Access Entry) · staging-k8s(namespace·RBAC·LB Controller) (#13, 10/22 20:25) | 미측정 | (추정) API 공개 엔드포인트에 관리자 공인 IP 필요 | 4-6(허용 IP는 tfvars·Secret으로, 커밋 금지) |
+| 10/23 | 김종식 | 8-1 가동 정책 — global(cluster-schedule 역할·Budgets) (#17, 10/23 11:42) | 미측정 | 없음 | — |
+| 10/23 | 김종식 | 5 RDS·Valkey — global SNS → staging (#24, 10/23 15:08) | 미측정 | 없음 | — |
+| 10/23 | 김종식 | 7-1~7-3 CloudFront·S3·frontend-deploy 1차 (#25, 10/23 15:47) | 미측정 | 없음 (7-4 ALB 원본은 gateway·Cognito 뒤로 보류) | — |
+| 10/24 01:59~02:05 | 김종식 | 8-1-3 cluster-schedule 수동 `status`·`down`·`up` (Actions #1~#3) | 수 분 | `down`에서 desired 1→0 후 `AccessDeniedException … eks:DescribeUpdate`(노드는 꺼짐). `DescribeUpdate`는 클러스터 ARN이 필수 리소스 | 8-1 문제 해결 표에 행 추가 → #41(10/26 14:17)로 정책 수정 후 global apply |
+| 10/24~25 | 김종식 | 8-A·8-B DB 스키마·계정·Secret·RDS CA — staging-k8s (#35, 10/24 22:13) | 미측정 (Job Complete 10/25 20:36) | ① `job: cinema-ops/db-bootstrap-… is not in complete state` / `DeadlineExceeded` — 노드 0대(23:07 끄기 이후) ② 재apply 때 plan이 `infra_endpoints` ConfigMap destroy — 로컬 main이 #35에 멈춰 #36 미반영 ③ kubernetes 프로바이더 `Unauthorized` — export한 자격 증명 만료 ④ Secret 확인 명령 오타(`grep 'secrets$'` → `grep -- '-secrets$'`) | 13장: "Job not in complete state → `cluster-scale.sh up` 후 재apply", "`Unauthorized` = 자격 증명 만료 → 다시 export", plan 전 `git pull`·`git log -1` 확인. 8-B 확인 명령 수정 |
+| 10/25 | 김종식 · 한채연 | 8-C 시드 적재 (lotte-seed `load/run.sh`) | 미측정 | `RDS_HOST 필요` — 환경변수 없이 실행 | 8-C에 `RDS_HOST=$(kubectl … get cm cinema-infra-endpoints -o jsonpath='{.data.DB_HOST}') REPO=… bash run.sh` 명령. **PASS: 시드 검증 통과 (극장 132 · 상영관 39 · 좌석 6,767 · 회차 8,360 · 영화 22)** |
+| 10/26 | 김종식 | 6-A ECR·build-push (#36, 10/26 11:42) · 6-C-1 엔드포인트 ConfigMap | 미측정 | ① build-push `image-tag/kustomization.yaml 이 없다` — gitops PR #2(Public 대응)가 아직 미머지 ② (사전) 의존성 Trivy CRITICAL·Maven에 없는 tomcat 10.1.58·OrbStack 꺼짐 | 6-A-4·6-A-6: gitops PR 먼저 머지, Maven Central에서 버전 확인, Docker 없이 `initiate-layer-upload`로 push 거부 확인 |
+| 10/26 | 김종식 | 8-1 global — `DescribeUpdate` 권한 수정 (#41, 10/26 14:17) | 미측정 | 첫 global plan에 `aws_sns_topic_subscription.alerts_email[0]` add — 다른 브랜치(ci/3.1.4)에서 plan함 | 13장: "plan은 최신 main(또는 해당 PR 브랜치)에서" |
+| 10/26 | 김종식 | 6-C-2 ArgoCD·root 앱·서비스 Application — staging-k8s 한 번의 apply (#42, 10/26 16:15 · gitops #3) | apply 미측정 · sync 약 20분 | ① 앱 6개 `InvalidSpecError: project cinema which does not exist`, root OutOfSync — root가 gitops #3 머지 전 리비전으로 sync를 시작해 교착 ② `cinema-catalog` OutOfSync·파드 2분마다 재생성 — `replicas: 1`(selfHeal) ↔ HPA, JVM 기동 CPU가 HPA를 다시 4로 ③ CodeRabbit: 6-C-1대로 apply하면 ArgoCD까지 생성 | 13장: root 교착 → ArgoCD 화면 Terminate·Hard Refresh·Sync. 6-C-1을 확인 전용으로. gitops #4(HPA 대상 `replicas` 제거·scaleUp 1분 1개), 11장 destroy 순서(`-target=helm_release.argocd_apps` 먼저) |
+| 10/27 02:45 | 김종식 | 8-1-2 수동 `down` | 수 분 | 예약 끄기(10/26 23:07) **실행 자체가 없음**. 예약 실행 지연: 10/23 끄기 약 4시간, 10/26 켜기 약 2~6시간 | 8-1 상단에 변경 경위, 문제 해결 표 "예약 실행이 안 보임·몇 시간 늦음" |
+| 10/27 | 김종식 | 8-1-1 EventBridge Scheduler — global(SchedulerRead) → staging (#49) | 미측정 | ① staging plan에 노드그룹 2 change — AMI `release_version` 1.36.5-20261019 → 20261023(모듈의 최신 AMI 조회), 노드 0대라 그대로 적용 ② `ValidationException: The execution role you provide must allow AWS EventBridge Scheduler to assume the role` — trust `aws:SourceArn`에 일정 ARN을 넣음(일정 그룹 ARN이어야 함) ③ 끄기 일정 `end_date` 영구 diff(`…T15:00:00Z` ↔ `…T00:00:00+09:00`) | 8-1-1 EventBridge 절차(global apply 후 staging), 문제 해결 표 `ValidationException` 행. 코드: trust = 일정 그룹 ARN, `end_date`는 UTC(Z)로 |
+| ⬜ | 김종식 | 6-D 블루/그린 — 6-D-0 분석 회차 ID · 6-D-2 정상 배포 · 6-D-3 실패 버전 시연 | | | |
+| ⬜ | 김종식 | 6-B SQS·Lambda (3.1.8·3.1.9) · 7 Cognito · 7-4 CloudFront `/api` | | | |
+| ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |

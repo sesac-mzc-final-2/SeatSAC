@@ -1,5 +1,6 @@
 # ------------------------------------------------------------------
-# 3.1.14 가동 정책 (OPS-13): cluster-schedule 워크플로가 노드그룹 desired 1 ↔ 0
+# 3.1.14 가동 정책 (OPS-13): cluster-schedule 워크플로(백업·수동)가 노드그룹 desired 1 ↔ 0
+#   정시 실행은 EventBridge Scheduler(envs/staging cluster_schedule.tf, 역할 cinema-staging-cluster-scheduler)
 #   cinema-gha-cluster-schedule : main 브랜치(schedule·workflow_dispatch)에서만 → secrets.AWS_CLUSTER_SCHEDULE_ROLE_ARN
 #   권한: 이 클러스터의 노드그룹 조회·desired 변경 + ASG 인스턴스 수 조회. 클러스터 생성·삭제·kubectl 권한 없음
 # ------------------------------------------------------------------
@@ -30,6 +31,12 @@ data "aws_iam_policy_document" "cluster_schedule" {
       "arn:aws:eks:${var.region}:${local.account_id}:cluster/${var.eks_cluster_name}",
       "arn:aws:eks:${var.region}:${local.account_id}:nodegroup/${var.eks_cluster_name}/*/*",
     ]
+  }
+  statement {
+    # 예약 백업이 EventBridge 끄기 일정 상태(cluster_keep_on)를 확인한다. ListSchedules는 리소스 지정 불가
+    sid       = "SchedulerRead"
+    actions   = ["scheduler:ListSchedules"]
+    resources = ["*"]
   }
   statement {
     sid       = "AsgRead"

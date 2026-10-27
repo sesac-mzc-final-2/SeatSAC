@@ -79,7 +79,13 @@ public class BookingSeatCountClient implements SeatCountClient {
         return Optional.empty();
     }
 
-    private SeatCounts fetch(List<Long> ids) {
+    /**
+     * booking을 한 번 부른다 — 서킷·대체 카운터 <b>밖</b>이다. {@link #unavailableCounts}가 서킷 안에서 쓰고,
+     * {@link BookingSeatCountWarmup}이 기동 직후 같은 경로(URI 조립·HTTP·Jackson)를 예열할 때 그대로 쓴다.
+     * 예열이 실패해도 서킷 실패율과 {@code catalog_seat_counts_fallback_total}에 들어가지 않아야 하므로
+     * 예열 쪽에서 {@link #unavailableCounts}를 부르지 않는다.
+     */
+    SeatCounts fetch(List<Long> ids) {
         String joined = ids.stream().map(String::valueOf).collect(Collectors.joining(","));
         SeatCounts body = bookingRestClient.get()
             .uri("/internal/screenings/seat-counts?ids={ids}", joined)

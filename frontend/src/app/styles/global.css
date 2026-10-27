@@ -13,6 +13,8 @@
   --color-dim: #787f8d;
   --color-primary: #ff5a4e;
   --color-primary-hover: #eb4f45;
+  /* 코랄 위 글자색: 흰색은 3.1:1 이라 본문 기준(4.5:1)에 못 미쳐 어두운 색(6.2:1)을 쓴다 */
+  --color-on-primary: #0e0f13;
   --color-primary-soft: #ff5a4e15;
   --color-saturday: #68a2dd;
   --color-sunday: #d07076;

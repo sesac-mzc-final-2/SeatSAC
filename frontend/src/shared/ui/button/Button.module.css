@@ -29,7 +29,8 @@
 }
 .primary {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
+  font-weight: 700;
 }
 .primary:hover:not(:disabled) {
   background: var(--color-primary-hover);

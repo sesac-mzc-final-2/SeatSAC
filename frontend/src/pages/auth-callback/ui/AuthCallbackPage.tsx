@@ -22,6 +22,7 @@ export function AuthCallbackPage() {
   if (session.error) {
     return (
       <EmptyState
+        as="h1"
         icon="alert-circle"
         title="로그인을 완료하지 못했어요"
         description="로그인 창을 닫았거나 세션이 만료되었을 수 있습니다. 다시 시도해 주세요."
@@ -40,6 +41,7 @@ export function AuthCallbackPage() {
   if (session.status === "anonymous") {
     return (
       <EmptyState
+        as="h1"
         icon="log-in"
         title="로그인 정보가 없어요"
         description="로그인 버튼을 눌러 다시 시작해 주세요."

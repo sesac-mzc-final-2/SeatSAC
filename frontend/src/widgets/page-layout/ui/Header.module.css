@@ -61,14 +61,24 @@
   }
 }
 @media (max-width: 540px) {
+  /* 로그인 뒤 메뉴가 길어지면 계정 영역이 다음 줄로 내려가게 (320px 에서도 한 줄에 억지로 넣지 않는다) */
   .header {
-    height: 68px;
+    height: auto;
+    min-height: 68px;
   }
   .inner {
-    gap: 14px;
+    flex-wrap: wrap;
+    gap: 0 14px;
+    min-height: 68px;
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
   .nav {
     gap: 12px;
+    height: 60px;
     font-size: 11px;
+  }
+  .actions {
+    min-height: 44px;
   }
 }

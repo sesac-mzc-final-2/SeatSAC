@@ -9,6 +9,7 @@ export function RouteErrorPage() {
   if (isRouteErrorResponse(error) && error.status === 404) {
     return (
       <EmptyState
+        as="h1"
         icon="alert-circle"
         title="이 페이지는 자리가 비어 있어요"
         description="주소를 다시 확인하거나 상영중 영화에서 시작해 주세요."
@@ -23,6 +24,7 @@ export function RouteErrorPage() {
 
   return (
     <ErrorState
+      as="h1"
       error={error}
       title="화면을 표시하지 못했어요"
       action={

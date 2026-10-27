@@ -61,11 +61,12 @@
 .chip[aria-pressed="true"] {
   background: var(--color-primary);
   border-color: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
 }
 .chip[aria-pressed="true"] small,
 .chip[aria-pressed="true"] span {
-  color: #fff;
+  color: var(--color-on-primary);
+  font-weight: 600;
 }
 @media (max-width: 540px) {
   .heading {

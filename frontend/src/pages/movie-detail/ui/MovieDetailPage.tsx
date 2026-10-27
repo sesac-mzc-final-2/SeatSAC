@@ -13,6 +13,7 @@ const NOT_FOUND_TITLE = "영화를 찾을 수 없어요";
 function MovieNotFound() {
   return (
     <EmptyState
+      as="h1"
       icon="alert-circle"
       title={NOT_FOUND_TITLE}
       description="주소가 잘못되었거나 상영이 끝난 영화입니다."
@@ -38,7 +39,7 @@ export function MovieDetailPage() {
   if (notFound) return <MovieNotFound />;
   if (query.isPending) return <LoadingBlock label="영화 정보를 불러오는 중이에요" />;
   if (query.isError) {
-    return <ErrorState error={query.error} title="영화 정보를 불러오지 못했어요" onRetry={() => query.refetch()} />;
+    return <ErrorState as="h1" error={query.error} title="영화 정보를 불러오지 못했어요" onRetry={() => query.refetch()} />;
   }
 
   const movie = query.data;

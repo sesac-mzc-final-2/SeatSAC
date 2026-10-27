@@ -2,7 +2,7 @@ export { Button, ButtonLink, type ButtonProps, type ButtonLinkProps } from "./bu
 export { Badge, type BadgeTone } from "./badge/Badge";
 export { Icon, type IconName } from "./icon/Icon";
 export { Spinner, LoadingBlock } from "./spinner/Spinner";
-export { EmptyState } from "./empty-state/EmptyState";
+export { EmptyState, type HeadingLevel } from "./empty-state/EmptyState";
 export { ErrorState } from "./error-state/ErrorState";
 export { TraceCode } from "./trace-code/TraceCode";
 export { PageHeading } from "./page-heading/PageHeading";

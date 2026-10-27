@@ -66,9 +66,3 @@
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 | `docs/repo-workflow.md` |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
-
-<노션 반영 필요> ADR-7 선택안 "t3.large 2대(ng-a 1·ng-c 1)", ADR-10 제목·선택안 일치, ADR-22 본문 "ADR-21" → "ADR-44", ADR-23 "도입함" → "도입하지 않음", ADR-31에 "ADR-37·63으로 대체", ADR-33에 "Valkey t4g.micro(ADR-59)·Single-AZ(ADR-61)", ADR-34 데모 주간 11/16~20, ADR-36 "10/18 스냅샷" 콜아웃, 37·38·46 결론 채우기, ADR-65(중복) 삭제 여부
-
-<노션 반영 필요> ADR-74(10/25 노션 등록, 상태 열림): 팀 확인 후 노션 상태를 「결정됨」으로
-
-<노션 반영 필요> ADR-69·74 본문(10/25 3.1.5): 서비스 Application은 `kubernetes_manifest`(+`argocd_apps_enabled` 두 단계) 대신 Helm `argocd-apps`로 ArgoCD와 한 번의 apply, root 앱 `cinema-root`도 Terraform(gitops `apps/root.yaml` 삭제). ArgoCD 화면은 port-forward 전용, 팀원은 로그인 없이 읽기 전용(anonymous → `role:readonly`) + `argocd` namespace Application 조회 Role

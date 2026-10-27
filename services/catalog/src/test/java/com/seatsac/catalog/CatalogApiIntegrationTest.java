@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
 import com.sun.net.httpserver.HttpServer;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -22,6 +23,8 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -47,6 +50,11 @@ import org.springframework.test.web.servlet.MockMvc;
  * 3.3.2 확인 — CAT-01~05 + 내부 3개를 MySQL 8.4·Valkey 컨테이너와 가짜 booking(JDK HttpServer)으로 끝까지 돈다.
  * DDL은 Flyway가 만들고 엔티티는 {@code ddl-auto=validate}로 검증되므로 컨텍스트가 뜨면 매핑과 DDL이 맞는다는 뜻이다.
  * 데이터는 합성 fixture(롯데 시드 아님). Clock은 KST 2026-11-16 12:00으로 고정한다.
+ *
+ * <p>가짜 booking의 응답 타임아웃은 테스트 프로필 {@code app.services.booking-read-timeout}(1s, 운영 300ms와 다름)이다.
+ * {@code pr-check}는 서비스 4개의 Testcontainers 테스트를 한 러너에서 동시에 돌려서, 운영 예산 300ms로는 첫(콜드) 호출이
+ * 러너 부하만으로 타임아웃 → TOTAL이 되는 간헐 실패가 있었다(2026-10-27 run 40462224638·40465994426).
+ * 이 테스트가 확인하는 건 "느리면·죽으면 TOTAL, 정상이면 BOOKING"이지 300ms라는 숫자가 아니다.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -61,8 +69,12 @@ class CatalogApiIntegrationTest {
 
     enum BookingMode { OK, SLOW, DOWN }
 
+    /** SLOW 모드 응답 지연. 테스트 프로필 응답 타임아웃(1s)보다 충분히 커야 클라이언트 쪽 타임아웃이 먼저 난다 */
+    static final long SLOW_RESPONSE_MILLIS = 2_000;
+
     static volatile BookingMode bookingMode = BookingMode.OK;
     static HttpServer booking;
+    static ExecutorService bookingExecutor;
 
     @TestConfiguration(proxyBeanMethods = false)
     static class FixedClock {
@@ -76,12 +88,15 @@ class CatalogApiIntegrationTest {
     @BeforeAll
     static void startBookingStub() throws Exception {
         booking = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        // executor 없이 두면 디스패처 스레드 하나가 핸들러까지 돌려서 SLOW의 sleep이 다음 요청(다음 테스트의 OK 호출)을 막는다
+        bookingExecutor = Executors.newCachedThreadPool();
+        booking.setExecutor(bookingExecutor);
         booking.createContext("/internal/screenings/seat-counts", exchange -> {
             String ids = Objects.requireNonNullElse(exchange.getRequestURI().getQuery(), "");
             BookingMode mode = bookingMode;
             if (mode == BookingMode.SLOW) {
                 try {
-                    Thread.sleep(700);   // 응답 타임아웃 300ms를 넘긴다
+                    Thread.sleep(SLOW_RESPONSE_MILLIS);   // 응답 타임아웃(1s)을 넘긴다
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
@@ -113,6 +128,7 @@ class CatalogApiIntegrationTest {
     @AfterAll
     static void stopBookingStub() {
         booking.stop(0);
+        bookingExecutor.shutdownNow();   // SLOW 핸들러가 아직 자고 있으면 interrupt
     }
 
     @DynamicPropertySource
@@ -128,10 +144,14 @@ class CatalogApiIntegrationTest {
     StringRedisTemplate redis;
     @Autowired
     MeterRegistry meterRegistry;
+    @Autowired
+    CircuitBreakerRegistry circuitBreakers;
 
     @BeforeEach
     void fixture() {
         bookingMode = BookingMode.OK;
+        // 서킷 booking은 Spring 컨텍스트에 하나라 앞 테스트의 실패(SLOW·DOWN)가 다음 테스트로 이어진다 → 매번 CLOSED로
+        circuitBreakers.circuitBreaker("booking").reset();
         redis.getConnectionFactory().getConnection().serverCommands().flushAll();
 
         jdbc.update("DELETE FROM screening");

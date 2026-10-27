@@ -13,5 +13,7 @@ app:
   services:
     # 통합 테스트가 @DynamicPropertySource로 가짜 booking 주소를 넣는다. 기본값은 바로 연결 거부되는 포트
     booking-url: http://127.0.0.1:1
-    booking-read-timeout: 300ms
+    # 운영 계약은 300ms(application.yml)지만 테스트는 느림·정상 분기만 확인한다. pr-check가 서비스 4개 테스트를 한 러너에서
+    # 동시에 돌려 300ms로는 콜드 첫 호출이 부하만으로 타임아웃 → 간헐 실패. 가짜 booking SLOW 지연(2s)보다는 작게 둔다
+    booking-read-timeout: 1s
 logging.level.org.hibernate.SQL: INFO

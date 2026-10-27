@@ -670,7 +670,8 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 # 터미널 A (cinema-admin, 노드 켜짐)
 kubectl get daemonset -n kube-system aws-node -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'   # aws-node aws-eks-nodeagent (정책 에이전트)
 kubectl -n cinema-staging get networkpolicy                  # default-deny-ingress + {svc}-ingress 5개
-infra/scripts/np-check.sh                                    # 서비스 파드 안에서 서로 8080에 붙어 본다 (exec만, 읽기)
+infra/scripts/np-check.sh                                    # 서비스 파드 안에서 서로 8080에 붙어 본다 (get·exec만, 읽기)
+# Cognito 뒤(gateway 배포 후): REQUIRE_GATEWAY=1 infra/scripts/np-check.sh   — gateway 파드가 없으면 실패
 ```
 
 기대(gateway는 Cognito 전이라 건너뜀):
@@ -689,8 +690,20 @@ user     → payment   BLOCKED  BLOCKED  ✅
 payment  → catalog   BLOCKED  BLOCKED  ✅
 payment  → booking   BLOCKED  BLOCKED  ✅
 payment  → user      BLOCKED  BLOCKED  ✅
-모두 기대대로 (런타임 계약 6장)
+모두 기대대로 (12개 검사, 런타임 계약 6장)
 ```
+
+| 결과 | 뜻 | 판정 |
+| --- | --- | --- |
+| `OPEN` | 연결 성공 | 허용 대상이면 ✅ |
+| `BLOCKED` | **시간 초과**(timeout 종료 코드 124) — VPC CNI 정책은 패킷을 버리므로 차단은 시간 초과로 보인다 | 차단 대상이면 ✅ |
+| `ERROR:DNS` | 파드 안에서 서비스 이름이 안 풀림 | 정책 판단 불가 → ❌ (CoreDNS·Service 이름 확인) |
+| `ERROR:REFUSED` | 연결 거부 — 대상이 8080에서 안 듣고 있음 | ❌ (대상 파드 상태) |
+| `ERROR:NOT_READY` | 대상 Service에 Ready 엔드포인트가 없음 | ❌ (대상 readiness) |
+| `ERROR:EXEC` | exec 실패 | ❌ (권한·컨테이너 이름·bash) |
+
+- 종료 코드: `0` 모두 기대대로 · `1` 기대와 다르거나 판단 불가(필수 서비스 파드 없음, 검사 0개 포함) · `2` 클러스터 조회 실패(권한·연결 — "파드 없음"으로 착각하지 않게 바로 멈춤)
+- 필수 서비스: catalog·booking·user·payment. gateway는 Cognito 전에는 없어도 되고, 뒤에는 `REQUIRE_GATEWAY=1`로 필수
 
 - **Cognito 뒤(gateway 배포 후) 다시 실행**: `gateway → payment BLOCKED`(인계 #14 완료 조건), `gateway → catalog·booking·user OPEN`, 그리고 다른 서비스 → gateway가 **BLOCKED**인지(ALB 대역만 허용)도 같이 본다. 화면에서 CloudFront `/api` 호출이 되는지(ALB → gateway)
 - Prometheus Targets가 모두 UP이면 `monitoring` 허용은 확인된 것(6-D-1)
@@ -700,7 +713,9 @@ payment  → user      BLOCKED  BLOCKED  ✅
 | --- | --- | --- |
 | 허용인데 BLOCKED (서비스 간 503·타임아웃) | 호출하는 파드 라벨이 `app.kubernetes.io/name`과 다름, 허용 규칙 누락 | 그 서비스 `networkpolicy.yaml`에 규칙 추가 PR + 런타임 계약 6장 표 먼저 |
 | 차단이어야 하는데 OPEN | 정책 에이전트가 안 돎(`aws-eks-nodeagent` 없음)·VPC CNI 애드온 설정 | `enableNetworkPolicy` 확인(3.1.2), 노드 재기동 뒤 다시 |
-| 전부 ERROR | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
+| 종료 코드 2 `kubectl get pods 실패` | 자격 증명 만료·노드 꺼짐·권한 | `cinema-admin` 다시 로그인, `cluster-scale.sh status` |
+| `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
+| `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
 | gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
 
 ### 6-B. SQS·Lambda (3.1.8·3.1.9) — ⬜

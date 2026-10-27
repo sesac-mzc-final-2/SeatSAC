@@ -1,32 +1,54 @@
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
 .label {
-  font-size: 13px;
-  color: var(--color-muted);
-}
-.list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 9px;
+  color: #c4c9d3;
+  font-size: 13px;
 }
-.pill {
-  min-height: 44px;
-  padding: 0 18px;
-  border-radius: 22px;
-  border: 1px solid var(--color-border);
-  background: #fff;
+.label h2 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.count {
+  margin-left: auto;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.tabs {
+  display: flex;
+  gap: 42px;
+  margin-top: 20px;
+  border-bottom: 1px solid var(--color-border);
+}
+.tab {
+  padding: 0 2px 17px;
+  border-bottom: 2px solid transparent;
+  color: var(--color-muted);
+  font-size: 16px;
+  transition:
+    color var(--t-color),
+    border-color var(--t-color);
+}
+.tab:hover {
   color: var(--color-text);
-  font: inherit;
-  cursor: pointer;
 }
-.pill:hover {
-  border-color: var(--color-text);
+.tab[aria-pressed="true"] {
+  color: var(--color-text);
+  border-bottom-color: var(--color-primary);
+  font-weight: 600;
 }
-.pill[aria-pressed="true"] {
-  border-color: var(--color-text);
-  background: var(--color-text);
-  color: #fff;
+@media (max-width: 540px) {
+  .label,
+  .label h2 {
+    font-size: 11px;
+  }
+  .tabs {
+    gap: 0;
+    justify-content: space-between;
+    margin-top: 21px;
+  }
+  .tab {
+    padding: 0 4px 14px;
+    font-size: 12px;
+  }
 }

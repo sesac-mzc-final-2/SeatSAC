@@ -1,4 +1,5 @@
 import type { ScreeningMovie } from "@/entities/screening";
+import { Icon } from "@/shared/ui";
 import styles from "./MovieSelect.module.css";
 
 interface Props {
@@ -13,14 +14,14 @@ interface Props {
 export function MovieSelect({ options, value, onChange, missingLabel }: Props) {
   const missing = value !== null && !options.some((movie) => movie.movieId === value);
   return (
-    <label className={styles.label}>
-      영화
+    <div className={styles.wrap}>
       <select
         className={styles.select}
+        aria-label="영화 선택"
         value={value ?? ""}
         onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
       >
-        <option value="">전체 영화</option>
+        <option value="">모든 영화</option>
         {missing && (
           <option value={value}>{missingLabel ?? `선택한 영화 (#${value})`} — 이 날짜 상영 없음</option>
         )}
@@ -30,6 +31,9 @@ export function MovieSelect({ options, value, onChange, missingLabel }: Props) {
           </option>
         ))}
       </select>
-    </label>
+      <span className={styles.chevron}>
+        <Icon name="chevron-down" />
+      </span>
+    </div>
   );
 }

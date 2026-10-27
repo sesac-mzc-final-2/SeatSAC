@@ -1,23 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { GradeBadge, MoviePoster, movieDetailQuery } from "@/entities/movie";
 import { isApiError } from "@/shared/api";
 import { routes } from "@/shared/config";
 import { formatDateDots, hasHangul, useDocumentTitle } from "@/shared/lib";
-import { ButtonLink, EmptyState, ErrorState, LoadingBlock } from "@/shared/ui";
+import { ButtonLink, EmptyState, ErrorState, Icon, LoadingBlock } from "@/shared/ui";
 import styles from "./MovieDetailPage.module.css";
 
 const CAST_LIMIT = 5;
-
-const NOT_FOUND_TITLE = "영화를 찾을 수 없습니다";
+const NOT_FOUND_TITLE = "영화를 찾을 수 없어요";
 
 function MovieNotFound() {
   return (
     <EmptyState
+      icon="alert-circle"
       title={NOT_FOUND_TITLE}
       description="주소가 잘못되었거나 상영이 끝난 영화입니다."
-      action={<ButtonLink to={routes.home()}>영화 목록으로</ButtonLink>}
+      action={
+        <ButtonLink variant="primary" to={routes.home()}>
+          상영중 영화 보기 <Icon name="arrow-right" />
+        </ButtonLink>
+      }
     />
   );
 }
@@ -33,52 +36,68 @@ export function MovieDetailPage() {
   useDocumentTitle(notFound ? NOT_FOUND_TITLE : query.data?.title);
 
   if (notFound) return <MovieNotFound />;
-  if (query.isPending) return <LoadingBlock label="영화 정보를 불러오는 중…" />;
+  if (query.isPending) return <LoadingBlock label="영화 정보를 불러오는 중이에요" />;
   if (query.isError) {
-    return <ErrorState error={query.error} title="영화 정보를 불러오지 못했습니다" onRetry={() => query.refetch()} />;
+    return <ErrorState error={query.error} title="영화 정보를 불러오지 못했어요" onRetry={() => query.refetch()} />;
   }
 
   const movie = query.data;
-  const rows: Array<[string, ReactNode]> = [];
-  if (movie.runtimeMinutes !== null) rows.push(["러닝타임", `${movie.runtimeMinutes}분`]);
-  if (movie.releaseDate) rows.push(["개봉일", formatDateDots(movie.releaseDate)]);
-  if (movie.director) rows.push(["감독", movie.director]);
-  if (movie.cast.length > 0) rows.push(["출연", movie.cast.slice(0, CAST_LIMIT).join(", ")]);
+  const cast = movie.cast.slice(0, CAST_LIMIT);
 
   return (
     <article className={styles.page}>
+      {movie.posterUrl && <div className={styles.backdrop} style={{ backgroundImage: `url(${movie.posterUrl})` }} />}
       <Link to={routes.home()} className={styles.back}>
-        ← 영화 목록
+        <Icon name="arrow-left" /> 상영중 영화
       </Link>
 
       <section className={styles.hero}>
-        <MoviePoster movie={movie} className={styles.poster} />
-        <div className={styles.info}>
-          <div className={styles.titleBlock}>
-            <div className={styles.meta}>
-              <GradeBadge grade={movie.viewGrade} />
-              {movie.genres.length > 0 && <span>{movie.genres.join(" · ")}</span>}
-            </div>
+        <MoviePoster movie={movie} eager className={styles.poster} />
+        <div className={styles.content}>
+          <p className="eyebrow">지금, 스크린에서</p>
+          <div className={styles.titleRow}>
+            <GradeBadge grade={movie.viewGrade} />
             <h1 className={styles.title}>{movie.title}</h1>
-            {movie.titleEn && movie.titleEn !== movie.title && <p className={styles.titleEn}>{movie.titleEn}</p>}
+          </div>
+          {movie.titleEn && movie.titleEn !== movie.title && <p className={styles.english}>{movie.titleEn}</p>}
+
+          <div className={styles.meta}>
+            {movie.genres.length > 0 && (
+              <span>
+                <Icon name="film" size={15} />
+                {movie.genres.join(" · ")}
+              </span>
+            )}
+            {movie.releaseDate && (
+              <span>
+                <Icon name="calendar" size={15} />
+                {formatDateDots(movie.releaseDate)} 개봉
+              </span>
+            )}
+            {movie.runtimeMinutes !== null && (
+              <span>
+                <Icon name="clock" size={15} />
+                {movie.runtimeMinutes}분
+              </span>
+            )}
           </div>
 
-          {rows.length > 0 && (
-            <dl className={styles.rows}>
-              {rows.map(([label, value]) => (
-                <div key={label} style={{ display: "contents" }}>
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
+          {movie.director && (
+            <dl className={styles.credits}>
+              <dt>감독</dt>
+              <dd>{movie.director}</dd>
+            </dl>
+          )}
+          {cast.length > 0 && (
+            <dl className={styles.credits}>
+              <dt>출연</dt>
+              <dd>{cast.join(", ")}</dd>
             </dl>
           )}
 
-          <div className={styles.actions}>
-            <ButtonLink variant="primary" size="lg" to={routes.showtimes({ movieId: movie.movieId })}>
-              예매하기
-            </ButtonLink>
-          </div>
+          <ButtonLink variant="primary" className={styles.book} to={routes.showtimes({ movieId: movie.movieId })}>
+            상영시간 보기 <Icon name="arrow-right" size={18} />
+          </ButtonLink>
         </div>
       </section>
 
@@ -88,7 +107,12 @@ export function MovieDetailPage() {
             줄거리
           </h2>
           <p className={styles.synopsisText}>{movie.synopsis}</p>
-          {!hasHangul(movie.synopsis) && <p className={styles.note}>한국어 줄거리가 없어 영어 원문을 보여 줍니다.</p>}
+          {!hasHangul(movie.synopsis) && <p className="micro">한국어 줄거리가 없어 영어 원문을 보여 줍니다.</p>}
+          <div className={styles.synopsisEnd} aria-hidden="true">
+            <span />
+            <Icon name="film" size={18} strokeWidth={1.2} />
+            <span />
+          </div>
         </section>
       )}
 

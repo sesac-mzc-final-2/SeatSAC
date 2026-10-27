@@ -119,7 +119,8 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          files=$(git diff --name-only "$BASE" HEAD)
+          # --no-renames: frontend/ 밖으로 옮긴 파일도 이전 경로(삭제)로 잡힌다
+          files=$(git diff --no-renames --name-only "$BASE" HEAD)
           if grep -qE '^frontend/' <<<"$files"; then
             echo "frontend/ 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
           elif grep -qxF '.github/workflows/pr-check.yml' <<<"$files" && [ -f frontend/package-lock.json ]; then
@@ -129,14 +130,21 @@ jobs:
           fi
 
   frontend:
+    # ruleset 필수 검사는 이 job. 변경 감지가 실패하면(skipped = 통과로 새지 않게) 여기서 실패시킨다
     needs: frontend-changes
-    if: needs.frontend-changes.outputs.changed == 'true'
+    if: always() && (needs.frontend-changes.result != 'success' || needs.frontend-changes.outputs.changed == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
     steps:
+      - name: 변경 감지 결과 확인
+        if: needs.frontend-changes.result != 'success'
+        working-directory: .
+        run: |
+          echo "::error::frontend 변경 감지 실패 (result=${{ needs.frontend-changes.result }}) — frontend-changes 로그 확인"
+          exit 1
       - uses: actions/checkout@v4
       - name: package-lock.json 확인
         run: test -f package-lock.json || { echo "::error::frontend/package-lock.json 이 없다 (npm ci 에 필요. 커밋한다)"; exit 1; }

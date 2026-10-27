@@ -11,5 +11,9 @@ export const env = {
   },
 } as const;
 
-/** Cognito 값이 없으면(로컬 기본) 로그인 기능을 끈 채로 조회 화면만 동작한다 */
-export const isCognitoConfigured = env.cognito.authority !== "" && env.cognito.clientId !== "";
+/**
+ * Cognito 값이 없으면(로컬 기본) 로그인 기능을 끈 채로 조회 화면만 동작한다.
+ * domain 도 필수: 없으면 Hosted UI 로그아웃을 못 해 Cognito 세션이 남는다.
+ */
+export const isCognitoConfigured =
+  env.cognito.authority !== "" && env.cognito.clientId !== "" && env.cognito.domain !== "";

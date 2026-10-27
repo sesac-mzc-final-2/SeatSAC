@@ -7,7 +7,8 @@ export const env = {
     authority: metaEnv.VITE_COGNITO_AUTHORITY ?? "",
     clientId: metaEnv.VITE_COGNITO_CLIENT_ID ?? "",
     domain: metaEnv.VITE_COGNITO_DOMAIN ?? "",
-    redirectUri: metaEnv.VITE_COGNITO_REDIRECT_URI ?? `${window.location.origin}/callback`,
+    // 빈 문자열도 "없음"으로 보고 기본값(현재 출처 + /callback)을 쓴다 (?? 는 빈 문자열에 기본값을 주지 않는다)
+    redirectUri: metaEnv.VITE_COGNITO_REDIRECT_URI || `${window.location.origin}/callback`,
   },
 } as const;
 

@@ -173,12 +173,15 @@
   }
 }
 @media (max-width: 540px) {
+  /* 긴 제목·작은 화면에서 콘텐츠가 늘어나도 아래 절대 배치된 슬라이더(44px)에 버튼이 가려지지 않게:
+     높이를 고정하지 않고 콘텐츠 아래에 슬라이더만큼 여백을 둔다 */
   .hero {
-    height: 401px;
+    height: auto;
+    min-height: 401px;
   }
   .content {
     width: 100%;
-    padding: 29px 23px;
+    padding: 29px 23px 76px;
   }
   .art {
     width: 100%;

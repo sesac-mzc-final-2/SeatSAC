@@ -715,6 +715,16 @@ payment  → user      BLOCKED  BLOCKED  ✅
   curl -sS -o /dev/null -w '%{http_code}\n' "https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api/movies"   # 200 (CAT-01, 인증 없음)
   ```
   대상 그룹 이름은 LB Controller가 `k8s-cinemast-gateway-…`처럼 줄여 만든다. 못 찾으면 `aws elbv2 describe-target-groups --query 'TargetGroups[].TargetGroupName'`으로 확인
+- **허용 대역이 ALB 서브넷과 정확히 같은지** 대조한다. healthy·200은 "너무 좁은" 허용만 잡고 "너무 넓은" 허용(예: VPC CIDR로 되돌아감)은 못 잡는다
+  ```bash
+  grep '^public_subnets' infra/terraform/envs/staging/staging.tfvars                # ① 기준: ["10.20.0.0/24", "10.20.1.0/24"]
+  kubectl -n cinema-staging get networkpolicy \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{..ipBlock.cidr}{"\n"}{end}'   # ② ipBlock은 gateway 정책에만, ①과 같은 2개
+  aws ec2 describe-subnets --subnet-ids $(aws elbv2 describe-load-balancers \
+    --query "LoadBalancers[?contains(LoadBalancerName,'cinemast-gateway')].AvailabilityZones[].SubnetId" --output text) \
+    --query 'Subnets[].CidrBlock' --output text                                    # ③ 실제 ALB 서브넷 = ①
+  ```
+  판정: ①·②·③이 같은 두 CIDR이고, ②에서 gateway 밖의 정책에 ipBlock이 없으면 ✅. ②가 더 넓으면(`10.20.0.0/16` 등) gitops `base/gateway/networkpolicy.yaml`을 고친다. ③이 다르면 ALB 서브넷 태그를 확인한다(아래 표 마지막 줄). ALB 이름도 `k8s-cinemast-gateway-…`이고, 못 찾으면 `aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'`으로 확인
 - Prometheus Targets가 모두 UP이면 `monitoring` 허용은 확인된 것(6-D-1)
 - BLOCKED는 연결이 버려져 `TIMEOUT`(기본 3초) 뒤에 나온다 → 전체 1분 안팎
 

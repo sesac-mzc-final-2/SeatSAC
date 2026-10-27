@@ -13,8 +13,8 @@ export interface MovieGroup {
 }
 
 /**
- * W3: 영화별 → 상영관별로 묶는다. 입력이 시간순이면 각 묶음도 첫 회차 시각 순서가 된다.
- * 같은 상영관에서 filmFormat이 섞이면 첫 회차 값을 쓴다 (시드에는 상영관당 하나).
+ * W3: 영화별 → (상영관, 상영 형식)별로 묶는다. 입력이 시간순이면 각 묶음도 첫 회차 시각 순서가 된다.
+ * 같은 상영관에 2D·3D 가 섞이면 형식별로 따로 묶여 버튼 옆 형식 표기가 틀리지 않는다.
  */
 export function groupScreenings(items: readonly Screening[]): MovieGroup[] {
   const movieGroups = new Map<number, MovieGroup>();
@@ -26,7 +26,7 @@ export function groupScreenings(items: readonly Screening[]): MovieGroup[] {
       movieGroup = { movie: screening.movie, auditoriums: [] };
       movieGroups.set(screening.movie.movieId, movieGroup);
     }
-    const key = `${screening.movie.movieId}:${screening.auditorium.auditoriumId}`;
+    const key = `${screening.movie.movieId}:${screening.auditorium.auditoriumId}:${screening.filmFormat ?? ""}`;
     let auditoriumGroup = auditoriumGroups.get(key);
     if (!auditoriumGroup) {
       auditoriumGroup = {

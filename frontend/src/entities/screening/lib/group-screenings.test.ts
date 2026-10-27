@@ -32,6 +32,20 @@ describe("groupScreenings", () => {
     expect(groups[1].auditoriums[0].screenings.map((s) => s.screeningId)).toEqual([2]);
   });
 
+  it("같은 상영관이라도 상영 형식이 다르면 따로 묶는다", () => {
+    const items = [
+      make(1, 10, 2, "2026-11-16T13:40:00+09:00"),
+      { ...make(2, 10, 2, "2026-11-16T16:20:00+09:00"), filmFormat: "3D" },
+      make(3, 10, 2, "2026-11-16T19:00:00+09:00"),
+    ];
+    const [group] = groupScreenings(items);
+    expect(group.auditoriums.map((a) => [a.auditorium.auditoriumId, a.filmFormat])).toEqual([
+      [2, "2D"],
+      [2, "3D"],
+    ]);
+    expect(group.auditoriums[0].screenings.map((s) => s.screeningId)).toEqual([1, 3]);
+  });
+
   it("moviesIn은 중복 없이 첫 등장 순서", () => {
     const items = [make(1, 10, 2, ""), make(2, 20, 3, ""), make(3, 10, 6, "")];
     expect(moviesIn(items).map((m) => m.movieId)).toEqual([10, 20]);

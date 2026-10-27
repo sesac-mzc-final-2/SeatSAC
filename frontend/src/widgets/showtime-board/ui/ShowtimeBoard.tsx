@@ -20,6 +20,8 @@ export function ShowtimeBoard({ screenings, onSelect }: Props) {
     <div className={styles.list}>
       {groups.map((group) => {
         const total = group.auditoriums.reduce((n, hall) => n + hall.screenings.length, 0);
+        // 형식별로 나뉜 그룹이라 상영관 수는 고유 auditoriumId 로 센다
+        const auditoriumCount = new Set(group.auditoriums.map((hall) => hall.auditorium.auditoriumId)).size;
         return (
           <article key={group.movie.movieId} className={`panel ${styles.movie}`} aria-labelledby={`movie-${group.movie.movieId}`}>
             <div className={styles.info}>
@@ -30,14 +32,14 @@ export function ShowtimeBoard({ screenings, onSelect }: Props) {
                 </h3>
               </div>
               <p className={styles.meta}>
-                상영관 {group.auditoriums.length}곳 · 회차 {total}개
+                상영관 {auditoriumCount}곳 · 회차 {total}개
               </p>
               <Link to={routes.movie(group.movie.movieId)} className={styles.detail}>
                 영화 정보 <Icon name="arrow-right" size={12} />
               </Link>
             </div>
             {group.auditoriums.map((hall) => (
-              <div key={hall.auditorium.auditoriumId} className={styles.room}>
+              <div key={`${hall.auditorium.auditoriumId}:${hall.filmFormat ?? ""}`} className={styles.room}>
                 <div className={styles.roomLabel}>
                   <Icon name="armchair" size={15} />
                   <strong>{hall.auditorium.name}</strong>

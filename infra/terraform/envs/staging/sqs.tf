@@ -108,11 +108,12 @@ module "booking_pod_identity" {
 }
 
 # ---- DLQ 경보 → SNS cinema-alerts(global) → 메일 -----------------------
-#   DLQ에 하나라도 보이면 = 알림 Lambda가 같은 메시지를 3번 처리하지 못했다
+#   DLQ에 하나라도 보이면 = 같은 메시지가 3번 수신(ReceiveMessage)됐는데 삭제되지 않았다 — 보통 Lambda 실패지만
+#   가시성 제한(180초)보다 오래 걸린 처리·수동 수신(콘솔·CLI로 열어 봄)도 수신 횟수에 들어간다
 #   SQS 지표는 큐가 활성(메시지 있음·최근 호출)일 때만 나온다 → 빈 DLQ는 데이터 없음 = 정상(notBreaching)
 resource "aws_cloudwatch_metric_alarm" "notification_dlq" {
   alarm_name          = "${var.name}-notification-dlq-not-empty"
-  alarm_description   = "알림 DLQ에 메시지 있음 — 알림 Lambda(3.1.8)가 3회 실패. Lambda 로그의 eventId로 원인 확인 후 DLQ 재전송(런북 6-B)"
+  alarm_description   = "알림 DLQ에 메시지 있음 — 같은 메시지를 SQS가 3번 내줬는데(수신) 삭제되지 않음. Lambda 로그의 eventId·메시지 수신 횟수로 원인 확인 후 DLQ 재전송(런북 6-B-4)"
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateNumberOfMessagesVisible"
   dimensions          = { QueueName = aws_sqs_queue.notification_dlq.name }
@@ -142,4 +143,75 @@ resource "aws_cloudwatch_metric_alarm" "notification_oldest_age" {
   treat_missing_data  = "notBreaching"
   alarm_actions       = [data.aws_sns_topic.alerts.arn]
   ok_actions          = [data.aws_sns_topic.alerts.arn]
+}
+
+# ---- 지표 유지: 큐를 주기적으로 조회 ----------------------------------------
+#   SQS 지표는 큐가 "활성"일 때만 CloudWatch로 나온다(메시지·API 호출 뒤 최대 6시간). 받는 쪽 없이 메시지만 남아
+#   6시간 넘게 아무 호출이 없으면 지표가 끊겨 위 두 경보가 데이터 없음(notBreaching) → 울려야 할 때 안 울리거나 OK로 돌아간다
+#   → EventBridge Scheduler가 1시간마다 두 큐에 GetQueueAttributes를 불러 활성 상태를 유지한다(3.1.14와 같은 universal target)
+#   비용: 일정 2개 × 하루 24회 — Scheduler·SQS 무료 한도 안
+resource "aws_scheduler_schedule_group" "sqs_metrics" {
+  name = "${var.name}-sqs-metrics"
+}
+
+resource "aws_iam_role" "sqs_metrics_scheduler" {
+  name        = "${var.name}-sqs-metrics-scheduler"
+  description = "EventBridge Scheduler: keep notification queues active for CloudWatch metrics (3.1.9)"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "scheduler.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = {
+          "aws:SourceAccount" = local.account_id
+          "aws:SourceArn"     = aws_scheduler_schedule_group.sqs_metrics.arn # 일정 그룹 ARN (cluster_schedule.tf와 같은 이유)
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "sqs_metrics_scheduler" {
+  name = "sqs-get-queue-attributes"
+  role = aws_iam_role.sqs_metrics_scheduler.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "ReadQueueAttributes"
+      Effect   = "Allow"
+      Action   = ["sqs:GetQueueAttributes"]
+      Resource = [aws_sqs_queue.notification.arn, aws_sqs_queue.notification_dlq.arn]
+    }]
+  })
+}
+
+resource "aws_scheduler_schedule" "sqs_metrics" {
+  for_each = {
+    notification = aws_sqs_queue.notification.url
+    dlq          = aws_sqs_queue.notification_dlq.url
+  }
+
+  name                = "keep-active-${each.key}"
+  group_name          = aws_scheduler_schedule_group.sqs_metrics.name
+  description         = "GetQueueAttributes hourly so SQS keeps publishing CloudWatch metrics (3.1.9)"
+  schedule_expression = "rate(1 hour)"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:sqs:getQueueAttributes"
+    role_arn = aws_iam_role.sqs_metrics_scheduler.arn
+    input = jsonencode({
+      QueueUrl       = each.value
+      AttributeNames = ["ApproximateNumberOfMessages"]
+    })
+
+    retry_policy {
+      maximum_retry_attempts = 0 # 다음 시간에 다시 부른다
+    }
+  }
 }

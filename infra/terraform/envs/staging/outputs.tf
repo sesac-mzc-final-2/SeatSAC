@@ -104,11 +104,14 @@ output "api_origin_domain_name" {
 }
 
 output "frontend_github_variables" {
-  description = "레포 Settings → Secrets and variables → Actions → Variables. Cognito 3개(VITE_COGNITO_AUTHORITY·CLIENT_ID·DOMAIN)는 cognito.tf(3.3.x) 출력에서"
+  description = "레포 Settings → Secrets and variables → Actions → Variables 6개 (런북 7-3). 비밀 없음"
   value = {
     FRONTEND_BUCKET            = aws_s3_bucket.frontend.bucket
     CLOUDFRONT_DISTRIBUTION_ID = aws_cloudfront_distribution.frontend.id
     VITE_COGNITO_REDIRECT_URI  = "https://${aws_cloudfront_distribution.frontend.domain_name}/callback"
+    VITE_COGNITO_AUTHORITY     = local.cognito_issuer_uri # cognito.tf (3.1.16)
+    VITE_COGNITO_CLIENT_ID     = aws_cognito_user_pool_client.web.id
+    VITE_COGNITO_DOMAIN        = local.cognito_domain_url
   }
 }
 

@@ -18,6 +18,8 @@ __pycache__/
 .venv/
 # Terraform
 **/.terraform/
+# archive_file이 만드는 Lambda zip (3.1.16)
+infra/terraform/**/.build/
 *.tfstate
 *.tfstate.*
 *.tfplan

@@ -651,6 +651,91 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 - 앱 설정은 gitops PR, ArgoCD 화면에서 손으로 고친 값은 selfHeal이 되돌린다. 급할 때만 관리자가 해당 앱 auto-sync를 끄고 작업 → Git 반영 → 다시 켬
 - 로그·PR·노션에 이미지 주소·ALB DNS를 붙일 때는 계정 ID를 `<ACCOUNT_ID>`로 가린다
 
+### 6-E. NetworkPolicy 허용 목록 확인 (3.1.13, OPS-15)
+
+코드: SeatSAC-gitops `base/common/default-deny-ingress.yaml`(앱 namespace 인바운드 기본 거부) · `base/{svc}/networkpolicy.yaml`(허용) · 확인 스크립트 `infra/scripts/np-check.sh`. 집행은 VPC CNI 네트워크 정책 에이전트(`enableNetworkPolicy = "true"`, 3.1.2). Terraform 변경 없음
+
+| 호출하는 쪽 → | 허용 대상 (8080) | 근거 |
+| --- | --- | --- |
+| ALB (public 서브넷 `10.20.0.0/24`·`10.20.1.0/24`) | gateway | CloudFront `/api` → ALB → gateway |
+| gateway | catalog · booking · user | 라우팅 |
+| catalog | booking | 잔여 좌석 `GET /internal/screenings/seat-counts` |
+| booking | catalog · payment | 회차 확인 · 결제 |
+| user | booking · catalog | 예매 내역 · 회차 요약·극장 검증 |
+| payment | (없음) | 호출하는 쪽이 아니다 |
+| 분석 Job `rollout-smoke` | booking · gateway (preview) | 3.1.6 |
+| `monitoring` namespace | 전체 | Prometheus 수집 |
+
+```bash
+# 터미널 A (cinema-admin, 노드 켜짐)
+kubectl get daemonset -n kube-system aws-node -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'   # aws-node aws-eks-nodeagent (정책 에이전트)
+kubectl -n cinema-staging get networkpolicy                  # Cognito 전: default-deny-ingress + catalog·booking·user·payment-ingress 4개 (gateway 앱이 아직 없음) · 뒤: + gateway-ingress = 5개
+infra/scripts/np-check.sh                                    # 서비스 파드 안에서 서로 8080에 붙어 본다 (get·exec만, 읽기)
+# Cognito 뒤(gateway 배포 후): REQUIRE_GATEWAY=1 infra/scripts/np-check.sh   — gateway 파드가 없으면 실패
+```
+
+기대(gateway는 Cognito 전이라 건너뜀):
+
+```
+from     → to        기대     결과
+catalog  → booking   OPEN     OPEN     ✅
+catalog  → user      BLOCKED  BLOCKED  ✅
+catalog  → payment   BLOCKED  BLOCKED  ✅
+booking  → catalog   OPEN     OPEN     ✅
+booking  → user      BLOCKED  BLOCKED  ✅
+booking  → payment   OPEN     OPEN     ✅
+user     → catalog   OPEN     OPEN     ✅
+user     → booking   OPEN     OPEN     ✅
+user     → payment   BLOCKED  BLOCKED  ✅
+payment  → catalog   BLOCKED  BLOCKED  ✅
+payment  → booking   BLOCKED  BLOCKED  ✅
+payment  → user      BLOCKED  BLOCKED  ✅
+모두 기대대로 (12개 검사, 런타임 계약 6장)
+```
+
+| 결과 | 뜻 | 판정 |
+| --- | --- | --- |
+| `OPEN` | 연결 성공 | 허용 대상이면 ✅ |
+| `BLOCKED` | **시간 초과**(timeout 종료 코드 124) — VPC CNI 정책은 패킷을 버리므로 차단은 시간 초과로 보인다 | 차단 대상이면 ✅ |
+| `ERROR:DNS` | 파드 안에서 서비스 이름이 안 풀림 | 정책 판단 불가 → ❌ (CoreDNS·Service 이름 확인) |
+| `ERROR:REFUSED` | 연결 거부 — 대상이 8080에서 안 듣고 있음 | ❌ (대상 파드 상태) |
+| `ERROR:NOT_READY` | 대상 Service에 Ready 엔드포인트가 없음 | ❌ (대상 readiness) |
+| `ERROR:EXEC` | exec 실패 | ❌ (권한·컨테이너 이름·bash) |
+
+- 종료 코드: `0` 모두 기대대로 · `1` 기대와 다르거나 판단 불가(필수 서비스 파드 없음, 검사 0개 포함) · `2` 클러스터 조회 실패(권한·연결 — "파드 없음"으로 착각하지 않게 바로 멈춤)
+- 필수 서비스: catalog·booking·user·payment. gateway는 Cognito 전에는 없어도 되고, 뒤에는 `REQUIRE_GATEWAY=1`로 필수
+
+- **Cognito 뒤(gateway 배포 후) 다시 실행**: `gateway → payment BLOCKED`(인계 #14 완료 조건), `gateway → catalog·booking·user OPEN`, 그리고 다른 서비스 → gateway가 **BLOCKED**인지(ALB 대역만 허용)도 같이 본다(20개 검사)
+- **ALB → gateway 실경로는 `np-check.sh`가 보지 않는다**(스크립트는 앱 파드끼리만). public 서브넷 대역 규칙은 아래로 따로 확인한다 — 인계 #14 완료 조건
+  ```bash
+  kubectl -n cinema-staging get pods -l app.kubernetes.io/name=gateway -o wide     # gateway 파드 IP
+  aws elbv2 describe-target-health --target-group-arn "$(aws elbv2 describe-target-groups \
+    --query "TargetGroups[?contains(TargetGroupName,'cinemast-gateway')].TargetGroupArn | [0]" --output text)" \
+    --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output text   # 파드 IP healthy
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api/movies"   # 200 (CAT-01, 인증 없음)
+  ```
+  대상 그룹 이름은 LB Controller가 `k8s-cinemast-gateway-…`처럼 줄여 만든다. 못 찾으면 `aws elbv2 describe-target-groups --query 'TargetGroups[].TargetGroupName'`으로 확인
+- **허용 대역이 ALB 서브넷과 정확히 같은지** 대조한다. healthy·200은 "너무 좁은" 허용만 잡고 "너무 넓은" 허용(예: VPC CIDR로 되돌아감)은 못 잡는다
+  ```bash
+  grep '^public_subnets' infra/terraform/envs/staging/staging.tfvars                # ① 기준: ["10.20.0.0/24", "10.20.1.0/24"]
+  kubectl -n cinema-staging get networkpolicy \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{..ipBlock.cidr}{"\n"}{end}'   # ② ipBlock은 gateway 정책에만, ①과 같은 2개
+  aws ec2 describe-subnets --subnet-ids $(aws elbv2 describe-load-balancers \
+    --query "LoadBalancers[?contains(LoadBalancerName,'cinemast-gateway')].AvailabilityZones[].SubnetId" --output text) \
+    --query 'Subnets[].CidrBlock' --output text                                    # ③ 실제 ALB 서브넷 = ①
+  ```
+  판정: ①·②·③이 같은 두 CIDR이고, ②에서 gateway 밖의 정책에 ipBlock이 없으면 ✅. ②가 더 넓으면(`10.20.0.0/16` 등) gitops `base/gateway/networkpolicy.yaml`을 고친다. ③이 다르면 ALB 서브넷 태그를 확인한다(아래 표 마지막 줄). ALB 이름도 `k8s-cinemast-gateway-…`이고, 못 찾으면 `aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'`으로 확인
+- Prometheus Targets가 모두 UP이면 `monitoring` 허용은 확인된 것(6-D-1)
+- BLOCKED는 연결이 버려져 `TIMEOUT`(기본 3초) 뒤에 나온다 → 전체 1분 안팎
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 허용인데 BLOCKED (서비스 간 503·타임아웃) | 호출하는 파드 라벨이 `app.kubernetes.io/name`과 다름, 허용 규칙 누락 | 그 서비스 `networkpolicy.yaml`에 규칙 추가 PR + 런타임 계약 6장 표 먼저 |
+| 차단이어야 하는데 OPEN | 정책 에이전트가 안 돎(`aws-eks-nodeagent` 없음)·VPC CNI 애드온 설정 | `enableNetworkPolicy` 확인(3.1.2), 노드 재기동 뒤 다시 |
+| 종료 코드 2 `kubectl get pods 실패` | 자격 증명 만료·노드 꺼짐·권한 | `cinema-admin` 다시 로그인, `cluster-scale.sh status` |
+| `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
+| `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
+| gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
 ### 6-D. 블루/그린 배포·자동 롤백 확인 (3.1.6, OPS-03·04)
 
 코드: SeatSAC-gitops `base/{booking,gateway}/rollout.yaml` · `analysis/` (AnalysisTemplate + 분석 트래픽 k6 `analysis/smoke/`) · `base/{booking,gateway}/networkpolicy.yaml`(`rollout-smoke` 허용). Terraform 변경 없음

@@ -17,7 +17,9 @@ npm run build               # tsc -b && vite build → dist/
 ```
 
 `mock/server.mjs` 는 catalog 계약 모양으로 응답하는 가짜 데이터(영화 6편·극장 4곳·하루 편성, 롯데시네마 수집 데이터·포스터 없음)다.
-`?fail=503` 을 붙이면 503, `/api/movies/999` 는 404 로 오류 화면을 재현할 수 있다. 빌드에는 포함되지 않는다.
+`?fail=503` 을 붙이면 503, 영화 ID 999 는 404 라 화면에서 `/movies/999` 로 들어가면 「영화를 찾을 수 없어요」를 볼 수 있다. 빌드에는 포함되지 않는다.
+
+Node 는 **22.22 이상**(`engines`). 테스트 의존성 jsdom 30 이 그 아래를 지원하지 않으며, CI(`pr-check` `frontend` job)·`frontend-deploy` 는 Node 24 를 쓴다.
 
 환경 변수는 `.env.example` 참고 (전부 공개 값, `VITE_` 는 빌드에 포함된다). `VITE_COGNITO_*` 가 비어 있으면 로그인 버튼이
 비활성화되고 조회 화면만 동작한다. 값은 `docs/service-runtime-contract.md` 3장 frontend 표.

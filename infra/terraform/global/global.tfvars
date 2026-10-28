@@ -12,4 +12,4 @@ github_repo     = "SeatSAC"   # 대소문자 그대로
 github_repo_id  = "1425477103"
 
 # 3.1.11: envs/staging apply 뒤 `terraform output cloudfront_distribution_id` 값을 넣고 global apply (무효화 권한을 이 배포로 좁힘)
-frontend_distribution_ids = []
+frontend_distribution_ids = ["E316HLOWJ7VZO1"]

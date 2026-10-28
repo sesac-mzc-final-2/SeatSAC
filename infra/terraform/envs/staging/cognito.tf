@@ -78,7 +78,7 @@ resource "aws_lambda_function" "cognito_presignup" {
   architectures    = ["arm64"]
 
   logging_config {
-    log_format = "Text"
+    log_format = "JSON"
     log_group  = aws_cloudwatch_log_group.cognito_presignup.name
   }
 

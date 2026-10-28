@@ -1,4 +1,4 @@
-import { addDays, dayOfWeekKo, formatDateKo, todayKst } from "@/shared/lib";
+import { addDays, dayOfWeekKo, formatDateKo, useTodayKst } from "@/shared/lib";
 import { Icon } from "@/shared/ui";
 import styles from "./DateTabs.module.css";
 
@@ -13,7 +13,7 @@ const dowIndex = (iso: string) => new Date(`${iso}T12:00:00+09:00`).getUTCDay();
 
 /** 날짜 선택 칩: 오늘부터 7일. 주소로 들어온 날짜가 범위 밖이면 그 날짜도 맨 앞에 보여 준다 */
 export function DateTabs({ value, onChange, days = 7 }: Props) {
-  const today = todayKst();
+  const today = useTodayKst();
   const dates = Array.from({ length: days }, (_, i) => addDays(today, i));
   if (!dates.includes(value)) dates.unshift(value);
   const [year, month] = value.split("-").map(Number);

@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { useSearchParams } from "react-router";
-import { isValidIsoDate, todayKst } from "@/shared/lib";
+import { isValidIsoDate, useTodayKst } from "@/shared/lib";
 
 export interface ShowtimesFilter {
   theaterId: number | null;
@@ -24,6 +24,8 @@ function parseId(value: string | null): number | null {
  */
 export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
   const [params, setParams] = useSearchParams();
+  // 자정이 지나면 바뀌는 값 — 열어 둔 화면의 「오늘」·지난 날짜 보정이 같이 따라온다
+  const today = useTodayKst();
 
   const requestedTheaterId = parseId(params.get("theaterId"));
   let theaterId: number | null = null;
@@ -35,7 +37,6 @@ export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
   }
 
   // 지난 날짜(끝난 회차)는 고를 수 없으니 오늘로 보정한다 (ISO 날짜는 문자열 비교로 충분)
-  const today = todayKst();
   const rawDate = params.get("date");
   const filter: ShowtimesFilter = {
     theaterId,
@@ -54,7 +55,8 @@ export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
           }
           return next;
         },
-        { replace: true },
+        // 필터는 같은 화면 안의 변경이라 히스토리를 쌓지 않고, 스크롤 위치도 그대로 둔다
+        { replace: true, preventScrollReset: true },
       );
     },
     [setParams],
@@ -62,6 +64,7 @@ export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
 
   return {
     filter,
+    today,
     setTheater: (theaterId: number) => update({ theaterId }),
     setDate: (date: string) => update({ date }),
     setMovie: (movieId: number | null) => update({ movieId }),

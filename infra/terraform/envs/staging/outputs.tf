@@ -130,3 +130,24 @@ output "cluster_schedule_group" {
   description = "GitHub cluster-schedule 백업이 끄기 상태를 확인하는 일정 그룹"
   value       = aws_scheduler_schedule_group.cluster.name
 }
+
+# ---- 3.1.9 알림 큐 (sqs.tf) ----------------------------------------------
+# 큐 URL은 계정 ID를 포함한다 → PR·노션에 붙일 때는 <ACCOUNT_ID>로 가린다
+output "notification_queue_url" {
+  description = "booking APP_SQS_NOTIFICATION_QUEUE_URL과 같은 값이어야 한다(envs/staging-k8s ConfigMap cinema-infra-endpoints의 SQS_NOTIFICATION_URL)"
+  value       = aws_sqs_queue.notification.url
+}
+
+output "notification_queue_arn" {
+  description = "알림 Lambda(3.1.8) 이벤트 소스"
+  value       = aws_sqs_queue.notification.arn
+}
+
+output "notification_dlq_url" {
+  value = aws_sqs_queue.notification_dlq.url
+}
+
+output "booking_pod_role_arn" {
+  description = "cinema-staging-booking-pod (Pod Identity, ServiceAccount cinema-staging/booking)"
+  value       = module.booking_pod_identity.iam_role_arn
+}

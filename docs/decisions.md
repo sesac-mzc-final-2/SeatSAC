@@ -67,5 +67,3 @@
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 | `docs/repo-workflow.md` |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
-
-<노션 반영 필요> ADR-78(10/26 3.1.6) 새로 등록(상태 열림): 블루/그린 분석 트래픽 Job·최소 요청 20건·actuator 제외·실패 시 abort + revert PR·실패 버전 시연 방식. 대안(분석 중 실사용자 트래픽 일부를 preview로 = 카나리 전환, k6 부하 Job을 preview로 = OPS-10과 중복)과 기각 이유는 3.1.6 WBS 기록

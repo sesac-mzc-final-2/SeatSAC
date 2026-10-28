@@ -566,6 +566,105 @@ aws ecr initiate-layer-upload --repository-name cinema/booking --profile cinema-
 - Trivy가 알려 준 "수정 버전"이 Maven Central에 아직 없으면(릴리스 투표 실패 등, 10/25 tomcat 10.1.58) 빌드가 `Could not find …`로 깨진다 → 실제로 배포된 다음 버전으로 올린다(`https://repo1.maven.org/maven2/<그룹 경로>/<이름>/`에서 확인)
 - 레포가 Public이라 Actions 로그도 공개된다. 워크플로가 계정 ID를 가리지만(`mask-aws-account-id`), 실행 로그·요약을 노션·PR에 붙일 때 레지스트리 주소가 없는지 한 번 더 본다
 
+### 6-B. SQS 알림 큐·DLQ·booking Pod Identity (3.1.9, OPS-07) · Lambda (3.1.8) — ⬜
+
+코드: `envs/staging/sqs.tf`(큐·DLQ·큐 정책·Pod Identity·경보 2개) · `variables.tf`(`app_namespace`) · `outputs.tf` · SeatSAC-gitops `base/booking/serviceaccount.yaml`·`rollout.yaml`(`serviceAccountName: booking`). 큐 URL은 이미 ConfigMap `cinema-infra-endpoints`(`SQS_NOTIFICATION_URL`, 6-C-1)에 있다 → `envs/staging-k8s` 변경 없음
+
+| 만드는 것 | 이름·값 |
+| --- | --- |
+| 알림 큐 | `cinema-staging-notification-events` · 보존 7일(DLQ 14일보다 짧게) · 가시성 제한 180초(Lambda 30초 × 6) · 긴 폴링 20초 · SSE-SQS |
+| DLQ | `cinema-staging-notification-events-dlq` · `maxReceiveCount 3` · 보존 14일 · 알림 큐에서만 받음(redrive allow) |
+| 큐 정책 | 두 큐 모두 TLS가 아닌 요청 거부 |
+| Pod Identity | 역할 `cinema-staging-booking-pod`(이름 그대로, 난수 접미사 없음) → `sqs:SendMessage`·`sqs:GetQueueUrl` on 알림 큐만. 연결 `cinema-staging` / ServiceAccount `booking` |
+| 경보 2개 → SNS `cinema-alerts` → 메일 | `cinema-staging-notification-dlq-not-empty`: DLQ 메시지 > 0 (같은 메시지를 SQS가 3번 내줬는데 삭제되지 않음 — 보통 Lambda 실패) · `cinema-staging-notification-oldest-2d`: 알림 큐의 가장 오래된 메시지 > 2일 (받는 쪽이 없음 — DLQ로 안 가고 7일 뒤 삭제되는 경우) |
+| 지표 유지 | EventBridge Scheduler `cinema-staging-sqs-metrics/keep-active-{notification,dlq}`: 1시간마다 `GetQueueAttributes` — SQS는 6시간 넘게 호출이 없는 큐의 지표를 끊어 경보가 "데이터 없음"으로 조용해지므로 |
+
+**순서**: ① SeatSAC PR 머지 → `envs/staging` apply(연결이 먼저 있어야 한다) → ② gitops PR 머지(ServiceAccount) → booking 새 파드에 자격 증명 주입. 순서가 바뀌면 파드가 자격 증명 없이 뜬다 → ArgoCD에서 booking **Restart**
+
+#### 6-B-1. apply (3.1.9)
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명). 최신 main에서
+cd infra/terraform/envs/staging
+git pull && git log -1 --oneline
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: aws_sqs_queue 2 · aws_sqs_queue_redrive_allow_policy 1 · aws_sqs_queue_policy 2 · aws_cloudwatch_metric_alarm 2
+#         module.booking_pod_identity (IAM 역할·정책·연결 등 4) · 지표 유지 Scheduler(그룹 1·역할 1·정책 1·일정 2)
+#         → 약 16 to add, 0 change, 0 destroy
+terraform apply plan.out && rm -f plan.out     # 저장된 plan에는 비밀 값이 평문
+terraform output -raw booking_pod_role_arn | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'
+```
+
+- plan에 노드그룹 `release_version` 변경이 같이 보이면 3.1.14 때와 같은 AMI 갱신이다(노드 0대일 때 apply가 안전, 13장)
+- 큐 URL·ARN 출력에는 계정 ID가 들어 있다 → PR·노션에는 `<ACCOUNT_ID>`로 가린다
+
+#### 6-B-2. 확인
+
+```bash
+# 터미널 A (cinema-admin)
+Q=cinema-staging-notification-events
+URL=$(aws sqs get-queue-url --queue-name $Q --query QueueUrl --output text)
+aws sqs get-queue-attributes --queue-url "$URL" \
+  --attribute-names RedrivePolicy SqsManagedSseEnabled VisibilityTimeout MessageRetentionPeriod \
+  --query 'Attributes' --output json | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g'
+#   기대: maxReceiveCount 3 · …-dlq · SqsManagedSseEnabled true · 180 · 604800
+aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace cinema-staging \
+  --query 'associations[].[serviceAccount,associationId]' --output text       # booking 1줄
+aws cloudwatch describe-alarms --alarm-names cinema-staging-notification-dlq-not-empty cinema-staging-notification-oldest-2d \
+  --query 'MetricAlarms[].[AlarmName,StateValue]' --output text              # 둘 다 OK 또는 INSUFFICIENT_DATA
+aws iam get-role --role-name cinema-staging-booking-pod --query 'Role.RoleName' --output text   # 정확한 이름(접미사 없음)
+aws scheduler list-schedules --group-name cinema-staging-sqs-metrics --query 'Schedules[].[Name,State]' --output text   # keep-active-* 2개 ENABLED
+
+# gitops PR 머지 뒤(booking 새 파드) — Pod Identity가 주입됐는지 (값은 출력하지 않는다)
+P=$(kubectl -n cinema-staging get pods -l app.kubernetes.io/name=booking -o jsonpath='{.items[*].metadata.name}'); P=${P%% *}
+kubectl -n cinema-staging get pod "$P" -o jsonpath='{.spec.serviceAccountName}{"\n"}'          # booking
+kubectl -n cinema-staging get pod "$P" -o jsonpath='{range .spec.containers[0].env[*]}{.name}{"\n"}{end}' \
+  | grep AWS_CONTAINER                                                                         # …_FULL_URI · …_AUTHORIZATION_TOKEN_FILE
+```
+
+- gitops PR은 booking 파드 템플릿을 바꾸므로 **블루/그린 배포 + 분석**(6-D-2)이 한 번 돈다 → 6-D-2 첫 확인을 같이 해도 된다
+- 메시지가 실제로 가는지는 릴레이를 켠 뒤(6-B-3)에 본다. 그 전에는 큐가 비어 있는 게 정상
+
+#### 6-B-3. 아웃박스 릴레이 켜기 (3.2.6, 남궁일 — SeatSAC #39 머지 · 알림 Lambda 3.1.8 연결 뒤)
+
+릴레이 코드는 `APP_OUTBOX_RELAY_ENABLED`가 `true`일 때만 돈다(기본 `false`). **켜는 조건: 6-B-1·2 확인 + 알림 Lambda(3.1.8) 이벤트 소스 연결 완료**
+
+- 꺼 두는 동안 확정된 예매는 아웃박스에 `PENDING`으로 남는다(DB라 사라지지 않음) → Lambda가 붙은 뒤 켜면 순서대로 보내진다. **기다리는 쪽이 안전하다**
+- Lambda 전에 켜야 하면(3.2.6 통합 확인 등): 메시지는 큐에 쌓이기만 하고 받는 쪽이 없어 **DLQ로도 가지 않는다** → 보존 7일이 지나면 SQS가 조용히 지운다. 2일째에 `…-notification-oldest-2d` 경보가 오니 그 전에 Lambda를 붙이거나 릴레이를 다시 끈다
+- 큐에서 사라진 경우의 복구: 아웃박스 행은 `SENT`로 남아 있다(릴레이가 지우지 않음) → 그 기간 행을 `PENDING`으로 되돌리면 같은 `eventId`(= `message_key`)로 다시 보내진다. DB 손 작업이라 남궁일과 함께(`UPDATE booking_db.outbox_message SET status='PENDING', attempt_count=0, next_attempt_at=:now WHERE status='SENT' AND sent_at BETWEEN :from AND :to`), Lambda는 `eventId`로 중복을 무시한다
+
+```yaml
+# SeatSAC-gitops overlays/staging/booking/kustomization.yaml  booking-config literals에 추가
+      - APP_OUTBOX_RELAY_ENABLED=true
+```
+
+```bash
+# 켠 뒤: 예매를 하나 확정하고(BKG-10) 1~2초 뒤
+kubectl -n cinema-staging port-forward svc/booking 18082:8080 &
+curl -s localhost:18082/actuator/prometheus | grep -E '^booking_(notification_publish_total|outbox_pending)'   # sent 증가 · pending 0
+kill %1
+aws sqs get-queue-attributes --queue-url "$URL" --attribute-names ApproximateNumberOfMessages \
+  --query 'Attributes.ApproximateNumberOfMessages' --output text                   # Lambda(3.1.8) 전에는 확정 수만큼 쌓인다
+```
+
+- 꺼져 있던 동안 확정된 예매는 아웃박스에 `PENDING`으로 쌓여 있다가 켜는 순간 보내진다(`booking_outbox_pending`이 0으로)
+- Lambda(3.1.8)가 붙기 전에 켰다면 큐에 쌓이기만 한다. **큐를 비우지(purge) 않는다** — 보존 7일 안에 Lambda가 붙으면 그때 처리된다(넘기면 위 복구)
+
+#### 6-B-4. 문제 해결
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| booking 로그 `AccessDenied … sqs:SendMessage` | Pod Identity 연결의 ServiceAccount·namespace가 파드와 다름, 큐 ARN이 다름 | `list-pod-identity-associations` vs `kubectl get pod … serviceAccountName`. 고치면 booking **Restart** |
+| `Unable to load credentials` · 파드 env에 `AWS_CONTAINER_*`가 없음 | 연결보다 파드가 먼저 뜸(웹훅은 파드 생성 때만 주입) 또는 `serviceAccountName` 없음 | apply 확인 후 ArgoCD에서 booking **Restart** |
+| `booking_notification_publish_total{result="retry"}` 계속 증가 | 큐 URL 오타·큐 없음·권한 | 로그의 오류 메시지, ConfigMap `SQS_NOTIFICATION_URL`(6-C-1) |
+| 아웃박스 행이 `FAILED` | 10회 재시도 실패(릴레이를 큐보다 먼저 켬 등) | 원인을 고친 뒤 남궁일과 `FAILED` → `PENDING` 되돌림(손 작업, 3.2.6 런북) |
+| DLQ 경보 메일 | 같은 메시지가 3번 수신됐는데 삭제되지 않음: Lambda 실패·제한 시간 초과, 처리가 가시성 제한(180초)보다 김, 사람이 콘솔·CLI로 수신해 봄 | DLQ 메시지의 수신 횟수(`aws sqs receive-message --queue-url <DLQ URL> --attribute-names ApproximateReceiveCount ApproximateFirstReceiveTimestamp --visibility-timeout 0`)와 Lambda 로그(CloudWatch)의 `eventId`·오류를 함께 본다 → 고친 뒤 `aws sqs start-message-move-task --source-arn <DLQ ARN>`으로 DLQ → 알림 큐 재전송 |
+| `…-notification-oldest-2d` 경보 메일 | 받는 쪽 없음: Lambda 연결 전에 릴레이를 켬, 이벤트 소스 매핑 꺼짐·오류 | Lambda 연결(3.1.8) 또는 릴레이 끄기(`APP_OUTBOX_RELAY_ENABLED=false` gitops PR). 7일을 넘겼으면 6-B-3 복구 |
+
+- 삭제(11장): 큐를 지우면 남은 메시지도 사라진다. 다시 만들면 URL이 같으므로 앱 설정은 그대로다
+
+
 ### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-74)
 
 SeatSAC-gitops는 Public이다(무료 플랜에서 ruleset을 쓰려면 Public이어야 한다). 그래서 **계정 ID·엔드포인트를 gitops에 두지 않고** 둘 다 `envs/staging-k8s`가 클러스터에 넣는다.
@@ -651,91 +750,6 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 - 앱 설정은 gitops PR, ArgoCD 화면에서 손으로 고친 값은 selfHeal이 되돌린다. 급할 때만 관리자가 해당 앱 auto-sync를 끄고 작업 → Git 반영 → 다시 켬
 - 로그·PR·노션에 이미지 주소·ALB DNS를 붙일 때는 계정 ID를 `<ACCOUNT_ID>`로 가린다
 
-### 6-E. NetworkPolicy 허용 목록 확인 (3.1.13, OPS-15)
-
-코드: SeatSAC-gitops `base/common/default-deny-ingress.yaml`(앱 namespace 인바운드 기본 거부) · `base/{svc}/networkpolicy.yaml`(허용) · 확인 스크립트 `infra/scripts/np-check.sh`. 집행은 VPC CNI 네트워크 정책 에이전트(`enableNetworkPolicy = "true"`, 3.1.2). Terraform 변경 없음
-
-| 호출하는 쪽 → | 허용 대상 (8080) | 근거 |
-| --- | --- | --- |
-| ALB (public 서브넷 `10.20.0.0/24`·`10.20.1.0/24`) | gateway | CloudFront `/api` → ALB → gateway |
-| gateway | catalog · booking · user | 라우팅 |
-| catalog | booking | 잔여 좌석 `GET /internal/screenings/seat-counts` |
-| booking | catalog · payment | 회차 확인 · 결제 |
-| user | booking · catalog | 예매 내역 · 회차 요약·극장 검증 |
-| payment | (없음) | 호출하는 쪽이 아니다 |
-| 분석 Job `rollout-smoke` | booking · gateway (preview) | 3.1.6 |
-| `monitoring` namespace | 전체 | Prometheus 수집 |
-
-```bash
-# 터미널 A (cinema-admin, 노드 켜짐)
-kubectl get daemonset -n kube-system aws-node -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'   # aws-node aws-eks-nodeagent (정책 에이전트)
-kubectl -n cinema-staging get networkpolicy                  # Cognito 전: default-deny-ingress + catalog·booking·user·payment-ingress 4개 (gateway 앱이 아직 없음) · 뒤: + gateway-ingress = 5개
-infra/scripts/np-check.sh                                    # 서비스 파드 안에서 서로 8080에 붙어 본다 (get·exec만, 읽기)
-# Cognito 뒤(gateway 배포 후): REQUIRE_GATEWAY=1 infra/scripts/np-check.sh   — gateway 파드가 없으면 실패
-```
-
-기대(gateway는 Cognito 전이라 건너뜀):
-
-```
-from     → to        기대     결과
-catalog  → booking   OPEN     OPEN     ✅
-catalog  → user      BLOCKED  BLOCKED  ✅
-catalog  → payment   BLOCKED  BLOCKED  ✅
-booking  → catalog   OPEN     OPEN     ✅
-booking  → user      BLOCKED  BLOCKED  ✅
-booking  → payment   OPEN     OPEN     ✅
-user     → catalog   OPEN     OPEN     ✅
-user     → booking   OPEN     OPEN     ✅
-user     → payment   BLOCKED  BLOCKED  ✅
-payment  → catalog   BLOCKED  BLOCKED  ✅
-payment  → booking   BLOCKED  BLOCKED  ✅
-payment  → user      BLOCKED  BLOCKED  ✅
-모두 기대대로 (12개 검사, 런타임 계약 6장)
-```
-
-| 결과 | 뜻 | 판정 |
-| --- | --- | --- |
-| `OPEN` | 연결 성공 | 허용 대상이면 ✅ |
-| `BLOCKED` | **시간 초과**(timeout 종료 코드 124) — VPC CNI 정책은 패킷을 버리므로 차단은 시간 초과로 보인다 | 차단 대상이면 ✅ |
-| `ERROR:DNS` | 파드 안에서 서비스 이름이 안 풀림 | 정책 판단 불가 → ❌ (CoreDNS·Service 이름 확인) |
-| `ERROR:REFUSED` | 연결 거부 — 대상이 8080에서 안 듣고 있음 | ❌ (대상 파드 상태) |
-| `ERROR:NOT_READY` | 대상 Service에 Ready 엔드포인트가 없음 | ❌ (대상 readiness) |
-| `ERROR:EXEC` | exec 실패 | ❌ (권한·컨테이너 이름·bash) |
-
-- 종료 코드: `0` 모두 기대대로 · `1` 기대와 다르거나 판단 불가(필수 서비스 파드 없음, 검사 0개 포함) · `2` 클러스터 조회 실패(권한·연결 — "파드 없음"으로 착각하지 않게 바로 멈춤)
-- 필수 서비스: catalog·booking·user·payment. gateway는 Cognito 전에는 없어도 되고, 뒤에는 `REQUIRE_GATEWAY=1`로 필수
-
-- **Cognito 뒤(gateway 배포 후) 다시 실행**: `gateway → payment BLOCKED`(인계 #14 완료 조건), `gateway → catalog·booking·user OPEN`, 그리고 다른 서비스 → gateway가 **BLOCKED**인지(ALB 대역만 허용)도 같이 본다(20개 검사)
-- **ALB → gateway 실경로는 `np-check.sh`가 보지 않는다**(스크립트는 앱 파드끼리만). public 서브넷 대역 규칙은 아래로 따로 확인한다 — 인계 #14 완료 조건
-  ```bash
-  kubectl -n cinema-staging get pods -l app.kubernetes.io/name=gateway -o wide     # gateway 파드 IP
-  aws elbv2 describe-target-health --target-group-arn "$(aws elbv2 describe-target-groups \
-    --query "TargetGroups[?contains(TargetGroupName,'cinemast-gateway')].TargetGroupArn | [0]" --output text)" \
-    --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output text   # 파드 IP healthy
-  curl -sS -o /dev/null -w '%{http_code}\n' "https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api/movies"   # 200 (CAT-01, 인증 없음)
-  ```
-  대상 그룹 이름은 LB Controller가 `k8s-cinemast-gateway-…`처럼 줄여 만든다. 못 찾으면 `aws elbv2 describe-target-groups --query 'TargetGroups[].TargetGroupName'`으로 확인
-- **허용 대역이 ALB 서브넷과 정확히 같은지** 대조한다. healthy·200은 "너무 좁은" 허용만 잡고 "너무 넓은" 허용(예: VPC CIDR로 되돌아감)은 못 잡는다
-  ```bash
-  grep '^public_subnets' infra/terraform/envs/staging/staging.tfvars                # ① 기준: ["10.20.0.0/24", "10.20.1.0/24"]
-  kubectl -n cinema-staging get networkpolicy \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{..ipBlock.cidr}{"\n"}{end}'   # ② ipBlock은 gateway 정책에만, ①과 같은 2개
-  aws ec2 describe-subnets --subnet-ids $(aws elbv2 describe-load-balancers \
-    --query "LoadBalancers[?contains(LoadBalancerName,'cinemast-gateway')].AvailabilityZones[].SubnetId" --output text) \
-    --query 'Subnets[].CidrBlock' --output text                                    # ③ 실제 ALB 서브넷 = ①
-  ```
-  판정: ①·②·③이 같은 두 CIDR이고, ②에서 gateway 밖의 정책에 ipBlock이 없으면 ✅. ②가 더 넓으면(`10.20.0.0/16` 등) gitops `base/gateway/networkpolicy.yaml`을 고친다. ③이 다르면 ALB 서브넷 태그를 확인한다(아래 표 마지막 줄). ALB 이름도 `k8s-cinemast-gateway-…`이고, 못 찾으면 `aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'`으로 확인
-- Prometheus Targets가 모두 UP이면 `monitoring` 허용은 확인된 것(6-D-1)
-- BLOCKED는 연결이 버려져 `TIMEOUT`(기본 3초) 뒤에 나온다 → 전체 1분 안팎
-
-| 증상 | 원인 | 해결 |
-| --- | --- | --- |
-| 허용인데 BLOCKED (서비스 간 503·타임아웃) | 호출하는 파드 라벨이 `app.kubernetes.io/name`과 다름, 허용 규칙 누락 | 그 서비스 `networkpolicy.yaml`에 규칙 추가 PR + 런타임 계약 6장 표 먼저 |
-| 차단이어야 하는데 OPEN | 정책 에이전트가 안 돎(`aws-eks-nodeagent` 없음)·VPC CNI 애드온 설정 | `enableNetworkPolicy` 확인(3.1.2), 노드 재기동 뒤 다시 |
-| 종료 코드 2 `kubectl get pods 실패` | 자격 증명 만료·노드 꺼짐·권한 | `cinema-admin` 다시 로그인, `cluster-scale.sh status` |
-| `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
-| `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
-| gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
 ### 6-D. 블루/그린 배포·자동 롤백 확인 (3.1.6, OPS-03·04)
 
 코드: SeatSAC-gitops `base/{booking,gateway}/rollout.yaml` · `analysis/` (AnalysisTemplate + 분석 트래픽 k6 `analysis/smoke/`) · `base/{booking,gateway}/networkpolicy.yaml`(`rollout-smoke` 허용). Terraform 변경 없음
@@ -854,7 +868,91 @@ kubectl -n cinema-staging get jobs | grep -i preview-traffic                    
 | AnalysisRun `Error`(Failed 아님) | Prometheus 주소·쿼리 오류 | `kubectl -n cinema-staging describe analysisrun <이름>` 메시지 |
 | booking·gateway가 동시에 preview | 블루/그린 동시 금지(노드 2대) | build-push가 booking만 커밋. 사람 PR도 하나씩 |
 
-### 6-B. SQS·Lambda (3.1.8·3.1.9) — ⬜
+### 6-E. NetworkPolicy 허용 목록 확인 (3.1.13, OPS-15)
+
+코드: SeatSAC-gitops `base/common/default-deny-ingress.yaml`(앱 namespace 인바운드 기본 거부) · `base/{svc}/networkpolicy.yaml`(허용) · 확인 스크립트 `infra/scripts/np-check.sh`. 집행은 VPC CNI 네트워크 정책 에이전트(`enableNetworkPolicy = "true"`, 3.1.2). Terraform 변경 없음
+
+| 호출하는 쪽 → | 허용 대상 (8080) | 근거 |
+| --- | --- | --- |
+| ALB (public 서브넷 `10.20.0.0/24`·`10.20.1.0/24`) | gateway | CloudFront `/api` → ALB → gateway |
+| gateway | catalog · booking · user | 라우팅 |
+| catalog | booking | 잔여 좌석 `GET /internal/screenings/seat-counts` |
+| booking | catalog · payment | 회차 확인 · 결제 |
+| user | booking · catalog | 예매 내역 · 회차 요약·극장 검증 |
+| payment | (없음) | 호출하는 쪽이 아니다 |
+| 분석 Job `rollout-smoke` | booking · gateway (preview) | 3.1.6 |
+| `monitoring` namespace | 전체 | Prometheus 수집 |
+
+```bash
+# 터미널 A (cinema-admin, 노드 켜짐)
+kubectl get daemonset -n kube-system aws-node -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'   # aws-node aws-eks-nodeagent (정책 에이전트)
+kubectl -n cinema-staging get networkpolicy                  # Cognito 전: default-deny-ingress + catalog·booking·user·payment-ingress 4개 (gateway 앱이 아직 없음) · 뒤: + gateway-ingress = 5개
+infra/scripts/np-check.sh                                    # 서비스 파드 안에서 서로 8080에 붙어 본다 (get·exec만, 읽기)
+# Cognito 뒤(gateway 배포 후): REQUIRE_GATEWAY=1 infra/scripts/np-check.sh   — gateway 파드가 없으면 실패
+```
+
+기대(gateway는 Cognito 전이라 건너뜀):
+
+```
+from     → to        기대     결과
+catalog  → booking   OPEN     OPEN     ✅
+catalog  → user      BLOCKED  BLOCKED  ✅
+catalog  → payment   BLOCKED  BLOCKED  ✅
+booking  → catalog   OPEN     OPEN     ✅
+booking  → user      BLOCKED  BLOCKED  ✅
+booking  → payment   OPEN     OPEN     ✅
+user     → catalog   OPEN     OPEN     ✅
+user     → booking   OPEN     OPEN     ✅
+user     → payment   BLOCKED  BLOCKED  ✅
+payment  → catalog   BLOCKED  BLOCKED  ✅
+payment  → booking   BLOCKED  BLOCKED  ✅
+payment  → user      BLOCKED  BLOCKED  ✅
+모두 기대대로 (12개 검사, 런타임 계약 6장)
+```
+
+| 결과 | 뜻 | 판정 |
+| --- | --- | --- |
+| `OPEN` | 연결 성공 | 허용 대상이면 ✅ |
+| `BLOCKED` | **시간 초과**(timeout 종료 코드 124) — VPC CNI 정책은 패킷을 버리므로 차단은 시간 초과로 보인다 | 차단 대상이면 ✅ |
+| `ERROR:DNS` | 파드 안에서 서비스 이름이 안 풀림 | 정책 판단 불가 → ❌ (CoreDNS·Service 이름 확인) |
+| `ERROR:REFUSED` | 연결 거부 — 대상이 8080에서 안 듣고 있음 | ❌ (대상 파드 상태) |
+| `ERROR:NOT_READY` | 대상 Service에 Ready 엔드포인트가 없음 | ❌ (대상 readiness) |
+| `ERROR:EXEC` | exec 실패 | ❌ (권한·컨테이너 이름·bash) |
+
+- 종료 코드: `0` 모두 기대대로 · `1` 기대와 다르거나 판단 불가(필수 서비스 파드 없음, 검사 0개 포함) · `2` 클러스터 조회 실패(권한·연결 — "파드 없음"으로 착각하지 않게 바로 멈춤)
+- 필수 서비스: catalog·booking·user·payment. gateway는 Cognito 전에는 없어도 되고, 뒤에는 `REQUIRE_GATEWAY=1`로 필수
+
+- **Cognito 뒤(gateway 배포 후) 다시 실행**: `gateway → payment BLOCKED`(인계 #14 완료 조건), `gateway → catalog·booking·user OPEN`, 그리고 다른 서비스 → gateway가 **BLOCKED**인지(ALB 대역만 허용)도 같이 본다(20개 검사)
+- **ALB → gateway 실경로는 `np-check.sh`가 보지 않는다**(스크립트는 앱 파드끼리만). public 서브넷 대역 규칙은 아래로 따로 확인한다 — 인계 #14 완료 조건
+  ```bash
+  kubectl -n cinema-staging get pods -l app.kubernetes.io/name=gateway -o wide     # gateway 파드 IP
+  aws elbv2 describe-target-health --target-group-arn "$(aws elbv2 describe-target-groups \
+    --query "TargetGroups[?contains(TargetGroupName,'cinemast-gateway')].TargetGroupArn | [0]" --output text)" \
+    --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output text   # 파드 IP healthy
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api/movies"   # 200 (CAT-01, 인증 없음)
+  ```
+  대상 그룹 이름은 LB Controller가 `k8s-cinemast-gateway-…`처럼 줄여 만든다. 못 찾으면 `aws elbv2 describe-target-groups --query 'TargetGroups[].TargetGroupName'`으로 확인
+- **허용 대역이 ALB 서브넷과 정확히 같은지** 대조한다. healthy·200은 "너무 좁은" 허용만 잡고 "너무 넓은" 허용(예: VPC CIDR로 되돌아감)은 못 잡는다
+  ```bash
+  grep '^public_subnets' infra/terraform/envs/staging/staging.tfvars                # ① 기준: ["10.20.0.0/24", "10.20.1.0/24"]
+  kubectl -n cinema-staging get networkpolicy \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{..ipBlock.cidr}{"\n"}{end}'   # ② ipBlock은 gateway 정책에만, ①과 같은 2개
+  aws ec2 describe-subnets --subnet-ids $(aws elbv2 describe-load-balancers \
+    --query "LoadBalancers[?contains(LoadBalancerName,'cinemast-gateway')].AvailabilityZones[].SubnetId" --output text) \
+    --query 'Subnets[].CidrBlock' --output text                                    # ③ 실제 ALB 서브넷 = ①
+  ```
+  판정: ①·②·③이 같은 두 CIDR이고, ②에서 gateway 밖의 정책에 ipBlock이 없으면 ✅. ②가 더 넓으면(`10.20.0.0/16` 등) gitops `base/gateway/networkpolicy.yaml`을 고친다. ③이 다르면 ALB 서브넷 태그를 확인한다(아래 표 마지막 줄). ALB 이름도 `k8s-cinemast-gateway-…`이고, 못 찾으면 `aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'`으로 확인
+- Prometheus Targets가 모두 UP이면 `monitoring` 허용은 확인된 것(6-D-1)
+- BLOCKED는 연결이 버려져 `TIMEOUT`(기본 3초) 뒤에 나온다 → 전체 1분 안팎
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 허용인데 BLOCKED (서비스 간 503·타임아웃) | 호출하는 파드 라벨이 `app.kubernetes.io/name`과 다름, 허용 규칙 누락 | 그 서비스 `networkpolicy.yaml`에 규칙 추가 PR + 런타임 계약 6장 표 먼저 |
+| 차단이어야 하는데 OPEN | 정책 에이전트가 안 돎(`aws-eks-nodeagent` 없음)·VPC CNI 애드온 설정 | `enableNetworkPolicy` 확인(3.1.2), 노드 재기동 뒤 다시 |
+| 종료 코드 2 `kubectl get pods 실패` | 자격 증명 만료·노드 꺼짐·권한 | `cinema-admin` 다시 로그인, `cluster-scale.sh status` |
+| `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
+| `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
+| gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 

@@ -146,6 +146,13 @@ variable "cloudfront_price_class" {
   default     = "PriceClass_200"
 }
 
+# ---- 3.1.9 알림 큐 · booking Pod Identity --------------------------------
+variable "app_namespace" {
+  description = "앱 namespace. booking ServiceAccount(Pod Identity 연결)가 여기 있다. envs/staging-k8s의 app_namespace와 같은 값"
+  type        = string
+  default     = "cinema-staging"
+}
+
 # ---- 3.1.12 DB 계정 생성 Job ------------------------------------------
 variable "ops_namespace" {
   description = "관리자 전용 namespace(팀원 조회 범위 밖). DB 계정 생성 Job·그 입력 Secret이 여기 있다. envs/staging-k8s의 ops_namespace와 같은 값"

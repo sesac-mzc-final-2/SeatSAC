@@ -6,3 +6,15 @@ app:
     booking-url: http://localhost:8082
     user-url: http://localhost:8083
     payment-url: http://localhost:8084
+  outbox:
+    relay-enabled: true          # 로컬은 ElasticMQ가 있으니 켠다
+  sqs:
+    notification-queue-url: http://localhost:9324/queue/cinema-staging-notification-events
+
+# ElasticMQ (infra/compose). 자격 증명 값은 쓰이지 않지만 SDK가 요구한다
+spring.cloud.aws:
+  region.static: ap-northeast-2
+  credentials:
+    access-key: local
+    secret-key: local
+  sqs.endpoint: http://localhost:9324

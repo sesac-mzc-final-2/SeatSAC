@@ -56,4 +56,4 @@ kubeconfig
 !frontend/.env.example
 
 # Vite 의존성 사전 번들 캐시 (보통 node_modules/.vite, 프로젝트 루트에 생길 때도 있음)
-frontend/.vite/
+.vite/

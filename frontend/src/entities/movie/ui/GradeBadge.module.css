@@ -1,0 +1,36 @@
+.rating {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+}
+.rating[data-grade="ALL"] {
+  background: #43955d;
+  font-size: 8px;
+}
+.rating[data-grade="12"] {
+  background: #3b88c6;
+}
+.rating[data-grade="15"] {
+  background: #dc9237;
+}
+.rating[data-grade="19"] {
+  background: #c9464b;
+  font-size: 8px;
+}
+.sm {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+.sm[data-grade="ALL"],
+.sm[data-grade="19"] {
+  font-size: 7px;
+}

@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    archive = {
+      source  = "hashicorp/archive" # 3.1.16 Pre sign-up Lambda 코드 zip (cognito.tf)
+      version = "~> 2.7"
+    }
   }
 
   # 버킷 이름은 backend.hcl 에서: terraform init -backend-config=backend.hcl

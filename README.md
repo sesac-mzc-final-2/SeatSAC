@@ -89,7 +89,7 @@ seatsac/
 | --- | --- | --- |
 | JDK | 21 (Temurin 권장) | `java -version` |
 | Docker Desktop | 최신 | `docker compose version` |
-| Node.js | 20 LTS 이상 (frontend 담당) | `node -v` |
+| Node.js | 22.22 이상 (frontend 담당 — jsdom 30 요구, CI·배포는 24) | `node -v` |
 | Python | 3.12 (ai·lambdas) | `python3 --version` |
 | AWS CLI v2 | 클러스터 확인용 | `aws --version` |
 | kubectl | EKS 버전 ±1 | `kubectl version --client` |

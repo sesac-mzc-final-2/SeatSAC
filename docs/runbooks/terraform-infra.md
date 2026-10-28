@@ -954,9 +954,9 @@ payment  → user      BLOCKED  BLOCKED  ✅
 | `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
 | gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
 
-## 7. staging 5) Cognito·CloudFront·S3 (3.1.11) — ⬜
+## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
-코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito(3.3.x)는 `cognito.tf`에 따로 온다.
+코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito는 `cognito.tf`(3.1.16, 7-6).
 
 | 항목 | 값 |
 | --- | --- |
@@ -1004,7 +1004,7 @@ terraform apply plan.out
 | `FRONTEND_BUCKET` | `frontend_github_variables` 출력 |
 | `CLOUDFRONT_DISTRIBUTION_ID` | 〃 |
 | `VITE_COGNITO_REDIRECT_URI` | 〃 (`https://<배포 도메인>/callback`). Cognito 앱 클라이언트 콜백 URL에도 같은 값 |
-| `VITE_COGNITO_AUTHORITY` · `VITE_COGNITO_CLIENT_ID` · `VITE_COGNITO_DOMAIN` | `cognito.tf`(3.3.x) 출력 |
+| `VITE_COGNITO_AUTHORITY` · `VITE_COGNITO_CLIENT_ID` · `VITE_COGNITO_DOMAIN` | 〃 (3.1.16 Cognito apply 뒤 출력에 생긴다, 7-6) |
 
 Secret `AWS_FRONTEND_DEPLOY_ROLE_ARN`은 2-4에서 이미 등록했다.
 
@@ -1056,6 +1056,102 @@ aws s3api get-public-access-block --bucket "$(terraform output -raw frontend_buc
 | `frontend-deploy` `AssumeRoleWithWebIdentity` 거부 | main이 아닌 ref에서 실행 / Secret 미등록 | main에서 실행 |
 | `frontend-deploy` `cloudfront:CreateInvalidation` 거부 | `frontend_distribution_ids`에 다른 ID | 7-2 |
 | 새 화면이 안 보임 | 브라우저가 옛 index.html을 메모리 캐시 | 무효화 완료 확인 후 강력 새로고침. CloudFront는 index.html을 캐시하지 않는다 |
+
+### 7-6. Cognito 사용자 풀 · Pre sign-up · gateway 활성화 (3.1.16, ADR-37·63)
+
+코드: `envs/staging/cognito.tf` · `lambdas/cognito-presignup/handler.py` · `envs/staging-k8s/staging-k8s.tfvars`(`cognito_enabled = true`). gitops 변경 없음(`gateway-config`가 이미 `${COGNITO_ISSUER_URI}`·`${COGNITO_CLIENT_ID}`를 쓴다)
+
+| 만드는 것 | 이름·값 |
+| --- | --- |
+| 사용자 풀 | `cinema-staging-users` · 이메일 로그인(대소문자 무시) · 가입 필수 email·name · 비밀번호 8자(소문자·숫자) · 삭제 보호 끔(재생성 리허설) |
+| 앱 클라이언트 | `cinema-staging-web` · 공개(시크릿 없음) · 코드 + PKCE · 범위 `openid email profile aws.cognito.signin.user.admin` · 콜백 `https://<배포 도메인>/callback`·`http://localhost:5173/callback` · 로그아웃 `…/` · Access·ID 60분, Refresh 7일 |
+| Hosted UI 도메인 | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` (클래식 Hosted UI) |
+| 그룹 | `ADMIN` → gateway `X-User-Role: ADMIN` |
+| Pre sign-up Lambda | `cinema-staging-cognito-presignup`(Python 3.12, arm64) — Hosted UI 가입을 자동 확인(메일 발송 없음). 로그 7일 |
+
+**순서** (gateway 이미지 태그가 `CHANGE_ME`라 Application보다 먼저 태그를 넣는다)
+
+1. SeatSAC PR 머지 → **7-6-1** `envs/staging` apply
+2. Actions → `build-push` → `services=gateway` 수동 실행(gitops `overlays/staging/gateway/image-tag`에 태그 커밋)
+3. **7-6-2** `envs/staging-k8s` apply(`cognito_enabled = true`) → gateway Application → 파드·Ingress(ALB)
+4. 7-4 CloudFront `/api` → 7-3 Variables 3개 추가 → `frontend-deploy` → 7-5 확인
+5. 6-E `REQUIRE_GATEWAY=1 infra/scripts/np-check.sh` · ALB → gateway 실경로·대역 대조(인계 #14)
+
+#### 7-6-1. envs/staging apply
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명). 최신 main
+cd infra/terraform/envs/staging
+git pull && git log -1 --oneline
+terraform init -backend-config=backend.hcl            # 새 프로바이더 hashicorp/archive 설치 → .terraform.lock.hcl 바뀜
+terraform providers lock -platform=darwin_arm64 -platform=linux_amd64   # 맥·CI 둘 다의 해시
+git diff --stat .terraform.lock.hcl                    # archive 블록이 추가됐으면 PR로 커밋(처음 한 번)
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: aws_cognito_user_pool · _client · _domain · _user_group 각 1 · aws_lambda_function 1 · aws_lambda_permission 1
+#         aws_iam_role 1 · aws_iam_role_policy 1 · aws_cloudwatch_log_group 1 → 9 to add, 0 change, 0 destroy
+terraform apply plan.out && rm -f plan.out
+terraform output -json frontend_github_variables | jq 'keys'     # 6개 (값은 7-3에서 Variables로)
+```
+
+- `InvalidParameterException … Domain already exists`: 접두사 `cinema-staging`을 다른 계정이 쓰고 있다 → `staging.tfvars`에 `cognito_domain_prefix = "cinema-staging-<짧은 접미사>"` → 다시 plan. 런타임 계약 3장 `VITE_COGNITO_DOMAIN`도 같이 고친다
+- 출력의 사용자 풀 ID·클라이언트 ID는 비밀이 아니지만(화면에 들어간다) 사용자 풀 ID에는 리전만 있다. 계정 ID는 없다
+
+#### 7-6-2. gateway 활성화 (envs/staging-k8s)
+
+```bash
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out
+#   기대: kubernetes_config_map_v1.infra_endpoints 1 change(COGNITO_ISSUER_URI·COGNITO_CLIENT_ID 채움)
+#         helm_release.argocd_apps 1 change(cinema-gateway Application 추가). destroy 0
+terraform apply plan.out && rm -f plan.out
+
+# 터미널 A
+kubectl -n cinema-staging get cm cinema-infra-endpoints \
+  -o go-template='{{range $k, $v := .data}}{{$k}}{{"\t"}}{{if $v}}set{{else}}EMPTY{{end}}{{"\n"}}{{end}}'   # COGNITO_* = set
+kubectl -n argocd get application cinema-gateway                  # Synced · Healthy (분석 없음: 첫 배포)
+kubectl -n cinema-staging get pods,ingress -l app.kubernetes.io/name=gateway
+kubectl -n cinema-staging get ingress gateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{"\n"}' | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'
+```
+
+- 다른 앱(catalog·booking·user·payment)은 ConfigMap이 바뀌어도 자동으로 다시 뜨지 않는다. **user**는 Cognito 값을 쓰지 않으니(엔드포인트 기본값) 그대로 둔다
+- gateway 파드가 `CreateContainerConfigError`·기동 실패면 ConfigMap `COGNITO_*`가 비었는지(apply 순서), `ImagePullBackOff`면 2번(build-push)을 안 한 것
+
+#### 7-6-3. 사용자·관리자
+
+```bash
+POOL=$(cd ../staging && terraform output -raw cognito_user_pool_id)
+# 가입은 화면(Hosted UI)에서. 관리자 지정: 가입한 이메일로
+aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" --username '<가입 이메일>' --group-name ADMIN
+aws cognito-idp list-users-in-group --user-pool-id "$POOL" --group-name ADMIN --query 'Users[].Username' --output text
+# 비밀번호 분실(메일 발송 없음): 관리자가 임시 비밀번호 설정 → 다음 로그인 때 변경
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username '<이메일>' --password '<임시>' --no-permanent
+```
+
+- 이메일·비밀번호는 PR·노션·런북에 적지 않는다. 그룹 변경은 **다음 토큰부터** 반영(다시 로그인)
+
+#### 7-6-4. 확인
+
+```bash
+DOMAIN=$(cd ../staging && terraform output -raw cloudfront_domain_name)
+HOSTED=$(cd ../staging && terraform output -raw cognito_hosted_ui_url)
+curl -s "$(cd ../staging && terraform output -raw cognito_issuer_uri)/.well-known/openid-configuration" | jq -r .issuer   # 발급자 URL
+curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/movies"        # 200 (7-4 뒤)
+curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 401 (토큰 없음)
+```
+
+- [ ] Hosted UI(`$HOSTED/login?client_id=…&response_type=code&scope=openid&redirect_uri=https://$DOMAIN/callback`)에서 가입 → 메일 확인 없이 바로 로그인
+- [ ] 화면 로그인 → `/api/users/me` 200(프로필 생성, email·name 채워짐). **503 `IDENTITY_UNAVAILABLE`**이면 화면이 `aws.cognito.signin.user.admin` 범위를 요청하지 않은 것(아래)
+- [ ] ADMIN 지정 후 다시 로그인 → `/api/admin/**` 403이 아님
+- [ ] 로그아웃 → Hosted UI 세션 종료 후 `/`로 돌아옴
+- [ ] Lambda 로그 그룹 `/aws/lambda/cinema-staging-cognito-presignup`에 가입 시각 기록
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| `/api/users/me` 503 `IDENTITY_UNAVAILABLE`, user 로그 `GetUser rejected the token` | Access Token에 `aws.cognito.signin.user.admin` 범위가 없음(화면 `scope`) | frontend `scope`에 추가(런타임 계약 3장) → 다시 로그인 |
+| 가입 후 "User is not confirmed" | Pre sign-up 연결 안 됨·Lambda 오류 | `aws cognito-idp describe-user-pool --user-pool-id $POOL --query 'UserPool.LambdaConfig'`, Lambda 로그 |
+| Hosted UI `redirect_mismatch` | 콜백 URL이 클라이언트 목록과 다름(끝 `/`·http/https) | `VITE_COGNITO_REDIRECT_URI` = `https://<배포 도메인>/callback` |
+| 모든 API 401 | gateway issuer·client_id와 토큰이 다름(풀을 다시 만들었는데 ConfigMap 그대로) | 7-6-2 다시 apply → ArgoCD gateway **Restart** |
+| `/api/admin/**` 403 | 그룹 지정 전 토큰 | 로그아웃 → 다시 로그인 |
 
 ## 8. staging 6) DB 스키마·계정·K8s Secret·시드 (3.1.12)
 

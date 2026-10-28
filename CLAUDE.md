@@ -159,7 +159,7 @@
 | 다른 서비스 주소·타임아웃 | `APP_SERVICES_{NAME}_URL`, `_CONNECT_TIMEOUT`, `_READ_TIMEOUT` | `APP_SERVICES_PAYMENT_URL=http://payment:8080` |
 | 인증 | ⚠️ `APP_COGNITO_ISSUER_URI`, `APP_COGNITO_CLIENT_ID` (gateway 앱 설정 `app.cognito.*`, Spring 표준 `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI`는 쓰지 않음. 03a `APP_JWT_SECRET`·`jwt-secret` 삭제) | — |
 | AWS | SDK 표준 `AWS_REGION=ap-northeast-2`. 자격 증명은 Pod Identity, 액세스 키 금지 | — |
-| frontend | `VITE_` (빌드에 포함 = 공개 값만) | `VITE_API_BASE_URL=/api`, `VITE_COGNITO_AUTHORITY` |
+| frontend | `VITE_` (빌드에 포함 = 공개 값만). 개발 전용(빌드에 안 들어감): `DEV_API_PROXY` — Vite 프록시 `/api` 대상(기본 `http://localhost:8080`, 목 서버는 `npm run dev:mock`) | `VITE_API_BASE_URL=/api`, `VITE_COGNITO_AUTHORITY` |
 | K8s Secret (Terraform 생성) | `{service}-secrets`(앱), `{service}-migrator-secrets`(Flyway Job만) | `booking-secrets` |
 | ConfigMap | `{service}-config`(gitops, 엔드포인트는 `${키}`만), ⚠️ `cinema-infra-endpoints`(Terraform, 엔드포인트 — 키는 `docs/service-runtime-contract.md` 3장) | `${DB_HOST}` |
 | 프로필 | `local`, `staging` | `SPRING_PROFILES_ACTIVE=staging` |
@@ -389,7 +389,7 @@
 | `VITE_COGNITO_DOMAIN` | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` |
 | `VITE_COGNITO_REDIRECT_URI` | `https://{배포ID}.cloudfront.net/callback` (로컬 `http://localhost:5173/callback`) |
 
-`frontend-deploy` 워크플로가 Terraform 출력에서 값을 넣는다(GitHub Variables). 토큰은 `react-oidc-context`가 관리하고 `Authorization: Bearer`로 보낸다. 저장소는 **메모리**(`InMemoryWebStorage`, localStorage 금지). 새로고침하면 `signinRedirect`로 Cognito 세션을 이용해 다시 받는다(비밀번호 재입력 없음, ADR-63).
+`frontend-deploy` 워크플로가 Terraform 출력에서 값을 넣는다(GitHub Variables, `frontend_github_variables` 6개). ⚠️ OIDC `scope`는 **`openid email profile aws.cognito.signin.user.admin`** — user가 같은 Access Token으로 Cognito `GetUser`를 부르므로 마지막 범위가 없으면 `GET /users/me`가 503 `IDENTITY_UNAVAILABLE`(앱 클라이언트는 4개 모두 허용, 3.1.16). 토큰은 `react-oidc-context`가 관리하고 `Authorization: Bearer`로 보낸다. 저장소는 **메모리**(`InMemoryWebStorage`, localStorage 금지). 새로고침하면 `signinRedirect`로 Cognito 세션을 이용해 다시 받는다(비밀번호 재입력 없음, ADR-63).
 
 ### 4. 이미지·DB 마이그레이션
 
@@ -492,6 +492,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] NetworkPolicy 허용 목록·기본 거부 (3.1.13, gitops `base/*/networkpolicy.yaml` — gateway ALB 대역을 public 서브넷으로 좁힘, 10/27 · **런북 6-E `np-check.sh` 확인 후 체크**, gateway는 Cognito 뒤 `REQUIRE_GATEWAY=1`로 다시)
 - [ ] Compose `elasticmq-native:latest` → 버전 고정 — 김종식
 - [ ] `infra/terraform/envs/staging`에 Cognito·SQS·Pod Identity 모듈 추가 시 이 문서 3·6장 이름 그대로 — 김종식
+- [ ] Cognito 사용자 풀 `cinema-staging-users`·공개 앱 클라이언트·Hosted UI `cinema-staging`·`ADMIN` 그룹·Pre sign-up Lambda `cinema-staging-cognito-presignup` + `cognito_enabled = true`(gateway Application) (3.1.16, `envs/staging/cognito.tf` — 코드 10/28 · **런북 7-6-4 확인 후 체크**)
 
 
 ---

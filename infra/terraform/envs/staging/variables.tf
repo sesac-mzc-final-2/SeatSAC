@@ -176,3 +176,10 @@ variable "cluster_schedule_demo_start" {
     error_message = "YYYY-MM-DD 형식"
   }
 }
+
+# 3.1.16 Cognito (cognito.tf)
+variable "cognito_domain_prefix" {
+  description = "Hosted UI 도메인 접두사 → https://<접두사>.auth.<리전>.amazoncognito.com (런타임 계약 3장 VITE_COGNITO_DOMAIN). 리전 안에서 전역 고유"
+  type        = string
+  default     = "cinema-staging"
+}

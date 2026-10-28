@@ -1,0 +1,30 @@
+.wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.select {
+  max-width: 260px;
+  padding: 11px 36px 11px 14px;
+  appearance: none;
+  font-size: 12px;
+}
+.select option {
+  background: var(--color-card);
+}
+.chevron {
+  position: absolute;
+  right: 12px;
+  pointer-events: none;
+  color: var(--color-muted);
+}
+@media (max-width: 540px) {
+  .select {
+    max-width: 170px;
+    padding: 10px 29px 10px 11px;
+    font-size: 10px;
+  }
+  .chevron {
+    right: 10px;
+  }
+}

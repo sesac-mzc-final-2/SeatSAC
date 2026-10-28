@@ -56,4 +56,8 @@ server:
   shutdown: graceful
 management:
   endpoints.web.exposure.include: health,prometheus
-  endpoint.health.probes.enabled: true
+  endpoint.health.probes.enabled: true          # readiness 그룹은 readinessState만 (서비스 실행 계약 1장, DB 없음)
+  # 인계 #9 (서비스 실행 계약 1장·5장): 3.1.6 gateway 블루/그린 분석·3.1.7 대시보드가
+  # http_server_requests_seconds_bucket{application="gateway"} 에 의존한다. 없으면 분석이 지표를 못 찾아 항상 abort
+  metrics.tags.application: gateway
+  metrics.distribution.percentiles-histogram.http.server.requests: true

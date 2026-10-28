@@ -18,6 +18,8 @@ __pycache__/
 .venv/
 # Terraform
 **/.terraform/
+# archive_file이 만드는 Lambda zip (3.1.16)
+infra/terraform/**/.build/
 *.tfstate
 *.tfstate.*
 *.tfplan
@@ -52,3 +54,8 @@ kubeconfig
 /load/
 # kotlin 에러 로그
 .kotlin/
+# frontend 예시 env (공개 값만) — .env.* 무시 규칙의 예외
+!frontend/.env.example
+
+# Vite 의존성 사전 번들 캐시 (보통 node_modules/.vite, 프로젝트 루트에 생길 때도 있음)
+.vite/

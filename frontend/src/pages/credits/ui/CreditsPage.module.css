@@ -1,0 +1,140 @@
+.hero {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  align-items: center;
+  gap: 28px;
+}
+.tmdb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 128px;
+  height: 88px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: #15171d;
+  color: var(--color-text);
+}
+.tmdb:hover {
+  border-color: #4d515d;
+}
+.tmdb span {
+  font-size: 22px;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+}
+.tmdb small {
+  margin-top: 3px;
+  color: var(--color-muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+}
+.heading {
+  margin-bottom: 9px;
+  font-size: 20px;
+  letter-spacing: -0.035em;
+}
+.disclaimer {
+  margin-bottom: 9px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 16px 0;
+}
+.card {
+  min-height: 190px;
+}
+.card > p {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.card .sub {
+  margin-top: 12px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.provenance {
+  font-weight: 700;
+}
+.team {
+  padding-bottom: 24px;
+}
+.teamHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.teamGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 21px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.teamGrid > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  min-height: 118px;
+  padding: 18px;
+  border-left: 1px solid var(--color-border);
+}
+.teamGrid > div:first-child {
+  border-left: 0;
+}
+.teamGrid span {
+  color: var(--color-muted);
+  font: 11px ui-monospace, monospace;
+}
+.teamGrid strong {
+  font-size: 15px;
+}
+.teamGrid small {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 28px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.back:hover {
+  color: var(--color-text);
+}
+@media (max-width: 800px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 19px;
+  }
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .teamGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .teamGrid > div:nth-child(odd) {
+    border-left: 0;
+  }
+  .teamGrid > div:nth-child(n + 3) {
+    border-top: 1px solid var(--color-border);
+  }
+}
+@media (max-width: 540px) {
+  .teamGrid > div {
+    min-height: 102px;
+    padding: 15px;
+  }
+}

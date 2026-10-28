@@ -1,0 +1,68 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 0 23px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--t-color),
+    border-color var(--t-color),
+    color var(--t-color),
+    transform var(--t-color);
+}
+.button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.button:disabled,
+.button[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.primary {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 700;
+}
+.primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+.secondary {
+  background: var(--color-card);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+.secondary:hover:not(:disabled) {
+  background: var(--color-card-hover);
+  border-color: #4d515d;
+}
+.ghost {
+  background: #ffffff08;
+  color: var(--color-text);
+  border-color: #ffffff30;
+}
+.ghost:hover:not(:disabled) {
+  background: #ffffff14;
+}
+.lg {
+  min-height: 50px;
+  padding: 0 28px;
+  font-size: 15px;
+}
+.sm {
+  min-height: 38px;
+  padding: 0 15px;
+  font-size: 13px;
+  gap: 8px;
+}
+.block {
+  width: 100%;
+}

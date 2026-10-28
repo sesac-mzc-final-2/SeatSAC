@@ -128,7 +128,7 @@
 | 다른 서비스 주소·타임아웃 | `APP_SERVICES_{NAME}_URL`, `_CONNECT_TIMEOUT`, `_READ_TIMEOUT` | `APP_SERVICES_PAYMENT_URL=http://payment:8080` |
 | 인증 | ⚠️ `APP_COGNITO_ISSUER_URI`, `APP_COGNITO_CLIENT_ID` (gateway 앱 설정 `app.cognito.*`, Spring 표준 `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI`는 쓰지 않음. 03a `APP_JWT_SECRET`·`jwt-secret` 삭제) | — |
 | AWS | SDK 표준 `AWS_REGION=ap-northeast-2`. 자격 증명은 Pod Identity, 액세스 키 금지 | — |
-| frontend | `VITE_` (빌드에 포함 = 공개 값만) | `VITE_API_BASE_URL=/api`, `VITE_COGNITO_AUTHORITY` |
+| frontend | `VITE_` (빌드에 포함 = 공개 값만). 개발 전용(빌드에 안 들어감): `DEV_API_PROXY` — Vite 프록시 `/api` 대상(기본 `http://localhost:8080`, 목 서버는 `npm run dev:mock`) | `VITE_API_BASE_URL=/api`, `VITE_COGNITO_AUTHORITY` |
 | K8s Secret (Terraform 생성) | `{service}-secrets`(앱), `{service}-migrator-secrets`(Flyway Job만) | `booking-secrets` |
 | ConfigMap | `{service}-config`(gitops, 엔드포인트는 `${키}`만), ⚠️ `cinema-infra-endpoints`(Terraform, 엔드포인트 — 키는 `docs/service-runtime-contract.md` 3장) | `${DB_HOST}` |
 | 프로필 | `local`, `staging` | `SPRING_PROFILES_ACTIVE=staging` |

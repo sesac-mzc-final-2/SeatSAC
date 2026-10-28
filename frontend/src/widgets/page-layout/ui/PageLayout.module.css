@@ -1,0 +1,18 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.main {
+  flex: 1 0 auto;
+  min-height: 65vh;
+  padding-top: 44px;
+  padding-bottom: 56px;
+  animation: pageReveal 0.3s ease both;
+}
+@media (max-width: 540px) {
+  .main {
+    padding-top: 31px;
+    padding-bottom: 36px;
+  }
+}

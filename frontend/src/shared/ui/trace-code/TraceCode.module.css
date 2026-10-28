@@ -1,0 +1,37 @@
+.wrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+}
+.code {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.code:hover {
+  text-decoration: underline;
+}
+.code code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--color-text);
+}
+.copied {
+  font-size: 12px;
+  color: var(--color-primary);
+}
+.failed {
+  font-size: 12px;
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+.failed code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--color-text);
+  user-select: all;
+}

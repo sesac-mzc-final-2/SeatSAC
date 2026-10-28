@@ -1,0 +1,133 @@
+.page {
+  /* 히어로가 헤더 바로 아래 붙도록 레이아웃 기본 여백을 줄인다 */
+  margin-top: -16px;
+}
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 19px;
+  margin-top: 22px;
+  padding: 19px 24px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #14161b;
+}
+.bannerIcon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 43px;
+  height: 43px;
+  border: 1px solid #383c47;
+  border-radius: 9px;
+  color: #c0c4ce;
+}
+.bannerCopy h2 {
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.bannerCopy p {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.miniSeats {
+  display: grid;
+  grid-template-columns: repeat(6, 12px);
+  gap: 5px;
+  margin-left: auto;
+  margin-right: 32px;
+}
+.miniSeats span {
+  width: 12px;
+  height: 12px;
+  border: 1px solid #484d59;
+  border-radius: 3px;
+}
+.miniSeats .held {
+  background: repeating-linear-gradient(135deg, #4a4e59 0, #4a4e59 2px, #333640 2px, #333640 4px);
+}
+.bannerAction {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.bannerAction:hover {
+  color: #fff;
+}
+.note {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 45px;
+  padding: 34px 0 0;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.note > span:first-child {
+  display: flex;
+  color: #b6bbc6;
+}
+.noteTag {
+  margin-left: auto;
+  padding: 5px 8px;
+  border: 1px solid #343742;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+@media (max-width: 1050px) {
+  .miniSeats {
+    display: none;
+  }
+  .bannerAction {
+    margin-left: auto;
+  }
+}
+@media (max-width: 800px) {
+  .bannerCopy p span {
+    display: none;
+  }
+  .note p span {
+    display: none;
+  }
+}
+@media (max-width: 540px) {
+  .page {
+    margin-top: -13px;
+  }
+  .banner {
+    gap: 11px;
+    margin-top: 16px;
+    padding: 16px 15px;
+  }
+  .bannerIcon {
+    width: 33px;
+    height: 33px;
+    border-radius: 7px;
+  }
+  .bannerCopy h2 {
+    margin-bottom: 5px;
+    font-size: 11px;
+  }
+  .bannerCopy p {
+    font-size: 9px;
+  }
+  .bannerAction {
+    gap: 0;
+    font-size: 0;
+  }
+  .note {
+    margin-top: 31px;
+    padding-top: 23px;
+    font-size: 10px;
+  }
+  .noteTag {
+    padding: 4px 6px;
+    font-size: 8px;
+  }
+}

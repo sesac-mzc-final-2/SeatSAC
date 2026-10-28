@@ -1,0 +1,244 @@
+.hero {
+  position: relative;
+  height: 390px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid #272b33;
+  border-radius: var(--radius);
+  background: #13151a;
+}
+.art {
+  position: absolute;
+  right: 0;
+  width: 68%;
+  height: 100%;
+  background-position: 50% 35%;
+  background-size: cover;
+  animation: heroReveal 0.5s ease both;
+}
+.fade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, #15171d 0%, #15171dfb 24%, #15171deb 34%, #15171d70 57%, #15171d05 85%),
+    linear-gradient(0deg, #101217b0, transparent 45%);
+}
+.content {
+  position: relative;
+  z-index: 1;
+  width: 62%;
+  padding: 33px 44px;
+}
+.kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #bbbfc8;
+  font-size: 12px;
+}
+.kicker::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #c4c8d1;
+}
+.headline {
+  margin: 17px 0 16px;
+  font-size: 43px;
+  font-weight: 730;
+  line-height: 1.25;
+  letter-spacing: -1.8px;
+}
+.headline span {
+  display: block;
+}
+.description {
+  color: #b0b5bf;
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-line;
+}
+.movie {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 23px;
+  font-size: 13px;
+}
+.movieEn {
+  margin-left: 2px;
+  color: #a9aeb9;
+  font-size: 12px;
+}
+.buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 17px;
+}
+.buttons > a {
+  min-height: 42px;
+  padding: 0 20px;
+  font-size: 13px;
+}
+.slider {
+  position: absolute;
+  right: 33px;
+  bottom: 26px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  color: #aeb3bf;
+  font-size: 11px;
+}
+.slider b {
+  font-weight: 600;
+  color: #fff;
+}
+.arrow {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 28px;
+}
+.arrow:hover {
+  color: #fff;
+}
+.lines {
+  display: flex;
+  gap: 5px;
+  margin-right: 3px;
+}
+/* 보이는 막대는 얇게, 실제 터치 영역은 28px 높이로 (막대는 ::after) */
+.line {
+  position: relative;
+  width: 20px;
+  height: 28px;
+  transition: width 0.2s;
+}
+.line::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 3px;
+  margin-top: -1.5px;
+  background: #ffffff33;
+  transition: background-color 0.2s;
+}
+.line[aria-pressed="true"] {
+  width: 32px;
+}
+.line[aria-pressed="true"]::after {
+  background: #e8e9ed;
+}
+@keyframes heroReveal {
+  from {
+    opacity: 0.6;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (max-width: 1050px) {
+  .content {
+    width: 70%;
+    padding-left: 32px;
+  }
+  .headline {
+    font-size: 39px;
+  }
+}
+@media (max-width: 800px) {
+  .content {
+    width: 80%;
+    padding-left: 27px;
+  }
+  .fade {
+    background: linear-gradient(90deg, #15171dfc, #15171da5 60%, #15171d2b);
+  }
+  .art {
+    width: 77%;
+  }
+  .slider {
+    right: 21px;
+    bottom: 20px;
+  }
+  .lines {
+    display: none;
+  }
+}
+@media (max-width: 540px) {
+  /* 긴 제목·작은 화면에서 콘텐츠가 늘어나도 아래 절대 배치된 슬라이더(44px)에 버튼이 가려지지 않게:
+     높이를 고정하지 않고 콘텐츠 아래에 슬라이더만큼 여백을 둔다 */
+  .hero {
+    height: auto;
+    min-height: 401px;
+  }
+  .content {
+    width: 100%;
+    padding: 29px 23px 76px;
+  }
+  .art {
+    width: 100%;
+    opacity: 0.62;
+    background-position: 65% 34%;
+  }
+  .fade {
+    background:
+      linear-gradient(90deg, #15171de5, #15171d45),
+      linear-gradient(0deg, #15171dfc 0%, #15171d45 80%);
+  }
+  .kicker {
+    font-size: 10px;
+  }
+  .headline {
+    margin: 22px 0 20px;
+    font-size: 34px;
+    letter-spacing: -1.1px;
+  }
+  .description {
+    font-size: 11px;
+  }
+  .movie {
+    margin-top: 24px;
+    font-size: 11px;
+  }
+  .buttons {
+    gap: 9px;
+    margin-top: 19px;
+  }
+  .buttons > a {
+    padding: 0 15px;
+    font-size: 11px;
+  }
+  .slider {
+    right: 20px;
+    bottom: 15px;
+    gap: 10px;
+  }
+  .arrow {
+    display: none;
+  }
+  .lines {
+    display: flex;
+  }
+  .lines {
+    gap: 8px;
+  }
+  .line {
+    width: 24px;
+    height: 44px;
+  }
+  .line::after {
+    height: 2px;
+    margin-top: -1px;
+  }
+  .line[aria-pressed="true"] {
+    width: 32px;
+  }
+}

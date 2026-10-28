@@ -1,0 +1,59 @@
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 5px;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted); /* 배경 대비 5.6:1 (이전 #69707e 는 3.8:1) */
+  font-size: 12px;
+}
+.step b {
+  font-size: 10px;
+  font-weight: 500;
+}
+.step svg {
+  margin-left: 8px;
+  color: #555b68;
+}
+.current {
+  color: var(--color-text);
+}
+.current b {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 700;
+}
+.done {
+  color: #b4bac5;
+}
+@media (max-width: 800px) {
+  .steps {
+    gap: 8px;
+  }
+  .step {
+    font-size: 10px;
+    gap: 6px;
+  }
+  .step svg {
+    margin-left: 2px;
+  }
+}
+@media (max-width: 540px) {
+  .steps {
+    gap: 10px;
+    width: 100%;
+  }
+  .current b {
+    width: 20px;
+    height: 20px;
+  }
+}

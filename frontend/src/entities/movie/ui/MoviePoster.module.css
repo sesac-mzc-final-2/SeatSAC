@@ -1,0 +1,85 @@
+.frame {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 11px;
+  background: var(--color-card);
+}
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.35s ease;
+}
+.fallback {
+  position: relative;
+  height: 100%;
+  padding: 28px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  text-align: center;
+  background: linear-gradient(145deg, #20232b, #12141a);
+  color: #626875;
+}
+.fallbackTitle {
+  position: relative;
+  z-index: 1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.5;
+  letter-spacing: -1px;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.fallbackNote {
+  max-width: 150px;
+  color: var(--color-muted);
+  font-size: 9px;
+  letter-spacing: 1px;
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fallbackLines {
+  position: absolute;
+  inset: 14px;
+  border: 1px solid #ffffff0d;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.compact .fallback {
+  padding: 6px;
+  gap: 5px;
+}
+.compact .fallbackTitle {
+  font-size: 9px;
+  letter-spacing: 0;
+  -webkit-line-clamp: 3;
+}
+.compact .fallback > svg,
+.compact .fallbackNote,
+.compact .fallbackLines {
+  display: none;
+}
+@media (max-width: 540px) {
+  .fallback {
+    padding: 23px 16px;
+    gap: 16px;
+  }
+  .fallbackTitle {
+    font-size: 20px;
+  }
+  .fallbackNote {
+    font-size: 8px;
+  }
+}

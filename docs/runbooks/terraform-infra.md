@@ -568,15 +568,15 @@ aws ecr initiate-layer-upload --repository-name cinema/booking --profile cinema-
 
 ### 6-B. SQS 알림 큐·DLQ·booking Pod Identity (3.1.9, OPS-07) · Lambda (3.1.8) — ⬜
 
-코드: `envs/staging/sqs.tf`(큐·DLQ·큐 정책·Pod Identity·DLQ 경보) · `variables.tf`(`app_namespace`) · `outputs.tf` · SeatSAC-gitops `base/booking/serviceaccount.yaml`·`rollout.yaml`(`serviceAccountName: booking`). 큐 URL은 이미 ConfigMap `cinema-infra-endpoints`(`SQS_NOTIFICATION_URL`, 6-C-1)에 있다 → `envs/staging-k8s` 변경 없음
+코드: `envs/staging/sqs.tf`(큐·DLQ·큐 정책·Pod Identity·경보 2개) · `variables.tf`(`app_namespace`) · `outputs.tf` · SeatSAC-gitops `base/booking/serviceaccount.yaml`·`rollout.yaml`(`serviceAccountName: booking`). 큐 URL은 이미 ConfigMap `cinema-infra-endpoints`(`SQS_NOTIFICATION_URL`, 6-C-1)에 있다 → `envs/staging-k8s` 변경 없음
 
 | 만드는 것 | 이름·값 |
 | --- | --- |
-| 알림 큐 | `cinema-staging-notification-events` · 보존 4일 · 가시성 제한 180초(Lambda 30초 × 6) · 긴 폴링 20초 · SSE-SQS |
+| 알림 큐 | `cinema-staging-notification-events` · 보존 7일(DLQ 14일보다 짧게) · 가시성 제한 180초(Lambda 30초 × 6) · 긴 폴링 20초 · SSE-SQS |
 | DLQ | `cinema-staging-notification-events-dlq` · `maxReceiveCount 3` · 보존 14일 · 알림 큐에서만 받음(redrive allow) |
 | 큐 정책 | 두 큐 모두 TLS가 아닌 요청 거부 |
-| Pod Identity | 역할 `cinema-staging-booking-pod` → `sqs:SendMessage`·`sqs:GetQueueUrl` on 알림 큐만. 연결 `cinema-staging` / ServiceAccount `booking` |
-| DLQ 경보 | `cinema-staging-notification-dlq-not-empty`: DLQ 보이는 메시지 > 0 (5분) → SNS `cinema-alerts` → 메일 |
+| Pod Identity | 역할 `cinema-staging-booking-pod`(이름 그대로, 난수 접미사 없음) → `sqs:SendMessage`·`sqs:GetQueueUrl` on 알림 큐만. 연결 `cinema-staging` / ServiceAccount `booking` |
+| 경보 2개 → SNS `cinema-alerts` → 메일 | `cinema-staging-notification-dlq-not-empty`: DLQ 메시지 > 0 (Lambda 3회 실패) · `cinema-staging-notification-oldest-2d`: 알림 큐의 가장 오래된 메시지 > 2일 (받는 쪽이 없음 — DLQ로 안 가고 7일 뒤 삭제되는 경우) |
 
 **순서**: ① SeatSAC PR 머지 → `envs/staging` apply(연결이 먼저 있어야 한다) → ② gitops PR 머지(ServiceAccount) → booking 새 파드에 자격 증명 주입. 순서가 바뀌면 파드가 자격 증명 없이 뜬다 → ArgoCD에서 booking **Restart**
 
@@ -588,8 +588,8 @@ cd infra/terraform/envs/staging
 git pull && git log -1 --oneline
 terraform init -backend-config=backend.hcl
 terraform plan -var-file=staging.tfvars -out=plan.out
-#   기대: aws_sqs_queue 2 · aws_sqs_queue_redrive_allow_policy 1 · aws_sqs_queue_policy 2 · aws_cloudwatch_metric_alarm 1
-#         module.booking_pod_identity (IAM 역할·정책·연결 등 4) → 약 10 to add, 0 change, 0 destroy
+#   기대: aws_sqs_queue 2 · aws_sqs_queue_redrive_allow_policy 1 · aws_sqs_queue_policy 2 · aws_cloudwatch_metric_alarm 2
+#         module.booking_pod_identity (IAM 역할·정책·연결 등 4) → 약 11 to add, 0 change, 0 destroy
 terraform apply plan.out && rm -f plan.out     # 저장된 plan에는 비밀 값이 평문
 terraform output -raw booking_pod_role_arn | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'
 ```
@@ -606,11 +606,12 @@ URL=$(aws sqs get-queue-url --queue-name $Q --query QueueUrl --output text)
 aws sqs get-queue-attributes --queue-url "$URL" \
   --attribute-names RedrivePolicy SqsManagedSseEnabled VisibilityTimeout MessageRetentionPeriod \
   --query 'Attributes' --output json | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g'
-#   기대: maxReceiveCount 3 · …-dlq · SqsManagedSseEnabled true · 180 · 345600
+#   기대: maxReceiveCount 3 · …-dlq · SqsManagedSseEnabled true · 180 · 604800
 aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace cinema-staging \
   --query 'associations[].[serviceAccount,associationId]' --output text       # booking 1줄
-aws cloudwatch describe-alarms --alarm-names cinema-staging-notification-dlq-not-empty \
-  --query 'MetricAlarms[].StateValue' --output text                           # OK 또는 INSUFFICIENT_DATA
+aws cloudwatch describe-alarms --alarm-names cinema-staging-notification-dlq-not-empty cinema-staging-notification-oldest-2d \
+  --query 'MetricAlarms[].[AlarmName,StateValue]' --output text              # 둘 다 OK 또는 INSUFFICIENT_DATA
+aws iam get-role --role-name cinema-staging-booking-pod --query 'Role.RoleName' --output text   # 정확한 이름(접미사 없음)
 
 # gitops PR 머지 뒤(booking 새 파드) — Pod Identity가 주입됐는지 (값은 출력하지 않는다)
 P=$(kubectl -n cinema-staging get pods -l app.kubernetes.io/name=booking -o jsonpath='{.items[*].metadata.name}'); P=${P%% *}
@@ -622,9 +623,13 @@ kubectl -n cinema-staging get pod "$P" -o jsonpath='{range .spec.containers[0].e
 - gitops PR은 booking 파드 템플릿을 바꾸므로 **블루/그린 배포 + 분석**(6-D-2)이 한 번 돈다 → 6-D-2 첫 확인을 같이 해도 된다
 - 메시지가 실제로 가는지는 릴레이를 켠 뒤(6-B-3)에 본다. 그 전에는 큐가 비어 있는 게 정상
 
-#### 6-B-3. 아웃박스 릴레이 켜기 (3.2.6, 남궁일 — SeatSAC #39 머지 뒤)
+#### 6-B-3. 아웃박스 릴레이 켜기 (3.2.6, 남궁일 — SeatSAC #39 머지 · 알림 Lambda 3.1.8 연결 뒤)
 
-릴레이 코드는 `APP_OUTBOX_RELAY_ENABLED`가 `true`일 때만 돈다(기본 `false`). 큐·권한(6-B-1·2)이 생긴 뒤 gitops PR로 켠다
+릴레이 코드는 `APP_OUTBOX_RELAY_ENABLED`가 `true`일 때만 돈다(기본 `false`). **켜는 조건: 6-B-1·2 확인 + 알림 Lambda(3.1.8) 이벤트 소스 연결 완료**
+
+- 꺼 두는 동안 확정된 예매는 아웃박스에 `PENDING`으로 남는다(DB라 사라지지 않음) → Lambda가 붙은 뒤 켜면 순서대로 보내진다. **기다리는 쪽이 안전하다**
+- Lambda 전에 켜야 하면(3.2.6 통합 확인 등): 메시지는 큐에 쌓이기만 하고 받는 쪽이 없어 **DLQ로도 가지 않는다** → 보존 7일이 지나면 SQS가 조용히 지운다. 2일째에 `…-notification-oldest-2d` 경보가 오니 그 전에 Lambda를 붙이거나 릴레이를 다시 끈다
+- 큐에서 사라진 경우의 복구: 아웃박스 행은 `SENT`로 남아 있다(릴레이가 지우지 않음) → 그 기간 행을 `PENDING`으로 되돌리면 같은 `eventId`(= `message_key`)로 다시 보내진다. DB 손 작업이라 남궁일과 함께(`UPDATE outbox_message SET status='PENDING', attempt_count=0, next_attempt_at=:now WHERE status='SENT' AND sent_at BETWEEN :from AND :to`), Lambda는 `eventId`로 중복을 무시한다
 
 ```yaml
 # SeatSAC-gitops overlays/staging/booking/kustomization.yaml  booking-config literals에 추가
@@ -641,7 +646,7 @@ aws sqs get-queue-attributes --queue-url "$URL" --attribute-names ApproximateNum
 ```
 
 - 꺼져 있던 동안 확정된 예매는 아웃박스에 `PENDING`으로 쌓여 있다가 켜는 순간 보내진다(`booking_outbox_pending`이 0으로)
-- Lambda(3.1.8)가 붙기 전에는 큐에 쌓이기만 한다(보존 4일). **큐를 비우지(purge) 않는다** — Lambda가 붙으면 그대로 처리된다
+- Lambda(3.1.8)가 붙기 전에 켰다면 큐에 쌓이기만 한다. **큐를 비우지(purge) 않는다** — 보존 7일 안에 Lambda가 붙으면 그때 처리된다(넘기면 위 복구)
 
 #### 6-B-4. 문제 해결
 
@@ -651,7 +656,8 @@ aws sqs get-queue-attributes --queue-url "$URL" --attribute-names ApproximateNum
 | `Unable to load credentials` · 파드 env에 `AWS_CONTAINER_*`가 없음 | 연결보다 파드가 먼저 뜸(웹훅은 파드 생성 때만 주입) 또는 `serviceAccountName` 없음 | apply 확인 후 ArgoCD에서 booking **Restart** |
 | `booking_notification_publish_total{result="retry"}` 계속 증가 | 큐 URL 오타·큐 없음·권한 | 로그의 오류 메시지, ConfigMap `SQS_NOTIFICATION_URL`(6-C-1) |
 | 아웃박스 행이 `FAILED` | 10회 재시도 실패(릴레이를 큐보다 먼저 켬 등) | 원인을 고친 뒤 남궁일과 `FAILED` → `PENDING` 되돌림(손 작업, 3.2.6 런북) |
-| DLQ 경보 메일 | 알림 Lambda(3.1.8)가 같은 메시지를 3번 실패 | Lambda 로그(CloudWatch)의 `eventId`로 원인 확인 → 고친 뒤 콘솔·CLI `start-message-move-task`로 DLQ → 알림 큐 재전송 |
+| DLQ 경보 메일 | 알림 Lambda(3.1.8)가 같은 메시지를 3번 실패 | Lambda 로그(CloudWatch)의 `eventId`로 원인 확인 → 고친 뒤 `aws sqs start-message-move-task --source-arn <DLQ ARN>`으로 DLQ → 알림 큐 재전송 |
+| `…-notification-oldest-2d` 경보 메일 | 받는 쪽 없음: Lambda 연결 전에 릴레이를 켬, 이벤트 소스 매핑 꺼짐·오류 | Lambda 연결(3.1.8) 또는 릴레이 끄기(`APP_OUTBOX_RELAY_ENABLED=false` gitops PR). 7일을 넘겼으면 6-B-3 복구 |
 
 - 삭제(11장): 큐를 지우면 남은 메시지도 사라진다. 다시 만들면 URL이 같으므로 앱 설정은 그대로다
 

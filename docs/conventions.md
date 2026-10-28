@@ -102,6 +102,7 @@
 | --- | --- | --- |
 | 400 | `VALIDATION_FAILED`, `SCREENING_STARTED` | 전체 / booking |
 | 401 | `UNAUTHORIZED` | gateway |
+| 401 | `TOKEN_REJECTED` | user (Cognito `GetUser`가 Access Token을 거절 — `NotAuthorizedException`, 예: `aws.cognito.signin.user.admin` 범위 없음) |
 | 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
 | 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |
@@ -110,7 +111,7 @@
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
 | 503 | `PAYMENT_RESULT_UNKNOWN` | booking |
-| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user |
+| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애. 토큰 거절은 401 `TOKEN_REJECTED`) |
 
 새 코드는 이 표와 해당 OpenAPI 응답 `description`에 함께 추가한다.
 

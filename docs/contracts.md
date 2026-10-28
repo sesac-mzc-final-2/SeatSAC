@@ -98,4 +98,4 @@
 | `booking.confirmed.v1.json` | payload 필수 3개, `userId` uuid, `traceId` pattern |
 | `seat-event.v1.json` | `traceId` pattern |
 
-<노션 반영 필요> API 명세서 v1.1의 1-3 "페이징 없는 목록은 JSON 배열" → `{items}`, 1-4 "details는 선택(배열 또는 객체)" → 항상 배열, 3-2 내부 회차 API `seatIds[]` 삭제, 5-1 프로필 생성 실패 → 503 `IDENTITY_UNAVAILABLE`, 10장 #1·#2·#6·#10 결정 표시, 부록 B에 OpenAPI 3.1·contract-check
+<노션 반영 필요> API 명세서 v1.1의 1-3 "페이징 없는 목록은 JSON 배열" → `{items}`, 1-4 "details는 선택(배열 또는 객체)" → 항상 배열, 3-2 내부 회차 API `seatIds[]` 삭제, 5-1 프로필 생성 실패 → 503 `IDENTITY_UNAVAILABLE`, 10장 #1·#2·#6·#10 결정 표시, 부록 B에 OpenAPI 3.1·contract-check. 5-1 프로필 생성 시 Cognito 토큰 거절 → 401 `TOKEN_REJECTED`, 그 밖의 실패 → 503 `IDENTITY_UNAVAILABLE`

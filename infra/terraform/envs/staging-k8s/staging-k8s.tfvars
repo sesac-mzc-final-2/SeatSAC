@@ -15,3 +15,7 @@ lbc_replicas      = 1
 # ⬇ 3.1.5 ArgoCD 차트 버전 — apply 전에 helm search로 실제 있는 버전인지 확인 (variables.tf 설명)
 argocd_chart_version      = "10.11.1"
 argocd_apps_chart_version = "2.0.7"
+
+# ⬇ 3.1.16 Cognito: envs/staging apply(cognito.tf)로 사용자 풀이 생긴 뒤 이 폴더 apply (런북 7-6)
+#   → ConfigMap COGNITO_ISSUER_URI·COGNITO_CLIENT_ID 채움 + gateway ArgoCD Application 생성
+cognito_enabled = true

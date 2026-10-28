@@ -389,7 +389,7 @@
 | `VITE_COGNITO_DOMAIN` | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` |
 | `VITE_COGNITO_REDIRECT_URI` | `https://{배포ID}.cloudfront.net/callback` (로컬 `http://localhost:5173/callback`) |
 
-`frontend-deploy` 워크플로가 Terraform 출력에서 값을 넣는다(GitHub Variables). 토큰은 `react-oidc-context`가 관리하고 `Authorization: Bearer`로 보낸다. 저장소는 **메모리**(`InMemoryWebStorage`, localStorage 금지). 새로고침하면 `signinRedirect`로 Cognito 세션을 이용해 다시 받는다(비밀번호 재입력 없음, ADR-63).
+`frontend-deploy` 워크플로가 Terraform 출력에서 값을 넣는다(GitHub Variables, `frontend_github_variables` 6개). ⚠️ OIDC `scope`는 **`openid email profile aws.cognito.signin.user.admin`** — user가 같은 Access Token으로 Cognito `GetUser`를 부르므로 마지막 범위가 없으면 `GET /users/me`가 503 `IDENTITY_UNAVAILABLE`(앱 클라이언트는 4개 모두 허용, 3.1.16). 토큰은 `react-oidc-context`가 관리하고 `Authorization: Bearer`로 보낸다. 저장소는 **메모리**(`InMemoryWebStorage`, localStorage 금지). 새로고침하면 `signinRedirect`로 Cognito 세션을 이용해 다시 받는다(비밀번호 재입력 없음, ADR-63).
 
 ### 4. 이미지·DB 마이그레이션
 
@@ -491,6 +491,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] NetworkPolicy 허용 목록·기본 거부 (3.1.13, gitops `base/*/networkpolicy.yaml` — gateway ALB 대역을 public 서브넷으로 좁힘, 10/27 · **런북 6-E `np-check.sh` 확인 후 체크**, gateway는 Cognito 뒤 `REQUIRE_GATEWAY=1`로 다시)
 - [ ] Compose `elasticmq-native:latest` → 버전 고정 — 김종식
 - [ ] `infra/terraform/envs/staging`에 Cognito·SQS·Pod Identity 모듈 추가 시 이 문서 3·6장 이름 그대로 — 김종식
+- [ ] Cognito 사용자 풀 `cinema-staging-users`·공개 앱 클라이언트·Hosted UI `cinema-staging`·`ADMIN` 그룹·Pre sign-up Lambda `cinema-staging-cognito-presignup` + `cognito_enabled = true`(gateway Application) (3.1.16, `envs/staging/cognito.tf` — 코드 10/28 · **런북 7-6-4 확인 후 체크**)
 
 
 ---

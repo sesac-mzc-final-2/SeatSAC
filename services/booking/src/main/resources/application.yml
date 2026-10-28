@@ -58,7 +58,7 @@ app:
     # 기본값이 있으면 staging ConfigMap에서 키가 빠진 것이 드러나지 않고 엉뚱한 주소로 재시도한다
     notification-queue-url: ${APP_SQS_NOTIFICATION_QUEUE_URL:}
   outbox:
-    # 큐(3.1.8)가 생기기 전에 켜면 확정마다 10회 재시도 끝에 FAILED가 되어 손으로 되살려야 한다.
+    # 큐(3.1.9)가 생기기 전에 켜면 확정마다 10회 재시도 끝에 FAILED가 되어 손으로 되살려야 한다.
     # 꺼 두면 PENDING으로 쌓여 있다가 켜는 순간 흘러간다 (booking_outbox_pending으로 보인다)
     relay-enabled: ${APP_OUTBOX_RELAY_ENABLED:false}
     relay-interval: ${APP_OUTBOX_RELAY_INTERVAL:1s}

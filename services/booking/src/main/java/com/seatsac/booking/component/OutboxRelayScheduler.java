@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 /**
  * 릴레이 주기 실행 — 파드마다 1초(런타임 계약 3장 {@code APP_OUTBOX_RELAY_INTERVAL}).
  *
- * <p>{@code APP_OUTBOX_RELAY_ENABLED=false}면 이 빈이 아예 만들어지지 않는다. 알림 큐(3.1.8)가
+ * <p>{@code APP_OUTBOX_RELAY_ENABLED=false}면 이 빈이 아예 만들어지지 않는다. 알림 큐(3.1.9)가
  * 생기기 전에 돌면 확정마다 10회 재시도 끝에 {@code FAILED}가 되어 <b>사람이 손으로 되살려야</b>
  * 한다. 꺼 두면 아웃박스에 {@code PENDING}으로 쌓여 있다가 켜는 순간 그대로 흘러간다
  * (쌓인 양은 {@code booking_outbox_pending}으로 보인다).

@@ -34,10 +34,12 @@ export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
         : selectableTheaterIds[0];
   }
 
+  // 지난 날짜(끝난 회차)는 고를 수 없으니 오늘로 보정한다 (ISO 날짜는 문자열 비교로 충분)
+  const today = todayKst();
   const rawDate = params.get("date");
   const filter: ShowtimesFilter = {
     theaterId,
-    date: isValidIsoDate(rawDate) ? rawDate : todayKst(),
+    date: isValidIsoDate(rawDate) && rawDate >= today ? rawDate : today,
     movieId: parseId(params.get("movieId")),
   };
 

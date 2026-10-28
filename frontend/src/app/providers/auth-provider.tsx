@@ -9,7 +9,7 @@ import {
   type SessionUser,
 } from "@/entities/session";
 import { configureHttpAuth } from "@/shared/api";
-import { env, isCognitoConfigured } from "@/shared/config";
+import { env, isCognitoConfigured, routes } from "@/shared/config";
 
 /**
  * Cognito Hosted UI (code + PKCE, ADR-37). 토큰은 메모리에만 둔다 (InMemoryWebStorage, ADR-63) —
@@ -56,11 +56,16 @@ interface SigninState {
   returnTo?: unknown;
 }
 
-/** Hosted UI state로 넘긴 돌아갈 경로. 같은 출처의 절대 경로만 허용한다 (열린 리다이렉트 방지) */
+/**
+ * Hosted UI state로 넘긴 돌아갈 경로. 같은 출처의 절대 경로만 허용하고(열린 리다이렉트 방지),
+ * `/callback` 자신은 제외한다 — 콜백 화면에서 다시 로그인하면 돌아갈 곳이 콜백이 돼 로딩에 머물 수 있다
+ */
 function readReturnTo(state: unknown): string | null {
   const returnTo = (state as SigninState | undefined)?.returnTo;
   if (typeof returnTo !== "string") return null;
-  return returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : null;
+  if (!returnTo.startsWith("/") || returnTo.startsWith("//")) return null;
+  if (returnTo === routes.callback() || returnTo.startsWith(`${routes.callback()}?`)) return null;
+  return returnTo;
 }
 
 const currentPath = (): string => `${window.location.pathname}${window.location.search}`;

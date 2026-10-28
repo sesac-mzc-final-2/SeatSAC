@@ -651,6 +651,209 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 - 앱 설정은 gitops PR, ArgoCD 화면에서 손으로 고친 값은 selfHeal이 되돌린다. 급할 때만 관리자가 해당 앱 auto-sync를 끄고 작업 → Git 반영 → 다시 켬
 - 로그·PR·노션에 이미지 주소·ALB DNS를 붙일 때는 계정 ID를 `<ACCOUNT_ID>`로 가린다
 
+### 6-E. NetworkPolicy 허용 목록 확인 (3.1.13, OPS-15)
+
+코드: SeatSAC-gitops `base/common/default-deny-ingress.yaml`(앱 namespace 인바운드 기본 거부) · `base/{svc}/networkpolicy.yaml`(허용) · 확인 스크립트 `infra/scripts/np-check.sh`. 집행은 VPC CNI 네트워크 정책 에이전트(`enableNetworkPolicy = "true"`, 3.1.2). Terraform 변경 없음
+
+| 호출하는 쪽 → | 허용 대상 (8080) | 근거 |
+| --- | --- | --- |
+| ALB (public 서브넷 `10.20.0.0/24`·`10.20.1.0/24`) | gateway | CloudFront `/api` → ALB → gateway |
+| gateway | catalog · booking · user | 라우팅 |
+| catalog | booking | 잔여 좌석 `GET /internal/screenings/seat-counts` |
+| booking | catalog · payment | 회차 확인 · 결제 |
+| user | booking · catalog | 예매 내역 · 회차 요약·극장 검증 |
+| payment | (없음) | 호출하는 쪽이 아니다 |
+| 분석 Job `rollout-smoke` | booking · gateway (preview) | 3.1.6 |
+| `monitoring` namespace | 전체 | Prometheus 수집 |
+
+```bash
+# 터미널 A (cinema-admin, 노드 켜짐)
+kubectl get daemonset -n kube-system aws-node -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'   # aws-node aws-eks-nodeagent (정책 에이전트)
+kubectl -n cinema-staging get networkpolicy                  # Cognito 전: default-deny-ingress + catalog·booking·user·payment-ingress 4개 (gateway 앱이 아직 없음) · 뒤: + gateway-ingress = 5개
+infra/scripts/np-check.sh                                    # 서비스 파드 안에서 서로 8080에 붙어 본다 (get·exec만, 읽기)
+# Cognito 뒤(gateway 배포 후): REQUIRE_GATEWAY=1 infra/scripts/np-check.sh   — gateway 파드가 없으면 실패
+```
+
+기대(gateway는 Cognito 전이라 건너뜀):
+
+```
+from     → to        기대     결과
+catalog  → booking   OPEN     OPEN     ✅
+catalog  → user      BLOCKED  BLOCKED  ✅
+catalog  → payment   BLOCKED  BLOCKED  ✅
+booking  → catalog   OPEN     OPEN     ✅
+booking  → user      BLOCKED  BLOCKED  ✅
+booking  → payment   OPEN     OPEN     ✅
+user     → catalog   OPEN     OPEN     ✅
+user     → booking   OPEN     OPEN     ✅
+user     → payment   BLOCKED  BLOCKED  ✅
+payment  → catalog   BLOCKED  BLOCKED  ✅
+payment  → booking   BLOCKED  BLOCKED  ✅
+payment  → user      BLOCKED  BLOCKED  ✅
+모두 기대대로 (12개 검사, 런타임 계약 6장)
+```
+
+| 결과 | 뜻 | 판정 |
+| --- | --- | --- |
+| `OPEN` | 연결 성공 | 허용 대상이면 ✅ |
+| `BLOCKED` | **시간 초과**(timeout 종료 코드 124) — VPC CNI 정책은 패킷을 버리므로 차단은 시간 초과로 보인다 | 차단 대상이면 ✅ |
+| `ERROR:DNS` | 파드 안에서 서비스 이름이 안 풀림 | 정책 판단 불가 → ❌ (CoreDNS·Service 이름 확인) |
+| `ERROR:REFUSED` | 연결 거부 — 대상이 8080에서 안 듣고 있음 | ❌ (대상 파드 상태) |
+| `ERROR:NOT_READY` | 대상 Service에 Ready 엔드포인트가 없음 | ❌ (대상 readiness) |
+| `ERROR:EXEC` | exec 실패 | ❌ (권한·컨테이너 이름·bash) |
+
+- 종료 코드: `0` 모두 기대대로 · `1` 기대와 다르거나 판단 불가(필수 서비스 파드 없음, 검사 0개 포함) · `2` 클러스터 조회 실패(권한·연결 — "파드 없음"으로 착각하지 않게 바로 멈춤)
+- 필수 서비스: catalog·booking·user·payment. gateway는 Cognito 전에는 없어도 되고, 뒤에는 `REQUIRE_GATEWAY=1`로 필수
+
+- **Cognito 뒤(gateway 배포 후) 다시 실행**: `gateway → payment BLOCKED`(인계 #14 완료 조건), `gateway → catalog·booking·user OPEN`, 그리고 다른 서비스 → gateway가 **BLOCKED**인지(ALB 대역만 허용)도 같이 본다(20개 검사)
+- **ALB → gateway 실경로는 `np-check.sh`가 보지 않는다**(스크립트는 앱 파드끼리만). public 서브넷 대역 규칙은 아래로 따로 확인한다 — 인계 #14 완료 조건
+  ```bash
+  kubectl -n cinema-staging get pods -l app.kubernetes.io/name=gateway -o wide     # gateway 파드 IP
+  aws elbv2 describe-target-health --target-group-arn "$(aws elbv2 describe-target-groups \
+    --query "TargetGroups[?contains(TargetGroupName,'cinemast-gateway')].TargetGroupArn | [0]" --output text)" \
+    --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output text   # 파드 IP healthy
+  curl -sS -o /dev/null -w '%{http_code}\n' "https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api/movies"   # 200 (CAT-01, 인증 없음)
+  ```
+  대상 그룹 이름은 LB Controller가 `k8s-cinemast-gateway-…`처럼 줄여 만든다. 못 찾으면 `aws elbv2 describe-target-groups --query 'TargetGroups[].TargetGroupName'`으로 확인
+- **허용 대역이 ALB 서브넷과 정확히 같은지** 대조한다. healthy·200은 "너무 좁은" 허용만 잡고 "너무 넓은" 허용(예: VPC CIDR로 되돌아감)은 못 잡는다
+  ```bash
+  grep '^public_subnets' infra/terraform/envs/staging/staging.tfvars                # ① 기준: ["10.20.0.0/24", "10.20.1.0/24"]
+  kubectl -n cinema-staging get networkpolicy \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{..ipBlock.cidr}{"\n"}{end}'   # ② ipBlock은 gateway 정책에만, ①과 같은 2개
+  aws ec2 describe-subnets --subnet-ids $(aws elbv2 describe-load-balancers \
+    --query "LoadBalancers[?contains(LoadBalancerName,'cinemast-gateway')].AvailabilityZones[].SubnetId" --output text) \
+    --query 'Subnets[].CidrBlock' --output text                                    # ③ 실제 ALB 서브넷 = ①
+  ```
+  판정: ①·②·③이 같은 두 CIDR이고, ②에서 gateway 밖의 정책에 ipBlock이 없으면 ✅. ②가 더 넓으면(`10.20.0.0/16` 등) gitops `base/gateway/networkpolicy.yaml`을 고친다. ③이 다르면 ALB 서브넷 태그를 확인한다(아래 표 마지막 줄). ALB 이름도 `k8s-cinemast-gateway-…`이고, 못 찾으면 `aws elbv2 describe-load-balancers --query 'LoadBalancers[].LoadBalancerName'`으로 확인
+- Prometheus Targets가 모두 UP이면 `monitoring` 허용은 확인된 것(6-D-1)
+- BLOCKED는 연결이 버려져 `TIMEOUT`(기본 3초) 뒤에 나온다 → 전체 1분 안팎
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 허용인데 BLOCKED (서비스 간 503·타임아웃) | 호출하는 파드 라벨이 `app.kubernetes.io/name`과 다름, 허용 규칙 누락 | 그 서비스 `networkpolicy.yaml`에 규칙 추가 PR + 런타임 계약 6장 표 먼저 |
+| 차단이어야 하는데 OPEN | 정책 에이전트가 안 돎(`aws-eks-nodeagent` 없음)·VPC CNI 애드온 설정 | `enableNetworkPolicy` 확인(3.1.2), 노드 재기동 뒤 다시 |
+| 종료 코드 2 `kubectl get pods 실패` | 자격 증명 만료·노드 꺼짐·권한 | `cinema-admin` 다시 로그인, `cluster-scale.sh status` |
+| `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
+| `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
+| gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
+### 6-D. 블루/그린 배포·자동 롤백 확인 (3.1.6, OPS-03·04)
+
+코드: SeatSAC-gitops `base/{booking,gateway}/rollout.yaml` · `analysis/` (AnalysisTemplate + 분석 트래픽 k6 `analysis/smoke/`) · `base/{booking,gateway}/networkpolicy.yaml`(`rollout-smoke` 허용). Terraform 변경 없음
+
+| 단계 | 일어나는 일 |
+| --- | --- |
+| 1 | 새 태그 커밋(build-push) 또는 설정 PR → Rollout이 **preview** ReplicaSet을 띄움(active는 그대로 트래픽 처리) |
+| 2 | preview Ready → `prePromotionAnalysis` 시작: 분석 Job이 `{svc}-preview:8080`에 조회 4분 30초(200이 95% 미만이면 실패), Prometheus 지표 2분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
+| 3a | 통과 → active Service를 preview 해시로 전환 → 이전 버전 60초 뒤 축소 |
+| 3b | 실패 → **abort**: active 그대로(= 자동 롤백, 사용자 영향 없음), preview 30초 뒤 축소. Rollout·ArgoCD 앱이 `Degraded` |
+
+**사전 조건**: 6-C-2 확인 완료(앱 Synced·Healthy), 시드 적재(8-C)·**분석 회차 ID(6-D-0)**, `kube-prometheus-stack`이 booking·gateway PodMonitor를 수집(6-D-1), gateway는 Cognito 뒤. 첫 배포(이전 버전 없음)는 분석 없이 바로 active가 된다
+
+**도구** (터미널 A, 한 번): Argo Rollouts kubectl 플러그인 — 컨트롤러 차트 2.43.8과 같은 릴리스 계열
+
+```bash
+brew install argoproj/tap/kubectl-argo-rollouts     # macOS. Linux: GitHub 릴리스 바이너리
+kubectl argo rollouts version
+```
+
+#### 6-D-0. 분석 회차 ID 고르기 (`SMOKE_SCREENING_ID`, 시드 적재 뒤 1회)
+
+booking 분석 Job은 `GET /screenings/{id}/seats`가 **200**이어야 통과한다. 없는 회차면 404 → k6 checks 50% → Job 실패 → **정상 배포도 전부 abort**. 그래서 gitops `analysis/booking-prepromotion.yaml`의 `SMOKE_SCREENING_ID`는 `CHANGE_ME`로 두고, `gitops-validate`가 숫자가 아니면 PR을 막는다. 아래로 실제 회차를 골라 넣는다.
+
+| 조건 | 이유 |
+| --- | --- |
+| 시드(lotte-seed)에 있는 회차 | catalog가 404를 돌려주지 않게 |
+| **좌석 배치가 있는 극장**(`hasLayout: true`, 4곳)·`totalSeats > 0` | 좌석 현황이 Valkey·RDS 집계까지 끝까지 탄다 |
+| 날짜는 상관없음 | 좌석 현황은 지난 회차도 200(`SCREENING_STARTED`는 선점 경로에만). 한 번 정하면 고정 |
+| (나중에) 결제 경로를 넣을 때는 **미래 회차** + 분석 전용 회차 | 선점이 `SCREENING_STARTED`로 막히고, 진짜 예매가 생겼다 취소되므로 데모 데이터와 섞이지 않게 (#37 이후, 남궁일) |
+
+```bash
+# 터미널 A (cinema-admin, 노드 켜짐). 응답은 화면에서만 보고 PR·노션에 붙이지 않는다(시드 내용)
+kubectl -n cinema-staging port-forward svc/catalog 18081:8080 &
+kubectl -n cinema-staging port-forward svc/booking 18082:8080 &
+
+# 1) 좌석 배치가 있는 극장
+curl -s localhost:18081/theaters | jq -r '.items[] | select(.hasLayout) | "\(.theaterId)\t\(.name)"'
+
+# 2) 그 극장의 회차 — 시드 영업일을 모르면 최근 날짜를 훑는다 (시드는 하루 편성)
+T=<1)에서 고른 theaterId>
+for d in $(for i in $(seq 0 30); do date -d "-$i day" +%F 2>/dev/null || date -v-${i}d +%F; done); do
+  n=$(curl -s "localhost:18081/screenings?date=$d&theaterId=$T" | jq '.items | length')
+  [ "${n:-0}" -gt 0 ] && { echo "영업일 $d: 회차 $n개"; break; }
+done
+curl -s "localhost:18081/screenings?date=$d&theaterId=$T" \
+  | jq -r '.items[] | select(.totalSeats > 0) | "\(.screeningId)\t\(.totalSeats)석\t\(.startsAt)"' | head -3
+
+# 3) booking으로 확인 — 둘 다 200, 좌석 목록이 비어 있지 않아야 한다
+S=<2)에서 고른 screeningId>
+curl -s -o /dev/null -w 'seats %{http_code}\n' localhost:18082/screenings/$S/seats
+curl -s -o /dev/null -w 'seat-counts %{http_code}\n' "localhost:18082/internal/screenings/seat-counts?ids=$S"
+curl -s localhost:18082/screenings/$S/seats | jq 'keys'     # 좌석 필드가 있는지만 본다
+
+kill %1 %2
+```
+
+- 영업일 훑기가 비면: 시드 적재 확인(8-C `PASS`)부터. 영업일은 lotte-seed 적재 결과 또는 한채연에게 묻는다(시드 SQL·원본은 레포·PR에 붙이지 않는다)
+- 고른 ID를 gitops PR로 `SMOKE_SCREENING_ID`에 넣는다(숫자만, 따옴표 안). 회차 ID는 숫자일 뿐이라 Public 레포에 두어도 된다
+- 시드를 다시 적재(재생성 리허설 3.1.15 등)해 ID가 바뀌면 이 절을 다시 하고 gitops를 고친다
+
+#### 6-D-1. 수집 확인 (분석이 볼 지표가 있는지)
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090
+# http://localhost:9090 → Status > Targets 에 podMonitor/cinema-staging/booking UP
+# 쿼리: http_server_requests_seconds_count{application="booking"} 에 rollouts_pod_template_hash 라벨이 있어야 한다
+```
+
+#### 6-D-2. 정상 배포 (통과 → 전환)
+
+```bash
+# SeatSAC main에 booking 변경 머지 → build-push가 gitops 태그 커밋 (또는 수동 실행 services=booking)
+kubectl argo rollouts get rollout booking -n cinema-staging --watch
+#   기대: Preview(새 해시) Running → AnalysisRun Running(약 5분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
+kubectl -n cinema-staging get analysisrun -l rollouts-pod-template-hash          # 최신 Successful
+kubectl -n cinema-staging get jobs | grep -i preview-traffic                       # 분석 Job Complete
+```
+
+- 데모(무중단 배포)는 이 단계 동안 k6 `tests/k6/deploy-during-load.js`(OPS-10)를 active(gateway)로 돌려 오류율 0%를 본다
+
+#### 6-D-3. 실패 버전 시연 (abort → 자동 롤백)
+
+앱 코드를 고치지 않고 **gitops 설정 PR**로 preview만 망가뜨린다. 설정이 바뀌면 ConfigMap 해시가 바뀌어 새 ReplicaSet(preview)이 뜬다. active 파드는 이전 ConfigMap을 그대로 쓴다
+
+```yaml
+# SeatSAC-gitops overlays/staging/booking/kustomization.yaml — 시연용 PR (제목에 [시연·revert 예정])
+      - APP_SERVICES_CATALOG_URL=http://catalog-unavailable:8080   # 원래 http://catalog:8080
+```
+
+1. 위 PR 머지 → `kubectl argo rollouts get rollout booking -n cinema-staging --watch`
+2. preview는 Ready가 된다(readiness = DB만). 분석 Job의 `GET /screenings/{id}/seats`가 catalog를 못 찾아 503 → `http-5xx-ratio` 실패 → **Aborted**, active는 이전 버전 그대로
+3. 그동안 사용자 화면·k6(active)는 오류 없음 = 자동 롤백 확인
+4. **시연 PR을 revert하는 PR** 머지 → Rollout이 안정 버전과 같은 템플릿으로 돌아와 `Healthy`(새 배포 없음)
+
+- 같은 방식으로 gateway도 가능(`gateway-config`의 `APP_SERVICES_CATALOG_URL`) — Cognito 뒤
+- 결제 경로 실패(`booking_payment_call_total` timeout·error)로 시연하려면 분석 트래픽에 결제 경로가 들어가야 한다(BKG-10 #37 이후, 남궁일과 정함)
+
+#### 6-D-4. 이미지 버전이 실패했을 때 되돌리기
+
+| 상황 | 할 일 |
+| --- | --- |
+| 분석 실패로 Aborted | active는 안전. gitops에서 **해당 `deploy(staging): {svc} → {sha7}` 커밋을 revert하는 PR** → 머지하면 `Healthy`. 앱 수정은 SeatSAC에서 고쳐 다시 머지(새 태그) |
+| 전환된 뒤 문제 발견(60초 안) | ArgoCD 화면(admin) → Rollout → **Abort**는 전환 전에만 의미. 전환 후에는 revert PR이 원칙 |
+| preview가 10분 안에 Ready 안 됨 | `progressDeadlineAbort`로 자동 abort. `kubectl -n cinema-staging describe rollout booking`·preview 파드 로그 확인 → revert PR |
+
+- `kubectl argo rollouts abort/promote/undo`는 클러스터 직접 조작이다 → 평소에 쓰지 않는다(selfHeal·Git과 어긋남). 긴급 시 관리자만, 스크럼 공유
+
+#### 6-D-5. 자주 막히는 곳
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| gitops PR에서 `블루/그린 분석 회차 ID (숫자)` 실패 | `SMOKE_SCREENING_ID`가 `CHANGE_ME`이거나 숫자가 아님 | 6-D-0으로 실제 회차를 골라 넣는다 |
+| `preview-requests` 실패(결과 0) | 분석 Job이 preview에 못 닿음(NetworkPolicy·Job ImagePull) 또는 PodMonitor 미수집 | `kubectl -n cinema-staging logs job/<…preview-traffic…>`, 6-D-1 Targets |
+| `preview-traffic` 실패 | ① 조회가 200이 아님(k6 `checks` < 95%, 종료 코드 99) — 새 버전의 경로·라우트 고장 또는 `SMOKE_SCREENING_ID`가 시드에 없는 회차(404) ② Job 파드 오류(이미지 `grafana/k6:1.7.1` pull, ConfigMap `rollout-smoke-scripts` 없음) | Job 로그의 k6 요약에서 `✗ seats 200` 같은 실패 check 확인. ②는 `kubectl -n cinema-staging get cm rollout-smoke-scripts`(cinema-common 앱) |
+| AnalysisRun `Error`(Failed 아님) | Prometheus 주소·쿼리 오류 | `kubectl -n cinema-staging describe analysisrun <이름>` 메시지 |
+| booking·gateway가 동시에 preview | 블루/그린 동시 금지(노드 2대) | build-push가 booking만 커밋. 사람 PR도 하나씩 |
+
 ### 6-B. SQS·Lambda (3.1.8·3.1.9) — ⬜
 
 ## 7. staging 5) Cognito·CloudFront·S3 (3.1.11) — ⬜
@@ -889,14 +1092,18 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 
 ## 8-1. 가동 정책 — 노드 0대 스케줄·Budgets (3.1.14, OPS-13)
 
-코드: `.github/workflows/cluster-schedule.yml` · `infra/scripts/cluster-scale.sh` · `infra/terraform/global/{cluster_schedule,budgets}.tf`
+코드: `infra/terraform/envs/staging/cluster_schedule.tf`(EventBridge Scheduler, **정시 실행**) · `.github/workflows/cluster-schedule.yml`(백업·수동) · `infra/scripts/cluster-scale.sh` · `infra/terraform/global/{cluster_schedule,budgets}.tf`
+
+> 10/27 변경: GitHub Actions schedule이 몇 시간씩 늦거나 빠졌다(10/23 끄기 4시간·10/26 켜기 6시간 지연, 10/26 끄기 누락). 정시 실행을 **EventBridge Scheduler**(KST 타임존, `eks:UpdateNodegroupConfig` 직접 호출)로 옮기고, 워크플로는 30분 뒤 백업으로 남겼다. 둘 다 멱등이라 같이 돌아도 안전하다
 
 | 시각 (KST) | 동작 | 비고 |
 | --- | --- | --- |
-| 월~금 08:23 | 노드그룹마다 desired 1 (`up`) | 인스턴스 InService까지 대기(최대 10분) → 파드 Ready까지 5~10분 더 |
-| 월~금 23:07 | desired 0 (`down`) | 금요일 밤에 꺼져 월요일 아침까지 0대 |
-| 데모 주간 11/16~20 | 예약 끄기 건너뜀 (24시간) | 발표 후 수동 `down` |
-| 임시로 밤에도 켜 둠 | 레포 Variables `CLUSTER_KEEP_ON=true` | 예약 끄기만 건너뜀. 끝나면 `false` |
+| 월~금 08:23 | **EventBridge** 노드그룹마다 desired 1 | 노드 Ready까지 2~3분, 파드 Ready까지 5~10분 더 |
+| 월~금 08:53 | GitHub 백업 `up` (이미 켜져 있으면 no-op) | 월~금 07~10시(KST)에 도착한 실행만 동작 — 토요일 아침에 늦게 온 켜기는 건너뜀 |
+| 월~금 23:07 | **EventBridge** desired 0 | 금요일 밤에 꺼져 월요일 아침까지 0대 |
+| 월~금 23:37 · 다음 날 00:37 | GitHub 백업 `down` (no-op 또는 대신 끄기) | 월~금 22~23시·화~토 0~5시(KST)에 도착한 실행만 동작 — 늦게 온 끄기가 근무 시간에 끄지 않게 |
+| 데모 주간 11/16~20 | 예약 끄기 멈춤 (24시간) | EventBridge 끄기는 `cluster_schedule_demo_start` 0시에 끝남(end_date), 백업도 날짜로 건너뜀. 발표 후 수동 `down` |
+| 임시로 밤에도 켜 둠 | `envs/staging` tfvars `cluster_keep_on = true` → apply | EventBridge 끄기 DISABLED → 백업도 그 상태를 보고 건너뜀. 끝나면 `false` → apply. (예전 Variables `CLUSTER_KEEP_ON`은 쓰지 않음 — 지운다) |
 
 ### 8-1-1. global 적용 (역할·Budgets)
 
@@ -909,6 +1116,30 @@ terraform plan -var-file=global.tfvars -out=plan.out
 terraform apply plan.out
 terraform output github_secrets        # AWS_CLUSTER_SCHEDULE_ROLE_ARN → 레포 Actions Secrets에 등록
 ```
+
+**EventBridge Scheduler (10/27 추가, envs/staging)** — global 다음(백업 워크플로가 `scheduler:ListSchedules`를 쓰므로 global 먼저)
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명)
+# 1) global — 반드시 apply까지 끝낸 뒤 staging으로 (안 하면 백업 워크플로가 scheduler:ListSchedules AccessDenied)
+cd infra/terraform/global
+terraform plan -var-file=global.tfvars -out=plan.out
+# 기대: aws_iam_role_policy.gha_cluster_schedule 1 change (SchedulerRead 문 추가). add·destroy 0
+terraform apply plan.out
+rm -f plan.out
+
+# 2) envs/staging
+cd ../envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: schedule group 1 · IAM 역할 1 · 인라인 정책 1 · 일정 4(ng-a·ng-c × up·down) = 7 add. destroy 0
+#   노드그룹 2 change가 같이 보이면 release_version(AMI) 갱신 — 노드 0대(밤)일 때만 같이 apply, 낮이면 노드 교체가 생긴다
+terraform apply plan.out
+rm -f plan.out
+terraform output cluster_schedules      # {<노드그룹>-up = ENABLED, <노드그룹>-down = ENABLED} × 2
+```
+
+- 레포 Variables `CLUSTER_KEEP_ON`이 남아 있으면 지운다(더 이상 읽지 않음)
+- `cluster_schedule_demo_start`가 지난 뒤에는 끄기 일정의 end_date가 과거라 **새로 만들기가 거절될 수 있다**(재생성 리허설은 데모 주간 전에)
 
 - Budgets 메일 주소마다 확인 메일은 오지 않는다(바로 발송). 스팸함 확인
 - `budget_monthly_usd`·`budget_daily_usd`는 `global.tfvars`에서 팀과 정한 값으로. 평소 하루 비용(컨트롤 플레인·NAT·RDS·Valkey·ALB + 낮 시간 노드)보다 조금 높게 둔다
@@ -928,7 +1159,9 @@ infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드�
 - [ ] 워크플로가 main에 머지된 뒤 Actions → cluster-schedule → Run workflow `status` 성공 (역할·Secret 확인)
 - [ ] 수동 `down` → Summary 표 desired 0 · InService 0, `kubectl get nodes` → No resources
 - [ ] 수동 `up` → InService 1씩, `kubectl get nodes` 2대 Ready, ArgoCD 앱이 다시 Healthy
-- [ ] 다음 날 아침 예약 `up`이 실행됐는지 Actions 기록 확인 (schedule은 수~십수 분 늦을 수 있음)
+- [ ] EventBridge 실행 확인: 08:23·23:07 직후 `infra/scripts/cluster-scale.sh status`(desired) · CloudWatch 지표 `AWS/Scheduler` `InvocationAttemptCount`·`TargetErrorCount`(이미 같은 값이면 "No changes needed"로 오류 1건 = 정상)
+- [ ] 백업 확인: Actions → cluster-schedule 예약 실행 Summary가 "이미 desired" 또는 "늦게 도착 — 건너뜀"
+- [ ] `cluster_keep_on = true` apply → `terraform output cluster_schedules`의 `-down`이 DISABLED, 그날 밤 백업 Summary "DISABLED — 백업도 건너뜀" → `false`로 되돌림
 - [ ] `aws budgets describe-budgets --account-id <계정ID>` 에 `cinema-monthly`·`cinema-daily`
 - [ ] 두 번째 `terraform plan`(staging) No changes — desired 변경은 Terraform이 무시
 
@@ -939,7 +1172,10 @@ infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드�
 | `up`이 10분 넘게 InService 0 | t3.large 용량 부족·SCP·서브넷 IP 부족 | 노드그룹 Health 이슈(`describe-nodegroup`)·ASG 활동 기록 확인 |
 | `desired 1 → 0` 출력 후 `AccessDeniedException … DescribeUpdate` (❌, 노드는 꺼짐) | `eks:DescribeUpdate`는 **클러스터 ARN**이 필수 리소스인데 노드그룹 ARN만 허용했음 (10/24 수정) | global `cluster_schedule.tf` `UpdateRead` 문 확인 후 apply |
 | 노드그룹 `DEGRADED` | 인스턴스 생성 실패·서브넷 IP 부족·IAM 등 건강 문제 | 끄기는 그대로 진행됨(경고만). 켜기는 중단 → 8-1-4 |
-| 예약 실행이 안 보임 | 워크플로가 main에 없음 / 60일간 레포 활동 없음(GitHub가 schedule 중지) | main 머지 확인, Actions에서 워크플로 Enable |
+| 예약 실행이 안 보임·몇 시간 늦음 (GitHub) | GitHub schedule은 부하에 따라 늦거나 빠진다(10/23·10/26 실제 발생) / 60일간 레포 활동 없음 | 정시 실행은 EventBridge가 하므로 영향 없음. 늦게 온 백업은 시각 확인으로 건너뜀. 둘 다 안 돌았으면 수동 실행 |
+| 08:23·23:07에 노드가 안 바뀜 (EventBridge) | 일정 DISABLED(`cluster_keep_on`)·end_date 지남·역할 권한·노드그룹 이름 바뀜(교체 후 apply 안 함) | `aws scheduler list-schedules --group-name cinema-staging-cluster`, CloudWatch `TargetErrorCount`, staging plan으로 일정 입력값 확인 |
+| 백업 `EventBridge 끄기 일정 확인`에서 `AccessDenied scheduler:ListSchedules` | global 정책(SchedulerRead) apply 전 | global apply |
+| staging apply `ValidationException: The execution role you provide must allow AWS EventBridge Scheduler to assume the role` | 실행 역할 trust 조건 `aws:SourceArn`이 **일정 그룹 ARN**과 다름(일정 ARN을 넣으면 거절, 10/27) | `cluster_schedule.tf` trust를 `aws_scheduler_schedule_group.cluster.arn`으로. 방금 바꿨으면 IAM 전파 10~20초 뒤 다시 apply |
 
 
 ### 8-1-4. 노드그룹 DEGRADED·변경 거부 복구
@@ -1082,10 +1318,25 @@ terraform destroy -var-file=staging.tfvars
 
 ## 14. 실행 기록
 
-| 날짜 | 실행자 | 단계 | 소요 | 문제 | 런북 수정 |
+> 시각은 KST. "PR"은 그 단계 코드가 main에 들어간 PR. 소요는 apply 시작~확인 끝(미측정은 다음 실행 때 채운다)
+
+| 날짜 | 실행자 | 단계 (PR) | 소요 | 문제 | 런북 수정 |
 | --- | --- | --- | --- | --- | --- |
-| 10/20 | 김종식 | 1 bootstrap · 3 네트워크 | ⬜ | init 때 버킷 입력 요구 | 1장 "다음 단계 준비" 추가 |
-| 10/21 | 김종식 | 2 global | ⬜ | OIDC 공급자 409, import 시 already managed | 2-2·12장·13장 추가 |
-| ⬜ | 김종식 | 4 EKS (staging · staging-k8s) | ⬜ | | |
-| ⬜ | 김종식 | 5 RDS·Valkey (global SNS · staging) | ⬜ | | |
-| ⬜ | 김종식 · 한채연 | 8 DB 계정·Secret · 시드 | ⬜ | | |
+| 10/20 | 김종식 | 1 bootstrap (state 버킷) | 5초 | `init`에서 버킷 이름 입력 요구 | 1장 "다음 단계 준비"(backend.hcl) 추가 |
+| 10/20 | 김종식 | 3 네트워크 — VPC·서브넷·SG (#1, 10/20 22:19) | 미측정 | 없음 | — |
+| 10/21 | 김종식 | 2 global — 팀 역할·GitHub OIDC·CI 역할 (#2, 10/21 14:58) | 미측정 | ① `CreateOpenIDConnectProvider 409 EntityAlreadyExists`(계정에 OIDC 공급자가 이미 있음) ② import 시 `Resource already managed by Terraform` ③ (추정) Terraform이 MFA 프로필을 직접 써서 `AssumeRoleTokenProvider session option not set` | 2-2(OIDC 공급자 확인 표)·12장(state 이동)·13장 추가, 0장·2-5에 "Terraform 실행 전 `export-credentials` → `unset AWS_PROFILE`" |
+| 10/22 | 김종식 | 4 EKS — staging(EKS·노드그룹·Access Entry) · staging-k8s(namespace·RBAC·LB Controller) (#13, 10/22 20:25) | 미측정 | (추정) API 공개 엔드포인트에 관리자 공인 IP 필요 | 4-6(허용 IP는 tfvars·Secret으로, 커밋 금지) |
+| 10/23 | 김종식 | 8-1 가동 정책 — global(cluster-schedule 역할·Budgets) (#17, 10/23 11:42) | 미측정 | 없음 | — |
+| 10/23 | 김종식 | 5 RDS·Valkey — global SNS → staging (#24, 10/23 15:08) | 미측정 | 없음 | — |
+| 10/23 | 김종식 | 7-1~7-3 CloudFront·S3·frontend-deploy 1차 (#25, 10/23 15:47) | 미측정 | 없음 (7-4 ALB 원본은 gateway·Cognito 뒤로 보류) | — |
+| 10/24 01:59~02:05 | 김종식 | 8-1-3 cluster-schedule 수동 `status`·`down`·`up` (Actions #1~#3) | 수 분 | `down`에서 desired 1→0 후 `AccessDeniedException … eks:DescribeUpdate`(노드는 꺼짐). `DescribeUpdate`는 클러스터 ARN이 필수 리소스 | 8-1 문제 해결 표에 행 추가 → #41(10/26 14:17)로 정책 수정 후 global apply |
+| 10/24~25 | 김종식 | 8-A·8-B DB 스키마·계정·Secret·RDS CA — staging-k8s (#35, 10/24 22:13) | 미측정 (Job Complete 10/25 20:36) | ① `job: cinema-ops/db-bootstrap-… is not in complete state` / `DeadlineExceeded` — 노드 0대(23:07 끄기 이후) ② 재apply 때 plan이 `infra_endpoints` ConfigMap destroy — 로컬 main이 #35에 멈춰 #36 미반영 ③ kubernetes 프로바이더 `Unauthorized` — export한 자격 증명 만료 ④ Secret 확인 명령 오타(`grep 'secrets$'` → `grep -- '-secrets$'`) | 13장: "Job not in complete state → `cluster-scale.sh up` 후 재apply", "`Unauthorized` = 자격 증명 만료 → 다시 export", plan 전 `git pull`·`git log -1` 확인. 8-B 확인 명령 수정 |
+| 10/25 | 김종식 · 한채연 | 8-C 시드 적재 (lotte-seed `load/run.sh`) | 미측정 | `RDS_HOST 필요` — 환경변수 없이 실행 | 8-C에 `RDS_HOST=$(kubectl … get cm cinema-infra-endpoints -o jsonpath='{.data.DB_HOST}') REPO=… bash run.sh` 명령. **PASS: 시드 검증 통과 (극장 132 · 상영관 39 · 좌석 6,767 · 회차 8,360 · 영화 22)** |
+| 10/26 | 김종식 | 6-A ECR·build-push (#36, 10/26 11:42) · 6-C-1 엔드포인트 ConfigMap | 미측정 | ① build-push `image-tag/kustomization.yaml 이 없다` — gitops PR #2(Public 대응)가 아직 미머지 ② (사전) 의존성 Trivy CRITICAL·Maven에 없는 tomcat 10.1.58·OrbStack 꺼짐 | 6-A-4·6-A-6: gitops PR 먼저 머지, Maven Central에서 버전 확인, Docker 없이 `initiate-layer-upload`로 push 거부 확인 |
+| 10/26 | 김종식 | 8-1 global — `DescribeUpdate` 권한 수정 (#41, 10/26 14:17) | 미측정 | 첫 global plan에 `aws_sns_topic_subscription.alerts_email[0]` add — 다른 브랜치(ci/3.1.4)에서 plan함 | 13장: "plan은 최신 main(또는 해당 PR 브랜치)에서" |
+| 10/26 | 김종식 | 6-C-2 ArgoCD·root 앱·서비스 Application — staging-k8s 한 번의 apply (#42, 10/26 16:15 · gitops #3) | apply 미측정 · sync 약 20분 | ① 앱 6개 `InvalidSpecError: project cinema which does not exist`, root OutOfSync — root가 gitops #3 머지 전 리비전으로 sync를 시작해 교착 ② `cinema-catalog` OutOfSync·파드 2분마다 재생성 — `replicas: 1`(selfHeal) ↔ HPA, JVM 기동 CPU가 HPA를 다시 4로 ③ CodeRabbit: 6-C-1대로 apply하면 ArgoCD까지 생성 | 13장: root 교착 → ArgoCD 화면 Terminate·Hard Refresh·Sync. 6-C-1을 확인 전용으로. gitops #4(HPA 대상 `replicas` 제거·scaleUp 1분 1개), 11장 destroy 순서(`-target=helm_release.argocd_apps` 먼저) |
+| 10/27 02:45 | 김종식 | 8-1-2 수동 `down` | 수 분 | 예약 끄기(10/26 23:07) **실행 자체가 없음**. 예약 실행 지연: 10/23 끄기 약 4시간, 10/26 켜기 약 2~6시간 | 8-1 상단에 변경 경위, 문제 해결 표 "예약 실행이 안 보임·몇 시간 늦음" |
+| 10/27 | 김종식 | 8-1-1 EventBridge Scheduler — global(SchedulerRead) → staging (#49) | 미측정 | ① staging plan에 노드그룹 2 change — AMI `release_version` 1.36.5-20261019 → 20261023(모듈의 최신 AMI 조회), 노드 0대라 그대로 적용 ② `ValidationException: The execution role you provide must allow AWS EventBridge Scheduler to assume the role` — trust `aws:SourceArn`에 일정 ARN을 넣음(일정 그룹 ARN이어야 함) ③ 끄기 일정 `end_date` 영구 diff(`…T15:00:00Z` ↔ `…T00:00:00+09:00`) | 8-1-1 EventBridge 절차(global apply 후 staging), 문제 해결 표 `ValidationException` 행. 코드: trust = 일정 그룹 ARN, `end_date`는 UTC(Z)로 |
+| ⬜ | 김종식 | 6-D 블루/그린 — 6-D-0 분석 회차 ID · 6-D-2 정상 배포 · 6-D-3 실패 버전 시연 | | | |
+| ⬜ | 김종식 | 6-B SQS·Lambda (3.1.8·3.1.9) · 7 Cognito · 7-4 CloudFront `/api` | | | |
+| ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |

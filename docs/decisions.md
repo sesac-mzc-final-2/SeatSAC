@@ -48,9 +48,10 @@
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 7 · 34 | EKS On-Demand **t3.large 2대**(ng-a 1 · ng-c 1). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
+| 7 · 34 | EKS On-Demand **t3.large 2대**(ng-a 1 · ng-c 1). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14 — 실행은 EventBridge Scheduler, GitHub Actions는 백업·수동), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
 | 8 · 35 · 58 | Kustomize + ArgoCD. booking·gateway만 블루/그린(5xx 1%·결제 timeout/error 5% 롤백, scaleDown 60초), 나머지 롤링. 프로브·자원·HPA·메트릭·Secret·NetworkPolicy는 `docs/service-runtime-contract.md` | 동시 블루/그린 금지 |
 | 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음 | 31의 httpOnly 쿠키는 37·63으로 대체 |
+| 78 | 블루/그린 분석 트래픽: 분석 중 AnalysisTemplate Job(k6, 조회만)이 `{svc}-preview`로 직접 요청, `/actuator` 제외 요청 ≥ 20건/분을 같이 판정(트래픽 0 = 실패). 실패하면 abort(전환 없음) → gitops 태그 revert PR. 실패 버전 시연은 gitops 설정 PR로 의존 서비스 주소를 깨뜨리는 방식 | ⏳ 남궁일 확인(결제 경로 트래픽·시연 방식) |
 | 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets·Loki는 확장 |
 | 36 · 39 | AWS 아키텍처 = 위 결정들의 합. 노션 ADR-36(10/18 v3)은 이전 스냅샷 | |
 | 46 | GitHub Actions → AWS OIDC. 역할 `cinema-gha-ecr-push`·`cinema-gha-tf-plan`·`cinema-gha-frontend-deploy`·`cinema-gha-cluster-schedule`(3.1.14). CI는 apply 안 함 | `infra/terraform/global` |
@@ -67,8 +68,4 @@
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 | `docs/repo-workflow.md` |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
 
-<노션 반영 필요> ADR-7 선택안 "t3.large 2대(ng-a 1·ng-c 1)", ADR-10 제목·선택안 일치, ADR-22 본문 "ADR-21" → "ADR-44", ADR-23 "도입함" → "도입하지 않음", ADR-31에 "ADR-37·63으로 대체", ADR-33에 "Valkey t4g.micro(ADR-59)·Single-AZ(ADR-61)", ADR-34 데모 주간 11/16~20, ADR-36 "10/18 스냅샷" 콜아웃, 37·38·46 결론 채우기, ADR-65(중복) 삭제 여부
-
-<노션 반영 필요> ADR-74(10/25 노션 등록, 상태 열림): 팀 확인 후 노션 상태를 「결정됨」으로
-
-<노션 반영 필요> ADR-69·74 본문(10/25 3.1.5): 서비스 Application은 `kubernetes_manifest`(+`argocd_apps_enabled` 두 단계) 대신 Helm `argocd-apps`로 ArgoCD와 한 번의 apply, root 앱 `cinema-root`도 Terraform(gitops `apps/root.yaml` 삭제). ArgoCD 화면은 port-forward 전용, 팀원은 로그인 없이 읽기 전용(anonymous → `role:readonly`) + `argocd` namespace Application 조회 Role
+<노션 반영 필요> ADR-78(10/26 3.1.6) 새로 등록(상태 열림): 블루/그린 분석 트래픽 Job·최소 요청 20건·actuator 제외·실패 시 abort + revert PR·실패 버전 시연 방식. 대안(분석 중 실사용자 트래픽 일부를 preview로 = 카나리 전환, k6 부하 Job을 preview로 = OPS-10과 중복)과 기각 이유는 3.1.6 WBS 기록

@@ -10,8 +10,14 @@ spring.lifecycle.timeout-per-shutdown-phase: 20s   # preStop 5s + graceful 20s (
 management:
   endpoints.web.exposure.include: health,prometheus,info
   endpoint.health.probes.enabled: true
+  # readiness에 db를 넣는다 (서비스 실행 계약 1장) — DB에 못 붙는 파드는 NotReady가 되어
+  # Service 엔드포인트에서 빠진다. liveness에는 외부 의존을 넣지 않는다(기본 livenessState만)
+  endpoint.health.group.readiness.include: readinessState,db
   endpoint.health.show-details: never
   metrics.tags.application: payment
+  # 3.1.6 블루/그린 분석·3.1.7 대시보드가 http_server_requests_seconds_bucket을 찾는다.
+  # 히스토그램이 없으면 p95를 계산할 수 없다 (서비스 실행 계약 1장·5장)
+  metrics.distribution.percentiles-histogram.http.server.requests: true
 logging:
   config: classpath:logback-spring.xml
 

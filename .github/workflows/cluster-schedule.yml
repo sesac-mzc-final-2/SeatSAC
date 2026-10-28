@@ -1,15 +1,18 @@
 # 3.1.14 가동 정책 (OPS-13, ADR-34): 평일 아침 켜고 밤에 끈다. 주말은 금요일 밤에 꺼진 채로 월요일 아침까지.
-#   데모 주간(DEMO_START~DEMO_END, KST)은 예약 끄기를 건너뛴다(24시간 가동).
-#   임시로 밤에도 켜 두려면: 레포 Settings → Variables → CLUSTER_KEEP_ON = true (예약 끄기만 건너뜀, 다시 false로)
-#   수동 실행: Actions → cluster-schedule → Run workflow (up·down·status)
-#   주의: schedule은 기본 브랜치(main)에 있는 파일만 실행되고, GitHub 사정으로 수~십수 분 늦을 수 있다.
+#   기본 실행 수단은 AWS EventBridge Scheduler(envs/staging cluster_schedule.tf) — 08:23·23:07 KST 정각에 실행된다
+#   이 워크플로는 ① 백업(30분 뒤 다시 확인, 멱등) ② 수동 실행(up·down·status) 용도다
+#     GitHub schedule은 늦거나 빠진다(10/23 4시간·10/26 6시간 지연, 10/26 끄기 누락) → 백업도 두 번, 시각 확인 필수
+#   데모 주간(DEMO_START~DEMO_END, KST)은 예약 끄기를 건너뛴다(24시간 가동). EventBridge도 시작일부터 끄기를 멈춘다
+#   임시로 밤에도 켜 두기: envs/staging `cluster_keep_on = true` → apply (EventBridge 끄기 DISABLED).
+#     이 백업은 EventBridge 끄기 일정이 DISABLED면 따라서 건너뛴다(한 곳에서만 바꾸면 된다)
 #   실제 작업은 infra/scripts/cluster-scale.sh (사람도 같은 스크립트를 cinema-admin으로 쓴다)
 name: cluster-schedule
 
 on:
   schedule:
-    - cron: "23 23 * * 0-4" # 켜기: 월~금 08:23 KST (= UTC 일~목 23:23). 정각을 피해 지연을 줄인다
-    - cron: "7 14 * * 1-5"  # 끄기: 월~금 23:07 KST (= UTC 월~금 14:07)
+    - cron: "53 23 * * 0-4"  # 켜기 백업: 월~금 08:53 KST (EventBridge 08:23의 30분 뒤)
+    - cron: "37 14 * * 1-5"  # 끄기 백업 1: 월~금 23:37 KST (EventBridge 23:07의 30분 뒤)
+    - cron: "37 15 * * 1-5"  # 끄기 백업 2: 화~토 00:37 KST (백업 1이 빠질 때)
   workflow_dispatch:
     inputs:
       action:
@@ -33,6 +36,7 @@ concurrency:
 env:
   CLUSTER: cinema-staging-eks
   AWS_REGION: ap-northeast-2
+  SCHEDULE_GROUP: cinema-staging-cluster   # envs/staging output cluster_schedule_group
   DEMO_START: "2026-11-16"
   DEMO_END: "2026-11-20"
 
@@ -48,30 +52,37 @@ jobs:
           SCHEDULE: ${{ github.event.schedule }}
           INPUT_ACTION: ${{ inputs.action }}
           INPUT_DESIRED: ${{ inputs.desired }}
-          KEEP_ON: ${{ vars.CLUSTER_KEEP_ON }}
         run: |
           today=$(TZ=Asia/Seoul date +%F)
+          hour=$(TZ=Asia/Seoul date +%-H)
+          dow=$(TZ=Asia/Seoul date +%u)   # 1=월 … 7=일
           desired=1
+          skip() { echo "$1 — 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; action=skip; }
           if [ "$EVENT" = "workflow_dispatch" ]; then
             action="$INPUT_ACTION"; desired="$INPUT_DESIRED"
           else
             case "$SCHEDULE" in
-              "23 23 * * 0-4") action=up ;;
-              "7 14 * * 1-5")  action=down ;;
+              "53 23 * * 0-4")                  action=up ;;
+              "37 14 * * 1-5"|"37 15 * * 1-5") action=down ;;
               *) echo "::error::모르는 schedule: $SCHEDULE"; exit 1 ;;
             esac
-            if [ "$action" = "down" ]; then
-              if ! [[ "$today" < "$DEMO_START" ]] && ! [[ "$today" > "$DEMO_END" ]]; then
-                echo "데모 주간($DEMO_START~$DEMO_END) — 예약 끄기 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; action=skip
-              elif [ "$KEEP_ON" = "true" ]; then
-                echo "CLUSTER_KEEP_ON=true — 예약 끄기 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; action=skip
-              fi
+            # 시각·요일 확인: GitHub schedule은 몇 시간(하루를 넘길 수도) 늦게 돌 수 있고, github.event.schedule에는
+            #   원래 예약 날짜가 없다 → 지금 KST 시각이 그 동작이 맞는 창일 때만 실행한다
+            #   끄기: 월~금 22~23시 또는 화~토 0~5시 (금요일 밤 끄기가 토요일 새벽에 와도 끈다)
+            #   켜기: 월~금 7~10시만 (금요일 켜기가 토요일 아침에 와서 주말 내내 켜 두는 일을 막는다)
+            if [ "$action" = "down" ] && ! { { [ "$hour" -ge 22 ] && [ "$dow" -le 5 ]; } || { [ "$hour" -le 5 ] && [ "$dow" -ge 2 ] && [ "$dow" -le 6 ]; }; }; then
+              skip "끄기 백업이 요일 ${dow} ${hour}시(KST)에 늦게 도착"
+            elif [ "$action" = "up" ] && ! { [ "$hour" -ge 7 ] && [ "$hour" -le 10 ] && [ "$dow" -le 5 ]; }; then
+              skip "켜기 백업이 요일 ${dow} ${hour}시(KST)에 늦게 도착"
+            fi
+            if [ "$action" = "down" ] && ! [[ "$today" < "$DEMO_START" ]] && ! [[ "$today" > "$DEMO_END" ]]; then
+              skip "데모 주간($DEMO_START~$DEMO_END) 예약 끄기"
             fi
           fi
           if ! [[ "$desired" =~ ^[1-2]$ ]]; then echo "::error::desired는 1 또는 2"; exit 1; fi
           echo "action=$action" >> "$GITHUB_OUTPUT"
           echo "desired=$desired" >> "$GITHUB_OUTPUT"
-          echo "오늘(KST) $today · 이벤트 $EVENT · 할 일 $action"
+          echo "오늘(KST) $today(요일 $dow) ${hour}시 · 이벤트 $EVENT · 할 일 $action"
 
       - uses: actions/checkout@v4
         if: steps.decide.outputs.action != 'skip'
@@ -87,8 +98,34 @@ jobs:
         if: steps.decide.outputs.action != 'skip'
         run: echo "::add-mask::$(aws sts get-caller-identity --query Account --output text)"
 
+      # 예약 끄기 백업만: EventBridge 끄기 일정이 꺼져 있으면(cluster_keep_on = true) 따라서 건너뛴다
+      - name: EventBridge 끄기 일정 확인
+        id: keep
+        if: steps.decide.outputs.action == 'down' && github.event_name == 'schedule'
+        run: |
+          # 일정 그룹이 없으면(staging apply 전·destroy 뒤) ResourceNotFoundException → "없음"으로 보고 백업이 끈다
+          #   그 밖의 조회 오류(권한 등)는 그대로 실패시킨다 — 상태를 모르면서 끄지도 건너뛰지도 않게
+          err="$RUNNER_TEMP/list-schedules.err"
+          # shellcheck disable=SC2016  # JMESPath 리터럴(백틱)
+          if states=$(aws scheduler list-schedules --group-name "$SCHEDULE_GROUP" \
+              --query 'Schedules[?ends_with(Name, `-down`)].State' --output text 2>"$err"); then
+            :
+          elif grep -q ResourceNotFoundException "$err"; then
+            states=
+          else
+            cat "$err" >&2
+            exit 1
+          fi
+          echo "EventBridge 끄기 일정 상태: ${states:-없음}"
+          if [ -z "$states" ]; then
+            echo "::warning::$SCHEDULE_GROUP 에 끄기 일정이 없다(envs/staging apply 전?) — 백업이 끈다"
+          elif grep -qw DISABLED <<<"$states"; then
+            echo "EventBridge 끄기가 DISABLED(cluster_keep_on) — 백업도 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 노드그룹 조정
-        if: steps.decide.outputs.action != 'skip'
+        if: steps.decide.outputs.action != 'skip' && steps.keep.outputs.skip != 'true'
         env:
           ACTION: ${{ steps.decide.outputs.action }}
           DESIRED: ${{ steps.decide.outputs.desired }}

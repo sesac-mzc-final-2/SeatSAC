@@ -80,6 +80,24 @@ public final class BookingPolicy {
     /** 멱등 키 TTL 24시간 — 화면이 재시도할 수 있는 동안 첫 응답을 들고 있는다 (ADR-19) */
     public static final Duration IDEMPOTENCY_TTL = Duration.ofHours(24);
 
+    /**
+     * 아웃박스 릴레이 — 한 주기에 집는 양. 노드 0대 구간(ADR-34) 뒤 첫 주기에는 밀린 알림이
+     * 한꺼번에 걸리는데, 전부 보내려 하면 Hikari 연결 5개를 다 쓴다. 남은 건은 다음 주기가 받는다.
+     */
+    public static final int OUTBOX_RELAY_BATCH = 50;
+
+    /**
+     * 점유 시간. 파드가 전송 중에 죽으면 이 시간이 지난 뒤 다른 파드가 집는다.
+     * SQS 호출(연결·응답 수 초)보다 넉넉하고, 재전송이 너무 늦지 않은 값이다.
+     */
+    public static final Duration OUTBOX_CLAIM_TIMEOUT = Duration.ofSeconds(30);
+
+    /** 재시도 한도. 넘기면 FAILED로 두고 경보한다 (ERD 3.3) */
+    public static final int OUTBOX_MAX_ATTEMPTS = 10;
+
+    /** 재시도 간격 상한 — 1·2·4…최대 60초 (ERD 3.3) */
+    public static final Duration OUTBOX_MAX_BACKOFF = Duration.ofSeconds(60);
+
     /** SSE 하트비트 간격과 재연결 지시 값 */
     public static final Duration SSE_HEARTBEAT = Duration.ofSeconds(15);
     public static final long SSE_RETRY_MILLIS = 2_000L;

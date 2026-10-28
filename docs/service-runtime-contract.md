@@ -73,7 +73,7 @@
 | --- | --- | --- |
 | gateway | `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
-| booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`, `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s` | `SPRING_DATASOURCE_PASSWORD` |
+| booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`, `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 뒤 `true` | `SPRING_DATASOURCE_PASSWORD` |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL`, `APP_COGNITO_ENDPOINT`(선택, 기본 `https://cognito-idp.{AWS_REGION}.amazonaws.com`, `AWS_REGION`이 없으면 `ap-northeast-2` — 프로필 첫 생성 때 `GetUser`) | `SPRING_DATASOURCE_PASSWORD` |
 | payment | `APP_PAYMENT_MOCK_DELAY_CARD=9999`, `APP_PAYMENT_MOCK_DELAY=5s` | `SPRING_DATASOURCE_PASSWORD` |
 

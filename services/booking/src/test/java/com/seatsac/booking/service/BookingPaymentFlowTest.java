@@ -225,8 +225,31 @@ class BookingPaymentFlowTest {
         verify(paymentClient).cancel(anyString(), org.mockito.ArgumentMatchers
             .eq(PaymentCancelReason.HOLD_EXPIRED));
         assertThat(outboxMessageRepository.count()).isZero();
+        // 환불하고 여기서 끝낸다. 만료 스캔에 넘기면 안 된다 — 스캔은 결제를 요청한 예매
+        // (current_payment_id 있음)를 계속 보류하므로 아무도 다시 조회하지 않으면 영구히 PENDING이다
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
-            .isEqualTo(BookingStatus.PENDING);   // 만료 스캔이 EXPIRED로 바꾼다
+            .isEqualTo(BookingStatus.EXPIRED);
+        // 좌석 행도 같이 지운다. 남으면 좌석 현황에는 비어 보이는데 유일 제약 때문에 다시 선점되지 않는다
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(bookingId)).isEmpty();
+    }
+
+    /** 승인 뒤 만료인데 <b>환불 호출이 실패</b>하면 예매를 PENDING으로 남긴다 — 다음 조회가 다시 환불한다 */
+    @Test
+    void approvedButExpiredKeepsPendingWhenRefundFails() {
+        Long bookingId = hold(102L);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved(bookingId);
+        });
+        willThrow(new IllegalStateException("payment 응답 없음"))
+            .given(paymentClient).cancel(anyString(), any());
+
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class);
+
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.PENDING);
+        assertThat(outboxMessageRepository.count()).isZero();
     }
 
     // --- 예매당 1회 ---

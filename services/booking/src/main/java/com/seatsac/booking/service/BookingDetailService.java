@@ -69,7 +69,12 @@ public class BookingDetailService {
         }
 
         if (payment.isApproved()) {
-            resultApplier.applyApproved(booking, payment);
+            // 승인 뒤 만료였으면 방금 환불했다 → 조회한 값(APPROVED)은 이미 낡았다.
+            // 같은 응답에 「예매 EXPIRED + 결제 APPROVED」가 나가면 화면이 환불 사실을 알 수 없다
+            if (resultApplier.applyApproved(booking, payment) == BookingPaymentResultApplier.Applied.EXPIRED_REFUNDED) {
+                PaymentResult refunded = findPayment(booking.getCurrentPaymentId());
+                return refunded != null ? refunded : payment;
+            }
         } else if (!payment.isProcessing()) {
             resultApplier.applyDeclined(booking);
         }

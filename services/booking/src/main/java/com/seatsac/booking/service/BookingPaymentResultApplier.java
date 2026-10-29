@@ -47,7 +47,7 @@ public class BookingPaymentResultApplier {
         CONFIRMED,
         /** <b>다른 경로가 이미 확정했다.</b> 환불하지 않는다 — 예매도 결제도 유효하다 */
         ALREADY_CONFIRMED,
-        /** 승인을 받았지만 확정할 수 없는 상태였다(만료·취소). 결제는 취소(환불)했다 */
+        /** 승인을 받았지만 확정할 수 없는 상태였다(만료). 결제를 취소(환불)하고 예매도 EXPIRED로 끝냈다 */
         EXPIRED_REFUNDED,
         /** 거절을 반영했다 (좌석을 풀었다) */
         FAILED,
@@ -91,9 +91,16 @@ public class BookingPaymentResultApplier {
                 return Applied.ALREADY_CONFIRMED;
             }
 
-            log.warn("승인 뒤 확정 실패(만료·취소) — 결제를 취소한다 bookingId={} paymentId={}",
+            log.warn("승인 뒤 확정 실패(만료·취소) — 결제를 취소하고 예매를 만료로 끝낸다 bookingId={} paymentId={}",
                 booking.getBookingId(), payment.paymentId());
-            cancelPayment(payment.paymentId(), PaymentCancelReason.HOLD_EXPIRED);
+            // 환불을 먼저 한다. 만료로 바꾼 뒤 취소가 실패하면 「예매 없는 승인 결제」가 남는다 —
+            // 여기서 실패하면 PENDING으로 남겨 다음 조회가 다시 시도하게 둔다
+            if (cancelPayment(payment.paymentId(), PaymentCancelReason.HOLD_EXPIRED)) {
+                expireAfterRefund(booking, now);
+            } else {
+                log.warn("환불을 확인하지 못해 예매를 PENDING으로 남긴다 — 다음 조회가 다시 시도한다 bookingId={}",
+                    booking.getBookingId());
+            }
             return Applied.EXPIRED_REFUNDED;
         }
 
@@ -140,6 +147,23 @@ public class BookingPaymentResultApplier {
         }
     }
 
+    /**
+     * 환불한 뒤 예매를 <b>EXPIRED로 끝낸다</b>. 여기서 끝내지 않으면 예매가 PENDING에 남는데,
+     * 만료 스캔은 결제를 요청한 예매({@code current_payment_id} 있음)를 계속 보류하므로
+     * <b>아무도 다시 조회하지 않으면 영구히 PENDING</b>이 된다 — 그 사이 {@code booking_seat} 행이
+     * 남아 그 좌석은 좌석 현황에 비어 보이는데도 다시 선점되지 않는다(유일 제약).
+     *
+     * <p>계약도 이 경우를 EXPIRED로 본다 (BKG-10 409 {@code details[status=EXPIRED, reason=HOLD_EXPIRED]}).
+     * 0행이면 그 사이 다른 경로가 끝낸 것이므로 아무것도 하지 않는다.
+     */
+    private void expireAfterRefund(Booking booking, Instant now) {
+        bookingState.expireHold(booking.getBookingId(), now).ifPresentOrElse(hold -> {
+            eventPublisher.publish(SeatEventType.EXPIRED, hold.screeningId(), hold.seatIds(), now);
+            releaseKeys(booking, hold.seatIds());
+            log.info("환불 후 만료 반영 bookingId={} seats={}", hold.bookingId(), hold.seatIds().size());
+        }, () -> log.info("환불 후 만료를 반영하지 못했다(이미 처리됨) bookingId={}", booking.getBookingId()));
+    }
+
     /** 확정·거절 모두 선점 키는 더 필요 없다. 실패해도 TTL·만료 스캔이 치운다 */
     private void releaseKeys(Booking booking, List<Long> seatIds) {
         try {
@@ -151,12 +175,20 @@ public class BookingPaymentResultApplier {
     }
 
     /** 환불 실패는 삼키고 로그만 — 응답은 이미 정해졌고 만료 처리(BKG-12)가 다시 시도한다 */
-    private void cancelPayment(String paymentId, PaymentCancelReason reason) {
+    /**
+     * 결제 취소(환불). PAY-03은 멱등이라 다시 불러도 된다.
+     *
+     * @return 취소를 확인했으면 {@code true}. {@code false}면 <b>돈이 아직 잡혀 있을 수 있다</b> —
+     *     부르는 쪽은 예매를 끝내지 말고 PENDING으로 남겨 다음 조회가 다시 시도하게 둔다
+     */
+    private boolean cancelPayment(String paymentId, PaymentCancelReason reason) {
         try {
             paymentClient.cancel(paymentId, reason);
+            return true;
         } catch (RuntimeException e) {
-            log.error("결제 취소 실패 paymentId={} reason={} — 만료 처리가 다시 시도한다",
+            log.error("결제 취소 실패 paymentId={} reason={} — 다음 조회가 다시 시도한다",
                 paymentId, reason, e);
+            return false;
         }
     }
 

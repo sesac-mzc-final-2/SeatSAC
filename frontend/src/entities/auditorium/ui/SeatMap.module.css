@@ -1,0 +1,137 @@
+/*
+ * 좌석 색은 이 컴포넌트 안에서만 쓰는 값이라 전역 토큰에 넣지 않았다.
+ * 선점 중(다른 사람)과 예매 완료를 색으로 구분해야 해서 전역에 없는 호박색을 여기서 만든다.
+ */
+.map {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 68vh;
+  touch-action: manipulation;
+
+  --seat-line: var(--color-border-strong);
+  --seat-fill: var(--color-card-hover);
+  --seat-text: var(--color-muted-strong);
+  --seat-held-fill: #3b2e18;
+  --seat-held-line: #8a6a2e;
+  --seat-held-text: #d9a95c;
+}
+
+/* 스크린 */
+.screen rect {
+  fill: var(--color-border-strong);
+}
+
+.screen text {
+  fill: var(--color-dim);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+}
+
+/* 통로 */
+.aisles rect {
+  fill: #ffffff07;
+}
+
+/* 줄 이름 */
+.rows text {
+  fill: var(--color-dim);
+  font-weight: 600;
+}
+
+/* 입구 */
+.entrances circle {
+  fill: none;
+  stroke: var(--color-border-strong);
+  stroke-width: 1.2;
+}
+
+.entrances text {
+  fill: var(--color-dim);
+  font-size: 8px;
+}
+
+/* 좌석 */
+.seat rect {
+  fill: var(--seat-fill);
+  stroke: var(--seat-line);
+  stroke-width: 1;
+  transition:
+    fill var(--t-color),
+    stroke var(--t-color);
+}
+
+.seat text {
+  fill: var(--seat-text);
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+}
+
+.seat[data-selectable] {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .seat[data-selectable]:hover rect {
+    fill: var(--color-primary-soft);
+    stroke: var(--color-primary);
+  }
+}
+
+.seat[data-selectable]:focus-visible {
+  outline: none;
+}
+
+.seat[data-selectable]:focus-visible rect {
+  stroke: var(--color-primary);
+  stroke-width: 2;
+}
+
+.seat[data-state="selected"] rect {
+  fill: var(--color-primary);
+  stroke: var(--color-primary);
+}
+
+.seat[data-state="selected"] text {
+  fill: var(--color-on-primary);
+}
+
+.seat[data-state="held"] rect {
+  fill: var(--seat-held-fill);
+  stroke: var(--seat-held-line);
+}
+
+.seat[data-state="held"] text {
+  fill: var(--seat-held-text);
+}
+
+.seat[data-state="reserved"] rect {
+  fill: var(--color-bg);
+  stroke: var(--color-border);
+}
+
+.seat[data-state="reserved"] text {
+  fill: var(--color-dim);
+}
+
+.seat[data-state="inactive"] rect {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-dasharray: 2 2;
+}
+
+.seat[data-state="inactive"] text {
+  display: none;
+}
+
+/* 리클라이너는 좌석 자체가 커서(수집 좌표) 모서리만 더 둥글게 둔다 */
+.seat[data-seat-type="RECLINER"] rect {
+  rx: 30%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seat rect {
+    transition: none;
+  }
+}

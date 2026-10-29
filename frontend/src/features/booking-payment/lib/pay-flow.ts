@@ -1,5 +1,5 @@
 import type { Booking, PayRequest, PayResult } from "@/entities/booking";
-import { ApiError, messageForError } from "@/shared/api";
+import { ApiError, NetworkError, messageForError } from "@/shared/api";
 
 /** 503 PAYMENT_RESULT_UNKNOWN 뒤 결과 확인: 2초 간격 최대 5회 (계약 BKG-10 503) */
 export const POLL_INTERVAL_MS = 2000;
@@ -73,9 +73,9 @@ async function pollUntilSettled(bookingId: number, deps: PayFlowDeps, waitFirst:
     try {
       const settled = fromBooking(await deps.load(bookingId));
       if (settled) return settled;
-    } catch (error) {
-      // 확인 중 오류는 삼키고 다음 차례에 다시 본다 — 마지막까지 모르면 unknown
-      if (attempt === POLL_ATTEMPTS) return { kind: "error", message: messageForError(error) };
+    } catch {
+      // 확인 중 오류는 삼키고 다음 차례에 다시 본다. 마지막까지 모르면 unknown —
+      // 「조회가 안 됐다」가 아니라 「결제 결과를 모른다」가 사용자에게 맞는 안내다
     }
   }
   return { kind: "unknown" };
@@ -93,6 +93,9 @@ export async function settlePayment(
   try {
     return fromPayResult(await deps.pay(bookingId, body, deps.newKey()));
   } catch (error) {
+    // 응답을 못 받은 경우(연결 실패·중간에 끊김)는 요청이 서버에 닿았는지 알 수 없다 →
+    // 503 PAYMENT_RESULT_UNKNOWN 과 같게 다룬다. 다시 결제하면 이중 결제가 된다
+    if (error instanceof NetworkError) return pollUntilSettled(bookingId, deps, true);
     if (!(error instanceof ApiError)) return { kind: "error", message: messageForError(error) };
 
     switch (error.code) {

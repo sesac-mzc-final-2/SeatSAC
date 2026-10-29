@@ -1,7 +1,7 @@
 import { SeatMap, SeatMapLegend, type AuditoriumLayout, type LayoutSeat } from "@/entities/auditorium";
 import type { SeatStatus } from "@/entities/booking";
 import { SeatChoiceBar, seatRenderState, type SeatChoice } from "@/features/seat-selection";
-import { formatDateDots } from "@/shared/lib";
+import { formatDateDots, timeOfIso } from "@/shared/lib";
 import styles from "./SeatBoard.module.css";
 
 interface Props {
@@ -68,7 +68,8 @@ export function SeatBoard({
       />
 
       <p className={styles.source}>
-        좌석 배치 출처: 롯데시네마 · {formatDateDots(layout.source.fetchedAt.slice(0, 10))} 수집
+        좌석 배치 출처: 롯데시네마 · {formatDateDots(layout.source.fetchedAt.slice(0, 10))}{" "}
+        {timeOfIso(layout.source.fetchedAt)} 수집
       </p>
     </div>
   );

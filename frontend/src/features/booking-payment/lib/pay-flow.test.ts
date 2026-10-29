@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Booking, PayRequest, PayResult } from "@/entities/booking";
-import { ApiError } from "@/shared/api";
+import { ApiError, NetworkError } from "@/shared/api";
 import { POLL_ATTEMPTS, settlePayment, type PayFlowDeps } from "./pay-flow";
 
 const request: PayRequest = {
@@ -135,6 +135,28 @@ describe("settlePayment", () => {
     });
   });
 
+  it("마지막 확인까지 조회가 실패하면 error가 아니라 unknown이다 (결제 폼을 다시 열지 않게)", async () => {
+    const load = vi.fn().mockRejectedValue(apiError(503, "SERVICE_UNAVAILABLE"));
+    const outcome = await settlePayment(
+      9876,
+      request,
+      deps({ pay: vi.fn().mockRejectedValue(apiError(503, "PAYMENT_RESULT_UNKNOWN")), load }),
+    );
+    expect(load).toHaveBeenCalledTimes(POLL_ATTEMPTS);
+    expect(outcome).toEqual({ kind: "unknown" });
+  });
+
+  it("응답을 못 받으면(NetworkError) 다시 결제하지 않고 조회로 결과를 맞춘다", async () => {
+    const pay = vi.fn().mockRejectedValue(new NetworkError(new Error("fetch failed")));
+    const wait = vi.fn().mockResolvedValue(undefined);
+    const load = vi.fn().mockResolvedValue(booking({ status: "CONFIRMED" }));
+    const outcome = await settlePayment(9876, request, deps({ pay, wait, load }));
+    expect(pay).toHaveBeenCalledTimes(1);
+    // 요청이 서버에 닿았는지 모르므로 2초 뒤부터 확인한다
+    expect(wait).toHaveBeenCalledWith(2000);
+    expect(outcome).toMatchObject({ kind: "confirmed" });
+  });
+
   it("이미 결제를 요청한 예매면 다시 결제하지 않고 조회로 확인한다", async () => {
     const pay = vi.fn().mockRejectedValue(apiError(409, "PAYMENT_ALREADY_REQUESTED"));
     const wait = vi.fn().mockResolvedValue(undefined);
@@ -175,7 +197,7 @@ describe("settlePayment", () => {
     expect(outcome).toMatchObject({ kind: "error" });
   });
 
-  it("네트워크 오류 등은 error로", async () => {
+  it("알 수 없는 예외는 error로 (응답을 받은 적이 없는 NetworkError와 구분)", async () => {
     const outcome = await settlePayment(9876, request, deps({ pay: vi.fn().mockRejectedValue(new Error("boom")) }));
     expect(outcome).toMatchObject({ kind: "error" });
   });

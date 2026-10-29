@@ -65,10 +65,16 @@ export function useSeatBoard(screeningId: number): SeatBoardState {
     snapshotSeqRef.current = snapshotBoard?.seq ?? -1;
   }, [snapshotBoard]);
 
-  /** 스냅샷을 다시 받고 모아 둔 이벤트를 버린다 (새 스냅샷 기준으로 다시 쌓는다) */
+  /**
+   * 스냅샷을 다시 받는다. 모아 둔 이벤트는 <b>새 스냅샷이 실제로 왔을 때만</b> 정리한다 —
+   * 먼저 비우면 재조회가 실패했을 때(네트워크 끊김) 아직 쓸 수 있는 이벤트까지 잃는다.
+   */
   const reload = useCallback(() => {
-    setEvents([]);
-    void refetch();
+    void refetch().then((result) => {
+      const fresh = result.data;
+      if (!fresh) return;
+      setEvents((current) => current.filter((event) => event.seq > fresh.seq));
+    });
   }, [refetch]);
 
   // 회차가 바뀌면 이전 회차의 이벤트를 버린다
@@ -121,7 +127,9 @@ export function useSeatBoard(screeningId: number): SeatBoardState {
     board,
     statusOfSeat,
     isLoading: snapshotQuery.isPending,
-    error: snapshotQuery.error,
+    // 좌석판이 이미 있으면 배경 재조회 실패를 오류 화면으로 올리지 않는다 —
+    // 연결 상태는 live가 알려 주고, 화면은 마지막으로 받은 좌석 상태를 그대로 보여 주는 게 낫다
+    error: board ? null : snapshotQuery.error,
     live,
     reload,
   };

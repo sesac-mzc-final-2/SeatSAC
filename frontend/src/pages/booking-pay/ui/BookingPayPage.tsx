@@ -76,14 +76,20 @@ function Pay() {
     }
     if (!booking) return <EmptyState title="예매를 찾을 수 없어요" />;
 
-    if (pay.pending) {
+    // 결과를 받은 뒤 예매를 다시 조회하는 동안은 아직 PENDING으로 보인다 →
+    // 그때 결제 폼을 다시 열면 사용자가 두 번째 결제를 시도할 수 있다
+    const settling = outcome !== null && outcome.kind !== "error" && bookingQuery.isFetching;
+
+    if (pay.pending || settling) {
       return (
         <div className={styles.waiting} role="status" aria-live="polite">
           <LoadingBlock
             label={
               pay.checking > 0
                 ? `결제 결과를 확인하고 있어요 (${pay.checking}/${POLL_ATTEMPTS})`
-                : "결제를 처리하고 있어요"
+                : settling
+                  ? "결제 결과를 반영하고 있어요"
+                  : "결제를 처리하고 있어요"
             }
           />
           <p className={styles.note}>

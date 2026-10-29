@@ -1,0 +1,64 @@
+.board {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.remaining {
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+.remaining strong {
+  color: var(--color-text);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-dim);
+  font-size: 13px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+}
+
+.live[data-live] {
+  color: var(--color-live);
+}
+
+.live[data-live] .dot {
+  background: var(--color-live);
+}
+
+.mapBox {
+  padding: 18px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-card);
+  overflow-x: auto;
+}
+
+.legend {
+  padding: 0 2px;
+}
+
+.source {
+  color: var(--color-dim);
+  font-size: 12px;
+}

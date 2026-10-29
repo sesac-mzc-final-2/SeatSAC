@@ -1,0 +1,89 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.pay {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .pay {
+    grid-template-columns: 1fr;
+  }
+}
+
+.summary,
+.card {
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-card);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.summary dl {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.summary dt {
+  color: var(--color-muted);
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+
+.summary dd {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.amount {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timer {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+.timer strong {
+  color: var(--color-text);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timer[data-urgent] strong {
+  color: var(--color-danger);
+}
+
+.waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  padding: 28px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-card);
+}
+
+.note {
+  color: var(--color-muted);
+  font-size: 13px;
+  text-align: center;
+}

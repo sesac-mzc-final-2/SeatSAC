@@ -1,0 +1,42 @@
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid #8a6a2e;
+  border-radius: var(--radius);
+  background: #3b2e1833;
+  color: var(--color-text);
+}
+
+.banner > svg {
+  color: #d9a95c;
+  flex: none;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.text span {
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+@media (max-width: 480px) {
+  .actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}

@@ -110,7 +110,7 @@
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
 | 503 | `PAYMENT_RESULT_UNKNOWN` | booking |
-| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애. 토큰 거절은 401 `TOKEN_REJECTED`) |
+| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애. 토큰 거절은 403 `TOKEN_REJECTED`) |
 
 새 코드는 이 표와 해당 OpenAPI 응답 `description`에 함께 추가한다.
 

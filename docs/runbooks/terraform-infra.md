@@ -757,7 +757,7 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 | 단계 | 일어나는 일 |
 | --- | --- |
 | 1 | 새 태그 커밋(build-push) 또는 설정 PR → Rollout이 **preview** ReplicaSet을 띄움(active는 그대로 트래픽 처리) |
-| 2 | preview 확장과 **동시에**(Ready 전) `prePromotionAnalysis` 시작: 분석 Job이 preview Ready를 기다린 뒤 `{svc}-preview:8080`에 조회 5분 30초(200이 95% 미만이면 실패), Prometheus 지표 3분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
+| 2 | preview 확장과 **동시에**(Ready 전) `prePromotionAnalysis` 시작: 분석 Job이 preview Ready를 기다린 뒤 `{svc}-preview:8080`에 조회 6분(200이 95% 미만이면 실패), Prometheus 지표 4분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
 | 3a | 통과 → active Service를 preview 해시로 전환 → 이전 버전 60초 뒤 축소 |
 | 3b | 실패 → **abort**: active 그대로(= 자동 롤백, 사용자 영향 없음), preview 30초 뒤 축소. Rollout·ArgoCD 앱이 `Degraded` |
 

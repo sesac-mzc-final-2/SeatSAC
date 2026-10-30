@@ -135,9 +135,9 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 
 블루/그린 분석(`SeatSAC-gitops/analysis/`):
 
-| 대상 | 조건 (preview 파드, 3분 지연 뒤 1분 × 3회 ≈ 6분, 하나라도 실패하면 abort = 전환 없음) |
+| 대상 | 조건 (preview 파드, 4분 지연 뒤 1분 × 3회 ≈ 6분, 하나라도 실패하면 abort = 전환 없음) |
 | --- | --- |
-| 공통 | 분석 트래픽 Job(`rollout-smoke`, k6)이 `{svc}-preview:8080`으로 조회 요청을 preview Ready를 기다린 뒤 5분 30초(요청 제한 5초) 보내고 **응답 200이 95% 미만이면 Job 실패**(404처럼 5xx가 아닌 고장도 잡음) · `/actuator/**` 제외 요청 **≥ 20건/분** (세 측정 모두, 트래픽 0이면 통과가 아니라 실패. 분석은 preview 확장과 동시에(Ready 전) 시작하므로 preview 기동·Job 지연은 3분 지연으로 흡수) |
+| 공통 | 분석 트래픽 Job(`rollout-smoke`, k6)이 `{svc}-preview:8080`으로 조회 요청을 preview Ready를 기다린 뒤(최대 150초) 6분(요청 제한 5초) 보내고 **응답 200이 95% 미만이면 Job 실패**(404처럼 5xx가 아닌 고장도 잡음) · `/actuator/**` 제외 요청 **≥ 20건/분** (세 측정 모두, 트래픽 0이면 통과가 아니라 실패. 분석은 preview 확장과 동시에(Ready 전) 시작하므로 preview 기동·Job 지연은 4분 지연으로 흡수) |
 | booking | 5xx 비율 ≤ 1% **그리고** `booking_payment_call_total{result=~"timeout\|error"}` / (`approved`+`declined`+`timeout`+`error`) ≤ 5% (결제 호출 0건이면 통과 — 분석 트래픽에 결제 경로를 넣는 것은 BKG-10 이후) |
 | gateway | 5xx 비율 ≤ 1% |
 

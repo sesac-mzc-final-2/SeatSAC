@@ -102,7 +102,8 @@
 | --- | --- | --- |
 | 400 | `VALIDATION_FAILED`, `SCREENING_STARTED` | 전체 / booking |
 | 401 | `UNAUTHORIZED` | gateway |
-| 403 | `FORBIDDEN`, `TOKEN_REJECTED` | gateway·서비스 / user (Cognito `GetUser`가 Access Token을 거절 — `NotAuthorizedException`, 예: `aws.cognito.signin.user.admin` 범위 없음) |
+| 401 | `TOKEN_REQUIRED`, `TOKEN_REJECTED`, `IDENTITY_MISMATCH` | user — 프로필을 처음 만들 때 Access Token으로 Cognito `GetUser`를 부른다(ADR-80). 토큰 없음 `TOKEN_REQUIRED` · 토큰 거절 `TOKEN_REJECTED`(범위 누락 등) · 토큰의 `sub`이 `X-User-Id`와 다름 `IDENTITY_MISMATCH`. 세 가지 모두 **다시 로그인해도 같은 결과**라 화면이 토큰 갱신·재로그인 흐름을 타면 안 된다 |
+| 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
 | 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |
 | 409 | `SCHEDULE_CONFLICT`, `SEAT_SOLD` | catalog |
@@ -110,7 +111,7 @@
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
 | 503 | `PAYMENT_RESULT_UNKNOWN` | booking |
-| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애. 토큰 거절은 401 `TOKEN_REJECTED`) |
+| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애 — **다시 시도하면 될 수 있다**. 토큰 자체가 거절된 경우는 위 401) |
 
 새 코드는 이 표와 해당 OpenAPI 응답 `description`에 함께 추가한다.
 

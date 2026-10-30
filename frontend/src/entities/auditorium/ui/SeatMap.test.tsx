@@ -48,6 +48,19 @@ describe("SeatMap (LAY-08)", () => {
     expect(screen.getByText("입구")).toBeInTheDocument();
   });
 
+  it("좌석 안에 좌석 이름 전체(A1)를 적는다", () => {
+    render(<SeatMap layout={layout} stateOf={() => "available"} />);
+    expect(screen.getByText("A1")).toBeInTheDocument();
+    expect(screen.getByText("A3")).toBeInTheDocument();
+  });
+
+  it("넘기는 좌석은 화면용으로 키운 사본이 아니라 원래 좌표를 가진 좌석이다", async () => {
+    const onSelect = vi.fn();
+    render(<SeatMap layout={layout} stateOf={() => "available"} onSelect={onSelect} />);
+    await userEvent.click(screen.getByRole("checkbox", { name: "A2 선택 가능" }));
+    expect(onSelect.mock.calls[0][0]).toBe(layout.seats[1]);
+  });
+
   it("고를 수 있는 좌석만 체크박스로 읽히고, 나머지는 상태를 이름에 넣는다", () => {
     render(
       <SeatMap

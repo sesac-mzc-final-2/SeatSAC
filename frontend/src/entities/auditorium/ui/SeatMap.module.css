@@ -6,7 +6,7 @@
   display: block;
   width: 100%;
   height: auto;
-  max-height: 68vh;
+  margin-inline: auto;
   touch-action: manipulation;
 
   --seat-line: var(--color-border-strong);
@@ -24,7 +24,7 @@
 
 .screen text {
   fill: var(--color-dim);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.22em;
 }
 
@@ -48,7 +48,7 @@
 
 .entrances text {
   fill: var(--color-dim);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 /* 좌석 */
@@ -64,6 +64,7 @@
 .seat text {
   fill: var(--seat-text);
   font-weight: 600;
+  letter-spacing: -0.02em;
   pointer-events: none;
   user-select: none;
 }

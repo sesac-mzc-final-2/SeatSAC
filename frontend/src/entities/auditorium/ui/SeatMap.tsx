@@ -1,4 +1,4 @@
-import { type KeyboardEvent } from "react";
+import { type KeyboardEvent, useMemo } from "react";
 import {
   MAP_PADDING,
   isSelectable,
@@ -6,6 +6,7 @@ import {
   rowMarkers,
   seatAriaLabel,
   seatFontSize,
+  toPixelLayout,
   viewBoxAttr,
 } from "../lib/seat-map";
 import type { AuditoriumLayout, LayoutSeat, SeatRenderState } from "../model/types";
@@ -28,15 +29,22 @@ interface Props {
  * <p>좌석이 100개를 넘고 상영관마다 모양이 달라서 격자(행×열)로 그리지 않는다 — 수집한 x·y·w·h를
  * 그대로 쓰고 통로·입구·스크린도 좌표대로 둔다. 그래야 실제 상영관과 같은 모양이 된다.
  */
-export function SeatMap({ layout, stateOf, onSelect, disabled = false }: Props) {
+export function SeatMap({ layout: source, stateOf, onSelect, disabled = false }: Props) {
+  // 좌표를 px로 바꿔 두면 여백·스크린·입구·글자를 px로 정할 수 있다 (toPixelLayout 참고)
+  const layout = useMemo(() => toPixelLayout(source), [source]);
   const box = layoutViewBox(layout);
   const rows = rowMarkers(layout.seats);
-  const screenY = -MAP_PADDING.top + 14;
+  // 스크린 글자(12px)가 위 여백 안에 들어가게 둔다 — 글자는 막대 8px 위에 놓인다
+  const screenY = -MAP_PADDING.top + 26;
 
   const press = (seat: LayoutSeat, state: SeatRenderState) => {
     if (disabled || !onSelect || !isSelectable(state)) return;
-    onSelect(seat);
+    onSelect(originalOf(seat));
   };
+
+  // stateOf·onSelect는 원래 좌석을 받는다 — 좌표만 바꾼 사본을 밖으로 내보내지 않는다
+  const original = useMemo(() => new Map(source.seats.map((seat) => [seat.seatId, seat])), [source]);
+  const originalOf = (seat: LayoutSeat): LayoutSeat => original.get(seat.seatId) ?? seat;
 
   const onKeyDown = (event: KeyboardEvent<SVGGElement>, seat: LayoutSeat, state: SeatRenderState) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -48,6 +56,10 @@ export function SeatMap({ layout, stateOf, onSelect, disabled = false }: Props) 
     <svg
       className={styles.map}
       viewBox={viewBoxAttr(box)}
+      width={box.width}
+      height={box.height}
+      // 작은 상영관을 화면 폭만큼 부풀리지 않고, 좁은 화면에서는 좌석이 읽히는 크기 아래로 줄이지 않는다(가로 스크롤)
+      style={{ maxWidth: box.width, minWidth: box.width * 0.72 }}
       preserveAspectRatio="xMidYMid meet"
       role="group"
       aria-label={`${layout.name} 좌석 배치도`}
@@ -98,7 +110,7 @@ export function SeatMap({ layout, stateOf, onSelect, disabled = false }: Props) 
             y={row.centerY}
             textAnchor="end"
             dominantBaseline="central"
-            fontSize={Math.max(row.height * 0.6, 7)}
+            fontSize={13}
           >
             {row.rowLabel}
           </text>
@@ -109,8 +121,8 @@ export function SeatMap({ layout, stateOf, onSelect, disabled = false }: Props) 
       <g className={styles.entrances} aria-hidden="true">
         {layout.entrances.map((entrance) => (
           <g key={`${entrance.x}-${entrance.y}`}>
-            <circle cx={entrance.x} cy={entrance.y} r={4} />
-            <text x={entrance.x} y={entrance.y + 13} textAnchor="middle">
+            <circle cx={entrance.x} cy={entrance.y} r={5} />
+            <text x={entrance.x} y={entrance.y + 16} textAnchor="middle">
               입구
             </text>
           </g>
@@ -120,7 +132,7 @@ export function SeatMap({ layout, stateOf, onSelect, disabled = false }: Props) 
       {/* 좌석 */}
       <g>
         {layout.seats.map((seat) => {
-          const state = stateOf(seat);
+          const state = stateOf(originalOf(seat));
           const selectable = !disabled && Boolean(onSelect) && isSelectable(state);
           return (
             <g
@@ -145,7 +157,7 @@ export function SeatMap({ layout, stateOf, onSelect, disabled = false }: Props) 
                 dominantBaseline="central"
                 fontSize={seatFontSize(seat)}
               >
-                {seat.colNo}
+                {seat.seatLabel}
               </text>
             </g>
           );

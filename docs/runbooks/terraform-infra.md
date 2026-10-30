@@ -616,7 +616,7 @@ aws cloudwatch describe-alarms --alarm-names cinema-staging-notification-dlq-not
   --query 'MetricAlarms[].[AlarmName,StateValue]' --output text              # 둘 다 OK 또는 INSUFFICIENT_DATA
 aws iam get-role --role-name cinema-staging-booking-pod --query 'Role.RoleName' --output text   # 정확한 이름(접미사 없음)
 aws scheduler list-schedules --group-name cinema-staging-sqs-metrics --query 'Schedules[].[Name,State]' --output text   # keep-active-* 2개 ENABLED
-aws logs tail /aws/lambda/cinema-staging-sqs-metrics --since 2h | grep -c 'REPORT'      # 1시간에 2번(큐 2개) 호출 — apply 뒤 1시간 넘게 지나서 본다
+aws logs tail /aws/lambda/cinema-staging-sqs-metrics --since 2h | grep -c 'REPORT'      # 약 4 (일정 2개 × 시간당 1회 × 2시간) — apply 뒤 2시간 넘게 지나서 본다. apply 직후면 0~2
 
 # gitops PR 머지 뒤(booking 새 파드) — Pod Identity가 주입됐는지 (값은 출력하지 않는다)
 P=$(kubectl -n cinema-staging get pods -l app.kubernetes.io/name=booking -o jsonpath='{.items[*].metadata.name}'); P=${P%% *}
@@ -634,7 +634,7 @@ kubectl -n cinema-staging get pod "$P" -o jsonpath='{range .spec.containers[0].e
 
 - 꺼 두는 동안 확정된 예매는 아웃박스에 `PENDING`으로 남는다(DB라 사라지지 않음) → Lambda가 붙은 뒤 켜면 순서대로 보내진다. **기다리는 쪽이 안전하다**
 - Lambda 전에 켜야 하면(3.2.6 통합 확인 등): 메시지는 큐에 쌓이기만 하고 받는 쪽이 없어 **DLQ로도 가지 않는다** → 보존 7일이 지나면 SQS가 조용히 지운다. 2일째에 `…-notification-oldest-2d` 경보가 오니 그 전에 Lambda를 붙이거나 릴레이를 다시 끈다
-- 그 경우 `…-notification-oldest-2d` 경보는 **반드시 온다**(켠 뒤 48시간, 받는 쪽이 없다는 정확한 신호). 예상된 경보이니 스크럼에 "Lambda 연결 전 릴레이 켬, 경보 예상"을 먼저 공유한다. 데모(인계 #10: 확정 → Lambda 로그에 `eventId`)도 Lambda가 전제라 **기본은 Lambda 뒤에 켠다**(남궁일·김종식 합의 10/30)
+- 그 경우 예매가 확정돼 메시지가 큐에 남아 있다면 `…-notification-oldest-2d` 경보가 **온다**(가장 오래된 메시지가 48시간을 넘긴 뒤, 받는 쪽이 없다는 정확한 신호. 확정이 하나도 없어 큐가 비어 있으면 오지 않는다). 예상된 경보이니 스크럼에 "Lambda 연결 전 릴레이 켬, 경보 예상"을 먼저 공유한다. 데모(인계 #10: 확정 → Lambda 로그에 `eventId`)도 Lambda가 전제라 **기본은 Lambda 뒤에 켠다**(남궁일·김종식 합의 10/30)
 - 큐에서 사라진 경우의 복구: 아웃박스 행은 `SENT`로 남아 있다(릴레이가 지우지 않음) → 그 기간 행을 `PENDING`으로 되돌리면 같은 `eventId`(= `message_key`)로 다시 보내진다. DB 손 작업이라 남궁일과 함께(`UPDATE booking_db.outbox_message SET status='PENDING', attempt_count=0, next_attempt_at=:now WHERE status='SENT' AND sent_at BETWEEN :from AND :to`), Lambda는 `eventId`로 중복을 무시한다
 
 ```yaml

@@ -19,7 +19,7 @@ import org.springframework.web.client.RestClientException;
  * API라 SDK 없이 JSON 1.1 프로토콜({@code X-Amz-Target} + {@code application/x-amz-json-1.1})로 직접 부른다.
  *
  * <ul>
- *   <li>Cognito가 토큰을 거절({@code NotAuthorizedException}: scope 누락·폐기)하면 403 {@code TOKEN_REJECTED}</li>
+ *   <li>Cognito가 토큰을 거절({@code NotAuthorizedException}: 만료·폐기)하면 401 {@code TOKEN_REJECTED}</li>
  *   <li>그 밖의 실패(타임아웃·연결·5xx·다른 오류 유형·응답에 sub/email 없음)는 503 {@code IDENTITY_UNAVAILABLE}
  *       — 화면은 잠시 뒤 재시도(계약)</li>
  * </ul>

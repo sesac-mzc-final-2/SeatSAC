@@ -1,7 +1,7 @@
 # 네이밍·공통 규약 (conventions)
 
 > 기준 2026-10-22 (회의록2 결정 반영, ADR-49~64). 03a 명명 규칙 개정을 확정한 최종본. 03a 이후 결정(Cognito ADR-37, API 명세서 v1.1, 2.2.4 v0.3, ERD 6차)을 반영해 03a와 다른 곳은 ⚠️로 표시했다.
-> 범위: 서비스 5개(gateway·catalog·booking·user·payment) + Lambda 3개(notification·cognito-presignup·sqs-metrics) (ADR-50·51, sqs-metrics는 3.1.9 운영용).
+> 범위: 서비스 5개(gateway·catalog·booking·user·payment) + Lambda 2개(notification·cognito-presignup) (ADR-50·51).
 > 이 문서가 노션 회의록과 다르면 이 문서를 따르고, 바꿀 때는 PR로 고친다.
 
 ---
@@ -110,7 +110,7 @@
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
 | 503 | `PAYMENT_RESULT_UNKNOWN` | booking |
-| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애. 토큰 거절은 401 `TOKEN_REJECTED`) |
+| 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애. 토큰 거절은 403 `TOKEN_REJECTED`) |
 
 새 코드는 이 표와 해당 OpenAPI 응답 `description`에 함께 추가한다.
 
@@ -149,7 +149,7 @@
 | ECR | `cinema/{service}` (frontend 없음) | `cinema/booking` |
 | 이미지 태그 | git SHA 7자리, 불변 | `cinema/booking:3f9a1c2` |
 | Pod Identity 역할 | `cinema-staging-{대상}-pod` | `cinema-staging-booking-pod` |
-| Lambda | `cinema-staging-{기능}` | `cinema-staging-notification`, `cinema-staging-cognito-presignup`, `cinema-staging-sqs-metrics`(알림 큐 지표 유지, 3.1.9) |
+| Lambda | `cinema-staging-{기능}` | `cinema-staging-notification`, `cinema-staging-cognito-presignup` |
 | K8s 리소스 | `{service}`, Rollout 미리보기 Service `{service}-preview`, Flyway Job `{service}-flyway` | `booking-preview` |
 | 공통 라벨 | `app.kubernetes.io/name={service}`, `app.kubernetes.io/part-of=cinema` | — |
 | Service 포트 이름 | `http` (8080) | — |

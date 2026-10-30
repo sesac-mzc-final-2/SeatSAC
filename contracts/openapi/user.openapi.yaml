@@ -23,7 +23,7 @@ paths:
       description: |
         프로필이 없으면 만들고 200, 이미 있으면 Cognito를 호출하지 않는다. 생성할 때만 요청의 Access Token으로
         Cognito GetUser를 호출해 email·name을 받는다(2.2.4 v0.3 결정). Cognito가 토큰을 거절하면
-        (NotAuthorizedException, 예: aws.cognito.signin.user.admin 범위 없음) 403 TOKEN_REJECTED,,
+        (NotAuthorizedException — aws.cognito.signin.user.admin 범위 없음, 폐기된 토큰 등) 403 TOKEN_REJECTED,
         그 밖의 Cognito 실패(장애·타임아웃)는 503 IDENTITY_UNAVAILABLE.
         role은 저장하지 않고 X-User-Role을 그대로.
       security: [ { bearerAuth: [] } ]
@@ -34,13 +34,17 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Profile" }
         "401":
-          description: UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치
+          description: |
+            UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치. 화면은 토큰을 1회 갱신 후 재시도, 그래도 401이면 로그인.
+            IDENTITY_MISMATCH (user) — Cognito가 돌려준 sub가 X-User-Id와 다름
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "403":
           description: |
-            TOKEN_REJECTED (user) — 프로필 생성 중 Cognito GetUser가 Access Token을 거절(범위 누락 등).
-            토큰 갱신·다시 로그인해도 같은 결과이므로 화면은 재시도하지 않는다(401이 아닌 이유 — 401이면 화면이
-            갱신 → signinRedirect를 반복한다). 화면 scope 설정을 고쳐야 한다
+            FORBIDDEN, details[0].reason = TOKEN_REJECTED (user) — 프로필 생성 중 Cognito GetUser가 Access Token을 거절
+            (NotAuthorizedException). 원인은 화면 scope에 aws.cognito.signin.user.admin이 없음(설정 문제) 또는
+            폐기된 토큰(전역 로그아웃 직후 등). 401이 아닌 이유: 401이면 화면이 갱신 → signinRedirect를 자동으로 반복한다.
+            화면은 자동 갱신·리다이렉트를 하지 않고 "다시 로그인" 안내를 한 번 보여 준다. 사용자가 다시 로그인한 뒤에도
+            403이면 설정 문제로 보고 더 시도하지 않는다
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "503":
           description: IDENTITY_UNAVAILABLE — 첫 호출 때 Cognito GetUser 호출 실패(장애·타임아웃·네트워크). 토큰 거절은 403 TOKEN_REJECTED. 화면은 잠시 뒤 재시도

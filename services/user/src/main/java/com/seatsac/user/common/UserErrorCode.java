@@ -15,8 +15,10 @@ public enum UserErrorCode implements ErrorCode {
 
     // 401 UNAUTHORIZED — 프로필을 처음 만들 때 Access Token이 필요하다 (Cognito GetUser)
     TOKEN_REQUIRED(CommonResponseCode.UNAUTHORIZED, "인증 정보가 없습니다."),
-    TOKEN_REJECTED(CommonResponseCode.UNAUTHORIZED, "인증 정보가 유효하지 않습니다."),
     IDENTITY_MISMATCH(CommonResponseCode.UNAUTHORIZED, "인증 정보가 사용자와 맞지 않습니다."),
+
+    // 403 FORBIDDEN — Cognito GetUser가 토큰을 거절(scope 누락·폐기). 401이면 화면이 갱신·로그인을 자동 반복한다 (규약 6장)
+    TOKEN_REJECTED(CommonResponseCode.FORBIDDEN, "인증 정보로 사용자 정보를 가져올 수 없습니다. 다시 로그인해 주세요."),
 
     // 400 VALIDATION_FAILED — USR-05 선호 극장
     DUPLICATE_RANK(CommonResponseCode.VALIDATION_FAILED, "선호 극장 순위가 중복됩니다."),

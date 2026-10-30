@@ -757,7 +757,7 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 | 단계 | 일어나는 일 |
 | --- | --- |
 | 1 | 새 태그 커밋(build-push) 또는 설정 PR → Rollout이 **preview** ReplicaSet을 띄움(active는 그대로 트래픽 처리) |
-| 2 | preview Ready → `prePromotionAnalysis` 시작: 분석 Job이 `{svc}-preview:8080`에 조회 4분 30초(200이 95% 미만이면 실패), Prometheus 지표 2분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
+| 2 | preview 확장과 **동시에**(Ready 전) `prePromotionAnalysis` 시작: 분석 Job이 preview Ready를 기다린 뒤 `{svc}-preview:8080`에 조회 6분(200이 95% 미만이면 실패), Prometheus 지표 4분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
 | 3a | 통과 → active Service를 preview 해시로 전환 → 이전 버전 60초 뒤 축소 |
 | 3b | 실패 → **abort**: active 그대로(= 자동 롤백, 사용자 영향 없음), preview 30초 뒤 축소. Rollout·ArgoCD 앱이 `Degraded` |
 
@@ -824,7 +824,7 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 ```bash
 # SeatSAC main에 booking 변경 머지 → build-push가 gitops 태그 커밋 (또는 수동 실행 services=booking)
 kubectl argo rollouts get rollout booking -n cinema-staging --watch
-#   기대: Preview(새 해시) Running → AnalysisRun Running(약 5분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
+#   기대: Preview(새 해시) Running → AnalysisRun Running(약 6분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
 kubectl -n cinema-staging get analysisrun -l rollouts-pod-template-hash          # 최신 Successful
 kubectl -n cinema-staging get jobs | grep -i preview-traffic                       # 분석 Job Complete
 ```

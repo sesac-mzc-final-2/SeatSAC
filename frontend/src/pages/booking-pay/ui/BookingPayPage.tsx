@@ -107,6 +107,7 @@ function Pay() {
           seatSelectHref={seatSelectHref}
           myPageHref={routes.myPage()}
           showtimesHref={routes.showtimes()}
+          onRecheck={() => void bookingQuery.refetch()}
         />
       );
     }

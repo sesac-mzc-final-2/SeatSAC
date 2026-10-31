@@ -1,6 +1,6 @@
 import { bookingStatusLabel, failureMessage, formatAmount, type Booking } from "@/entities/booking";
 import type { PayOutcome } from "@/features/booking-payment";
-import { Badge, ButtonLink, EmptyState } from "@/shared/ui";
+import { Badge, Button, ButtonLink, EmptyState } from "@/shared/ui";
 import styles from "./BookingResult.module.css";
 
 interface Props {
@@ -10,21 +10,28 @@ interface Props {
   seatSelectHref: string;
   myPageHref: string;
   showtimesHref: string;
+  /** 결과를 못 받았을 때 예매 상태를 다시 조회한다 (`GET /bookings/{id}`) */
+  onRecheck: () => void;
 }
 
 /**
  * W6 결제 결과. 4가지로 갈린다 — 완료 · 실패 · 시간 초과 · (결과를 못 받은) 확인 필요.
  * 실패에 「다시 결제」 버튼을 두지 않는다 — 예매당 결제는 1회이고 좌석도 이미 풀렸다(ADR-24).
  */
-export function BookingResult({ booking, outcome, seatSelectHref, myPageHref, showtimesHref }: Props) {
-  if (outcome?.kind === "unknown") {
+export function BookingResult({ booking, outcome, seatSelectHref, myPageHref, showtimesHref, onRecheck }: Props) {
+  // 다시 조회해 결과가 나왔으면(PENDING이 아니면) 아래에서 그 결과를 그린다
+  if (outcome?.kind === "unknown" && booking.status === "PENDING") {
     return (
       <EmptyState
         as="h2"
         icon="clock"
         title="결제 결과를 확인하지 못했어요"
-        description="결제가 처리 중일 수 있습니다. 잠시 후 예매 내역에서 결과를 확인해 주세요. 중복 결제는 되지 않습니다."
-        action={<ButtonLink to={myPageHref} variant="primary">예매 내역에서 확인</ButtonLink>}
+        description="결제가 처리 중일 수 있습니다. 잠시 후 결과를 다시 확인해 주세요. 중복 결제는 되지 않습니다."
+        action={
+          <Button variant="primary" onClick={onRecheck}>
+            결과 다시 확인
+          </Button>
+        }
       />
     );
   }

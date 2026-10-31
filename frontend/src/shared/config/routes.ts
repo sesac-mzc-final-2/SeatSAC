@@ -10,6 +10,7 @@ export const routePatterns = {
   movie: "/movies/:movieId",
   showtimes: "/showtimes",
   screening: "/screenings/:screeningId",
+  bookingPay: "/bookings/:bookingId/pay",
   credits: "/credits",
   callback: "/callback",
   myPage: "/me",
@@ -28,6 +29,8 @@ export const routes = {
   },
   /** W4 좌석 선택 (남궁일, BKG-09) */
   screening: (screeningId: number | string) => `/screenings/${screeningId}`,
+  /** W5·W6 결제·결제 결과 (남궁일, BKG-10) */
+  bookingPay: (bookingId: number | string) => `/bookings/${bookingId}/pay`,
   credits: () => "/credits",
   callback: () => "/callback",
   /** W8 마이페이지 (3.3.6) */

@@ -1,0 +1,75 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 14px;
+}
+
+@media (max-width: 480px) {
+  .row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field label {
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field input {
+  padding: 11px 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--t-color),
+    background var(--t-color);
+}
+
+.field input::placeholder {
+  color: var(--color-dim);
+}
+
+.field input:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.field input:disabled {
+  background: var(--color-card);
+  color: var(--color-dim);
+}
+
+.field input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.error {
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+.mock {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-card-hover);
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}

@@ -1,0 +1,46 @@
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.chip {
+  display: block;
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-card-hover);
+}
+
+.chip[data-state="selected"] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.chip[data-state="held"] {
+  background: #3b2e18;
+  border-color: #8a6a2e;
+}
+
+.chip[data-state="reserved"] {
+  background: var(--color-bg);
+  border-color: var(--color-border);
+}
+
+.chip[data-state="inactive"] {
+  background: none;
+  border-style: dashed;
+  border-color: var(--color-border);
+}

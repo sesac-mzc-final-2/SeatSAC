@@ -23,8 +23,8 @@ paths:
       description: |
         프로필이 없으면 만들고 200, 이미 있으면 Cognito를 호출하지 않는다. 생성할 때만 요청의 Access Token으로
         Cognito GetUser를 호출해 email·name을 받는다(2.2.4 v0.3 결정). Cognito가 토큰을 거절하면
-        (NotAuthorizedException, 예: aws.cognito.signin.user.admin 범위 없음) 401 TOKEN_REJECTED,
-        토큰의 sub이 X-User-Id와 다르면 401 IDENTITY_MISMATCH,
+        (NotAuthorizedException, 예: aws.cognito.signin.user.admin 범위 없음) 401 UNAUTHORIZED(reason TOKEN_REJECTED),
+        토큰의 sub이 X-User-Id와 다르면 401 UNAUTHORIZED(reason IDENTITY_MISMATCH),
         그 밖의 Cognito 실패(장애·타임아웃)는 503 IDENTITY_UNAVAILABLE (ADR-80).
         role은 저장하지 않고 X-User-Role을 그대로.
       security: [ { bearerAuth: [] } ]
@@ -36,15 +36,18 @@ paths:
               schema: { $ref: "#/components/schemas/Profile" }
         "401":
           description: |
-            UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치.
-            TOKEN_REQUIRED (user) — 프로필 생성에 Access Token이 필요한데 없음.
-            TOKEN_REJECTED (user) — Cognito GetUser가 Access Token을 거절(범위 누락 등).
-            IDENTITY_MISMATCH (user) — 토큰의 sub이 X-User-Id와 다름.
-            user의 세 코드는 다시 로그인해도 같은 결과다 — 화면은 토큰 갱신·재로그인 흐름을
-            타지 말고 안내로 끝내야 한다(설정을 고쳐야 풀린다)
+            code는 모두 UNAUTHORIZED. 원인은 details[].reason으로 구분한다.
+            Gateway — 토큰 없음(reason TOKEN_REQUIRED)·만료·서명 불일치.
+            user (프로필 생성 때, ADR-80):
+              TOKEN_REQUIRED — Access Token이 없음 (Gateway와 같은 이름 — 화면은 구분하지 않는다)
+              TOKEN_REJECTED — Cognito GetUser가 토큰을 거절(NotAuthorizedException). 범위 누락처럼
+                설정 문제면 다시 로그인해도 같다. Gateway 검증 뒤 토큰이 폐기된 드문 경우만 새 토큰으로 풀린다
+              IDENTITY_MISMATCH — 토큰의 sub이 X-User-Id와 다름
+            화면은 토큰 갱신 1회 뒤에도 TOKEN_REJECTED·IDENTITY_MISMATCH면 재로그인으로 보내지 않고
+            안내로 끝낸다(로그인 반복 방지)
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "503":
-          description: IDENTITY_UNAVAILABLE — 첫 호출 때 Cognito GetUser 호출 실패(장애·타임아웃·네트워크). 화면은 잠시 뒤 재시도. 토큰 자체가 거절된 경우는 401 TOKEN_REJECTED·IDENTITY_MISMATCH
+          description: IDENTITY_UNAVAILABLE — 첫 호출 때 Cognito GetUser 호출 실패(장애·타임아웃·네트워크). 화면은 잠시 뒤 재시도. 토큰 자체가 거절된 경우는 401 UNAUTHORIZED(reason TOKEN_REJECTED·IDENTITY_MISMATCH)
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     patch:
       tags: [profile]

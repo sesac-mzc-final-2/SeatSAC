@@ -5,10 +5,23 @@
 export const BASE = __ENV.BASE_URL || "http://gateway:8080";
 
 /**
- * Cognito 테스트 계정 토큰. 쉼표로 구분해 K6_TOKENS로 넘긴다.
- * 인증 API 요청 수 제한 때문에 k6 안에서 로그인하지 않고 미리 발급해 둔다.
+ * Cognito 테스트 계정 토큰. 인증 API 요청 수 제한 때문에 k6 안에서 로그인하지 않고 미리 발급해 둔다
+ * (`tools/loadtest_users.py`).
+ *
+ * - `K6_TOKENS_FILE` — 파일 경로(줄당 1개). 100개면 약 100KB라 env·인자 한도(128KiB)에 닿으므로 이쪽을 쓴다.
+ *   `open()`은 init 단계에서만 되고 상대 경로는 이 파일 기준이라 <b>절대 경로</b>로 넘긴다
+ * - `K6_TOKENS` — 쉼표로 이은 값. 토큰 몇 개로 돌릴 때만
  */
-export const TOKENS = (__ENV.K6_TOKENS || "").split(",").filter((t) => t.length > 0);
+function loadTokens() {
+  const file = __ENV.K6_TOKENS_FILE;
+  const raw = file ? open(file) : __ENV.K6_TOKENS || "";
+  return raw
+    .split(file ? /\r?\n/ : ",")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+export const TOKENS = loadTokens();
 
 /**
  * VU마다 다른 사용자를 쓴다. 토큰이 VU보다 적으면 같은 사용자가 겹치는데, booking은
@@ -17,7 +30,7 @@ export const TOKENS = (__ENV.K6_TOKENS || "").split(",").filter((t) => t.length 
  */
 export function tokenForVu(vu) {
   if (TOKENS.length === 0) {
-    throw new Error("K6_TOKENS가 비었다. Cognito 테스트 계정 토큰을 쉼표로 넘겨라");
+    throw new Error("토큰이 없다. K6_TOKENS_FILE(줄당 1개) 또는 K6_TOKENS(쉼표)로 Cognito 테스트 계정 토큰을 넘겨라");
   }
   return TOKENS[(vu - 1) % TOKENS.length];
 }

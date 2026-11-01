@@ -59,4 +59,26 @@ describe("useSeatChoice", () => {
     expect(result.current.seats).toHaveLength(0);
     expect(result.current.has(1)).toBe(false);
   });
+
+  it("retain은 조건에 맞는 좌석만 남기고 뺀 좌석을 돌려준다", () => {
+    const { result } = renderHook(() => useSeatChoice());
+    act(() => {
+      result.current.toggle(seat(1));
+      result.current.toggle(seat(2));
+      result.current.toggle(seat(3));
+    });
+    let removed: LayoutSeat[] = [];
+    act(() => {
+      removed = result.current.retain((chosen) => chosen.seatId !== 2);
+    });
+    expect(removed.map((chosen) => chosen.seatId)).toEqual([2]);
+    expect(result.current.seatIds).toEqual([1, 3]);
+
+    // 뺄 것이 없으면 그대로 두고 빈 배열
+    act(() => {
+      removed = result.current.retain(() => true);
+    });
+    expect(removed).toEqual([]);
+    expect(result.current.seatIds).toEqual([1, 3]);
+  });
 });

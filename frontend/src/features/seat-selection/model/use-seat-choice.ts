@@ -9,6 +9,8 @@ export interface SeatChoice {
   /** 이미 고른 좌석이면 빼고, 아니면 넣는다. 4석을 넘어 못 넣으면 `false` */
   toggle: (seat: LayoutSeat) => boolean;
   clear: () => void;
+  /** 조건에 맞는 좌석만 남기고, 뺀 좌석을 돌려준다 (실시간으로 점유된 좌석 정리) */
+  retain: (keep: (seat: LayoutSeat) => boolean) => LayoutSeat[];
   full: boolean;
 }
 
@@ -43,6 +45,14 @@ export function useSeatChoice(): SeatChoice {
 
   const clear = useCallback(() => apply([]), []);
 
+  const retain = useCallback((keep: (seat: LayoutSeat) => boolean) => {
+    const current = seatsRef.current;
+    const kept = current.filter(keep);
+    if (kept.length === current.length) return [];
+    apply(kept);
+    return current.filter((seat) => !kept.includes(seat));
+  }, []);
+
   const seatIds = useMemo(() => seats.map((seat) => seat.seatId), [seats]);
   const chosen = useMemo(() => new Set(seatIds), [seatIds]);
 
@@ -52,6 +62,7 @@ export function useSeatChoice(): SeatChoice {
     has: (seatId: number) => chosen.has(seatId),
     toggle,
     clear,
+    retain,
     full: seats.length >= MAX_SEATS,
   };
 }

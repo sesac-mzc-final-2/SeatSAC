@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { auditoriumLayoutQuery } from "@/entities/auditorium";
 import { availableCount } from "@/entities/booking";
@@ -109,6 +109,20 @@ function SeatSelect() {
     },
     onFailed: (message) => toast.show(message, { tone: "error" }),
   });
+
+  // 고른 좌석을 다른 사람이 먼저 잡으면(SSE HELD·CONFIRMED) 바로 선택에서 뺀다 — 그대로 두면
+  // 「선택됨」으로 보이다가 선점 요청이 409로 끝난다. 내 선점 요청 중에는 내 HELD 이벤트가 먼저 올 수
+  // 있어 건드리지 않는다(성공하면 결제 화면으로 넘어가며 비운다)
+  const { statusOfSeat } = board;
+  const { retain } = choice;
+  const holdPending = hold.pending;
+  useEffect(() => {
+    if (holdPending) return;
+    const taken = retain((seat) => statusOfSeat(seat.seatId) === "AVAILABLE");
+    if (taken.length > 0) {
+      toast.show(`${taken.map((seat) => seat.seatLabel).join(", ")} 좌석을 방금 다른 분이 선택해 선택에서 뺐어요.`);
+    }
+  }, [statusOfSeat, retain, holdPending, toast]);
 
   const sellableSeatIds = useMemo(
     () => (layoutQuery.data?.seats ?? []).filter((seat) => seat.active).map((seat) => seat.seatId),

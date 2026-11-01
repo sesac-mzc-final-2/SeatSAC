@@ -111,18 +111,20 @@ function SeatSelect() {
   });
 
   // 고른 좌석을 다른 사람이 먼저 잡으면(SSE HELD·CONFIRMED) 바로 선택에서 뺀다 — 그대로 두면
-  // 「선택됨」으로 보이다가 선점 요청이 409로 끝난다. 내 선점 요청 중에는 내 HELD 이벤트가 먼저 올 수
-  // 있어 건드리지 않는다(성공하면 결제 화면으로 넘어가며 비운다)
+  // 「선택됨」으로 보이다가 선점 요청이 409로 끝난다. 내 HELD일 수 있는 좌석은 건드리지 않는다:
+  // 요청 중(응답보다 이벤트가 먼저 올 수 있다)이거나, 결과를 모르는 선점의 좌석(응답 유실 — 같은 좌석으로
+  // 다시 누르면 같은 멱등 키로 첫 결과를 받아야 한다)
   const { statusOfSeat } = board;
   const { retain } = choice;
-  const holdPending = hold.pending;
+  const { pending: holdPending, unsettledSeatIds } = hold;
   useEffect(() => {
     if (holdPending) return;
-    const taken = retain((seat) => statusOfSeat(seat.seatId) === "AVAILABLE");
+    const mine = new Set(unsettledSeatIds);
+    const taken = retain((seat) => mine.has(seat.seatId) || statusOfSeat(seat.seatId) === "AVAILABLE");
     if (taken.length > 0) {
       toast.show(`${taken.map((seat) => seat.seatLabel).join(", ")} 좌석을 방금 다른 분이 선택해 선택에서 뺐어요.`);
     }
-  }, [statusOfSeat, retain, holdPending, toast]);
+  }, [statusOfSeat, retain, holdPending, unsettledSeatIds, toast]);
 
   const sellableSeatIds = useMemo(
     () => (layoutQuery.data?.seats ?? []).filter((seat) => seat.active).map((seat) => seat.seatId),

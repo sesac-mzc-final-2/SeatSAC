@@ -41,6 +41,19 @@ describe("useSeatHold 멱등 키", () => {
     expect(keyOf(1)).not.toBe(keyOf(0));
   });
 
+  it("결과를 모르는 선점의 좌석을 알려 주고, 결과가 나오면 비운다", async () => {
+    holdSeats.mockRejectedValueOnce(new NetworkError(new TypeError("Failed to fetch"))).mockRejectedValueOnce(conflict);
+    const onFailed = vi.fn();
+    const { result } = renderHook(() => useSeatHold({ onHeld: vi.fn(), onFailed }), { wrapper });
+
+    act(() => result.current.hold({ screeningId: 1, seatIds: [10, 11] }));
+    await waitFor(() => expect(result.current.unsettledSeatIds).toEqual([10, 11]));
+
+    act(() => result.current.hold({ screeningId: 1, seatIds: [10, 11] }));
+    await waitFor(() => expect(onFailed).toHaveBeenCalledTimes(2));
+    expect(result.current.unsettledSeatIds).toEqual([]);   // 409는 서버가 저장한 확정 결과
+  });
+
   it("결과를 몰라도 다른 좌석이면 새 키를 쓴다 (같은 키·다른 본문은 409)", async () => {
     await holdTwice(new NetworkError(new TypeError("Failed to fetch")), { screeningId: 1, seatIds: [12] });
     expect(keyOf(1)).not.toBe(keyOf(0));

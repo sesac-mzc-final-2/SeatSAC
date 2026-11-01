@@ -111,6 +111,25 @@ describe("useSeatBoard (BKG-01 + BKG-05)", () => {
     await waitFor(() => expect(result.current.live).toBe(true));
   });
 
+  it("처음 연결되면 스냅샷을 한 번 더 받는다 (연결 전에 끝난 첫 스냅샷과 연결 사이의 변화를 메운다)", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(snapshot(418)))
+      .mockResolvedValueOnce(jsonResponse({ ...snapshot(420), seats: [
+        { seatId: 1, status: "HELD" },
+        { seatId: 2, status: "AVAILABLE" },
+      ] }));
+    const { result } = renderHook(() => useSeatBoard(5123), { wrapper });
+    await waitFor(() => expect(result.current.board?.seq).toBe(418));
+
+    // 첫 스냅샷(418) 뒤, 연결 전에 419·420이 지나갔다 — 이벤트로는 오지 않는다
+    FakeEventSource.latest().emitOpen();
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.board?.seq).toBe(420));
+    expect(result.current.statusOfSeat(1)).toBe("HELD");
+  });
+
   it("번호에 빈틈이 생기면 이벤트를 적용하지 않고 스냅샷을 다시 받는다", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

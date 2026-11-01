@@ -29,8 +29,9 @@ export interface SeatBoardState {
 /**
  * BKG-01 스냅샷 + BKG-05 SSE를 합쳐 좌석 상태를 유지한다.
  *
- * 순서가 중요하다: <b>SSE를 먼저 연결해 이벤트를 모으고</b> 스냅샷을 받은 뒤 모아 둔 것을 적용한다.
- * 스냅샷을 먼저 받으면 그 사이에 생긴 변화를 아무도 알려 주지 않는다.
+ * 순서가 중요하다: SSE로 이벤트를 모으면서, <b>연결이 열린 뒤에 받은 스냅샷</b>에 모아 둔 것을 적용한다.
+ * 연결 전에 끝난 스냅샷만 쓰면 그 사이에 생긴 변화를 아무도 알려 주지 않는다 — 그래서 처음 연결될 때도
+ * 스냅샷을 한 번 더 받는다(첫 조회는 화면을 빨리 그리는 용도).
  *
  * <p>좌석 상태를 따로 저장하지 않고 <b>스냅샷 + 받은 이벤트</b>로 매번 계산한다. 그래서
  * 스냅샷이 새로 와도 이벤트를 다시 입히기만 하면 되고, 두 경로가 엇갈려 상태가 틀어질 일이 없다.
@@ -103,9 +104,13 @@ export function useSeatBoard(screeningId: number): SeatBoardState {
       },
       onOpen: () => {
         setLive(true);
-        // 처음 연결은 스냅샷 조회가 이미 돌고 있다. 다시 붙은 것이면 그동안 놓친 변화를 스냅샷으로 메운다
         if (openedRef.current) {
+          // 다시 붙은 것 — 그동안 놓친 변화를 스냅샷으로 메운다. 여러 화면이 한꺼번에 붙으므로 흩뜨린다
           reconnectTimer = window.setTimeout(reload, Math.random() * RECONNECT_JITTER_MS);
+        } else {
+          // 처음 연결 — 첫 스냅샷은 이 연결보다 먼저 출발한다. 서버는 Pub/Sub 구독을 등록한 뒤
+          // 연결을 알리므로, 지금 받는 스냅샷은 그 사이의 변화를 놓치지 않는다
+          reload();
         }
         openedRef.current = true;
       },

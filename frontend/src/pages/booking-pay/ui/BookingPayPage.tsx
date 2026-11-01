@@ -43,8 +43,8 @@ function Pay() {
   });
 
   const release = useReleaseHold({
-    onReleased: () => {
-      toast.show("좌석 선택을 취소했어요.");
+    onReleased: ({ alreadyEnded }) => {
+      toast.show(alreadyEnded ? "이미 끝난 예매예요." : "좌석 선택을 취소했어요.");
       void bookingQuery.refetch();
     },
     onFailed: (message) => toast.show(message, { tone: "error" }),

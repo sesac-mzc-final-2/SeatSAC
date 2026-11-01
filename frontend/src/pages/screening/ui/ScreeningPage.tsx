@@ -98,10 +98,14 @@ function SeatSelect() {
   });
 
   const release = useReleaseHold({
-    onReleased: () => {
+    onReleased: ({ alreadyEnded }) => {
       setActiveHold(null);
       board.reload();
-      toast.show("선택을 취소했어요. 좌석을 다시 고를 수 있습니다.");
+      toast.show(
+        alreadyEnded
+          ? "이전 선택은 이미 끝났어요. 좌석을 다시 고를 수 있습니다."
+          : "선택을 취소했어요. 좌석을 다시 고를 수 있습니다.",
+      );
     },
     onFailed: (message) => toast.show(message, { tone: "error" }),
   });

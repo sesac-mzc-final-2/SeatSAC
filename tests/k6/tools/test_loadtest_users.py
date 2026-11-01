@@ -187,6 +187,37 @@ class HelpersTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(os.stat(path.parent).st_mode), 0o700)
             self.assertEqual(lt.State.load(path).users[0].password, "pw")
 
+    def test_existing_directory_permissions_are_left_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            os.chmod(directory, 0o755)
+            lt.State(POOL_ID, CLIENT_ID, "ap-northeast-2").save(Path(directory) / "state.json")
+            self.assertEqual(stat.S_IMODE(os.stat(directory).st_mode), 0o755)   # --state ./x.json 같은 경우
+            self.assertEqual(stat.S_IMODE(os.stat(Path(directory) / "state.json").st_mode), 0o600)
+
+    def test_tokens_out_writes_one_per_line_privately(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_path, out = Path(directory) / "state.json", Path(directory) / "tokens.txt"
+            far = time.time() + 3600
+            lt.State(POOL_ID, CLIENT_ID, "ap-northeast-2", [
+                lt.LoadUser("a@example.com", "pw", "t1", far), lt.LoadUser("b@example.com", "pw", "t2", far),
+            ]).save(state_path)
+            lt.main(["--state", str(state_path), "tokens", "--out", str(out)])
+            self.assertEqual(out.read_text().splitlines(), ["t1", "t2"])
+            self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o600)
+
+    def test_network_error_of_one_user_does_not_lose_the_others(self) -> None:
+        users = [lt.LoadUser("a@example.com", "pw"), lt.LoadUser("b@example.com", "pw")]
+
+        def work(user: lt.LoadUser) -> None:
+            if user.email == "b@example.com":
+                raise TimeoutError("timed out")
+            user.access_token = "ok"
+
+        errors = lt._for_each(users, work, concurrency=2)
+        self.assertEqual(users[0].access_token, "ok")
+        self.assertEqual(len(errors), 1)
+        self.assertIn("TimeoutError", errors[0])
+
     def test_tokens_refuse_when_any_expires_soon(self) -> None:
         now = 1_000_000.0
         state = lt.State(POOL_ID, CLIENT_ID, "ap-northeast-2", [
@@ -209,6 +240,7 @@ class AdminCommandsTest(unittest.TestCase):
         self.state_path = Path(self.directory.name) / "state.json"
         self.calls: list[tuple[list[str], dict | None]] = []
         self.pool: set[str] = set()
+        self.admins: set[str] = set()
         self.original = lt.aws_cli
         lt.aws_cli = self.fake_aws
 
@@ -219,6 +251,9 @@ class AdminCommandsTest(unittest.TestCase):
     def fake_aws(self, profile: str, region: str, args: list[str], payload: dict | None = None) -> dict:
         self.assertEqual(profile, "cinema-admin")
         self.calls.append((args, payload))
+        if args[0] == "list-users-in-group":
+            self.assertEqual(args[args.index("--group-name") + 1], "ADMIN")
+            return {"Users": [{"Attributes": [{"Name": "email", "Value": email}]} for email in sorted(self.admins)]}
         if args[0] == "list-users":
             return {"Users": [{"Attributes": [{"Name": "email", "Value": email}]} for email in sorted(self.pool)]}
         if args[0] == "admin-create-user":
@@ -253,7 +288,15 @@ class AdminCommandsTest(unittest.TestCase):
         self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "2")
         self.calls.clear()
         self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "2")
-        self.assertEqual([args[0] for args, _ in self.calls], ["list-users"])
+        self.assertEqual([args[0] for args, _ in self.calls], ["list-users", "list-users-in-group"])
+
+    def test_create_stops_when_a_loadtest_user_is_admin(self) -> None:
+        self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "2")
+        self.admins.add(lt.email_of(2))   # 누가 손으로 ADMIN에 넣었다
+        with self.assertRaises(SystemExit) as raised:
+            self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "3")
+        self.assertIn(lt.email_of(2), str(raised.exception))
+        self.assertNotIn(lt.email_of(3), self.pool)   # 멈추기 전에 아무것도 만들지 않는다
 
     def test_create_refuses_state_of_another_pool(self) -> None:
         lt.State("ap-northeast-2_Other", CLIENT_ID, "ap-northeast-2").save(self.state_path)

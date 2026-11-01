@@ -9,7 +9,7 @@ booking은 사용자당 회차별 선점을 1건만 허용한다(user-hold). 같
   create   계정 만들기·비밀번호 고정 (관리자 역할 필요: AdminCreateUser·AdminSetUserPassword)
   login    SRP 로그인으로 토큰 받기 (AWS 자격 증명 불필요 — 공개 앱 클라이언트)
   refresh  리프레시 토큰으로 Access Token만 새로 받기 (자격 증명 불필요, 로그인 호출 없음)
-  tokens   K6_TOKENS 값 출력 (쉼표로 이은 Access Token). 곧 만료되면 실패
+  tokens   K6_TOKENS_FILE 파일(--out, 줄당 1개, 권한 600) 또는 K6_TOKENS 값(쉼표) 출력. 곧 만료되면 실패
   status   계정 수·가장 이른 만료 시각
   delete   계정 삭제 (관리자 역할 필요)
 
@@ -275,8 +275,11 @@ class State:
                      [LoadUser(**user) for user in raw.get("users", [])])
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(path.parent, 0o700)
+        # 새로 만드는 디렉터리만 700으로 둔다 — --state ./x.json·/tmp/x.json처럼 기존 디렉터리의 권한은 건드리지 않는다
+        # (파일 자체는 아래에서 600으로 만든다)
+        if not path.parent.exists():
+            path.parent.mkdir(mode=0o700, parents=True)
+            os.chmod(path.parent, 0o700)
         # 권한 600으로 새로 쓴 뒤 바꿔 끼운다 — 잠깐이라도 다른 사용자가 읽을 수 있는 파일을 만들지 않는다
         fd, temp = tempfile.mkstemp(dir=path.parent, prefix=".loadtest-", suffix=".json")
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -326,6 +329,21 @@ def aws_cli(profile: str, region: str, args: list[str], payload: dict | None = N
     return json.loads(done.stdout) if done.stdout.strip() else {}
 
 
+ADMIN_GROUP = "ADMIN"
+
+
+def admin_loadtest_emails(profile: str, state: State) -> list[str]:
+    """ADMIN 그룹에 들어 있는 부하 테스트 계정. 있으면 그 토큰이 관리자 API를 부를 수 있다"""
+    listed = aws_cli(profile, state.region, [
+        "list-users-in-group", "--user-pool-id", state.user_pool_id, "--group-name", ADMIN_GROUP])
+    emails = []
+    for user in listed.get("Users", []):
+        for attribute in user.get("Attributes", []):
+            if attribute["Name"] == "email" and attribute["Value"].startswith(EMAIL_PREFIX):
+                emails.append(attribute["Value"])
+    return sorted(emails)
+
+
 def existing_emails(profile: str, state: State) -> set[str]:
     listed = aws_cli(profile, state.region, [
         "list-users", "--user-pool-id", state.user_pool_id,
@@ -350,6 +368,10 @@ def cmd_create(args: argparse.Namespace) -> None:
         raise SystemExit(f"상태 파일이 다른 사용자 풀·클라이언트용이다: {args.state} — 다른 --state를 쓰거나 delete 후 다시")
     known = {user.email: user for user in state.users}
     in_pool = existing_emails(args.profile, state)
+    admins = admin_loadtest_emails(args.profile, state)
+    if admins:
+        # 누가 손으로 넣었을 수 있다. 관리자 토큰으로 부하를 주면 측정 대상이 달라지고 위험하다 → 멈춘다
+        raise SystemExit(f"ADMIN 그룹에 부하 테스트 계정이 있다: {', '.join(admins)} — 그룹에서 빼고 다시 실행한다")
 
     for index in range(1, args.count + 1):
         email = email_of(index)
@@ -382,8 +404,10 @@ def _for_each(users: list[LoadUser], work, concurrency: int) -> list[str]:
     def run(user: LoadUser) -> None:
         try:
             work(user)
-        except CognitoError as error:
-            errors.append(f"{user.email}: {error}")
+        except (CognitoError, OSError, ValueError, KeyError) as error:
+            # 사용자 하나의 네트워크 오류·이상한 응답이 전체를 멈추면 이미 받은 토큰을 저장하지 못한다
+            # → 다시 돌릴 때 로그인 100건을 또 보내게 된다(인증 API 제한). 모아서 보고하고 저장은 항상 한다
+            errors.append(f"{user.email}: {type(error).__name__}: {error}")
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         list(pool.map(run, users))
@@ -437,10 +461,24 @@ def usable_tokens(state: State, min_valid_seconds: float, count: int | None, now
     return [user.access_token for user in users if user.access_token]
 
 
+def write_private(path: Path, text: str) -> None:
+    """권한 600으로 쓴다 — 잠깐이라도 다른 사용자가 읽을 수 있는 파일을 만들지 않는다"""
+    fd, temp = tempfile.mkstemp(dir=path.parent if str(path.parent) else ".", prefix=".tokens-")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.chmod(temp, 0o600)
+    os.replace(temp, path)
+
+
 def cmd_tokens(args: argparse.Namespace) -> None:
     state = State.load(args.state)
     tokens = usable_tokens(state, args.min_valid_minutes * 60, args.count, time.time())
-    print(",".join(tokens))
+    if args.out:
+        # 토큰 하나가 1~1.2KB라 100개를 쉼표로 이으면 리눅스 env·인자 한도(128KiB)에 거의 닿는다 → 파일로 넘긴다
+        write_private(args.out, "\n".join(tokens) + "\n")
+        print(f"토큰 {len(tokens)}개 → {args.out} (K6_TOKENS_FILE)", file=sys.stderr)
+    else:
+        print(",".join(tokens))
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -484,6 +522,8 @@ def main(argv: list[str] | None = None) -> None:
     tokens = sub.add_parser("tokens", help="K6_TOKENS 값 출력")
     tokens.add_argument("--min-valid-minutes", type=float, default=30)
     tokens.add_argument("--count", type=int, default=None, help="앞에서부터 N개만 (기본 전부)")
+    tokens.add_argument("--out", type=Path, default=None,
+                        help="파일로 쓴다(줄당 1개, 권한 600). k6는 K6_TOKENS_FILE로 읽는다. 없으면 쉼표로 이어 출력")
     tokens.set_defaults(handler=cmd_tokens)
 
     sub.add_parser("status", help="계정·만료 요약").set_defaults(handler=cmd_status)

@@ -1128,6 +1128,7 @@ aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username '<이�
 ```
 
 - 이메일·비밀번호는 PR·노션·런북에 적지 않는다. 그룹 변경은 **다음 토큰부터** 반영(다시 로그인)
+- 부하 테스트 계정(4.2.1): `python3 tests/k6/tools/loadtest_users.py create --count 100 --authority … --client-id …` / `delete` — `cinema-admin`(김종식·백업 남궁일). `loadtest+NNN@example.com`, `ADMIN` 그룹 아님(있으면 `create`가 멈춘다). 데모 주간(11/20)까지 두고 **Public 전환 전 `delete`**. 사용법 `tests/k6/README.md`
 
 #### 7-6-4. 확인
 

@@ -15,10 +15,28 @@
 ### 토큰 (`K6_TOKENS`)
 
 Cognito 테스트 계정으로 **미리 발급**해 쉼표로 넘긴다. k6 안에서 로그인하지 않는다(인증 쪽에 불필요한 부하를 주지 않기 위해).
+계정·토큰은 `tools/loadtest_users.py`로 준비한다(Python 표준 라이브러리만, 관리 API만 `aws` CLI).
 
 ```bash
-export K6_TOKENS="eyJ...,eyJ...,eyJ..."   # 아래 실행 예가 이 변수를 그대로 쓴다
+T=tests/k6/tools/loadtest_users.py
+# 1) 계정 100개 — 관리자 역할(cinema-admin, MFA). 메일은 보내지 않는다(SUPPRESS). 이미 있으면 건너뛴다
+python3 $T create --count 100 \
+  --authority "$(gh variable get VITE_COGNITO_AUTHORITY)" --client-id "$(gh variable get VITE_COGNITO_CLIENT_ID)"
+# 2) 토큰 — SRP 로그인. AWS 자격 증명이 필요 없다(공개 앱 클라이언트). 100명 × 2회 호출
+python3 $T login
+# 3) 돌리기 직전 — Access Token(60분)만 리프레시 토큰으로 새로 받는다(로그인 호출 없음, 리프레시 7일)
+python3 $T refresh
+export K6_TOKENS="$(python3 $T tokens --min-valid-minutes 30)"   # 30분 안에 만료될 토큰이 있으면 실패
+python3 $T status                                                 # 계정 수·가장 이른 만료
+# 끝나면 (선택) 계정 삭제 — 관리자 역할
+python3 $T delete
 ```
+
+- 계정은 `loadtest+001@example.com` ~ `loadtest+100@example.com`(이름 `loadtest-001`…)이고 `ADMIN` 그룹에 넣지 않는다
+- **비밀번호·토큰은 레포 밖** `~/.seatsac/loadtest-users.json`(권한 600)에만 둔다. 커밋·PR·노션에 붙이지 않는다. 다른 위치는 `--state`
+- 토큰 100개를 이으면 약 100KB다 — `k6 -e`·컨테이너 env 모두 담긴다. 클러스터 안 Job에 넘기는 방법(Secret 이름·생성 주체)은 OPS-10 Job과 함께 정한다(김종식)
+- 사용자 프로필(`GET /users/me`)은 만들지 않는다 — booking은 `X-User-Id`(= `sub`)만 쓴다
+- 테스트: `python3 -m unittest discover -s tests/k6/tools` — 가짜 Cognito 서버가 서버 쪽 SRP로 서명을 검증한다
 
 > **같은 좌석 경쟁 시나리오는 토큰이 VU 수만큼 필요하다.** booking은 **회차당 선점 1건**만 허용하므로(`user-hold`), 토큰이 겹치면 두 번째 요청이 좌석 때문이 아니라 사용자 제한(`ACTIVE_HOLD_EXISTS`)으로 막힌다 — 재려던 것이 가려진다. 그래서 스크립트가 `setup()`에서 토큰 수를 확인하고 부족하면 **바로 멈춘다**.
 

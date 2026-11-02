@@ -94,10 +94,25 @@ class NotificationHandlerTest(unittest.TestCase):
         self.assertIn("screeningId", lines[2]["error"])
 
     def test_wrong_type_or_version_fails(self):
-        for change in ({"type": "booking.canceled"}, {"version": 2}):
+        for change in ({"type": "booking.canceled"}, {"version": 2},
+                       {"version": True}, {"version": "1"}, {"version": 1.5}):
             body = {**EXAMPLE, **change}
             result, _ = run(record(body, "m-x"))
             self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "m-x"}], change)
+
+    def test_version_accepts_integer_valued_float(self):
+        # JSON Schema는 1.0도 integer로 본다(const: 1과 같은 값) → 유효 메시지를 DLQ로 보내면 안 된다
+        # json.dumps(1.0)은 "1.0"이라 handler는 float 1.0을 받는다
+        result, lines = run(record({**EXAMPLE, "version": 1.0}, "m-x"))
+        self.assertEqual(result, {"batchItemFailures": []})
+        self.assertEqual(lines[0]["level"], "INFO")
+
+    def test_is_int_follows_json_schema_integer(self):
+        for value, expected in ((1, True), (1.0, True), (True, False), (False, False),
+                                ("1", False), (1.5, False), (None, False),
+                                (float("nan"), False), (float("inf"), False)):
+            with self.subTest(value=value):
+                self.assertIs(handler._is_int(value), expected)
 
     def test_event_id_must_be_uuid(self):
         result, lines = run(record({**EXAMPLE, "eventId": "not-a-uuid"}, "m-x"))

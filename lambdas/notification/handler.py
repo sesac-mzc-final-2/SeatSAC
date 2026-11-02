@@ -49,7 +49,12 @@ def _emit(level, message, **fields):
 
 
 def _is_int(v):
-    return isinstance(v, int) and not isinstance(v, bool)  # Python은 True도 int
+    # JSON Schema integer: 1.0처럼 값이 정수인 float은 허용, bool(True/False)은 거부
+    if isinstance(v, bool):  # Python은 True도 int
+        return False
+    if isinstance(v, int):
+        return True
+    return isinstance(v, float) and v.is_integer()
 
 
 def _is_uuid(v):
@@ -112,7 +117,7 @@ def _parse(record):
         raise InvalidMessage(f"envelope 필수 필드 없음: {','.join(missing)}")
     if (body["type"] != EXPECTED_TYPE
         or not _is_int(body["version"])
-        or body["version"] != EXPECTED_VERSION):
+        or body["version"] != EXPECTED_VERSION):     # 1.0 == 1 이라 통과
         raise InvalidMessage(f"지원하지 않는 type/version: {body['type']}/{body['version']}")
     if not _is_uuid(body["eventId"]):
         raise InvalidMessage("eventId가 UUID가 아님")

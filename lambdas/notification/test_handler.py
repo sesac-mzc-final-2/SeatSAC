@@ -136,14 +136,14 @@ class NotificationHandlerTest(unittest.TestCase):
             "amount": [None, "abc", 15000.5],
             "seatCount": [None, 0, 5, 99, "2", True],
             "seatLabels": [None, "J7", [1], ["J7", None]],
-            "confirmedAt": [None, "어제", 20261116],
+            "confirmedAt": [None, "어제", 20261116, "2026-11-16", "2026-11-16T14:04:10", "2026-11-16 14:04:10+09:00", "20261116T140410+0900", "2026-13-01T00:00:00+09:00", "2026-11-16T25:00:00+09:00", "２０２６-11-16T14:04:10+09:00"],
             "movieTitle": [123, ["x"]],
-            "startsAt": ["내일", 123],
+            "startsAt": ["내일", 123, "2026-11-16", "2026-11-16T14:04:10", "2026-11-16 14:04:10+09:00", "20261116T140410+0900", "2026-13-01T00:00:00+09:00", "2026-11-16T25:00:00+09:00", "２０２６-11-16T14:04:10+09:00"],
         }
         envelope_cases = {
             "producer": [None, "other"],
             "traceId": [None, "xyz", "A" * 32, "a" * 31],
-            "occurredAt": [None, "어제"],
+            "occurredAt": [None, "어제", "2026-11-16", "2026-11-16T14:04:10", "2026-11-16 14:04:10+09:00", "20261116T140410+0900", "2026-13-01T00:00:00+09:00", "2026-11-16T25:00:00+09:00", "２０２６-11-16T14:04:10+09:00"],
         }
         for field, values in payload_cases.items():
             for value in values:
@@ -157,6 +157,15 @@ class NotificationHandlerTest(unittest.TestCase):
                 result, lines = run(record({**EXAMPLE, field: value}, "m-x"))
                 self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "m-x"}], (field, value))
                 self.assertIn(field, lines[0]["error"])
+
+    def test_rfc3339_variants_are_accepted(self):
+        # 과하게 막지 않는다: Z·소수 초·다른 오프셋·소문자 t/z 는 RFC 3339 라 정상 메시지다
+        for stamp in ("2026-11-16T05:04:10Z", "2026-11-16T14:04:10.123+09:00", "2026-11-16T14:04:10.123456789+09:00",
+                      "2026-11-16T14:04:10+00:00", "2026-11-15T21:04:10-08:00", "2026-11-16t05:04:10z"):
+            body = copy.deepcopy(EXAMPLE)
+            body["occurredAt"] = body["payload"]["confirmedAt"] = body["payload"]["startsAt"] = stamp
+            result, _ = run(record(body, "m-x"))
+            self.assertEqual(result, {"batchItemFailures": []}, stamp)
 
     def test_error_log_does_not_contain_the_bad_value(self):
         body = copy.deepcopy(EXAMPLE)

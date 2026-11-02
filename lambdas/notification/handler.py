@@ -31,6 +31,8 @@ REQUIRED_PAYLOAD = (
 
 
 TRACE_ID = re.compile(r"^[0-9a-f]{32}$")  # 계약의 traceId pattern
+# [0-9]로 쓴다: 파이썬 \d는 전각 숫자("２０２６")도 받는다
+DATE_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$")
 # 계약상 null 허용: Catalog 조회 실패 시 null (examples/confirmed-catalog-unavailable.json). 나머지 필수 필드는 null 불가
 NULLABLE_PAYLOAD = ("movieTitle", "theaterName", "auditoriumName", "startsAt")
 
@@ -58,10 +60,15 @@ def _is_uuid(v):
 
 
 def _is_datetime(v):
+    """JSON Schema format: date-time = RFC 3339. 날짜 T 시각 + 시간대(Z 또는 ±hh:mm)가 모두 있어야 한다.
+    fromisoformat만 쓰면 날짜만("2026-11-16")·시간대 없음·공백 구분·"20261116T140410+0900"까지 통과한다 →
+    모양은 정규식으로, 월·일·시·오프셋 범위는 fromisoformat으로 확인한다. (윤초 :60은 booking(Java Instant)이 만들 수 없어 거부한다)"""
+    if not isinstance(v, str) or not DATE_TIME.match(v):
+        return False
     try:
-        datetime.fromisoformat(v)  # 3.12: +09:00·Z 모두 읽는다
+        datetime.fromisoformat(v.upper())  # 3.12: Z·소수 초 허용. t/z 소문자는 RFC 3339 허용이라 대문자로 맞춘다
         return True
-    except (TypeError, ValueError):
+    except ValueError:
         return False
 
 

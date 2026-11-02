@@ -34,11 +34,11 @@ python3 $T status                                                         # 계�
 python3 $T delete
 ```
 
-- 계정은 `loadtest+001@example.com` ~ `loadtest+100@example.com`(이름 `loadtest-001`…)이고 `ADMIN` 그룹에 넣지 않는다 — 들어 있으면 `create`가 멈춘다
+- 계정은 `loadtest+001@example.com` ~ `loadtest+100@example.com`(이름 `loadtest-001`…)이고 `ADMIN` 그룹에 넣지 않는다 — 들어 있으면 `create`가 멈추고, 나중에 넣었어도 `login`·`refresh`·`tokens`가 토큰의 `cognito:groups`를 보고 멈춘다
 - 계정은 데모 주간(11/20)까지 두고 **Public 전환 전 `delete`**(런북 7-6-3)
 - **비밀번호·토큰은 레포 밖** `~/.seatsac/loadtest-users.json`(권한 600)에만 둔다. 커밋·PR·노션에 붙이지 않는다. 다른 위치는 `--state`
 - **토큰은 파일로 넘긴다**(`K6_TOKENS_FILE`). 토큰 하나가 1~1.2KB라 100개를 쉼표로 이으면 리눅스 env·인자 한도(128KiB)에 거의 닿는다. 몇 개만 쓸 때는 `K6_TOKENS`(쉼표)도 된다
-- 클러스터 안 Job(OPS-10, 김종식): 실행 직전 관리자가 Secret `k6-loadtest-tokens`(`cinema-staging`)를 `tokens --out` 파일로 만들고 → Job이 파일로 마운트해 `K6_TOKENS_FILE`로 넘기고 → 끝나면 Secret을 지운다(GitOps 예외, 런북에 명시)
+- 클러스터 안 Job(OPS-10, 김종식): 실행 직전 관리자가 Secret `k6-loadtest-tokens`(`cinema-staging`)를 `tokens --out` 파일로 만들고 → Job이 파일로 마운트해 `K6_TOKENS_FILE`로 넘기고 → 끝나면 Secret을 지운다(GitOps 예외, 런북에 명시). **gateway는 인바운드 기본 거부라 Job 파드 라벨을 `base/gateway/networkpolicy.yaml` 허용 목록과 런북 6-E 표에 함께 넣어야 한다** — 빠지면 요청이 전부 타임아웃된다
 - 사용자 프로필(`GET /users/me`)은 만들지 않는다 — booking은 `X-User-Id`(= `sub`)만 쓴다
 - 테스트: `python3 -m unittest discover -s tests/k6/tools` — 가짜 Cognito 서버가 서버 쪽 SRP로 서명을 검증한다
 

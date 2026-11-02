@@ -110,12 +110,12 @@ def _parse(record):
     missing = [k for k in REQUIRED_ENVELOPE if k not in body]
     if missing:
         raise InvalidMessage(f"envelope 필수 필드 없음: {','.join(missing)}")
-    if body["type"] != EXPECTED_TYPE or body["version"] != EXPECTED_VERSION:
+    if (body["type"] != EXPECTED_TYPE
+        or not _is_int(body["version"])
+        or body["version"] != EXPECTED_VERSION):
         raise InvalidMessage(f"지원하지 않는 type/version: {body['type']}/{body['version']}")
-    try:
-        uuid.UUID(str(body["eventId"]))
-    except ValueError as e:
-        raise InvalidMessage("eventId가 UUID가 아님") from e
+    if not _is_uuid(body["eventId"]):
+        raise InvalidMessage("eventId가 UUID가 아님")
 
     payload = body["payload"]
     if not isinstance(payload, dict):

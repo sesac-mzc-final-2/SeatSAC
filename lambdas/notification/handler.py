@@ -32,7 +32,7 @@ REQUIRED_PAYLOAD = (
 
 TRACE_ID = re.compile(r"^[0-9a-f]{32}$")  # 계약의 traceId pattern
 # [0-9]로 쓴다: 파이썬 \d는 전각 숫자("２０２６")도 받는다
-DATE_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})$")
+DATE_TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-5][0-9])$")
 # 계약상 null 허용: Catalog 조회 실패 시 null (examples/confirmed-catalog-unavailable.json). 나머지 필수 필드는 null 불가
 NULLABLE_PAYLOAD = ("movieTitle", "theaterName", "auditoriumName", "startsAt")
 

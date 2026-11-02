@@ -230,6 +230,26 @@ def srp_login(api: CognitoApi, client_id: str, pool_name: str, email: str, passw
     return _tokens_of(finished["AuthenticationResult"], refresh_fallback=None)
 
 
+def token_groups(access_token: str) -> list[str]:
+    """Access Token(JWT) 본문의 cognito:groups. 서명은 검증하지 않는다 — 방금 받은 우리 토큰의 내용만 본다.
+    JWT 모양이 아니면 ValueError (조용히 통과시키지 않는다)"""
+    parts = access_token.split(".")
+    if len(parts) != 3:
+        raise ValueError("Access Token이 JWT 모양이 아니다")
+    body = parts[1] + "=" * (-len(parts[1]) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(body))
+    groups = claims.get("cognito:groups") or []
+    return [str(group) for group in groups] if isinstance(groups, list) else [str(groups)]
+
+
+def refuse_admin_token(tokens: Tokens) -> Tokens:
+    """ADMIN 그룹 토큰은 쓰지 않는다. create 뒤에 누가 그룹에 넣었어도 여기서 걸린다 —
+    관리자 API(ListUsersInGroup) 대신 토큰 클레임을 보므로 login·refresh에 AWS 자격 증명이 필요 없다"""
+    if ADMIN_GROUP in token_groups(tokens.access_token):
+        raise CognitoError("AdminGroup", "ADMIN 그룹 계정이다 — 그룹에서 빼고 다시 로그인한다")
+    return tokens
+
+
 def refresh_access(api: CognitoApi, client_id: str, refresh_token: str) -> Tokens:
     result = api.call(
         "InitiateAuth",
@@ -420,7 +440,7 @@ def cmd_login(args: argparse.Namespace) -> None:
     pool_name = pool_name_of(state.user_pool_id)
 
     def login(user: LoadUser) -> None:
-        tokens = srp_login(api, state.client_id, pool_name, user.email, user.password)
+        tokens = refuse_admin_token(srp_login(api, state.client_id, pool_name, user.email, user.password))
         user.access_token, user.access_expires_at = tokens.access_token, tokens.access_expires_at
         user.refresh_token = tokens.refresh_token
 
@@ -436,7 +456,11 @@ def cmd_refresh(args: argparse.Namespace) -> None:
     def refresh(user: LoadUser) -> None:
         if not user.refresh_token:
             raise CognitoError("NoRefreshToken", "login을 먼저 한다")
-        tokens = refresh_access(api, state.client_id, user.refresh_token)
+        try:
+            tokens = refuse_admin_token(refresh_access(api, state.client_id, user.refresh_token))
+        except CognitoError:
+            user.access_token, user.access_expires_at = None, 0.0   # 이전 토큰도 쓰지 않게 지운다
+            raise
         user.access_token, user.access_expires_at = tokens.access_token, tokens.access_expires_at
 
     errors = _for_each(state.users, refresh, args.concurrency)
@@ -458,6 +482,9 @@ def usable_tokens(state: State, min_valid_seconds: float, count: int | None, now
     stale = [user.email for user in users if not user.access_token or user.access_expires_at - now < min_valid_seconds]
     if stale:
         raise SystemExit(f"토큰 {len(stale)}개가 없거나 {min_valid_seconds / 60:.0f}분 안에 만료된다 — refresh를 먼저 돌린다")
+    admins = [user.email for user in users if ADMIN_GROUP in token_groups(user.access_token or "")]
+    if admins:
+        raise SystemExit(f"ADMIN 그룹 토큰이 있다: {', '.join(admins)} — 그룹에서 빼고 refresh를 다시 돌린다")
     return [user.access_token for user in users if user.access_token]
 
 

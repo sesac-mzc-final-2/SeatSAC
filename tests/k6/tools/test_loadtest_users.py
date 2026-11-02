@@ -30,6 +30,15 @@ import loadtest_users as lt  # noqa: E402
 POOL_ID = "ap-northeast-2_TestPool1"
 POOL_NAME = "TestPool1"
 CLIENT_ID = "testclientid"
+def fake_jwt(sub: str = "u", groups: list[str] | None = None) -> str:
+    """서명 없는 JWT 모양 — 도구는 본문(cognito:groups)만 읽는다"""
+    def part(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).rstrip(b"=").decode()
+    claims = {"sub": sub, **({"cognito:groups": groups} if groups is not None else {})}
+    return f"{part({'alg': 'none'})}.{part(claims)}.sig"
+
+
+ACCESS_1, ACCESS_2 = fake_jwt("first"), fake_jwt("second")
 TIMESTAMP_FORMAT = re.compile(r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} [1-9]\d? \d{2}:\d{2}:\d{2} UTC \d{4}$")
 
 
@@ -45,6 +54,8 @@ class FakeCognito:
         self.pending: dict | None = None
         self.calls: list[str] = []
         self.throttle_next = 0
+        self.login_access = ACCESS_1
+        self.refresh_access = ACCESS_2
 
     def handle(self, action: str, body: dict) -> tuple[int, dict]:
         self.calls.append(action)
@@ -58,7 +69,7 @@ class FakeCognito:
         if action == "InitiateAuth" and body["AuthFlow"] == "REFRESH_TOKEN_AUTH":
             if body["AuthParameters"]["REFRESH_TOKEN"] != "refresh-1":
                 return 400, {"__type": "NotAuthorizedException", "message": "bad refresh"}
-            return 200, {"AuthenticationResult": {"AccessToken": "access-2", "ExpiresIn": 3600}}
+            return 200, {"AuthenticationResult": {"AccessToken": self.refresh_access, "ExpiresIn": 3600}}
         if action == "RespondToAuthChallenge":
             return self._finish(body["ChallengeResponses"])
         return 400, {"__type": "InvalidParameterException", "message": action}
@@ -87,7 +98,7 @@ class FakeCognito:
         expected = base64.b64encode(hmac.new(key, message, hashlib.sha256).digest()).decode()
         if responses["PASSWORD_CLAIM_SIGNATURE"] != expected or responses["USERNAME"] != self.user_id:
             return 400, {"__type": "NotAuthorizedException", "message": "Incorrect username or password."}
-        return 200, {"AuthenticationResult": {"AccessToken": "access-1", "ExpiresIn": 3600, "RefreshToken": "refresh-1"}}
+        return 200, {"AuthenticationResult": {"AccessToken": self.login_access, "ExpiresIn": 3600, "RefreshToken": "refresh-1"}}
 
 
 class FakeServer:
@@ -139,7 +150,7 @@ class SrpTest(unittest.TestCase):
         with FakeServer(cognito) as endpoint:
             tokens = lt.srp_login(lt.CognitoApi("ap-northeast-2", endpoint), CLIENT_ID, POOL_NAME,
                                   "loadtest+001@example.com", "lt0123abcd456789a1")
-        self.assertEqual(tokens.access_token, "access-1")
+        self.assertEqual(tokens.access_token, ACCESS_1)
         self.assertEqual(tokens.refresh_token, "refresh-1")
         self.assertGreater(tokens.access_expires_at, time.time() + 3500)
 
@@ -155,9 +166,36 @@ class SrpTest(unittest.TestCase):
         cognito.throttle_next = 2
         with FakeServer(cognito) as endpoint:
             tokens = lt.refresh_access(lt.CognitoApi("ap-northeast-2", endpoint), CLIENT_ID, "refresh-1")
-        self.assertEqual(tokens.access_token, "access-2")
+        self.assertEqual(tokens.access_token, ACCESS_2)
         self.assertEqual(tokens.refresh_token, "refresh-1")   # 갱신 응답에는 리프레시 토큰이 없다
         self.assertEqual(cognito.calls.count("InitiateAuth"), 3)
+
+
+class AdminTokenTest(unittest.TestCase):
+    """create 뒤에 누가 ADMIN 그룹에 넣어도 토큰 클레임(cognito:groups)으로 걸러진다 — AWS 자격 증명 없이"""
+
+    def test_login_refuses_admin_token(self) -> None:
+        cognito = FakeCognito("loadtest+001@example.com", "lt0123abcd456789a1")
+        cognito.login_access = fake_jwt("admin", ["ADMIN"])
+        with FakeServer(cognito) as endpoint, self.assertRaises(lt.CognitoError) as raised:
+            lt.refuse_admin_token(lt.srp_login(lt.CognitoApi("ap-northeast-2", endpoint), CLIENT_ID, POOL_NAME,
+                                               "loadtest+001@example.com", "lt0123abcd456789a1"))
+        self.assertEqual(raised.exception.kind, "AdminGroup")
+
+    def test_tokens_refuse_admin_token_in_state(self) -> None:
+        state = lt.State(POOL_ID, CLIENT_ID, "ap-northeast-2", [
+            lt.LoadUser("a@example.com", "pw", ACCESS_1, 2_000_000.0),
+            lt.LoadUser("b@example.com", "pw", fake_jwt("b", ["USER", "ADMIN"]), 2_000_000.0),
+        ])
+        with self.assertRaises(SystemExit) as raised:
+            lt.usable_tokens(state, 60, None, 1_000_000.0)
+        self.assertIn("b@example.com", str(raised.exception))
+
+    def test_groups_are_read_from_jwt_body(self) -> None:
+        self.assertEqual(lt.token_groups(fake_jwt("x", ["ADMIN"])), ["ADMIN"])
+        self.assertEqual(lt.token_groups(fake_jwt("x")), [])
+        with self.assertRaises(ValueError):
+            lt.token_groups("not-a-jwt")   # 조용히 통과시키지 않는다
 
 
 class HelpersTest(unittest.TestCase):
@@ -199,10 +237,10 @@ class HelpersTest(unittest.TestCase):
             state_path, out = Path(directory) / "state.json", Path(directory) / "tokens.txt"
             far = time.time() + 3600
             lt.State(POOL_ID, CLIENT_ID, "ap-northeast-2", [
-                lt.LoadUser("a@example.com", "pw", "t1", far), lt.LoadUser("b@example.com", "pw", "t2", far),
+                lt.LoadUser("a@example.com", "pw", ACCESS_1, far), lt.LoadUser("b@example.com", "pw", ACCESS_2, far),
             ]).save(state_path)
             lt.main(["--state", str(state_path), "tokens", "--out", str(out)])
-            self.assertEqual(out.read_text().splitlines(), ["t1", "t2"])
+            self.assertEqual(out.read_text().splitlines(), [ACCESS_1, ACCESS_2])
             self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o600)
 
     def test_network_error_of_one_user_does_not_lose_the_others(self) -> None:
@@ -221,11 +259,11 @@ class HelpersTest(unittest.TestCase):
     def test_tokens_refuse_when_any_expires_soon(self) -> None:
         now = 1_000_000.0
         state = lt.State(POOL_ID, CLIENT_ID, "ap-northeast-2", [
-            lt.LoadUser("a@example.com", "pw", "t1", now + 3600),
-            lt.LoadUser("b@example.com", "pw", "t2", now + 600),
+            lt.LoadUser("a@example.com", "pw", ACCESS_1, now + 3600),
+            lt.LoadUser("b@example.com", "pw", ACCESS_2, now + 600),
         ])
-        self.assertEqual(lt.usable_tokens(state, 300, None, now), ["t1", "t2"])
-        self.assertEqual(lt.usable_tokens(state, 1800, 1, now), ["t1"])   # 앞에서 1개만
+        self.assertEqual(lt.usable_tokens(state, 300, None, now), [ACCESS_1, ACCESS_2])
+        self.assertEqual(lt.usable_tokens(state, 1800, 1, now), [ACCESS_1])   # 앞에서 1개만
         with self.assertRaises(SystemExit):
             lt.usable_tokens(state, 1800, None, now)   # b가 30분 안에 만료
 

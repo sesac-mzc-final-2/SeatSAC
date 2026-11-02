@@ -8,10 +8,12 @@
   eventId·receiveCount가 같이 찍히니 로그에서 가려낸다. 별도 저장소(중복 제거 테이블)는 두지 않는다.
 - 실패: 메시지 단위로 보고한다(ReportBatchItemFailures). 한 건이 깨져도 나머지는 삭제되고,
   깨진 건만 다시 수신되어 3회째 실패하면 DLQ로 간다 → DLQ 경보(런북 6-B-4).
-  계약에 어긋난 메시지(JSON 아님·필수 필드 없음·모르는 type/version)는 다시 받아도 같으므로 DLQ로 가서 사람이 본다.
+  계약에 어긋난 메시지(JSON 아님·필수 필드 없음·필드 값의 타입/범위/null 위반·모르는 type/version)는
+  다시 받아도 같으므로 DLQ로 가서 사람이 본다. null은 Catalog 조회 실패 필드 4개(NULLABLE_PAYLOAD)만 허용된다.
 - 개인정보: 계약상 이메일·이름은 본문에 없다. 카드 정보도 없다. userId(Cognito sub)는 규약대로 로그에 둘 수 있다.
 """
 import json
+import re
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -28,6 +30,11 @@ REQUIRED_PAYLOAD = (
 )
 
 
+TRACE_ID = re.compile(r"^[0-9a-f]{32}$")  # 계약의 traceId pattern
+# 계약상 null 허용: Catalog 조회 실패 시 null (examples/confirmed-catalog-unavailable.json). 나머지 필수 필드는 null 불가
+NULLABLE_PAYLOAD = ("movieTitle", "theaterName", "auditoriumName", "startsAt")
+
+
 class InvalidMessage(Exception):
     """계약에 맞지 않는 메시지. 재시도해도 같은 결과라 DLQ에서 사람이 본다."""
 
@@ -39,8 +46,53 @@ def _emit(level, message, **fields):
     sys.stdout.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)  # Python은 True도 int
+
+
+def _is_uuid(v):
+    try:
+        return isinstance(v, str) and str(uuid.UUID(v)) == v.lower()
+    except ValueError:
+        return False
+
+
+def _is_datetime(v):
+    try:
+        datetime.fromisoformat(v)  # 3.12: +09:00·Z 모두 읽는다
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _check_values(body, payload):
+    """필수 필드의 값(타입·범위·null)을 계약대로 확인한다. 오류에는 필드 이름만 담는다(값이 로그에 남지 않게)."""
+    bad = []
+
+    def check(name, ok):
+        if not ok:
+            bad.append(name)
+
+    check("producer", body["producer"] == "booking")
+    check("traceId", isinstance(body["traceId"], str) and bool(TRACE_ID.match(body["traceId"])))
+    check("occurredAt", _is_datetime(body["occurredAt"]))
+    check("bookingId", _is_int(payload["bookingId"]))
+    check("userId", _is_uuid(payload["userId"]))
+    check("screeningId", _is_int(payload["screeningId"]))
+    check("amount", _is_int(payload["amount"]))
+    check("seatCount", _is_int(payload["seatCount"]) and 1 <= payload["seatCount"] <= 4)
+    check("seatLabels", isinstance(payload["seatLabels"], list)
+          and all(isinstance(s, str) for s in payload["seatLabels"]))
+    check("confirmedAt", _is_datetime(payload["confirmedAt"]))
+    for k in NULLABLE_PAYLOAD:  # null 허용, 값이 있으면 문자열(startsAt은 date-time)
+        v = payload[k]
+        check(k, v is None or (_is_datetime(v) if k == "startsAt" else isinstance(v, str)))
+    if bad:
+        raise InvalidMessage(f"계약 위반 필드(값 오류): {','.join(bad)}")
+
+
 def _parse(record):
-    """본문을 envelope으로 읽고 계약의 필수 항목만 확인한다. 모르는 필드는 무시한다(소비자 규칙)."""
+    """본문을 envelope으로 읽고 계약의 필수 항목(있는지 + 타입·범위·null)을 확인한다. 모르는 필드는 무시한다(소비자 규칙)."""
     try:
         body = json.loads(record["body"])
     except (KeyError, TypeError, ValueError) as e:
@@ -64,6 +116,7 @@ def _parse(record):
     missing = [k for k in REQUIRED_PAYLOAD if k not in payload]
     if missing:
         raise InvalidMessage(f"payload 필수 필드 없음: {','.join(missing)}")
+    _check_values(body, payload)
     return body
 
 

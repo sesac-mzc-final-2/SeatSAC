@@ -17,6 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = json.loads((ROOT / "contracts/events/booking.confirmed.v1.json").read_text(encoding="utf-8"))
 EXAMPLE = json.loads(
     (ROOT / "contracts/events/examples/booking.confirmed.v1/confirmed.json").read_text(encoding="utf-8"))
+EXAMPLE_NULLS = json.loads(
+    (ROOT / "contracts/events/examples/booking.confirmed.v1/confirmed-catalog-unavailable.json").read_text(
+        encoding="utf-8"))
 
 
 def record(body, message_id="m-1", receive_count="1", trace_attr=None):
@@ -111,6 +114,56 @@ class NotificationHandlerTest(unittest.TestCase):
         result, lines = run(record(broken, "m-x", trace_attr=trace))
         self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "m-x"}])
         self.assertEqual(lines[0]["traceId"], trace)
+
+    def test_catalog_unavailable_example_with_nulls_succeeds(self):
+        # 계약상 null 허용 4개(movieTitle·theaterName·auditoriumName·startsAt)는 정상 메시지다 → DLQ로 보내면 안 된다
+        result, lines = run(record(EXAMPLE_NULLS))
+        self.assertEqual(result, {"batchItemFailures": []})
+        self.assertEqual(lines[0]["level"], "INFO")
+        self.assertNotIn("movieTitle", lines[0])
+
+    def test_nullable_fields_match_the_contract(self):
+        props = SCHEMA["properties"]["payload"]["properties"]
+        nullable = {k for k, v in props.items() if isinstance(v.get("type"), list) and "null" in v["type"]}
+        self.assertEqual(set(handler.NULLABLE_PAYLOAD), nullable)
+
+    def test_contract_violating_values_fail(self):
+        # 키는 있지만 값이 계약(타입·범위·null·형식)에 어긋나면 DLQ 경로로 보낸다
+        payload_cases = {
+            "bookingId": [None, "9876", 1.5, True],
+            "userId": [None, "abc", 123],
+            "screeningId": [None, "5123"],
+            "amount": [None, "abc", 15000.5],
+            "seatCount": [None, 0, 5, 99, "2", True],
+            "seatLabels": [None, "J7", [1], ["J7", None]],
+            "confirmedAt": [None, "어제", 20261116],
+            "movieTitle": [123, ["x"]],
+            "startsAt": ["내일", 123],
+        }
+        envelope_cases = {
+            "producer": [None, "other"],
+            "traceId": [None, "xyz", "A" * 32, "a" * 31],
+            "occurredAt": [None, "어제"],
+        }
+        for field, values in payload_cases.items():
+            for value in values:
+                body = copy.deepcopy(EXAMPLE)
+                body["payload"][field] = value
+                result, lines = run(record(body, "m-x"))
+                self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "m-x"}], (field, value))
+                self.assertIn(field, lines[0]["error"])
+        for field, values in envelope_cases.items():
+            for value in values:
+                result, lines = run(record({**EXAMPLE, field: value}, "m-x"))
+                self.assertEqual(result["batchItemFailures"], [{"itemIdentifier": "m-x"}], (field, value))
+                self.assertIn(field, lines[0]["error"])
+
+    def test_error_log_does_not_contain_the_bad_value(self):
+        body = copy.deepcopy(EXAMPLE)
+        body["payload"]["userId"] = "SECRET-LOOKING-VALUE"
+        _, lines = run(record(body, "m-x"))
+        self.assertIn("userId", lines[0]["error"])
+        self.assertNotIn("SECRET-LOOKING-VALUE", json.dumps(lines[0]))
 
     def test_empty_event(self):
         for event in ({}, {"Records": []}):

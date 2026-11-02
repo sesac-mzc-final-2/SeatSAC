@@ -7,7 +7,7 @@
 | `envs/staging/` | AWS 리소스: VPC → EKS → RDS·Valkey → ECR → (SQS·Lambda → Cognito) → CloudFront·S3 | S3 `staging/terraform.tfstate` |
 | `envs/staging-k8s/` | 클러스터 안: namespace·RBAC·LB Controller·DB 계정·Secret·엔드포인트 ConfigMap·ArgoCD·Application (ADR-69) | S3 `staging-k8s/terraform.tfstate` |
 
-파일은 관심사별로 나눈다. 예: `envs/staging` — `network.tf`·`security_groups.tf`(3.1.1) · `eks.tf`(3.1.2) · `rds.tf`·`valkey.tf`·`alerts.tf`(3.1.3) · `ecr.tf`(3.1.4) · `cloudfront.tf`(3.1.11) · `sqs.tf`·`lambda.tf`(3.1.8·9, 예정) · `cognito.tf`(예정) / `envs/staging-k8s` — `lb_controller.tf` · `db_bootstrap.tf`·`rds_ca.tf`(3.1.12) · `infra_endpoints.tf`(3.1.4) · `argocd.tf`·`argocd_apps.tf`(3.1.5)
+파일은 관심사별로 나눈다. 예: `envs/staging` — `network.tf`·`security_groups.tf`(3.1.1) · `eks.tf`(3.1.2) · `rds.tf`·`valkey.tf`·`alerts.tf`(3.1.3) · `ecr.tf`(3.1.4) · `cloudfront.tf`(3.1.11) · `sqs.tf`(3.1.9) · `lambda.tf`(3.1.8) · `cognito.tf`(3.1.16) / `envs/staging-k8s` — `lb_controller.tf` · `db_bootstrap.tf`·`rds_ca.tf`(3.1.12) · `infra_endpoints.tf`(3.1.4) · `argocd.tf`·`argocd_apps.tf`(3.1.5)
 
 순서·확인·문제 해결은 런북 `docs/runbooks/terraform-infra.md`가 기준이다(이 파일은 요약).
 

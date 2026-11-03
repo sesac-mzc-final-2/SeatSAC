@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -244,12 +245,67 @@ class BookingPaymentFlowTest {
         willThrow(new IllegalStateException("payment 응답 없음"))
             .given(paymentClient).cancel(anyString(), any());
 
+        // 「만료·환불됨」(409 refunded=true)이 아니라 결과 미확인(503) — 돈이 아직 잡혀 있을 수 있다
         assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
-            .isInstanceOf(BusinessException.class);
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
 
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
             .isEqualTo(BookingStatus.PENDING);
         assertThat(outboxMessageRepository.count()).isZero();
+    }
+
+    /** 환불을 확인하지 못한 예매는 다음 단건 조회가 다시 환불하고, 그때 EXPIRED로 끝낸다 */
+    @Test
+    void detailRetriesRefundLeftPendingByPayment() {
+        Long bookingId = hold(103L);
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved;
+        });
+        willThrow(new IllegalStateException("payment 응답 없음"))
+            .given(paymentClient).cancel(anyString(), any());
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class);
+
+        // 환불이 아직 안 되는 동안의 조회: 예매 PENDING + 결제 APPROVED (둘 다 사실이다)
+        given(paymentClient.find(anyString())).willReturn(java.util.Optional.of(approved));
+        var stillPending = bookingDetailService.get(USER, bookingId);
+        assertThat(stillPending.status()).isEqualTo(BookingStatus.PENDING);
+        assertThat(stillPending.payment().status()).isEqualTo("APPROVED");
+
+        // payment가 돌아오면 조회가 환불하고 만료로 끝낸다. 응답의 결제는 다시 읽은 CANCELED
+        PaymentResult canceled = new PaymentResult(approved.paymentId(), bookingId, 30_000, "CANCELED",
+            "1112", null, "HOLD_EXPIRED", approved.approvedAt(), Instant.now());
+        willReturn(canceled).given(paymentClient).cancel(anyString(), any());
+        given(paymentClient.find(anyString()))
+            .willReturn(java.util.Optional.of(approved), java.util.Optional.of(canceled));
+
+        var detail = bookingDetailService.get(USER, bookingId);
+        assertThat(detail.status()).isEqualTo(BookingStatus.EXPIRED);
+        assertThat(detail.payment().status()).isEqualTo("CANCELED");
+    }
+
+    /** 환불 뒤 결제를 다시 읽지 못하면 결제 없이 답한다 — 낡은 APPROVED를 EXPIRED 예매와 같이 내보내지 않는다 */
+    @Test
+    void detailOmitsStaleApprovalWhenRereadFailsAfterRefund() {
+        Long bookingId = hold(104L);
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willThrow(
+            com.seatsac.booking.common.BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception());
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class);
+        expire(bookingId);
+
+        given(paymentClient.find(anyString()))
+            .willReturn(java.util.Optional.of(approved))
+            .willThrow(new IllegalStateException("payment 응답 없음"));
+
+        var detail = bookingDetailService.get(USER, bookingId);
+        assertThat(detail.status()).isEqualTo(BookingStatus.EXPIRED);
+        assertThat(detail.payment()).isNull();
     }
 
     // --- 예매당 1회 ---

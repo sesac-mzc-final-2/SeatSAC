@@ -49,6 +49,11 @@ public class BookingPaymentResultApplier {
         ALREADY_CONFIRMED,
         /** 승인을 받았지만 확정할 수 없는 상태였다(만료). 결제를 취소(환불)하고 예매도 EXPIRED로 끝냈다 */
         EXPIRED_REFUNDED,
+        /**
+         * 승인을 받았지만 만료라 환불을 시도했는데 <b>환불을 확인하지 못했다</b>. 예매는 PENDING,
+         * 결제는 APPROVED일 수 있다 — 환불 완료로 답하면 안 된다. 다음 단건 조회가 다시 환불한다
+         */
+        REFUND_PENDING,
         /** 거절을 반영했다 (좌석을 풀었다) */
         FAILED,
         /** 이미 다른 경로가 처리했다 (거절 반영을 못 한 경우) */
@@ -95,12 +100,12 @@ public class BookingPaymentResultApplier {
                 booking.getBookingId(), payment.paymentId());
             // 환불을 먼저 한다. 만료로 바꾼 뒤 취소가 실패하면 「예매 없는 승인 결제」가 남는다 —
             // 여기서 실패하면 PENDING으로 남겨 다음 조회가 다시 시도하게 둔다
-            if (cancelPayment(payment.paymentId(), PaymentCancelReason.HOLD_EXPIRED)) {
-                expireAfterRefund(booking, now);
-            } else {
+            if (!cancelPayment(payment.paymentId(), PaymentCancelReason.HOLD_EXPIRED)) {
                 log.warn("환불을 확인하지 못해 예매를 PENDING으로 남긴다 — 다음 조회가 다시 시도한다 bookingId={}",
                     booking.getBookingId());
+                return Applied.REFUND_PENDING;
             }
+            expireAfterRefund(booking, now);
             return Applied.EXPIRED_REFUNDED;
         }
 

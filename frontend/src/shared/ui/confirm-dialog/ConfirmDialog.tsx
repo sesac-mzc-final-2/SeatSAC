@@ -53,6 +53,10 @@ export function ConfirmDialog({
         event.preventDefault();
         if (!busy) onClose();
       }}
+      onClose={() => {
+        // 브라우저가 cancel 없이 닫은 경우(연속 Esc 등) 부모 상태를 맞춘다. 부모가 닫은 경우는 open 이 이미 false
+        if (open) onClose();
+      }}
       onClick={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
       }}

@@ -255,6 +255,7 @@ function seedBookings() {
         createdAt: toKstIso(minusMinutes(s.startsAt, 60 * 48 + round * 90)),
         confirmedAt: paid ? toKstIso(minusMinutes(s.startsAt, 60 * 48 - 3)) : null,
         canceledAt: status === "CANCELED" ? toKstIso(minusMinutes(s.startsAt, 600)) : null,
+        paymentId: status === "CANCELED" ? randomUUID() : null,
         screening: summaryOf(s),
       });
     }
@@ -412,17 +413,27 @@ createServer(async (req, res) => {
   if ((m = /^\/api\/bookings\/(\d+)\/cancel$/.exec(path)) && req.method === "POST") {
     const booking = bookings.find((b) => b.bookingId === Number(m[1]));
     if (!booking) return fail(res, 404, "NOT_FOUND", `booking ${m[1]}`);
+    // 이미 취소된 예매의 재시도(응답 유실 뒤 같은 Idempotency-Key)는 실제 booking 처럼 같은 결과를 200 으로 다시 준다
+    if (booking.status === "CANCELED") {
+      return json(res, 200, {
+        bookingId: booking.bookingId,
+        status: "CANCELED",
+        canceledAt: booking.canceledAt,
+        payment: { paymentId: booking.paymentId, status: "CANCELED" },
+      });
+    }
     if (booking.status !== "CONFIRMED") return fail(res, 409, "BOOKING_STATE_CONFLICT", `status ${booking.status}`);
     if (booking.screening && new Date(booking.screening.startsAt).getTime() <= Date.now()) {
       return fail(res, 400, "SCREENING_STARTED", "screening already started");
     }
     booking.status = "CANCELED";
     booking.canceledAt = toKstIso(new Date());
+    booking.paymentId = randomUUID();
     return json(res, 200, {
       bookingId: booking.bookingId,
       status: "CANCELED",
       canceledAt: booking.canceledAt,
-      payment: { paymentId: randomUUID(), status: "CANCELED" },
+      payment: { paymentId: booking.paymentId, status: "CANCELED" },
     });
   }
 

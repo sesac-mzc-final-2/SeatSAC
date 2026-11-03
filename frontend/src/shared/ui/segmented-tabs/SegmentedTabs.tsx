@@ -20,7 +20,10 @@ export function SegmentedTabs<T extends string>({ tabs, value, onChange, "aria-l
   const move = (delta: number) => {
     const index = tabs.findIndex((tab) => tab.value === value);
     const next = tabs[(index + delta + tabs.length) % tabs.length];
-    if (next) onChange(next.value);
+    if (!next) return;
+    onChange(next.value);
+    // roving tabindex: 이전 탭은 tabIndex -1 이 되므로 새 탭으로 포커스를 옮겨야 이름이 읽힌다
+    document.getElementById(`tab-${next.value}`)?.focus();
   };
 
   return (

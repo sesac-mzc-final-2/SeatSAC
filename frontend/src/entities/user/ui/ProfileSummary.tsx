@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Chip, Icon } from "@/shared/ui";
+import { Badge, Icon } from "@/shared/ui";
 import type { Profile } from "../model/types";
 import styles from "./ProfileSummary.module.css";
 
@@ -23,9 +23,9 @@ export function ProfileSummary({ profile, aside }: Props) {
         <p className={styles.email}>{profile.email}</p>
       </div>
       <div className={styles.meta}>
-        <Chip size="sm" selected disabled aria-disabled="true" tabIndex={-1}>
+        <Badge tone="accent" className={styles.role}>
           {profile.role === "ADMIN" ? "관리자" : "일반 회원"}
-        </Chip>
+        </Badge>
         {aside}
       </div>
     </section>

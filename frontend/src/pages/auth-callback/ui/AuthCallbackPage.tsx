@@ -14,14 +14,16 @@ const PROFILE_MESSAGES: Record<string, string> = {
 
 /**
  * W7 `/callback` — Cognito 코드 교환은 인증 프로바이더가 처리한다. 토큰을 받으면 `GET /users/me` 로
- * 프로필을 만들고(첫 로그인) 저장해 둔 경로로 돌려보낸다. 프로필 호출이 실패하면 다시 시도하거나 그냥 계속할 수 있다
- * (프로필은 마이페이지에서 다시 만들어진다).
+ * 프로필을 만들고(첫 로그인) 저장해 둔 경로로 돌려보낸다. 프로필 호출이 실패하면 다시 시도하거나, 돌아갈 곳이
+ * 프로필과 무관한 화면이면 그냥 계속할 수 있다(프로필은 마이페이지에서 다시 만들어진다).
  */
 export function AuthCallbackPage() {
   useDocumentTitle("로그인");
   const session = useSession();
   const navigate = useNavigate();
   const returnTo = session.returnTo ?? routes.home();
+  // 마이페이지는 프로필이 있어야 그려진다 → 프로필 실패 뒤 「그냥 계속하기」는 같은 오류로 이어지므로 보여 주지 않는다
+  const returnNeedsProfile = returnTo === routes.myPage() || returnTo.startsWith(`${routes.myPage()}?`);
 
   const authenticated = session.status === "authenticated";
   const profile = useQuery({ ...myProfileQuery(), enabled: authenticated, retry: false });
@@ -75,9 +77,11 @@ export function AuthCallbackPage() {
         messages={PROFILE_MESSAGES}
         onRetry={() => profile.refetch()}
         action={
-          <Link to={returnTo} replace className={styles.skip}>
-            그냥 계속하기 <Icon name="arrow-right" size={13} />
-          </Link>
+          returnNeedsProfile ? undefined : (
+            <Link to={returnTo} replace className={styles.skip}>
+              그냥 계속하기 <Icon name="arrow-right" size={13} />
+            </Link>
+          )
         }
       />
     );

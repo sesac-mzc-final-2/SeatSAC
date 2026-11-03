@@ -1,15 +1,23 @@
-// 로컬 화면 작업용 catalog 목 서버 — contracts/openapi/catalog.openapi.yaml 모양으로 응답한다.
-// 의존성 없음(Node 내장 http). 데이터는 전부 이 파일 안의 가짜 값이다(롯데시네마 수집 데이터·포스터 없음).
+// 로컬 화면 작업용 목 서버 — catalog·user 계약(contracts/openapi/{catalog,user}.openapi.yaml)과 booking 의
+// 예매 취소(BKG-07) 모양으로 응답한다. 의존성 없음(Node 내장 http). 데이터는 전부 이 파일 안의 가짜 값이다
+// (롯데시네마 수집 데이터·포스터 없음). 예매·선호는 메모리에만 있어 재시작하면 초기값으로 돌아간다.
 //
-//   npm run mock              # http://localhost:8089
-//   npm run dev:mock          # 목 + Vite(/api → 8089) 한 번에
+//   npm run mock                        # http://localhost:8089
+//   npm run dev:mock                    # 목 + Vite(/api → 8089) 한 번에
+//   DEV_SESSION=1 npm run dev:mock      # + 가짜 로그인 → 마이페이지(/me)까지 (Authorization 헤더가 있으면 누구든 통과)
 //   MOCK_PORT=9000 npm run mock
 //
-// 재현용: GET /api/screenings?...&fail=503 → 503 SERVICE_UNAVAILABLE, /api/movies/999 → 404
+// 재현용: MOCK_FAIL_PATH=/api/screenings (화면에서 503 오류 상태) · 직접 호출은 ?fail=503 · /api/movies/999 → 404
+//        MOCK_ROLE=ADMIN (프로필 role) · 예매 ID 9001 은 회차 정보 없음(screening null)
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.MOCK_PORT ?? 8089);
+/** 화면에서 오류 상태를 재현할 때: 이 경로는 항상 MOCK_FAIL_STATUS(기본 503)로 응답 (예: MOCK_FAIL_PATH=/api/screenings) */
+const FAIL_PATH = process.env.MOCK_FAIL_PATH ?? "";
+const FAIL_STATUS = Number(process.env.MOCK_FAIL_STATUS ?? 503);
+/** GET /api/users/me 의 role (USER | ADMIN) */
+const MOCK_ROLE = process.env.MOCK_ROLE === "ADMIN" ? "ADMIN" : "USER";
 const KST = "+09:00";
 /** 편성이 있는 기간: 오늘 ±30일. 밖은 계약대로 `{ items: [] }`, 단건도 404 (목록·단건 범위 동일) */
 const SEED_RANGE_DAYS = 30;
@@ -184,9 +192,148 @@ function findScreening(id) {
   return null;
 }
 
+// ---------- 사용자 (user 계약 · BKG-07) ----------
+
+const DEV_USER = {
+  userId: "00000000-0000-4000-8000-000000000001",
+  email: "dev@localhost",
+  name: "개발 세션",
+  role: MOCK_ROLE,
+  createdAt: "2026-10-28T09:00:00+09:00",
+};
+
+const SEAT_PRICE = 15000;
+const dateOffset = (days) => {
+  const d = new Date((dayNumber(todayIso()) + days) * 86400000);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+};
+const minusMinutes = (iso, minutes) => new Date(new Date(iso).getTime() - minutes * 60000);
+const toKstIso = (date) => {
+  const k = new Date(date.getTime() + 9 * 3600 * 1000);
+  return `${k.getUTCFullYear()}-${pad(k.getUTCMonth() + 1)}-${pad(k.getUTCDate())}T${pad(k.getUTCHours())}:${pad(k.getUTCMinutes())}:${pad(k.getUTCSeconds())}${KST}`;
+};
+const summaryOf = (s) => ({
+  screeningId: s.screeningId,
+  movieTitle: s.movie.title,
+  theaterName: s.theater.name,
+  auditoriumName: s.auditorium.name,
+  startsAt: s.startsAt,
+  endsAt: s.endsAt,
+});
+
+/**
+ * 예매 내역 초기값: 오늘 기준 ±며칠의 회차를 골라 상태 4종을 섞는다. 미래 회차의 CONFIRMED 만 취소 버튼이 보이고
+ * 지난 회차의 CONFIRMED 는 보이지 않아야 한다. 9001 은 Catalog 실패(screening null) 재현용. 23건 → 「더 보기」(size 20) 확인
+ */
+function seedBookings() {
+  const plan = [
+    [2, 0, "CONFIRMED", ["H7", "H8"]],
+    [1, 3, "CONFIRMED", ["E5"]],
+    [0, 4, "CONFIRMED", ["C10", "C11", "C12"]],
+    [-1, 1, "CONFIRMED", ["F3", "F4"]],
+    [-1, 5, "PAYMENT_FAILED", ["B2"]],
+    [-2, 2, "EXPIRED", ["G1", "G2"]],
+    [-3, 0, "CANCELED", ["D6", "D7"]],
+    [3, 2, "CONFIRMED", ["A1"]],
+    [-4, 3, "CONFIRMED", ["J7", "J8"]],
+    [-5, 1, "PAYMENT_FAILED", ["K4"]],
+  ];
+  const result = [];
+  let id = 1001;
+  for (let round = 0; round < 3 && result.length < 22; round++) {
+    for (const [dayDelta, pick, status, seats] of plan) {
+      if (result.length >= 22) break;
+      const list = screeningsOn(dateOffset(dayDelta - round * 7));
+      const s = list[(pick + round * 7) % list.length];
+      const paid = status === "CONFIRMED" || status === "CANCELED";
+      result.push({
+        bookingId: id++,
+        status,
+        seatLabels: seats,
+        seatCount: seats.length,
+        amount: seats.length * SEAT_PRICE,
+        createdAt: toKstIso(minusMinutes(s.startsAt, 60 * 48 + round * 90)),
+        confirmedAt: paid ? toKstIso(minusMinutes(s.startsAt, 60 * 48 - 3)) : null,
+        canceledAt: status === "CANCELED" ? toKstIso(minusMinutes(s.startsAt, 600)) : null,
+        screening: summaryOf(s),
+      });
+    }
+  }
+  result.push({
+    bookingId: 9001,
+    status: "CONFIRMED",
+    seatLabels: ["E9", "E10"],
+    seatCount: 2,
+    amount: 2 * SEAT_PRICE,
+    createdAt: toKstIso(new Date(Date.now() - 36e5)),
+    confirmedAt: toKstIso(new Date(Date.now() - 35e5)),
+    canceledAt: null,
+    screening: null,
+  });
+  // 최근 생성 순
+  return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+const bookings = seedBookings();
+let preferences = {
+  preferredTheaters: [
+    { rank: 1, theaterId: 4 },
+    { rank: 2, theaterId: 18 },
+  ],
+  preferredTimeSlot: "EVENING",
+  preferredGenres: ["드라마", "모험"],
+};
+const TIME_SLOTS = ["MORNING", "AFTERNOON", "EVENING", "NIGHT"];
+const BOOKING_STATUSES = ["CONFIRMED", "PAYMENT_FAILED", "EXPIRED", "CANCELED"];
+
+/** 본문 JSON. 비어 있으면 null, 깨졌으면 undefined */
+const readJson = (req) =>
+  new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : null);
+      } catch {
+        resolve(undefined);
+      }
+    });
+  });
+
+/** 극장 ID 가 배치 있는 극장이 아니면 400 (실제 user 는 Catalog GET /internal/theaters 로 확인) */
+function validatePreferences(body) {
+  if (!body || typeof body !== "object") return [{ field: "body", reason: "REQUIRED" }];
+  const details = [];
+  const picked = body.preferredTheaters;
+  if (!Array.isArray(picked)) details.push({ field: "preferredTheaters", reason: "ARRAY" });
+  else {
+    if (picked.length > 3) details.push({ field: "preferredTheaters", reason: "MAX_3" });
+    const ranks = new Set();
+    for (const t of picked) {
+      const rank = t?.rank;
+      if (!Number.isInteger(rank) || rank < 1 || rank > 3 || ranks.has(rank)) {
+        details.push({ field: "preferredTheaters[].rank", value: rank, reason: "RANK_1_3_UNIQUE" });
+      }
+      ranks.add(rank);
+      if (!theaters.some((th) => th.hasLayout && th.theaterId === t?.theaterId)) {
+        details.push({ field: "preferredTheaters[].theaterId", value: t?.theaterId, reason: "UNKNOWN_THEATER" });
+      }
+    }
+  }
+  if (body.preferredTimeSlot !== null && !TIME_SLOTS.includes(body.preferredTimeSlot)) {
+    details.push({ field: "preferredTimeSlot", value: body.preferredTimeSlot, reason: "ENUM" });
+  }
+  if (!Array.isArray(body.preferredGenres) || body.preferredGenres.some((g) => typeof g !== "string")) {
+    details.push({ field: "preferredGenres", reason: "STRING_ARRAY" });
+  }
+  return details;
+}
+
+const requiresAuth = (path) => path.startsWith("/api/users/") || path.startsWith("/api/bookings/");
+
 // ---------- 서버 ----------
 
-createServer((req, res) => {
+createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
   const q = url.searchParams;
@@ -204,8 +351,80 @@ createServer((req, res) => {
     return;
   }
 
-  if (q.get("fail") === "503") return fail(res, 503, "SERVICE_UNAVAILABLE", "simulated by mock");
-  if (q.get("fail") === "500") return fail(res, 500, "INTERNAL_ERROR", "simulated by mock");
+  const failStatus = FAIL_PATH && path === FAIL_PATH ? FAIL_STATUS : Number(q.get("fail") ?? 0);
+  if (failStatus === 503) return fail(res, 503, "SERVICE_UNAVAILABLE", "simulated by mock");
+  if (failStatus === 500) return fail(res, 500, "INTERNAL_ERROR", "simulated by mock");
+
+  // 인증이 필요한 경로: Authorization: Bearer 가 있으면 누구든 통과 (Gateway 의 JWT 검증은 흉내 내지 않는다)
+  if (requiresAuth(path) && !/^Bearer\s+\S+/.test(req.headers.authorization ?? "")) {
+    return fail(res, 401, "UNAUTHORIZED", "missing bearer token");
+  }
+
+  if (path === "/api/users/me" && req.method === "GET") return json(res, 200, DEV_USER);
+
+  if (path === "/api/users/me" && req.method === "PATCH") {
+    const body = await readJson(req);
+    const name = body?.name;
+    if (typeof name !== "string" || name.trim().length < 1 || name.length > 20) {
+      return fail(res, 400, "VALIDATION_FAILED", "bad name", [{ field: "name", reason: "LENGTH_1_20" }]);
+    }
+    DEV_USER.name = name.trim();
+    return json(res, 200, DEV_USER);
+  }
+
+  if (path === "/api/users/me/bookings") {
+    const status = q.get("status");
+    const pageRaw = q.get("page") ?? "0";
+    const sizeRaw = q.get("size") ?? "20";
+    const details = [];
+    if (status !== null && !BOOKING_STATUSES.includes(status)) details.push({ field: "status", reason: "ENUM" });
+    if (!isNonNegativeInt(pageRaw)) details.push({ field: "page", reason: "MIN_0_INTEGER" });
+    if (!isNonNegativeInt(sizeRaw) || Number(sizeRaw) < 1 || Number(sizeRaw) > 50) details.push({ field: "size", reason: "RANGE_1_50_INTEGER" });
+    if (details.length > 0) return fail(res, 400, "VALIDATION_FAILED", "bad query", details);
+    const page = Number(pageRaw);
+    const size = Number(sizeRaw);
+    const all = status ? bookings.filter((b) => b.status === status) : bookings;
+    return json(res, 200, {
+      content: all.slice(page * size, page * size + size),
+      page,
+      size,
+      totalElements: all.length,
+      totalPages: Math.ceil(all.length / size),
+    });
+  }
+
+  if (path === "/api/users/me/preferences" && req.method === "GET") return json(res, 200, preferences);
+
+  if (path === "/api/users/me/preferences" && req.method === "PUT") {
+    const body = await readJson(req);
+    const details = validatePreferences(body);
+    if (details.length > 0) return fail(res, 400, "VALIDATION_FAILED", "bad preferences", details);
+    preferences = {
+      preferredTheaters: [...body.preferredTheaters]
+        .sort((a, b) => a.rank - b.rank)
+        .map(({ rank, theaterId }) => ({ rank, theaterId })),
+      preferredTimeSlot: body.preferredTimeSlot,
+      preferredGenres: [...body.preferredGenres],
+    };
+    return json(res, 200, preferences);
+  }
+
+  if ((m = /^\/api\/bookings\/(\d+)\/cancel$/.exec(path)) && req.method === "POST") {
+    const booking = bookings.find((b) => b.bookingId === Number(m[1]));
+    if (!booking) return fail(res, 404, "NOT_FOUND", `booking ${m[1]}`);
+    if (booking.status !== "CONFIRMED") return fail(res, 409, "BOOKING_STATE_CONFLICT", `status ${booking.status}`);
+    if (booking.screening && new Date(booking.screening.startsAt).getTime() <= Date.now()) {
+      return fail(res, 400, "SCREENING_STARTED", "screening already started");
+    }
+    booking.status = "CANCELED";
+    booking.canceledAt = toKstIso(new Date());
+    return json(res, 200, {
+      bookingId: booking.bookingId,
+      status: "CANCELED",
+      canceledAt: booking.canceledAt,
+      payment: { paymentId: randomUUID(), status: "CANCELED" },
+    });
+  }
 
   if (path === "/api/movies") {
     const status = q.get("status") ?? "NOW_SHOWING";
@@ -273,6 +492,6 @@ createServer((req, res) => {
 
   return fail(res, 404, "NOT_FOUND", path);
 }).listen(PORT, () => {
-  console.log(`mock catalog on http://localhost:${PORT}  (movies ${movies.length}, theaters ${theaters.filter((t) => t.hasLayout).length})`);
+  console.log(`mock catalog·user on http://localhost:${PORT}  (movies ${movies.length}, theaters ${theaters.filter((t) => t.hasLayout).length}, bookings ${bookings.length})`);
   console.log(`Vite 와 함께: npm run dev:mock  /  따로: DEV_API_PROXY=http://localhost:${PORT} npm run dev`);
 });

@@ -1,4 +1,5 @@
 // npm run dev:mock — 목 서버와 Vite 를 같이 띄운다 (Vite 의 /api → 목). 하나가 끝나면 둘 다 끝낸다.
+// DEV_SESSION=1 npm run dev:mock — Cognito 없이 로그인된 것처럼 (가짜 세션, 개발 서버 전용) 마이페이지까지 본다.
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -6,8 +7,9 @@ import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const port = process.env.MOCK_PORT ?? "8089";
-// npx 를 거치면 POSIX 에서 sh -c 중간 프로세스가 생겨 kill 이 Vite 까지 닿지 않는다 → Vite 실행 파일을 node 로 직접 띄운다
-const viteBin = createRequire(import.meta.url).resolve("vite/bin/vite.js");
+// npx 를 거치면 POSIX 에서 sh -c 중간 프로세스가 생겨 kill 이 Vite 까지 닿지 않는다 → Vite 실행 파일을 node 로 직접 띄운다.
+// `vite/bin/vite.js` 는 package.json exports 에 없어 resolve 가 ERR_PACKAGE_PATH_NOT_EXPORTED 로 실패한다 → package.json 위치에서 조립
+const viteBin = join(dirname(createRequire(import.meta.url).resolve("vite/package.json")), "bin", "vite.js");
 
 const mock = spawn(process.execPath, [join(here, "server.mjs")], { stdio: "inherit", env: { ...process.env, MOCK_PORT: port } });
 const vite = spawn(process.execPath, [viteBin], {

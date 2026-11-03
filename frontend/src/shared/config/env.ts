@@ -18,3 +18,9 @@ export const env = {
  */
 export const isCognitoConfigured =
   env.cognito.authority !== "" && env.cognito.clientId !== "" && env.cognito.domain !== "";
+
+/**
+ * 개발 서버 전용 가짜 로그인 플래그 (`DEV_SESSION=1 npm run dev:mock`). `__DEV_SESSION__` 은 vite.config `define` 이
+ * 개발 서버에서만 채우고 `vite build` 에서는 항상 "" → 배포본에서는 늘 false 다
+ */
+export const isDevSessionEnabled: boolean = import.meta.env.DEV && __DEV_SESSION__ !== "";

@@ -11,3 +11,6 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** vite.config.ts `define` — 개발 서버에서만 값이 있고 빌드에서는 "" (DEV_SESSION) */
+declare const __DEV_SESSION__: string;

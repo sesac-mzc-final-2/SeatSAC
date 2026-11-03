@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.seatsac.booking.common.BookingPolicy;
+import com.seatsac.booking.common.RedisKeys;
 import com.seatsac.booking.component.CatalogClient;
 import com.seatsac.booking.component.ScreeningCache;
 import com.seatsac.booking.component.SeatEventPublisher;
@@ -71,7 +72,7 @@ class SeatStreamFlowTest {
 
     @BeforeEach
     void setUp() {
-        redis.getConnectionFactory().getConnection().serverCommands().flushDb();   // seq를 1부터
+        redis.getConnectionFactory().getConnection().serverCommands().flushDb();   // seq 키를 비운다 — 첫 이벤트는 시각 기반 시작값 + 1
         screeningCache.clear();
         given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
             SCREENING, 10_004L, 1, NOW.plusSeconds(3600), NOW.plusSeconds(10_000),
@@ -110,7 +111,7 @@ class SeatStreamFlowTest {
             .contains("\"type\":\"HELD\"")
             .contains("\"seatIds\":[101,102]")
             .contains("\"screeningId\":42")
-            .contains("id:1");                                  // id = seq (INCR 결과)
+            .contains("id:" + redis.opsForValue().get(RedisKeys.seatSeq(SCREENING)));   // id = seq
         assertThat(content(otherScreening)).doesNotContain("event:seat");
     }
 
@@ -125,7 +126,9 @@ class SeatStreamFlowTest {
             .untilAsserted(() -> assertThat(content(watcher)).contains("event:seat"));
 
         String data = dataOf(content(watcher));
-        assertThat(com.jayway.jsonpath.JsonPath.<Integer>read(data, "$.seq")).isPositive();
+        // seq는 16자리(시각 ms × 1000 기준)라 Integer가 아니라 Long으로 읽힌다
+        assertThat(com.jayway.jsonpath.JsonPath.<Number>read(data, "$.seq").longValue())
+            .isEqualTo(Long.parseLong(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))));
         assertThat(com.jayway.jsonpath.JsonPath.<String>read(data, "$.type")).isEqualTo("CONFIRMED");
         assertThat(com.jayway.jsonpath.JsonPath.<String>read(data, "$.occurredAt"))
             .isEqualTo("2026-10-23T12:00:00+09:00");             // KST로 나간다

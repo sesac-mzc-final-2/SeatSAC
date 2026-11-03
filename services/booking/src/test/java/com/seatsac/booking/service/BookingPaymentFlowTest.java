@@ -133,6 +133,7 @@ class BookingPaymentFlowTest {
     @Test
     void approvedPaymentConfirmsBookingAndWritesOutboxInOneTransaction() throws Exception {
         Long bookingId = hold(101L, 102L);
+        long seqAfterHold = Long.parseLong(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING)));
         given(paymentClient.request(any())).willReturn(approved(bookingId));
 
         BookingPaymentResponse response = bookingPaymentService.pay(USER, bookingId, payRequest());
@@ -165,7 +166,7 @@ class BookingPaymentFlowTest {
 
         // 커밋 후: 선점 키 정리 + CONFIRMED 발행(선점 HELD 1 → 확정 2)
         assertThat(redis.hasKey(RedisKeys.seat(SCREENING, 101L))).isFalse();
-        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo("2");
+        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo(String.valueOf(seqAfterHold + 1));
     }
 
     /** Catalog 조회가 실패해도 확정은 진행하고 이름·시각만 비운다 (계약이 null을 허용하는 이유) */

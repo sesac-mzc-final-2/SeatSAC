@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { SessionContext, type Session } from "@/entities/session";
 import { configureHttpAuth } from "@/shared/api";
 
@@ -9,9 +9,12 @@ import { configureHttpAuth } from "@/shared/api";
 const DEV_ACCESS_TOKEN = "dev-session";
 
 export function DevSessionProvider({ children }: { children: ReactNode }) {
-  useEffect(() => {
+  // 토큰 공급자는 자식이 첫 요청(GET /users/me)을 보내기 전에 꽂혀 있어야 한다(401 은 재시도하지 않는다).
+  // effect 는 자식의 쿼리 구독보다 늦을 수 있어 첫 렌더의 state 초기화에서 한 번 꽂는다 (멱등)
+  const [httpAuthReady] = useState(() => {
     configureHttpAuth({ getAccessToken: () => DEV_ACCESS_TOKEN, onUnauthorized: null, onSessionExpired: null });
-  }, []);
+    return true;
+  });
 
   const session = useMemo<Session>(
     () => ({
@@ -26,5 +29,5 @@ export function DevSessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
+  return <SessionContext.Provider value={session}>{httpAuthReady ? children : null}</SessionContext.Provider>;
 }

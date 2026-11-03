@@ -25,13 +25,15 @@ const initial: Preferences = {
 const jsonResponse = (body: unknown) =>
   new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 
-function renderEditor() {
+function renderEditor(value: Preferences = initial) {
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
-  return render(
+  const ui = (prefs: Preferences) => (
     <QueryClientProvider client={client}>
-      <PreferencesEditor theaters={theaters} initial={initial} />
-    </QueryClientProvider>,
+      <PreferencesEditor theaters={theaters} initial={prefs} />
+    </QueryClientProvider>
   );
+  const result = render(ui(value));
+  return { ...result, rerenderWith: (prefs: Preferences) => result.rerender(ui(prefs)) };
 }
 
 describe("PreferencesEditor (W8 선호 설정)", () => {
@@ -89,5 +91,22 @@ describe("PreferencesEditor (W8 선호 설정)", () => {
       preferredGenres: ["드라마", "액션"],
     });
     expect(screen.getByRole("button", { name: "선호 설정 저장" })).toBeDisabled();
+  });
+
+  it("저장값(initial)이 바뀌면 편집 중이 아닐 때만 따라가고, 편집 중이면 내 변경을 지킨다", async () => {
+    const changed: Preferences = { ...initial, preferredTimeSlot: "NIGHT" };
+
+    const clean = renderEditor();
+    clean.rerenderWith(changed);
+    expect(screen.getByRole("button", { name: "심야 21시~" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "선호 설정 저장" })).toBeDisabled();
+    clean.unmount();
+
+    const dirty = renderEditor();
+    await userEvent.click(screen.getByRole("button", { name: "액션" }));
+    dirty.rerenderWith(changed);
+    expect(screen.getByRole("button", { name: "액션" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "저녁 17~21시" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "선호 설정 저장" })).toBeEnabled();
   });
 });

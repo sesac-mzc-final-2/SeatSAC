@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { useSession } from "@/entities/session";
 import { myProfileQuery, ProfileSummary } from "@/entities/user";
@@ -41,6 +42,7 @@ const PROFILE_MESSAGES: Record<string, string> = {
 /**
  * W8 마이페이지 `/me` (3.3.6): 프로필 · 탭(예매 내역 USR-04 · 선호 설정 USR-05).
  * 탭은 `?tab=` 으로 주소에 남겨 새로고침·뒤로 가기에도 유지한다. 비로그인은 로그인 안내.
+ * 선호 설정 패널은 한 번 연 뒤에는 탭을 옮겨도 숨기기만 한다(언마운트하면 저장하지 않은 편집이 사라진다).
  */
 export function MyPage() {
   useDocumentTitle("마이페이지");
@@ -50,6 +52,10 @@ export function MyPage() {
 
   const authenticated = session.status === "authenticated";
   const profile = useQuery({ ...myProfileQuery(), enabled: authenticated });
+
+  // 선호 설정 탭을 한 번이라도 열었는지 — 열기 전에는 선호·극장 요청을 보내지 않는다
+  const [preferencesOpened, setPreferencesOpened] = useState(tab === "preferences");
+  if (tab === "preferences" && !preferencesOpened) setPreferencesOpened(true);
 
   const setTab = (next: Tab) => {
     setParams(
@@ -89,13 +95,16 @@ export function MyPage() {
         <div className={styles.tabs}>
           <SegmentedTabs tabs={TABS} value={tab} onChange={setTab} aria-label="마이페이지 메뉴" />
         </div>
-        <div
-          id={tab === "bookings" ? "my-panel-bookings" : "my-panel-preferences"}
-          role="tabpanel"
-          aria-labelledby={`tab-${tab}`}
-        >
-          {tab === "bookings" ? <BookingHistory /> : <PreferencesPanel />}
-        </div>
+        {tab === "bookings" && (
+          <div id="my-panel-bookings" role="tabpanel" aria-labelledby="tab-bookings">
+            <BookingHistory />
+          </div>
+        )}
+        {preferencesOpened && (
+          <div id="my-panel-preferences" role="tabpanel" aria-labelledby="tab-preferences" hidden={tab !== "preferences"}>
+            <PreferencesPanel />
+          </div>
+        )}
       </>
     );
   };

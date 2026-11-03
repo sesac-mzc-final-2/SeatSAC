@@ -21,7 +21,7 @@ import styles from "./PreferencesEditor.module.css";
 interface Props {
   /** 고를 수 있는 극장 (배치 있는 4곳) */
   theaters: Theater[];
-  /** 저장돼 있던 값. 바뀌면 부모가 key 를 바꿔 다시 그린다 */
+  /** 저장돼 있던 값. 바뀌면(저장 성공·재조회) 저장 기준을 맞추고, 편집 중인 내용은 지킨다 */
   initial: Preferences;
 }
 
@@ -30,6 +30,16 @@ export function PreferencesEditor({ theaters, initial }: Props) {
   const toast = useToast();
   const [draft, setDraft] = useState(() => toDraft(initial));
   const [savedDraft, setSavedDraft] = useState(draft);
+  // initial 이 바뀌면(저장 성공으로 캐시가 바뀜, 다른 기기에서 저장) 렌더 중에 상태를 맞춘다 (React 「props 변화에 state 맞추기」).
+  // 저장 요청 중에 더 고친 내용은 dirty 라 그대로 두고, 고친 게 없을 때만 새 저장값으로 바꾼다
+  const [prevInitial, setPrevInitial] = useState(initial);
+  if (initial !== prevInitial) {
+    setPrevInitial(initial);
+    const next = toDraft(initial);
+    if (isSameDraft(draft, savedDraft)) setDraft(next);
+    setSavedDraft(next);
+  }
+  // 저장 성공은 응답으로 바로 저장 기준을 맞춘다 (부모 캐시 갱신과 무관하게, 단독 렌더에서도 동작)
   const save = useSavePreferences({ onSuccess: (saved) => setSavedDraft(toDraft(saved)) });
 
   const theaterName = (theaterId: number) =>

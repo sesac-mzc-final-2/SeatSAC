@@ -151,6 +151,36 @@ describe("useSeatBoard (BKG-01 + BKG-05)", () => {
     expect(result.current.statusOfSeat(1)).toBe("RESERVED");
   });
 
+  it("빈틈 재조회가 실패하면 실시간 표시를 끄고 다시 시도해 메운다", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(snapshot(418)))
+      .mockResolvedValueOnce(jsonResponse(snapshot(418)))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(jsonResponse({ ...snapshot(421), seats: [
+        { seatId: 1, status: "RESERVED" },
+        { seatId: 2, status: "AVAILABLE" },
+      ] }));
+
+    const { result } = renderHook(() => useSeatBoard(5123), { wrapper });
+    await waitFor(() => expect(result.current.board).not.toBeNull());
+    FakeEventSource.latest().emitOpen();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(result.current.live).toBe(true));
+
+    // 빈틈 → 첫 재조회 실패: 마지막 좌석판은 남기되 「실시간」이라고 하지 않는다
+    FakeEventSource.latest().emitSeat(event({ seq: 421, seatIds: [1], type: "CONFIRMED" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current.live).toBe(false));
+    expect(result.current.board?.seq).toBe(418);
+
+    // 다시 시도해 메우면 실시간 표시가 돌아온다
+    await waitFor(() => expect(result.current.board?.seq).toBe(421), { timeout: 3000 });
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(result.current.statusOfSeat(1)).toBe("RESERVED");
+    await waitFor(() => expect(result.current.live).toBe(true));
+  });
+
   it("스냅샷에 이미 들어 있는 번호의 이벤트는 무시한다", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(snapshot(418)));
     const { result } = renderHook(() => useSeatBoard(5123), { wrapper });

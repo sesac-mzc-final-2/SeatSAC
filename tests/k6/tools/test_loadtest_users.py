@@ -171,6 +171,33 @@ class SrpTest(unittest.TestCase):
         self.assertEqual(cognito.calls.count("InitiateAuth"), 3)
 
 
+class RefreshUserTest(unittest.TestCase):
+    """갱신 실패: 일시 오류면 이전 토큰을 남기고, 거절이면 지운다"""
+
+    def test_transient_failure_keeps_previous_token(self) -> None:
+        cognito = FakeCognito("loadtest+001@example.com", "x")
+        cognito.throttle_next = 99   # 재시도를 다 써도 요청 제한
+        user = lt.LoadUser("loadtest+001@example.com", "pw", ACCESS_1, 2_000_000.0, "refresh-1")
+        with FakeServer(cognito) as endpoint, self.assertRaises(lt.CognitoError):
+            lt.refresh_user(lt.CognitoApi("ap-northeast-2", endpoint, retry_delay=0), CLIENT_ID, user)
+        self.assertEqual((user.access_token, user.access_expires_at), (ACCESS_1, 2_000_000.0))
+
+    def test_rejected_refresh_clears_previous_token(self) -> None:
+        cognito = FakeCognito("loadtest+001@example.com", "x")
+        user = lt.LoadUser("loadtest+001@example.com", "pw", ACCESS_1, 2_000_000.0, "revoked")
+        with FakeServer(cognito) as endpoint, self.assertRaises(lt.CognitoError):
+            lt.refresh_user(lt.CognitoApi("ap-northeast-2", endpoint, retry_delay=0), CLIENT_ID, user)
+        self.assertEqual((user.access_token, user.access_expires_at), (None, 0.0))
+
+    def test_admin_token_on_refresh_clears_previous_token(self) -> None:
+        cognito = FakeCognito("loadtest+001@example.com", "x")
+        cognito.refresh_access = fake_jwt("admin", ["ADMIN"])
+        user = lt.LoadUser("loadtest+001@example.com", "pw", ACCESS_1, 2_000_000.0, "refresh-1")
+        with FakeServer(cognito) as endpoint, self.assertRaises(lt.CognitoError):
+            lt.refresh_user(lt.CognitoApi("ap-northeast-2", endpoint, retry_delay=0), CLIENT_ID, user)
+        self.assertIsNone(user.access_token)
+
+
 class AdminTokenTest(unittest.TestCase):
     """create 뒤에 누가 ADMIN 그룹에 넣어도 토큰 클레임(cognito:groups)으로 걸러진다 — AWS 자격 증명 없이"""
 

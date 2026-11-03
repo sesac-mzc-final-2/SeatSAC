@@ -171,12 +171,15 @@ class CognitoError(Exception):
 
 class CognitoApi:
     RETRYABLE = {"TooManyRequestsException", "InternalErrorException", "ServiceUnavailable"}
+    # 재시도를 다 써도 끝난 오류 — 토큰이 무효라는 뜻이 아니다
+    TRANSIENT = RETRYABLE | {"RetryExhausted"}
 
-    def __init__(self, region: str, endpoint: str | None = None) -> None:
+    def __init__(self, region: str, endpoint: str | None = None, retry_delay: float = 0.5) -> None:
         self.endpoint = endpoint or f"https://cognito-idp.{region}.amazonaws.com/"
+        self.retry_delay = retry_delay
 
     def call(self, action: str, body: dict) -> dict:
-        delay = 0.5
+        delay = self.retry_delay
         for attempt in range(6):
             request = urllib.request.Request(
                 self.endpoint,
@@ -453,19 +456,24 @@ def cmd_refresh(args: argparse.Namespace) -> None:
     state = State.load(args.state)
     api = CognitoApi(state.region)
 
-    def refresh(user: LoadUser) -> None:
-        if not user.refresh_token:
-            raise CognitoError("NoRefreshToken", "login을 먼저 한다")
-        try:
-            tokens = refuse_admin_token(refresh_access(api, state.client_id, user.refresh_token))
-        except CognitoError:
-            user.access_token, user.access_expires_at = None, 0.0   # 이전 토큰도 쓰지 않게 지운다
-            raise
-        user.access_token, user.access_expires_at = tokens.access_token, tokens.access_expires_at
-
-    errors = _for_each(state.users, refresh, args.concurrency)
+    errors = _for_each(state.users, lambda user: refresh_user(api, state.client_id, user), args.concurrency)
     state.save(args.state)
     _report("갱신", len(state.users), errors)
+
+
+def refresh_user(api: CognitoApi, client_id: str, user: LoadUser) -> None:
+    """Access Token만 새로 받는다. 거절(만료된 리프레시·ADMIN 그룹 등)이면 이전 토큰도 지운다 —
+    일시 오류(요청 제한·Cognito 장애·네트워크)면 <b>이전 토큰을 남긴다</b>: 아직 유효할 수 있고,
+    지우면 오류가 풀린 뒤 tokens가 그 계정을 거부해 갱신을 다시 돌려야 한다"""
+    if not user.refresh_token:
+        raise CognitoError("NoRefreshToken", "login을 먼저 한다")
+    try:
+        tokens = refuse_admin_token(refresh_access(api, client_id, user.refresh_token))
+    except CognitoError as error:
+        if error.kind not in CognitoApi.TRANSIENT:
+            user.access_token, user.access_expires_at = None, 0.0   # 무효가 된 토큰은 쓰지 않게 지운다
+        raise
+    user.access_token, user.access_expires_at = tokens.access_token, tokens.access_expires_at
 
 
 def _report(what: str, total: int, errors: list[str]) -> None:

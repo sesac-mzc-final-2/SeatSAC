@@ -63,7 +63,7 @@
 | `catalog:movies:*`, `catalog:movie:{id}`, `catalog:theaters:*`, `catalog:screenings:{date}:{theaterId}:{movieId\|all}`, `catalog:layout:{auditoriumId}:{version}` | catalog | 10분 | 변경 시 삭제. 잔여 좌석은 캐시 금지 |
 | `seat:{screeningId}:{seatId}` | booking | 300초 | holdId(UUID) |
 | `user-hold:{screeningId}:{userId}` | booking | 300초 | 회차당 진행 중 선점 1건 |
-| `seat-seq:{screeningId}` | booking | 없음 | 회차별 이벤트 일련번호 |
+| `seat-seq:{screeningId}` | booking | 없음 | 회차별 이벤트 일련번호. 이벤트마다 +1, **키가 없으면 현재 시각 ms × 1000부터** 시작(`seq-next.lua`) — Valkey 재시작으로 키가 사라져도 번호가 뒤로 가지 않아 열린 화면이 빈틈으로 보고 다시 받는다 |
 | `hold-expiry` (sorted set) | booking | 없음 | 멤버 `{screeningId}:{holdId}`, 점수 = 만료 시각 |
 | ⚠️ `idem:{userId}:{Idempotency-Key}` | booking | 24시간 | 요청 해시 + 처리 상태 + 첫 응답 (03a `idem:{키}` 대체) |
 

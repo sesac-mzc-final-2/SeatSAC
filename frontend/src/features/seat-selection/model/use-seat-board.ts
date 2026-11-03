@@ -13,6 +13,8 @@ import {
 
 /** 이벤트에 빈틈이 있으면 이만큼 기다린 뒤 스냅샷을 다시 받는다 (계약 결정 13번) */
 const GAP_REFETCH_DELAY_MS = 200;
+/** 빈틈 재조회가 실패하면 늘려 가며 다시 시도한다 (200ms → 400 → … 최대 5초) */
+const GAP_RETRY_MAX_MS = 5000;
 /** 재연결 때 모두가 동시에 스냅샷을 요청하지 않도록 0~1초 흩뜨린다 */
 const RECONNECT_JITTER_MS = 1000;
 
@@ -70,13 +72,20 @@ export function useSeatBoard(screeningId: number): SeatBoardState {
    * 스냅샷을 다시 받는다. 모아 둔 이벤트는 <b>새 스냅샷이 실제로 왔을 때만</b> 정리한다 —
    * 먼저 비우면 재조회가 실패했을 때(네트워크 끊김) 아직 쓸 수 있는 이벤트까지 잃는다.
    */
-  const reload = useCallback(() => {
-    void refetch().then((result) => {
-      const fresh = result.data;
-      if (!fresh) return;
-      setEvents((current) => current.filter((event) => event.seq > fresh.seq));
-    });
-  }, [refetch]);
+  const reloadSnapshot = useCallback(
+    () =>
+      refetch().then((result) => {
+        // 실패해도 react-query는 마지막 data를 남긴다 → 성공 여부는 오류로 가린다
+        const fresh = result.isError ? undefined : result.data;
+        if (!fresh) return false;
+        setEvents((current) => current.filter((event) => event.seq > fresh.seq));
+        return true;
+      }),
+    [refetch],
+  );
+  const reload = useCallback(() => void reloadSnapshot(), [reloadSnapshot]);
+  /** 빈틈 재조회가 실패했다 — 빈틈이 남은 동안은 화면이 최신이 아닐 수 있다 (실시간 표시를 끈다) */
+  const [gapStale, setGapStale] = useState(false);
 
   // 회차가 바뀌면 이전 회차의 이벤트를 버린다
   useEffect(() => {
@@ -85,12 +94,27 @@ export function useSeatBoard(screeningId: number): SeatBoardState {
     return () => setEvents([]);
   }, [screeningId]);
 
-  // 빈틈이 생기면 200ms 뒤 스냅샷으로 되돌린다 (이벤트로 메우지 않는다)
+  // 빈틈이 생기면 200ms 뒤 스냅샷으로 되돌린다 (이벤트로 메우지 않는다).
+  // 재조회가 실패하면 빈틈이 그대로라 이 effect가 다시 돌지 않는다 → 여기서 간격을 늘려 다시 시도한다
   useEffect(() => {
     if (!gap) return;
-    const timer = window.setTimeout(reload, GAP_REFETCH_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [gap, reload]);
+    let cancelled = false;
+    let timer: number | undefined;
+    const attempt = (delay: number) => {
+      timer = window.setTimeout(() => {
+        void reloadSnapshot().then((ok) => {
+          if (cancelled) return;
+          setGapStale(!ok);
+          if (!ok) attempt(Math.min(delay * 2, GAP_RETRY_MAX_MS));
+        });
+      }, delay);
+    };
+    attempt(GAP_REFETCH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [gap, reloadSnapshot]);
 
   // SSE 구독. 받은 이벤트는 쌓아 두기만 하고 적용은 위 계산이 한다
   useEffect(() => {
@@ -135,7 +159,8 @@ export function useSeatBoard(screeningId: number): SeatBoardState {
     // 좌석판이 이미 있으면 배경 재조회 실패를 오류 화면으로 올리지 않는다 —
     // 연결 상태는 live가 알려 주고, 화면은 마지막으로 받은 좌석 상태를 그대로 보여 주는 게 낫다
     error: board ? null : snapshotQuery.error,
-    live,
+    // 연결은 살아 있어도 빈틈을 메우지 못했으면 실시간 반영 중이 아니다
+    live: live && !(gap && gapStale),
     reload,
   };
 }

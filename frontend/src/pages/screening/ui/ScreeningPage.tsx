@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { auditoriumLayoutQuery } from "@/entities/auditorium";
 import { availableCount } from "@/entities/booking";
-import { screenTypeLabel, screeningDetailQuery } from "@/entities/screening";
+import { GradeBadge, movieDetailQuery } from "@/entities/movie";
+import { screenTypeLabel, screeningDetailQuery, type Screening } from "@/entities/screening";
 import { BookingSteps } from "@/features/booking-steps";
 import { RequireLogin } from "@/features/require-login";
 import {
@@ -16,9 +17,9 @@ import {
   type HoldFailure,
 } from "@/features/seat-selection";
 import { routes } from "@/shared/config";
-import { formatDateKo, timeOfIso, useDocumentTitle } from "@/shared/lib";
-import { EmptyState, ErrorState, LoadingBlock, PageHeading, useToast } from "@/shared/ui";
-import { SeatBoard } from "@/widgets/seat-board";
+import { formatDateDots, timeOfIso, useDocumentTitle } from "@/shared/lib";
+import { EmptyState, ErrorState, Icon, LoadingBlock, PageHeading, useToast } from "@/shared/ui";
+import { SeatBoard, SeatBookingPanel } from "@/widgets/seat-board";
 import styles from "./ScreeningPage.module.css";
 
 interface ActiveHold {
@@ -47,12 +48,20 @@ function SeatSelect() {
   const toast = useToast();
 
   const [activeHold, setActiveHold] = useState<ActiveHold | null>(null);
+  // 화면을 연 시각 — 이미 시작한 회차 안내용. 그 뒤에 시작하면 선점이 SCREENING_STARTED로 알려 준다
+  const [openedAt] = useState(() => Date.now());
 
   const screeningQuery = useQuery({
     ...screeningDetailQuery(screeningId),
     enabled: Number.isInteger(screeningId),
   });
   const screening = screeningQuery.data ?? null;
+
+  // 오른쪽 요약 패널의 포스터용 — 실패해도 제목 카드로 그린다
+  const movieQuery = useQuery({
+    ...movieDetailQuery(screening?.movie.movieId ?? 0),
+    enabled: screening !== null,
+  });
 
   const layoutQuery = useQuery({
     ...auditoriumLayoutQuery(screening?.auditorium.auditoriumId ?? 0, screening?.layoutVersion),
@@ -165,20 +174,46 @@ function SeatSelect() {
     }
     if (!layoutQuery.data || !board.board) return <EmptyState title="좌석 정보를 불러오지 못했어요" />;
 
+    const started = new Date(screening.startsAt).getTime() <= openedAt;
+    const locked = activeHold !== null || started;
+    const toggle = (seat: Parameters<typeof choice.toggle>[0]) => {
+      if (!choice.toggle(seat)) toast.show("한 번에 최대 4석까지 선택할 수 있어요.");
+    };
+
     return (
-      <SeatBoard
-        layout={layoutQuery.data}
-        statusOfSeat={board.statusOfSeat}
-        choice={choice}
-        onToggle={(seat) => {
-          if (!choice.toggle(seat)) toast.show("한 번에 최대 4석까지 선택할 수 있어요.");
-        }}
-        onSubmit={() => hold.hold({ screeningId, seatIds: choice.seatIds })}
-        holdPending={hold.pending}
-        live={board.live}
-        remaining={remaining}
-        disabled={activeHold !== null}
-      />
+      <>
+        {started && (
+          <div className={styles.notice} role="status">
+            <Icon name="info" size={18} />
+            <p>상영이 시작되어 더 이상 예매할 수 없어요.</p>
+          </div>
+        )}
+        <div className={styles.layout}>
+          <SeatBoard
+            layout={layoutQuery.data}
+            statusOfSeat={board.statusOfSeat}
+            choice={choice}
+            onToggle={toggle}
+            live={board.live}
+            totalSeats={sellableSeatIds.length}
+            remaining={remaining}
+            disabled={locked}
+          />
+          <SeatBookingPanel
+            screening={screening}
+            movie={movieQuery.data ?? null}
+            seats={choice.seats}
+            onRemove={toggle}
+            onSubmit={() => hold.hold({ screeningId, seatIds: choice.seatIds })}
+            pending={hold.pending}
+            disabled={locked}
+          />
+        </div>
+        <p className={styles.source}>
+          좌석 배치 출처: 롯데시네마 · {formatDateDots(layoutQuery.data.source.fetchedAt.slice(0, 10))} 수집
+          <span>준수 조건에 따른 출처 표기 · 교육용 배치</span>
+        </p>
+      </>
     );
   };
 
@@ -189,17 +224,14 @@ function SeatSelect() {
   return (
     <div className={styles.page}>
       <PageHeading
-        eyebrow={screening ? `${screening.theater.name} · ${screening.auditorium.name}` : undefined}
-        title={screening ? screening.movie.title : "좌석 선택"}
-        description={
-          screening
-            ? `${formatDateKo(screening.businessDate)} ${timeOfIso(screening.startsAt)} ~ ${timeOfIso(screening.endsAt)} · ${screenTypeLabel(screening.auditorium.screenType)}${screening.filmFormat ? ` · ${screening.filmFormat}` : ""}`
-            : undefined
-        }
+        eyebrow="가장 좋은 자리에서"
+        title="좌석 선택"
         back={{ to: routes.showtimes({ theaterId: screening?.theater.theaterId }), label: "상영시간표" }}
       >
         <BookingSteps current={1} />
       </PageHeading>
+
+      {screening && <ScreeningSummary screening={screening} />}
 
       {activeHold && (
         <ActiveHoldBanner
@@ -212,6 +244,29 @@ function SeatSelect() {
       )}
 
       {renderBody()}
+    </div>
+  );
+}
+
+/** 시안의 회차 요약 줄 — 등급·제목 | 극장·상영관·유형 · 날짜·시간 */
+function ScreeningSummary({ screening }: { screening: Screening }) {
+  return (
+    <div className={styles.summary}>
+      <div>
+        <GradeBadge grade={screening.movie.viewGrade} />
+        <h2>{screening.movie.title}</h2>
+        <span className={styles.divider} aria-hidden="true" />
+        <span>
+          {screening.theater.name} · {screening.auditorium.name} · {screenTypeLabel(screening.auditorium.screenType)}
+          {screening.filmFormat ? ` · ${screening.filmFormat}` : ""}
+        </span>
+      </div>
+      <p>
+        {formatDateDots(screening.businessDate)}
+        <b>
+          {timeOfIso(screening.startsAt)} ~ {timeOfIso(screening.endsAt)}
+        </b>
+      </p>
     </div>
   );
 }

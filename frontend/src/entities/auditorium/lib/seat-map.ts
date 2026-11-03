@@ -1,10 +1,10 @@
 import type { AuditoriumLayout, LayoutSeat, SeatRenderState } from "../model/types";
 
 /**
- * 배치도 바깥 여백 (화면 px). 왼쪽은 줄 이름, 위는 스크린, 아래는 입구 글자가 들어간다.
+ * 배치도 바깥 여백 (화면 px). 양옆은 줄 이름, 위는 곡선 스크린, 아래는 출구 글자가 들어간다.
  * 좌석 좌표는 {@link toPixelLayout}으로 px로 바꾼 뒤에 쓰므로 여백·장식도 px로 둔다.
  */
-export const MAP_PADDING = { top: 56, right: 16, bottom: 28, left: 34 } as const;
+export const MAP_PADDING = { top: 70, right: 34, bottom: 30, left: 34 } as const;
 
 /**
  * 좌석 한 칸의 목표 크기(px, 짧은 변 기준). 「A12」처럼 좌석 이름 전체를 넣고 손가락으로도

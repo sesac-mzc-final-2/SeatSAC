@@ -1,64 +1,70 @@
 .board {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  padding: 24px;
+  min-width: 0;
 }
 
-.top {
+.heading {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 16px;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  font-size: 13px;
 }
 
-.remaining {
+.room {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.room small {
+  margin-left: 5px;
   color: var(--color-muted);
-  font-size: 14px;
-}
-
-.remaining strong {
-  color: var(--color-text);
-  font-size: 16px;
-  font-variant-numeric: tabular-nums;
+  font-size: 12px;
 }
 
 .live {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  color: var(--color-dim);
-  font-size: 13px;
+  gap: 6px;
+  color: var(--color-muted);
+  font-size: 12px;
 }
 
-.dot {
-  width: 7px;
-  height: 7px;
+.live i {
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--color-border-strong);
+  background: var(--color-muted);
 }
 
-.live[data-live] {
-  color: var(--color-live);
-}
-
-.live[data-live] .dot {
+.live[data-live] i {
   background: var(--color-live);
 }
 
+/* 큰 상영관은 가로로 스크롤 (좌석이 읽히는 크기 아래로 줄이지 않는다) */
 .mapBox {
-  padding: 18px 14px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-card);
+  margin-top: 28px;
   overflow-x: auto;
 }
 
 .legend {
-  padding: 0 2px;
+  margin-top: 30px;
 }
 
-.source {
-  color: var(--color-dim);
+.help {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  margin-top: 18px;
+  color: var(--color-muted);
   font-size: 12px;
+}
+
+@media (max-width: 1050px) {
+  .board {
+    padding: 20px 15px;
+  }
 }

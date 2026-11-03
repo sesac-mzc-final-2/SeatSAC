@@ -45,7 +45,7 @@ describe("SeatMap (LAY-08)", () => {
     render(<SeatMap layout={layout} stateOf={() => "available"} />);
     expect(screen.getByRole("group", { name: "1관 좌석 배치도" })).toBeInTheDocument();
     expect(screen.getByText("SCREEN")).toBeInTheDocument();
-    expect(screen.getByText("입구")).toBeInTheDocument();
+    expect(screen.getAllByText("EXIT")[0]).toBeInTheDocument();
   });
 
   it("좌석 안에 좌석 이름 전체(A1)를 적는다", () => {

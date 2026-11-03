@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useMemo } from "react";
+import { type KeyboardEvent, useId, useMemo } from "react";
 import {
   MAP_PADDING,
   isSelectable,
@@ -34,8 +34,14 @@ export function SeatMap({ layout: source, stateOf, onSelect, disabled = false }:
   const layout = useMemo(() => toPixelLayout(source), [source]);
   const box = layoutViewBox(layout);
   const rows = rowMarkers(layout.seats);
-  // 스크린 글자(12px)가 위 여백 안에 들어가게 둔다 — 글자는 막대 8px 위에 놓인다
-  const screenY = -MAP_PADDING.top + 26;
+  const contentWidth = box.width - MAP_PADDING.left - MAP_PADDING.right;
+  // 곡선 스크린(시안): 스크린 구간 양 끝에서 위로 휘는 선. 글자는 곡선 아래 가운데
+  const screenFrom = layout.screen.xFrom;
+  const screenTo = Math.max(layout.screen.xTo, screenFrom + 1);
+  const screenY = -MAP_PADDING.top + 30;
+  const screenMid = (screenFrom + screenTo) / 2;
+  // 사선 무늬 id는 화면에 배치도가 여럿이어도 겹치지 않게
+  const heldPatternId = `seat-held-${useId().replace(/:/g, "")}`;
 
   const press = (seat: LayoutSeat, state: SeatRenderState) => {
     if (disabled || !onSelect || !isSelectable(state)) return;
@@ -65,16 +71,18 @@ export function SeatMap({ layout: source, stateOf, onSelect, disabled = false }:
       aria-label={`${layout.name} 좌석 배치도`}
       data-disabled={disabled || undefined}
     >
-      {/* 스크린 — 어느 쪽이 앞인지 알려 준다 */}
+      <defs>
+        {/* 다른 사람이 선점 중 = 어두운 칸 + 사선 (시안 좌석 상태 색) */}
+        <pattern id={heldPatternId} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="5" height="5" className={styles.heldBase} />
+          <line x1="0" y1="0" x2="0" y2="5" className={styles.heldStripe} />
+        </pattern>
+      </defs>
+
+      {/* 스크린 — 어느 쪽이 앞인지 알려 준다 (곡선) */}
       <g className={styles.screen} aria-hidden="true">
-        <rect
-          x={layout.screen.xFrom}
-          y={screenY}
-          width={Math.max(layout.screen.xTo - layout.screen.xFrom, 1)}
-          height={6}
-          rx={3}
-        />
-        <text x={(layout.screen.xFrom + layout.screen.xTo) / 2} y={screenY - 8} textAnchor="middle">
+        <path d={`M ${screenFrom} ${screenY + 12} Q ${screenMid} ${screenY - 12} ${screenTo} ${screenY + 12}`} />
+        <text x={screenMid} y={screenY + 22} textAnchor="middle">
           SCREEN
         </text>
       </g>
@@ -95,35 +103,33 @@ export function SeatMap({ layout: source, stateOf, onSelect, disabled = false }:
             key={`h-${aisle.yFrom}-${aisle.yTo}`}
             x={0}
             y={aisle.yFrom}
-            width={box.width - MAP_PADDING.left - MAP_PADDING.right}
+            width={contentWidth}
             height={Math.max(aisle.yTo - aisle.yFrom, 0)}
           />
         ))}
       </g>
 
-      {/* 줄 이름 */}
+      {/* 줄 이름 — 양쪽 (시안) */}
       <g className={styles.rows} aria-hidden="true">
         {rows.map((row) => (
-          <text
-            key={row.rowLabel}
-            x={-10}
-            y={row.centerY}
-            textAnchor="end"
-            dominantBaseline="central"
-            fontSize={13}
-          >
-            {row.rowLabel}
-          </text>
+          <g key={row.rowLabel}>
+            <text x={-12} y={row.centerY} textAnchor="end" dominantBaseline="central">
+              {row.rowLabel}
+            </text>
+            <text x={contentWidth + 12} y={row.centerY} textAnchor="start" dominantBaseline="central">
+              {row.rowLabel}
+            </text>
+          </g>
         ))}
       </g>
 
-      {/* 입구 */}
+      {/* 출입구 — 문 아이콘 + EXIT */}
       <g className={styles.entrances} aria-hidden="true">
         {layout.entrances.map((entrance) => (
-          <g key={`${entrance.x}-${entrance.y}`}>
-            <circle cx={entrance.x} cy={entrance.y} r={5} />
-            <text x={entrance.x} y={entrance.y + 16} textAnchor="middle">
-              입구
+          <g key={`${entrance.x}-${entrance.y}`} transform={`translate(${entrance.x - 8} ${entrance.y - 8})`}>
+            <path d="M9 2.7h2.2a1.3 1.3 0 0 1 1.3 1.3v9.3M1.3 13.3h13.4M3.3 13.3V3.7l5.4-1.7v11.3M6.7 8h.01" />
+            <text x={8} y={26} textAnchor="middle">
+              EXIT
             </text>
           </g>
         ))}
@@ -149,20 +155,43 @@ export function SeatMap({ layout: source, stateOf, onSelect, disabled = false }:
               onClick={() => press(seat, state)}
               onKeyDown={(event) => onKeyDown(event, seat, state)}
             >
-              <rect x={seat.x} y={seat.y} width={seat.w} height={seat.h} rx={Math.min(seat.w, seat.h) * 0.22} />
-              <text
-                x={seat.x + seat.w / 2}
-                y={seat.y + seat.h / 2}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fontSize={seatFontSize(seat)}
-              >
-                {seat.seatLabel}
-              </text>
+              <rect
+                x={seat.x}
+                y={seat.y}
+                width={seat.w}
+                height={seat.h}
+                rx={Math.min(seat.w, seat.h) * 0.2}
+                fill={state === "held" ? `url(#${heldPatternId})` : undefined}
+              />
+              {state === "reserved" ? (
+                // 예매 완료 = 어두운 칸 + X (시안)
+                <path
+                  className={styles.reservedMark}
+                  d={reservedMark(seat)}
+                />
+              ) : (
+                <text
+                  x={seat.x + seat.w / 2}
+                  y={seat.y + seat.h / 2}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={seatFontSize(seat)}
+                >
+                  {seat.seatLabel}
+                </text>
+              )}
             </g>
           );
         })}
       </g>
     </svg>
   );
+}
+
+/** 예매 완료 좌석의 X — 좌석 가운데 짧은 변의 30% 크기 */
+function reservedMark(seat: LayoutSeat): string {
+  const cx = seat.x + seat.w / 2;
+  const cy = seat.y + seat.h / 2;
+  const r = Math.min(seat.w, seat.h) * 0.18;
+  return `M ${cx - r} ${cy - r} L ${cx + r} ${cy + r} M ${cx + r} ${cy - r} L ${cx - r} ${cy + r}`;
 }

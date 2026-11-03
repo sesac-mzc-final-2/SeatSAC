@@ -1,12 +1,14 @@
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 18px;
+  justify-content: center;
+  gap: 10px 20px;
   margin: 0;
-  padding: 0;
+  padding: 20px 0 0;
+  border-top: 1px solid var(--color-border);
   list-style: none;
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .legend li {
@@ -16,12 +18,11 @@
 }
 
 .chip {
-  display: block;
-  width: 13px;
-  height: 13px;
-  border-radius: 4px;
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-card-hover);
+  position: relative;
+  width: 16px;
+  height: 15px;
+  border: 1px solid #737987;
+  border-radius: 3px;
 }
 
 .chip[data-state="selected"] {
@@ -30,17 +31,36 @@
 }
 
 .chip[data-state="held"] {
-  background: #3b2e18;
-  border-color: #8a6a2e;
+  background: repeating-linear-gradient(135deg, #3a3d46 0, #3a3d46 3px, #4a4e5a 3px, #4a4e5a 4px);
+  border-color: #4b505c;
 }
 
 .chip[data-state="reserved"] {
-  background: var(--color-bg);
-  border-color: var(--color-border);
+  background: #25272e;
+  border-color: #30343d;
 }
 
-.chip[data-state="inactive"] {
-  background: none;
-  border-style: dashed;
-  border-color: var(--color-border);
+/* 예매 완료 X */
+.chip[data-state="reserved"]::before,
+.chip[data-state="reserved"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 1.4px;
+  background: #5e6471;
+}
+
+.chip[data-state="reserved"]::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.chip[data-state="reserved"]::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.chip[data-state="recliner"] {
+  width: 22px;
+  border-bottom-width: 3px;
 }

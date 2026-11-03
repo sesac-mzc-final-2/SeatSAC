@@ -77,19 +77,24 @@ function Pay() {
     if (!booking) return <EmptyState title="예매를 찾을 수 없어요" />;
 
     // 결과를 받은 뒤 예매를 다시 조회하는 동안은 아직 PENDING으로 보인다 →
-    // 그때 결제 폼을 다시 열면 사용자가 두 번째 결제를 시도할 수 있다
-    const settling = outcome !== null && outcome.kind !== "error" && bookingQuery.isFetching;
+    // 그때 결제 폼을 다시 열면 사용자가 두 번째 결제를 시도할 수 있다.
+    // 네트워크가 끊겨 재조회가 멈춘(paused) 동안도, 재조회가 실패해 PENDING이 남은 경우도 마찬가지다
+    const paymentSent = outcome !== null && outcome.kind !== "error";
+    const paused = paymentSent && bookingQuery.fetchStatus === "paused";
+    const settling = paymentSent && bookingQuery.isFetching;
 
-    if (pay.pending || settling) {
+    if (pay.pending || settling || paused) {
       return (
         <div className={styles.waiting} role="status" aria-live="polite">
           <LoadingBlock
             label={
-              pay.checking > 0
-                ? `결제 결과를 확인하고 있어요 (${pay.checking}/${POLL_ATTEMPTS})`
-                : settling
-                  ? "결제 결과를 반영하고 있어요"
-                  : "결제를 처리하고 있어요"
+              paused
+                ? "네트워크 연결을 기다리고 있어요"
+                : pay.checking > 0
+                  ? `결제 결과를 확인하고 있어요 (${pay.checking}/${POLL_ATTEMPTS})`
+                  : settling
+                    ? "결제 결과를 반영하고 있어요"
+                    : "결제를 처리하고 있어요"
             }
           />
           <p className={styles.note}>
@@ -99,11 +104,12 @@ function Pay() {
       );
     }
 
-    if (booking.status !== "PENDING" || outcome?.kind === "unknown") {
+    // 결제를 보낸 뒤에는 폼을 다시 열지 않는다. 아직 PENDING이면(결과 미확인·재조회 실패) 「결과 다시 확인」
+    if (booking.status !== "PENDING" || paymentSent) {
       return (
         <BookingResult
           booking={booking}
-          outcome={outcome}
+          outcome={booking.status === "PENDING" ? { kind: "unknown" } : outcome}
           seatSelectHref={seatSelectHref}
           myPageHref={routes.myPage()}
           showtimesHref={routes.showtimes()}

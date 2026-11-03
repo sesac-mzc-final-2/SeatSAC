@@ -66,7 +66,8 @@ export function BookingSummaryCard({ booking, screening, movie }: Props) {
         )}
       </dl>
       <div className={styles.amount}>
-        <span>총 결제 금액</span>
+        {/* 결제 실패·만료·취소에 「결제 금액」이라 쓰면 청구된 것처럼 읽힌다 */}
+        <span>{booking.status === "CONFIRMED" || booking.status === "PENDING" ? "총 결제 금액" : "예매 금액"}</span>
         <strong>{formatAmount(booking.amount)}</strong>
       </div>
     </section>

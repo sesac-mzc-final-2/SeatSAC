@@ -25,9 +25,12 @@ export function ActiveHoldBanner({ bookingId, expiresAt, payHref, onRelease, rel
       <p>
         선점한 좌석이 있어요.
         <span>
-          {left > 0
-            ? ` ${Math.floor(left / 60)}분 ${String(left % 60).padStart(2, "0")}초 안에 결제를 완료해 주세요.`
-            : " 선점 시간이 거의 끝났어요."}{" "}
+          {expiresAt === null
+            ? // 409 응답에 만료 시각이 없을 수 있다 — 모르는 것을 「거의 끝났다」고 하지 않는다
+              " 이어서 결제하거나 선점을 해제해 주세요."
+            : left > 0
+              ? ` ${Math.floor(left / 60)}분 ${String(left % 60).padStart(2, "0")}초 안에 결제를 완료해 주세요.`
+              : " 선점 시간이 거의 끝났어요."}{" "}
           (예매 번호 {bookingId})
         </span>
       </p>

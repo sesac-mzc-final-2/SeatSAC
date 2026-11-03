@@ -47,4 +47,10 @@ describe("BookingResult — 결과 미확인", () => {
     renderResult("CONFIRMED");
     expect(screen.getByRole("heading", { name: "예매가 완료됐어요" })).toBeInTheDocument();
   });
+
+  it("결제가 끝나지 않은 결과에는 「결제 금액」이 아니라 「예매 금액」이라 쓴다", () => {
+    renderResult("EXPIRED");
+    expect(screen.getByText("예매 금액")).toBeInTheDocument();
+    expect(screen.queryByText("총 결제 금액")).not.toBeInTheDocument();
+  });
 });

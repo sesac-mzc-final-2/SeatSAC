@@ -13,3 +13,4 @@ export {
   type CardInput,
 } from "./lib/card";
 export { CardForm } from "./ui/CardForm";
+export { HoldTimer } from "./ui/HoldTimer";

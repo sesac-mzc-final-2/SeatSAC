@@ -1,0 +1,99 @@
+.card {
+  padding: 27px;
+  text-align: left;
+}
+
+.card h2 {
+  margin-bottom: 24px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.movie {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.poster {
+  width: 74px;
+  flex-shrink: 0;
+}
+
+.movie h3 {
+  margin-top: 10px;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.movie p {
+  margin-top: 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.card dl {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin: 23px 0;
+  font-size: 13px;
+}
+
+.card dl > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  line-height: 1.7;
+}
+
+.card dt {
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.card dd {
+  text-align: right;
+}
+
+.card dd small {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.amount {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding-top: 23px;
+  border-top: 1px solid var(--color-border);
+  font-size: 13px;
+}
+
+.amount strong {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 540px) {
+  .card {
+    padding: 22px 18px;
+  }
+
+  .poster {
+    width: 58px;
+  }
+
+  .amount strong {
+    font-size: 22px;
+  }
+}

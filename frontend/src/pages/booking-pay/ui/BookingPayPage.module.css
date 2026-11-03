@@ -1,89 +1,36 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 26px;
 }
 
 .pay {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 350px;
+  gap: 26px;
   align-items: start;
 }
 
-@media (max-width: 760px) {
+.summary {
+  position: sticky;
+  top: 24px;
+}
+
+@media (max-width: 900px) {
   .pay {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 20px;
   }
 }
 
-.summary,
-.card {
-  padding: 20px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-card);
-}
+@media (max-width: 700px) {
+  .pay {
+    grid-template-columns: 1fr;
+  }
 
-.card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.summary dl {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.summary dt {
-  color: var(--color-muted);
-  font-size: 13px;
-  margin-bottom: 3px;
-}
-
-.summary dd {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.amount {
-  font-size: 20px;
-  font-variant-numeric: tabular-nums;
-}
-
-.timer {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--color-border);
-  color: var(--color-muted);
-  font-size: 14px;
-}
-
-.timer strong {
-  color: var(--color-text);
-  font-size: 17px;
-  font-variant-numeric: tabular-nums;
-}
-
-.timer[data-urgent] strong {
-  color: var(--color-danger);
-}
-
-.waiting {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: center;
-  padding: 28px 20px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-card);
-}
-
-.note {
-  color: var(--color-muted);
-  font-size: 13px;
-  text-align: center;
+  /* 좁은 화면에서는 무엇을 결제하는지 먼저 보이게 */
+  .summary {
+    position: static;
+    grid-row: 1;
+  }
 }

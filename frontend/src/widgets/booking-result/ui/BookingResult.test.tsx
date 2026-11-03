@@ -26,7 +26,9 @@ const renderResult = (status: Booking["status"], onRecheck = vi.fn()) =>
         outcome={{ kind: "unknown" }}
         seatSelectHref="/screenings/3521"
         myPageHref="/me"
-        showtimesHref="/showtimes"
+        homeHref="/"
+        screening={null}
+        movie={null}
         onRecheck={onRecheck}
       />
     </MemoryRouter>,
@@ -43,6 +45,6 @@ describe("BookingResult — 결과 미확인", () => {
 
   it("다시 조회해 확정됐으면 완료 결과를 그린다", () => {
     renderResult("CONFIRMED");
-    expect(screen.getByRole("heading", { name: "예매가 완료되었어요" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "예매가 완료됐어요" })).toBeInTheDocument();
   });
 });

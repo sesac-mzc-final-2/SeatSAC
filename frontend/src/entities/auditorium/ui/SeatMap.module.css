@@ -126,7 +126,7 @@
 
 .heldStripe {
   stroke: var(--seat-held-stripe);
-  stroke-width: 1.4;
+  stroke-width: 1;
 }
 
 .seat[data-state="reserved"] rect {

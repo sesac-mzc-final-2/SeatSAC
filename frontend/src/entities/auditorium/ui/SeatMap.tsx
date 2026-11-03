@@ -73,9 +73,10 @@ export function SeatMap({ layout: source, stateOf, onSelect, disabled = false }:
     >
       <defs>
         {/* 다른 사람이 선점 중 = 어두운 칸 + 사선 (시안 좌석 상태 색) */}
-        <pattern id={heldPatternId} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-          <rect width="5" height="5" className={styles.heldBase} />
-          <line x1="0" y1="0" x2="0" y2="5" className={styles.heldStripe} />
+        {/* 범례 칩과 같은 사선: 4px마다 어두운 3px + 밝은 1px */}
+        <pattern id={heldPatternId} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="4" height="4" className={styles.heldBase} />
+          <line x1="0.5" y1="0" x2="0.5" y2="4" className={styles.heldStripe} />
         </pattern>
       </defs>
 
@@ -161,7 +162,8 @@ export function SeatMap({ layout: source, stateOf, onSelect, disabled = false }:
                 width={seat.w}
                 height={seat.h}
                 rx={Math.min(seat.w, seat.h) * 0.2}
-                fill={state === "held" ? `url(#${heldPatternId})` : undefined}
+                // fill 속성은 CSS(.seat rect { fill: transparent })에 져서 사선이 안 보인다 → 인라인 스타일
+                style={state === "held" ? { fill: `url(#${heldPatternId})` } : undefined}
               />
               {state === "reserved" ? (
                 // 예매 완료 = 어두운 칸 + X (시안)

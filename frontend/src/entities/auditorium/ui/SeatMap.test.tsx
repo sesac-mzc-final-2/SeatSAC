@@ -77,6 +77,20 @@ describe("SeatMap (LAY-08)", () => {
     expect(screen.queryByRole("img", { name: /A4/ })).not.toBeInTheDocument();
   });
 
+  it("다른 사람이 선점 중인 좌석은 범례와 같은 사선 패턴으로 칠한다 (CSS의 fill: transparent에 지지 않게 인라인 스타일)", () => {
+    render(
+      <SeatMap
+        layout={layout}
+        stateOf={stateOf({ 1: "held", 2: "available", 3: "available", 4: "inactive" })}
+        onSelect={() => {}}
+      />,
+    );
+    const rect = screen.getByRole("img", { name: "A1 다른 사람이 선점 중" }).querySelector("rect");
+    const patternId = document.querySelector("pattern")?.id;
+    expect(patternId).toBeTruthy();
+    expect(rect?.style.fill).toBe(`url("#${patternId}")`);
+  });
+
   it("선택한 좌석은 aria-checked로 표시한다", () => {
     render(
       <SeatMap

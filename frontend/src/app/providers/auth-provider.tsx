@@ -9,7 +9,8 @@ import {
   type SessionUser,
 } from "@/entities/session";
 import { configureHttpAuth } from "@/shared/api";
-import { env, isCognitoConfigured, routes } from "@/shared/config";
+import { env, isCognitoConfigured, isDevSessionEnabled, routes } from "@/shared/config";
+import { DevSessionProvider } from "./dev-session";
 
 /**
  * Cognito Hosted UI (code + PKCE, ADR-37). 토큰은 메모리에만 둔다 (InMemoryWebStorage, ADR-63) —
@@ -148,9 +149,13 @@ function SessionBridge({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }
 
-/** Cognito 값이 없으면(로컬 기본) 로그인 기능을 끈 세션으로 조회 화면만 동작한다 */
+/**
+ * Cognito 값이 없으면(로컬 기본) 로그인 기능을 끈 세션으로 조회 화면만 동작한다.
+ * 개발 서버에서 `DEV_SESSION=1` 이면 가짜 로그인 세션(목 서버용)으로 마이페이지·예매 화면까지 본다
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
   if (!isCognitoConfigured) {
+    if (isDevSessionEnabled) return <DevSessionProvider>{children}</DevSessionProvider>;
     return <SessionContext.Provider value={unavailableSession}>{children}</SessionContext.Provider>;
   }
   return (

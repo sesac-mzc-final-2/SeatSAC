@@ -62,6 +62,11 @@ export function timeOfIso(dateTime: string): string {
   return match?.[1] ?? dateTime;
 }
 
+/** `2026-11-16T14:30:00+09:00` → `2026-11-16` (오프셋이 +09:00이라 문자열 그대로 KST 영업일) */
+export function dateOfIso(dateTime: string): string {
+  return dateTime.slice(0, 10);
+}
+
 /** `2026-11-16` → `11월 16일 (월)` */
 export function formatDateKo(isoDate: string, options: { withYear?: boolean } = {}): string {
   const [y, m, d] = isoDate.split("-").map(Number);

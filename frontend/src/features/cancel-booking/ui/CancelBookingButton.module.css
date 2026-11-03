@@ -1,0 +1,13 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: color var(--t-color);
+}
+.button:hover {
+  color: var(--color-primary);
+}

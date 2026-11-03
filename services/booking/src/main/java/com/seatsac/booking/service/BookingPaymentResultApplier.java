@@ -188,8 +188,14 @@ public class BookingPaymentResultApplier {
      */
     private boolean cancelPayment(String paymentId, PaymentCancelReason reason) {
         try {
-            paymentClient.cancel(paymentId, reason);
-            return true;
+            // 예외가 없어도 취소가 확인된 것은 아니다 — 응답의 상태가 CANCELED일 때만 환불로 본다
+            PaymentResult result = paymentClient.cancel(paymentId, reason);
+            if (result != null && result.isCanceled()) {
+                return true;
+            }
+            log.error("결제 취소 응답이 CANCELED가 아니다 paymentId={} reason={} status={} — 다음 조회가 다시 시도한다",
+                paymentId, reason, result == null ? null : result.status());
+            return false;
         } catch (RuntimeException e) {
             log.error("결제 취소 실패 paymentId={} reason={} — 다음 조회가 다시 시도한다",
                 paymentId, reason, e);

@@ -124,6 +124,12 @@ class BookingPaymentFlowTest {
             "1112", null, null, Instant.now(), null);
     }
 
+    /** 결제 취소(환불) 응답 — 상태가 CANCELED여야 환불로 본다 */
+    private PaymentResult canceledFor(Long bookingId) {
+        return new PaymentResult(UUID.randomUUID().toString(), bookingId, 30_000, "CANCELED",
+            "1112", null, "HOLD_EXPIRED", Instant.now(), Instant.now());
+    }
+
     private PaymentResult declined(Long bookingId) {
         return new PaymentResult(UUID.randomUUID().toString(), bookingId, 30_000, "FAILED",
             "0000", "CARD_DECLINED", null, null, null);
@@ -212,6 +218,7 @@ class BookingPaymentFlowTest {
     @Test
     void approvedButExpiredRefundsAndRejects() {
         Long bookingId = hold(101L);
+        given(paymentClient.cancel(anyString(), any())).willReturn(canceledFor(bookingId));
         // 결제를 부르는 "사이에" 만료되는 상황 — 검증은 이미 지나갔다
         given(paymentClient.request(any())).willAnswer(invocation -> {
             expire(bookingId);
@@ -256,6 +263,25 @@ class BookingPaymentFlowTest {
         assertThat(outboxMessageRepository.count()).isZero();
     }
 
+    /** 취소 호출이 예외 없이 끝나도 응답이 CANCELED가 아니면 환불로 보지 않는다 */
+    @Test
+    void approvedButExpiredKeepsPendingWhenCancelIsNotConfirmed() {
+        Long bookingId = hold(105L);
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved;
+        });
+        given(paymentClient.cancel(anyString(), any())).willReturn(approved);   // 아직 APPROVED
+
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.PENDING);
+    }
+
     /** 환불을 확인하지 못한 예매는 다음 단건 조회가 다시 환불하고, 그때 EXPIRED로 끝낸다 */
     @Test
     void detailRetriesRefundLeftPendingByPayment() {
@@ -292,6 +318,7 @@ class BookingPaymentFlowTest {
     @Test
     void detailOmitsStaleApprovalWhenRereadFailsAfterRefund() {
         Long bookingId = hold(104L);
+        given(paymentClient.cancel(anyString(), any())).willReturn(canceledFor(bookingId));
         PaymentResult approved = approved(bookingId);
         given(paymentClient.request(any())).willThrow(
             com.seatsac.booking.common.BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception());

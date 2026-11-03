@@ -1,0 +1,16 @@
+.tabs {
+  margin: 32px 0 28px;
+}
+.logout {
+  color: var(--color-muted);
+  font-size: 12px;
+  transition: color var(--t-color);
+}
+.logout:hover {
+  color: var(--color-text);
+}
+@media (max-width: 620px) {
+  .tabs {
+    margin: 24px 0;
+  }
+}

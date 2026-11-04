@@ -395,6 +395,14 @@ def cmd_create(args: argparse.Namespace) -> None:
     if admins:
         # 누가 손으로 넣었을 수 있다. 관리자 토큰으로 부하를 주면 측정 대상이 달라지고 위험하다 → 멈춘다
         raise SystemExit(f"ADMIN 그룹에 부하 테스트 계정이 있다: {', '.join(admins)} — 그룹에서 빼고 다시 실행한다")
+    # 풀에는 있는데 상태 파일에 없는 계정 — 상태 파일을 잃었거나, 누가 같은 주소로 Hosted UI 가입을 했다(자가 가입 허용).
+    # 그대로 편입하면 남의 계정 비밀번호를 바꾸고 delete가 지운다 → 기본은 아무것도 만들기 전에 멈춘다
+    strangers = [email_of(index) for index in range(1, args.count + 1)
+                 if email_of(index) in in_pool and email_of(index) not in known]
+    if strangers and not args.adopt:
+        shown = ", ".join(strangers[:5]) + (" …" if len(strangers) > 5 else "")
+        raise SystemExit(f"상태 파일에 없는 기존 계정 {len(strangers)}개: {shown} — 이 도구가 만든 계정인지(상태 파일을 잃은 경우) "
+                         "확인한 뒤 --adopt로 다시 실행한다. --adopt는 그 계정들의 비밀번호를 새로 정한다")
 
     for index in range(1, args.count + 1):
         email = email_of(index)
@@ -551,6 +559,8 @@ def main(argv: list[str] | None = None) -> None:
     create.add_argument("--client-id", required=True, help="VITE_COGNITO_CLIENT_ID 값")
     create.add_argument("--count", type=int, default=100)
     create.add_argument("--profile", default=DEFAULT_PROFILE)
+    create.add_argument("--adopt", action="store_true",
+                        help="풀에만 있고 상태 파일에 없는 계정을 편입한다(비밀번호를 새로 정함) — 상태 파일을 잃었을 때만")
     create.set_defaults(handler=cmd_create)
 
     for name, handler, help_text in (("login", cmd_login, "SRP 로그인으로 토큰 받기"),

@@ -20,7 +20,8 @@ Cognito 테스트 계정으로 **미리 발급**해 **파일로** 넘긴다(`K6_
 ```bash
 T=tests/k6/tools/loadtest_users.py
 # 1) 계정 100개 — 관리자 역할(cinema-admin, MFA). 메일은 보내지 않는다(SUPPRESS).
-#    상태 파일과 풀에 모두 있는 계정은 건너뛴다. 풀에만 있으면(상태 파일을 잃은 경우) 비밀번호를 새로 정한다
+#    상태 파일과 풀에 모두 있는 계정은 건너뛴다. 풀에만 있는 계정이 있으면 멈춘다 — 상태 파일을 잃은 경우에만
+#    --adopt를 붙여 다시 실행한다(그 계정들의 비밀번호를 새로 정한다. 같은 주소로 직접 가입한 남의 계정일 수 있다)
 python3 $T create --count 100 \
   --authority "$(gh variable get VITE_COGNITO_AUTHORITY)" --client-id "$(gh variable get VITE_COGNITO_CLIENT_ID)"
 # 2) 토큰 — SRP 로그인. AWS 자격 증명이 필요 없다(공개 앱 클라이언트). 100명 × 2회 호출

@@ -332,7 +332,7 @@ class AdminCommandsTest(unittest.TestCase):
 
     def test_create_makes_missing_users_with_permanent_password_outside_argv(self) -> None:
         self.pool.add(lt.email_of(2))   # 2번은 풀에만 있고 상태 파일에는 없다(상태 파일을 잃은 경우)
-        self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "3")
+        self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "3", "--adopt")
 
         created = [args[args.index("--username") + 1] for args, _ in self.calls if args[0] == "admin-create-user"]
         self.assertEqual(created, [lt.email_of(1), lt.email_of(3)])
@@ -348,6 +348,15 @@ class AdminCommandsTest(unittest.TestCase):
         state = lt.State.load(self.state_path)
         self.assertEqual([user.email for user in state.users], [lt.email_of(i) for i in (1, 2, 3)])
         self.assertEqual({user.password for user in state.users}, {payload["Password"] for payload in passwords})
+
+    def test_create_refuses_pool_only_accounts_without_adopt(self) -> None:
+        # 같은 주소로 Hosted UI 가입한 남의 계정일 수 있다 — 비밀번호를 바꾸지 않고, 아무것도 만들기 전에 멈춘다
+        self.pool.add(lt.email_of(2))
+        with self.assertRaises(SystemExit) as raised:
+            self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "3")
+        self.assertIn(lt.email_of(2), str(raised.exception))
+        self.assertIn("--adopt", str(raised.exception))
+        self.assertFalse(any(args[0] in ("admin-create-user", "admin-set-user-password") for args, _ in self.calls))
 
     def test_create_again_does_nothing_for_known_users(self) -> None:
         self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "2")

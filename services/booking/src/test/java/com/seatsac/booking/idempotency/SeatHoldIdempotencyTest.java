@@ -144,9 +144,9 @@ class SeatHoldIdempotencyTest {
             RedisKeys.idempotency(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST), TimeUnit.SECONDS);
 
         assertThat(inProgressTtl).isBetween(
-            seatHoldProperties.idempotencyInProgressTtl().toSeconds() - 5,
-            seatHoldProperties.idempotencyInProgressTtl().toSeconds());
-        assertThat(seatHoldProperties.idempotencyInProgressTtl())
+            seatHoldProperties.holdTtl().toSeconds() - 5,
+            seatHoldProperties.holdTtl().toSeconds());
+        assertThat(seatHoldProperties.holdTtl())
             .isLessThan(BookingPolicy.IDEMPOTENCY_TTL);
     }
 

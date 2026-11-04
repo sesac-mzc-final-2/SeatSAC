@@ -830,7 +830,7 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 | 단계 | 일어나는 일 |
 | --- | --- |
 | 1 | 새 태그 커밋(build-push) 또는 설정 PR → Rollout이 **preview** ReplicaSet을 띄움(active는 그대로 트래픽 처리) |
-| 2 | preview Ready → `prePromotionAnalysis` 시작: 분석 Job이 `{svc}-preview:8080`에 조회 4분 30초(200이 95% 미만이면 실패), Prometheus 지표 2분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
+| 2 | preview 확장과 **동시에**(Ready 전) `prePromotionAnalysis` 시작: 분석 Job이 preview Ready를 기다린 뒤 `{svc}-preview:8080`에 조회 6분(200이 95% 미만이면 실패), Prometheus 지표 4분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
 | 3a | 통과 → active Service를 preview 해시로 전환 → 이전 버전 60초 뒤 축소 |
 | 3b | 실패 → **abort**: active 그대로(= 자동 롤백, 사용자 영향 없음), preview 30초 뒤 축소. Rollout·ArgoCD 앱이 `Degraded` |
 
@@ -897,7 +897,7 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 ```bash
 # SeatSAC main에 booking 변경 머지 → build-push가 gitops 태그 커밋 (또는 수동 실행 services=booking)
 kubectl argo rollouts get rollout booking -n cinema-staging --watch
-#   기대: Preview(새 해시) Running → AnalysisRun Running(약 5분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
+#   기대: Preview(새 해시) Running → AnalysisRun Running(약 6분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
 kubectl -n cinema-staging get analysisrun -l rollouts-pod-template-hash          # 최신 Successful
 kubectl -n cinema-staging get jobs | grep -i preview-traffic                       # 분석 Job Complete
 ```
@@ -1026,6 +1026,88 @@ payment  → user      BLOCKED  BLOCKED  ✅
 | `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
 | `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
 | gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
+
+### 6-F. 신호등 대시보드 (3.1.7, OPS-05) — ⬜
+
+Grafana 대시보드 **SeatSAC 신호등**과 기록 규칙 `cinema:*`는 gitops `observability/`(Application `cinema-observability`)가 올린다. Valkey 메모리·Evictions, SQS DLQ 패널은 **CloudWatch** 데이터소스라서 Grafana 파드에 읽기 권한이 필요하다(Terraform `envs/staging/grafana.tf`, Pod Identity). 나머지 패널은 Prometheus.
+
+| 패널 묶음 | 데이터 | 지금 나오는가 |
+| --- | --- | --- |
+| 서비스 신호등 5개 · API별 상태 표 · 블루/그린 버전별 요청 수 · 오류율 | `http_server_requests_seconds_*` (Spring 기본) | 서비스가 기동해 트래픽이 있으면 바로 |
+| 결제 timeout·error 비율 · 결제 호출 결과 | `booking_payment_call_total` | 남궁일 구현 후 (없으면 회색 "결제 호출 없음") |
+| 선점 결과 · SSE 연결 · 만료 지연 · 아웃박스 | `booking_seat_hold_total` 등 | 남궁일 구현 후 (없으면 "수집 없음") |
+| 캐시 적중률 · 잔여 좌석 대체 | `catalog_*` | 한채연 구현 후 |
+| Valkey 메모리 · Evictions · 알림 큐 · DLQ | CloudWatch | Pod Identity 연결 + Grafana 파드 재시작 뒤 |
+
+#### 6-F-1. 적용 순서 (**Terraform apply → gitops 머지 → Grafana 파드 재시작**)
+
+연결(Pod Identity)보다 **먼저 떠 있던 Grafana 파드는 자격 증명을 받지 못한다**(ServiceAccount·환경변수는 파드를 만들 때 정해진다, 3.1.9 booking 사례와 같다). 그래서 마지막에 한 번 다시 시작한다.
+
+```bash
+# ① Terraform (터미널 B, 0장 자격 증명, 최신 main에서)
+cd infra/terraform/envs/staging
+git pull && git log -1 --oneline
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: module.grafana_pod_identity (IAM 역할 1 · 정책 1 · 정책 연결 1 · Pod Identity 연결 1) → 4 to add, 0 change, 0 destroy
+#   (노드그룹 release_version 변경이 같이 보이면 AMI 갱신 — 6-B-1 참고)
+terraform apply plan.out && rm -f plan.out     # 저장된 plan에는 비밀 값이 평문
+```
+
+```text
+② SeatSAC-gitops 관측 PR 머지 → ArgoCD 자동 sync
+   - cinema-observability 앱 생성(Synced·Healthy), kube-prometheus-stack 앱은 values 변경으로 한 번 더 sync
+③ ArgoCD UI(관리자) → kube-prometheus-stack 앱 → Grafana Deployment → Actions → Restart
+   (kubectl delete / rollout restart 금지 — 클러스터는 GitOps만. ①이 끝난 뒤에 하는 게 핵심)
+```
+
+②를 ①보다 먼저 머지해도 안전하다(CloudWatch 패널만 오류, 나머지는 정상). 순서를 어겼다면 ③만 다시 하면 된다.
+
+#### 6-F-2. 확인
+
+```bash
+# 터미널 A (cinema-admin, 노드 켜짐)
+kubectl -n argocd get applications                                   # cinema-observability · kube-prometheus-stack : Synced / Healthy
+kubectl -n monitoring get prometheusrule cinema-traffic-light
+kubectl -n monitoring get cm dashboard-seatsac-traffic-light --show-labels      # grafana_dashboard=1
+# Grafana 파드에 Pod Identity 환경변수가 있는가 (③ 재시작 뒤. 없으면 CloudWatch 패널이 인증 오류)
+kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
+  -o jsonpath='{range .items[*].spec.containers[*]}{.name}{": "}{range .env[*]}{.name}{" "}{end}{"\n"}{end}' | grep AWS_CONTAINER
+```
+
+| 확인 | 방법 | 기대 |
+| --- | --- | --- |
+| 기록 규칙 로드 | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090` → http://localhost:9090/rules | 그룹 `cinema-traffic-light` 규칙 6개 모두 health **ok** |
+| 규칙 값 | Prometheus에서 `cinema:service_state` | 트래픽이 있는 서비스마다 0 (결과 없음 = 트래픽 없음, 정상) |
+| Grafana 접속 | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` → http://localhost:3000, 계정 `admin`. 비밀번호는 관리자가 Secret `kube-prometheus-stack-grafana`의 `admin-password` 키를 읽는다 (화면·채팅·PR에 붙이지 않는다) | 로그인 됨 |
+| 대시보드 | Dashboards → **SeatSAC 신호등** | 트래픽 있는 서비스는 초록 "정상", 없는 서비스는 회색 "트래픽 없음" |
+| CloudWatch | Connections → Data sources → CloudWatch → Save & test | "Data source is working". 실패하면 6-F-4 |
+| Valkey·DLQ 패널 | 대시보드 ② 핵심 지표 | 메모리 %가 숫자, Evictions 0, DLQ 0 (값이 1~2분 늦게 나올 수 있다) |
+
+- 비밀번호가 sync마다 바뀌어 로그인이 안 되면 알려 준다. 차트가 `adminPassword`를 비우면 렌더링마다 랜덤이 될 수 있어, Terraform이 만든 Secret + `grafana.admin.existingSecret`으로 고정하는 후속 작업이 필요하다
+- 접속은 port-forward만 된다(Ingress 없음). 발표 PC에서 미리 접속해 두고 시간 범위를 데모 구간에 맞춘다
+
+#### 6-F-3. 데모에서 쓰는 법
+
+1. **무중단 배포**: 시간 범위 "최근 30분", ④ 무중단 배포 행. k6 트래픽 중 booking PR을 머지하면 "버전별 요청 수"에서 한 해시의 선이 내려가고 새 해시가 올라간다(블루/그린은 비율 분할이 아니라 한 번에 전환). 같은 구간에 "오류율" 0%·"5xx 건수" 0이 유지된다. SSE 연결 수는 전환 뒤 0으로 떨어졌다 다시 오른다
+2. **자동 롤백**: 실패 버전을 배포하면 AnalysisRun이 실패해 전환이 일어나지 않는다. 대시보드에서는 active 해시가 그대로 이어지고 preview 해시는 분석 트래픽만 받다 사라진다
+3. **동시성**: ⑤ 실시간 좌석 행의 "선점 성공·충돌 건수" 카드(선택한 시간 범위의 건수)로 같은 좌석 100명 요청이 success 1 · conflict 99로 읽힌다 — 시간 범위를 데모 직전부터로 잡는다(booking이 `result` 4개 값을 기동 때 0으로 등록해야 첫 1건이 빠지지 않는다. "선점 결과 / 초"는 rate라 한순간에 몰리면 작은 봉우리로만 보인다). 지연 카드(9999)는 결제 결과 미확인 503(`PAYMENT_RESULT_UNKNOWN`)을 표시할 수 있다. 이 응답이 5xx 또는 `timeout|error`로 집계되고 적격 요청 수가 작으면 한 건도 임계값을 넘길 수 있다. 예를 들어 적격 서비스 요청 20건 중 5xx 1건은 5%이고, 결제 호출 19건 중 `timeout|error` 1건은 약 5.26%이다. 실제 신호와 분석 결과는 5xx·p95·결제 오류율 기준으로 판단한다. `"선점 p95"`의 300ms는 동시성 데모 목표이고, 서비스 요청 p95는 300ms에서 주의, 1초에서 장애로 판정한다.
+
+#### 6-F-4. 문제 해결
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 대시보드 목록에 **SeatSAC 신호등**이 없음 | ConfigMap 라벨이 없거나 사이드카가 못 읽음, `cinema-observability` 앱 미sync | `kubectl -n monitoring get cm -l grafana_dashboard=1`, 사이드카 로그 `kubectl -n monitoring logs deploy/kube-prometheus-stack-grafana -c grafana-sc-dashboard`, ArgoCD 앱 상태 |
+| 서비스 신호등이 전부 회색 "트래픽 없음" | 정말 요청이 없음(정상) 또는 수집 실패 | Prometheus에서 `cinema:http_requests:rate5m`. 비었는데 요청이 있으면 `http_server_requests_seconds_count`에 `namespace="cinema-staging"`·`application` 라벨이 있는지(PodMonitor, 6-D-1) |
+| 5xx가 나는데 초록 | 5분 평균이라 한두 건은 1% 미만 · 규칙 미로드 | Prometheus `/rules` health, 대시보드 "5xx 건수 / 분"과 "API별 상태" 표 |
+| gateway API 표의 `uri`가 `/**`·라우트 이름 같은 값 | Spring Cloud Gateway(WebFlux)는 라우트 기준 uri를 기록할 수 있다 | 배포 후 1회 표를 보고 필요하면 대시보드 쿼리·표를 PR로 조정 (서비스 신호등은 `application` 기준이라 영향 없음) |
+| 선점 p95 · 선점 결과가 "수집 없음" | booking이 `uri="/seats/hold"` 태그나 `booking_seat_hold_total`을 아직 내지 않음 | Prometheus에서 `http_server_requests_seconds_count{application="booking"}`의 실제 `uri`를 보고 다르면 대시보드 쿼리 수정 PR. 지표 미구현이면 남궁일 구현 후 |
+| CloudWatch 패널 오류 (`NoCredentialProviders` · `failed to load config` · `AccessDenied`) | Grafana 파드가 연결보다 먼저 떠서 환경변수가 없음, 또는 역할·연결 없음 | 위 확인 명령에 `AWS_CONTAINER_*`가 없으면 6-F-1 ③(재시작). 있는데 `AccessDenied`면 `aws iam list-attached-role-policies --role-name cinema-staging-grafana-pod`로 연결된 **관리형 정책**을 찾고(모듈이 사용자 지정 정책을 관리형으로 만들어 붙이므로 `list-role-policies`는 인라인 정책만 보여 비어 있어도 정상), `aws iam get-policy-version --policy-arn <위에서 나온 ARN> --version-id <aws iam get-policy의 DefaultVersionId>`로 `cloudwatch:GetMetricData`·`GetMetricStatistics`·`ListMetrics` 3개가 있는지 확인. 이어서 `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks`로 연결(namespace monitoring · SA `kube-prometheus-stack-grafana`) 확인 |
+| Save & test는 되는데 CloudWatch 패널이 "No data" | 지표 지연(1~2분) · 시간 범위가 노드를 끈 구간이 아님에도 SQS 큐가 비활성 | 시간 범위를 30분 이상으로. SQS 지표는 큐에 활동이 있어야 나오며 지표 유지 Lambda가 주기적으로 깨운다(6-B) |
+| Valkey 패널이 클러스터를 못 찾음 | 노드 구성 변경(복제본 추가)으로 `CacheClusterId`가 달라짐 | 대시보드 JSON의 `cinema-staging-valkey-001`을 CloudWatch의 실제 ID로 바꾸는 PR |
+| 화면에서 고친 내용이 사라짐 | 대시보드 원본은 ConfigMap(영속 저장소 없음) | 고친 JSON(대시보드 설정 → JSON Model)을 gitops `observability/dashboards/`에 PR |
+
+<노션 반영 필요> WBS 3.1.7 메모에 "CloudWatch 데이터소스 + Pod Identity(`cinema-staging-grafana-pod`), 기록 규칙·대시보드는 gitops `observability/`", 기능명세서 OPS-05에서 "토큰 사용량" 삭제(AI 서비스 범위 제외, ADR-50)
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 

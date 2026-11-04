@@ -11,6 +11,7 @@ import com.seatsac.booking.component.CatalogClient.AuditoriumLayout;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout.LayoutSeat;
 import com.seatsac.booking.component.HoldExpirySweeper;
 import com.seatsac.booking.component.ScreeningCache;
+import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.component.SeatHoldStrategy;
 import com.seatsac.booking.component.SeatKeyExpiredListener;
 import com.seatsac.booking.dto.request.SeatHoldRequest;
@@ -122,7 +123,7 @@ class HoldExpiryFlowTest {
         assertThat(redis.hasKey(RedisKeys.seat(SCREENING, 101L))).isFalse();
         assertThat(redis.hasKey(RedisKeys.userHold(SCREENING, USER))).isFalse();
         // 커밋 후 발행: 선점 HELD(1) + 만료 EXPIRED(2)
-        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo("2");
+        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo(seqAfter(2));
     }
 
     @Test
@@ -189,7 +190,7 @@ class HoldExpiryFlowTest {
 
         assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getStatus())
             .isEqualTo(BookingStatus.EXPIRED);
-        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo("2");   // HELD + EXPIRED
+        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo(seqAfter(2));   // HELD + EXPIRED
     }
 
     @Test
@@ -290,7 +291,7 @@ class HoldExpiryFlowTest {
         assertThat(redis.opsForZSet().size(RedisKeys.holdExpiry())).isZero();
         // 선점 HELD × holds + 만료 EXPIRED × holds (각각 한 번씩만)
         assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING)))
-            .isEqualTo(String.valueOf(holds * 2L));
+            .isEqualTo(seqAfter(holds * 2L));
     }
 
     @Test
@@ -324,6 +325,14 @@ class HoldExpiryFlowTest {
     private void notifyExpired(String key) {
         keyExpiredListener.onMessage(
             new DefaultMessage("__keyevent@0__:expired".getBytes(), key.getBytes()), null);
+    }
+
+    /**
+     * 이 회차에서 이벤트가 n번 난 뒤의 seq. 첫 이벤트(선점 HELD)는 시계가 {@code HELD_AT}일 때 나므로
+     * 시작값은 그 시각 기준이다 — 뒤에 시계를 움직여도 키가 이미 있어 +1씩만 오른다
+     */
+    private static String seqAfter(long events) {
+        return String.valueOf(SeatEventPublisher.startValue(HELD_AT) + events);
     }
 
     @TestConfiguration(proxyBeanMethods = false)

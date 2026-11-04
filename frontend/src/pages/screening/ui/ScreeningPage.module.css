@@ -1,0 +1,103 @@
+.page {
+  padding-bottom: 40px;
+}
+
+/* 시안 .screening-summary */
+.summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: -5px;
+  padding: 20px 0 22px;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.summary > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.summary h2 {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.summary > div > span:last-child,
+.summary > p {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.summary b {
+  margin-left: 10px;
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 9px;
+  background: #444954;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 15px 19px;
+  border: 1px solid #454b58;
+  border-radius: var(--radius-sm);
+  background: #20232b;
+  font-size: 13px;
+}
+
+/* 시안 .seats-layout — 배치도 + 오른쪽 요약 (좁으면 한 줄) */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
+  align-items: start;
+  margin-top: 25px;
+}
+
+.source {
+  display: flex;
+  gap: 13px;
+  margin-top: 20px;
+  color: #747d8d;
+  font-size: 11px;
+}
+
+.source span {
+  color: #575f6c;
+}
+
+@media (max-width: 1050px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr) 270px;
+    gap: 16px;
+  }
+}
+
+@media (max-width: 800px) {
+  .summary {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 13px;
+  }
+
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .source {
+    flex-direction: column;
+    gap: 4px;
+  }
+}

@@ -9,7 +9,9 @@ import {
   type SessionUser,
 } from "@/entities/session";
 import { configureHttpAuth } from "@/shared/api";
-import { env, isCognitoConfigured, routes } from "@/shared/config";
+import { env, isCognitoConfigured, isDevSessionEnabled, routes } from "@/shared/config";
+import { DevSessionProvider } from "./dev-session";
+import { revokeRefreshToken } from "./revoke-refresh-token";
 
 /**
  * Cognito Hosted UI (code + PKCE, ADR-37). 토큰은 메모리에만 둔다 (InMemoryWebStorage, ADR-63) —
@@ -20,7 +22,9 @@ const oidcConfig: AuthProviderProps = {
   client_id: env.cognito.clientId,
   redirect_uri: env.cognito.redirectUri,
   response_type: "code",
-  scope: "openid email profile",
+  // aws.cognito.signin.user.admin: user 서비스가 같은 Access Token 으로 Cognito GetUser 를 불러 프로필을 만든다
+  // (service-runtime-contract 3장). 없으면 GetUser 가 거절돼 GET /users/me 가 401 TOKEN_REJECTED → 로그인이 계속 튕긴다
+  scope: "openid email profile aws.cognito.signin.user.admin",
   automaticSilentRenew: true,
   userStore: new WebStorageStateStore({ store: new InMemoryWebStorage() }),
   // 콜백 처리 뒤 ?code=&state= 를 주소에서 지운다 (새로고침 때 재처리 방지). 이동은 /callback 화면이 한다
@@ -102,6 +106,9 @@ function SessionBridge({ children }: { children: ReactNode }) {
         return renewed?.access_token ?? null;
       },
       onSessionExpired: () => {
+        // 콜백 화면에서는 보내지 않는다 — 방금 받은 토큰이 거절된 것(scope·클라이언트 설정 문제)이라 다시 보내면
+        // Cognito 세션으로 즉시 돌아와 같은 401 을 반복한다. 콜백 화면이 오류와 다시 시도를 보여 준다
+        if (window.location.pathname === routes.callback()) return;
         void auth.removeUser().then(() => auth.signinRedirect({ state: { returnTo: currentPath() } }));
       },
     });
@@ -137,10 +144,16 @@ function SessionBridge({ children }: { children: ReactNode }) {
       },
       signOut: () => {
         signedInFlag.set(false);
-        void auth.removeUser().then(() => {
-          const logoutUrl = cognitoLogoutUrl();
-          if (logoutUrl) window.location.assign(logoutUrl);
-        });
+        // ① 메모리 토큰 삭제(이후 어떤 늦은 응답도 로그인 상태를 되살리지 못한다) → ② 잡아 둔 refresh token 폐기
+        // (직접 fetch, 5초 지나면 중단. CWE-613) → ③ Hosted UI 세션 종료. 폐기 실패는 로그아웃을 막지 않는다
+        const refreshToken = auth.user?.refresh_token;
+        void auth
+          .removeUser()
+          .then(() => revokeRefreshToken(refreshToken))
+          .then(() => {
+            const logoutUrl = cognitoLogoutUrl();
+            if (logoutUrl) window.location.assign(logoutUrl);
+          });
       },
     };
   }, [auth]);
@@ -148,9 +161,13 @@ function SessionBridge({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }
 
-/** Cognito 값이 없으면(로컬 기본) 로그인 기능을 끈 세션으로 조회 화면만 동작한다 */
+/**
+ * Cognito 값이 없으면(로컬 기본) 로그인 기능을 끈 세션으로 조회 화면만 동작한다.
+ * 개발 서버에서 `DEV_SESSION=1` 이면 가짜 로그인 세션(목 서버용)으로 마이페이지·예매 화면까지 본다
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
   if (!isCognitoConfigured) {
+    if (isDevSessionEnabled) return <DevSessionProvider>{children}</DevSessionProvider>;
     return <SessionContext.Provider value={unavailableSession}>{children}</SessionContext.Provider>;
   }
   return (

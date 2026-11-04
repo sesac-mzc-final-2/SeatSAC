@@ -1,0 +1,70 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 15px 19px;
+  border: 1px solid #454b58;
+  border-radius: var(--radius-sm);
+  background: #20232b;
+  font-size: 13px;
+}
+
+.banner p {
+  flex: 1;
+}
+
+.detail {
+  color: var(--color-muted);
+}
+
+/* 곧 끝남·만료 — 있을 때만 다음 줄에 */
+.notice:not(:empty) {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-primary);
+}
+
+.action,
+.release {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.action:hover,
+.release:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.release {
+  margin-left: 5px;
+  color: var(--color-muted);
+}
+
+.release:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+@media (max-width: 800px) {
+  .banner {
+    flex-wrap: wrap;
+  }
+
+  .banner p {
+    flex-basis: 80%;
+  }
+
+  .detail {
+    display: block;
+    margin-top: 3px;
+  }
+}

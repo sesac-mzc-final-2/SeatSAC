@@ -1,4 +1,4 @@
-/** 화면 경로 (2.2.5 화면 목록). 다른 담당 화면(W4 좌석 선택 `/screenings/:id`, W8 `/me`)도 링크 대상으로만 둔다. */
+/** 화면 경로 (2.2.5 화면 목록). 다른 담당 화면(W4 좌석 선택 `/screenings/:id`)은 링크 대상으로만 둔다. */
 export type ShowtimesQuery = {
   theaterId?: number | string | null;
   date?: string | null;
@@ -10,6 +10,7 @@ export const routePatterns = {
   movie: "/movies/:movieId",
   showtimes: "/showtimes",
   screening: "/screenings/:screeningId",
+  bookingPay: "/bookings/:bookingId/pay",
   credits: "/credits",
   callback: "/callback",
   myPage: "/me",
@@ -28,8 +29,10 @@ export const routes = {
   },
   /** W4 좌석 선택 (남궁일, BKG-09) */
   screening: (screeningId: number | string) => `/screenings/${screeningId}`,
+  /** W5·W6 결제·결제 결과 (남궁일, BKG-10) */
+  bookingPay: (bookingId: number | string) => `/bookings/${bookingId}/pay`,
   credits: () => "/credits",
   callback: () => "/callback",
-  /** W8 마이페이지 (3.3.6) */
-  myPage: () => "/me",
+  /** W8 마이페이지 (3.3.6). 탭은 `?tab=preferences` (기본은 예매 내역) */
+  myPage: (tab?: "preferences") => (tab ? `/me?tab=${tab}` : "/me"),
 } as const;

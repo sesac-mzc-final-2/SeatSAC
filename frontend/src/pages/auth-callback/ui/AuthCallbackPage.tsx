@@ -30,6 +30,8 @@ export function AuthCallbackPage() {
 
   const authenticated = session.status === "authenticated";
   const profile = useQuery({ ...myProfileQuery(), enabled: authenticated, retry: false });
+  // 방금 받은 토큰이 거절된 401 은 다시 요청해도 같다 → 토큰을 폐기하고 Cognito 세션까지 끝낸 뒤 다시 로그인
+  const rejected = isApiError(profile.error, 401);
 
   useEffect(() => {
     if (authenticated && profile.isSuccess) void navigate(returnTo, { replace: true });
@@ -37,15 +39,21 @@ export function AuthCallbackPage() {
   }, [authenticated, profile.isSuccess, session.status, returnTo, navigate]);
 
   if (session.error) {
+    // 401 뒤 조용한 갱신(signinSilent)까지 실패하면 session.error 가 먼저 선다. 이때 signIn 으로 보내면 Cognito 세션으로
+    // 같은 토큰을 다시 받아 반복되므로, 토큰이 거절된 경우는 signOut(폐기 + Hosted UI 로그아웃)으로 보낸다
     return (
       <EmptyState
         as="h1"
         icon="alert-circle"
         title="로그인을 완료하지 못했어요"
-        description="로그인 창을 닫았거나 세션이 만료되었을 수 있습니다. 다시 시도해 주세요."
+        description={
+          rejected
+            ? "로그인 정보를 확인하지 못했어요. 다시 로그인해 주세요."
+            : "로그인 창을 닫았거나 세션이 만료되었을 수 있습니다. 다시 시도해 주세요."
+        }
         action={
           <>
-            <Button variant="primary" onClick={() => session.signIn(returnTo)}>
+            <Button variant="primary" onClick={() => (rejected ? session.signOut() : session.signIn(returnTo))}>
               <Icon name="log-in" /> 다시 로그인
             </Button>
             <ButtonLink to={routes.home()}>홈으로</ButtonLink>
@@ -72,8 +80,6 @@ export function AuthCallbackPage() {
   }
 
   if (authenticated && profile.isError) {
-    // 방금 받은 토큰이 거절된 401 은 다시 요청해도 같다 → 토큰을 버리고 다시 로그인
-    const rejected = isApiError(profile.error, 401);
     return (
       <ErrorState
         as="h1"

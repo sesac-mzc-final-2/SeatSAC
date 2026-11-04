@@ -26,6 +26,10 @@ const oidcConfig: AuthProviderProps = {
   scope: "openid email profile aws.cognito.signin.user.admin",
   automaticSilentRenew: true,
   userStore: new WebStorageStateStore({ store: new InMemoryWebStorage() }),
+  // 로그아웃 때 refresh token 폐기. Cognito 는 refresh token 만 폐기할 수 있다(access token 은 revoke 대상이 아님).
+  // 엔드포인트는 Hosted UI 도메인의 /oauth2/revoke — 디스커버리 문서에 없을 수 있어 seed 로 준다
+  revokeTokenTypes: ["refresh_token"],
+  metadataSeed: env.cognito.domain ? { revocation_endpoint: `${env.cognito.domain}/oauth2/revoke` } : undefined,
   // 콜백 처리 뒤 ?code=&state= 를 주소에서 지운다 (새로고침 때 재처리 방지). 이동은 /callback 화면이 한다
   onSigninCallback: () => {
     window.history.replaceState({}, document.title, window.location.pathname);
@@ -143,10 +147,16 @@ function SessionBridge({ children }: { children: ReactNode }) {
       },
       signOut: () => {
         signedInFlag.set(false);
-        void auth.removeUser().then(() => {
-          const logoutUrl = cognitoLogoutUrl();
-          if (logoutUrl) window.location.assign(logoutUrl);
-        });
+        // ① refresh token 폐기(복사된 토큰이 만료 전까지 살아 있지 않게, CWE-613) → ② 메모리 토큰 삭제 → ③ Hosted UI 세션 종료.
+        // 폐기 실패(네트워크 등)는 로그아웃을 막지 않는다
+        void auth
+          .revokeTokens(["refresh_token"])
+          .catch(() => undefined)
+          .then(() => auth.removeUser())
+          .then(() => {
+            const logoutUrl = cognitoLogoutUrl();
+            if (logoutUrl) window.location.assign(logoutUrl);
+          });
       },
     };
   }, [auth]);

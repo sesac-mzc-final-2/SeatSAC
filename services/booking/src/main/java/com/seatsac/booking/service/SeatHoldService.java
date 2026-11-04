@@ -136,15 +136,17 @@ public class SeatHoldService {
     private Booking holdAndSave(String userId, Long screeningId, List<Long> seatIds, SeatLayout layout,
                                 Instant now, boolean retryAfterOrphan) {
         String holdId = UUID.randomUUID().toString();
-        // 만료 시각은 선점 직전 시각에서 센다. 요청 초입의 now(Catalog 조회 전)에서 세면 조회가 길어진 만큼
-        // RDS expires_at이 Valkey 키의 실제 TTL보다 앞당겨진다 — TTL을 짧게 설정할수록 커진다
-        Instant expiresAt = clock.instant().plus(seatHoldProperties.holdTtl());
+        // 선점 시각은 선점 직전에 구한다. 요청 초입의 now(Catalog 조회 전)를 쓰면 조회가 길어진 만큼
+        // RDS expires_at이 Valkey 키의 실제 TTL보다 앞당겨지고(TTL을 짧게 설정할수록 커진다),
+        // created_at~expires_at 간격도 설정 TTL보다 길어진다 → 만료·생성 시각과 이 아래 판단에 모두 이 값을 쓴다
+        Instant heldAt = clock.instant();
+        Instant expiresAt = heldAt.plus(seatHoldProperties.holdTtl());
 
         HoldOutcome outcome = seatHold.hold(screeningId, userId, holdId, seatIds, expiresAt);
         switch (outcome.status()) {
             case SEAT_TAKEN -> throw seatUnavailable(screeningId, outcome.takenSeatIds());
             case ACTIVE_HOLD -> {
-                Optional<Booking> active = bookingReader.findPendingByHoldId(outcome.activeHoldId(), now);
+                Optional<Booking> active = bookingReader.findPendingByHoldId(outcome.activeHoldId(), heldAt);
                 if (active.isPresent()) {
                     Booking pending = active.get();
                     throw BookingErrorCode.ACTIVE_HOLD_EXISTS.exception(
@@ -154,7 +156,7 @@ public class SeatHoldService {
                 // 아직 커밋 중일 수 있다: hold.lua는 RDS 커밋 전에 user-hold·장부를 쓴다.
                 // 같은 사용자의 두 번째 요청(더블클릭·재시도)을 고아로 보고 지우면 첫 요청의
                 // 선점 1건 제한과 만료 장부가 깨진다 → 만들어진 지 얼마 안 됐으면 409로 돌려준다
-                if (isCommitInFlight(screeningId, outcome.activeHoldId(), now)) {
+                if (isCommitInFlight(screeningId, outcome.activeHoldId(), heldAt)) {
                     throw BookingErrorCode.ACTIVE_HOLD_EXISTS.exception(
                         ErrorDetail.of("screeningId", screeningId, "HOLD_IN_PROGRESS"));
                 }
@@ -173,11 +175,11 @@ public class SeatHoldService {
 
         try {
             return bookingState.createPending(new PendingBooking(userId, screeningId, holdId, seatIds,
-                layout.labelsOf(seatIds), expiresAt), now);
+                layout.labelsOf(seatIds), expiresAt), heldAt);
         } catch (RuntimeException e) {
             // 유일 제약 위반 등. Valkey를 되돌리고 이벤트는 발행하지 않는다.
             // 되돌리기가 실패해도 원래 예외를 그대로 던진다 — 409를 500으로 바꾸면 안 된다
-            // (남은 좌석 키는 TTL 300초로 사라진다)
+            // (남은 좌석 키는 선점 TTL이 지나면 사라진다)
             try {
                 seatHold.release(screeningId, userId, holdId, seatIds);
             } catch (DataAccessException cleanupFailure) {

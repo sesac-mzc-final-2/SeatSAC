@@ -115,7 +115,7 @@ class HoldExpiryFlowTest {
      * Valkey 키의 실제 TTL이 어긋나지 않게(TTL을 짧게 설정할수록 차이가 커진다)
      */
     @Test
-    void expiresAtCountsFromTheMomentOfHoldNotRequestStart() {
+    void expiresAtAndCreatedAtCountFromTheMomentOfHold() {
         screeningCache.clear();
         given(catalogClient.findScreening(SCREENING)).willAnswer(invocation -> {
             clock.advanceSeconds(20);   // 회차 조회에 20초가 걸렸다
@@ -125,8 +125,12 @@ class HoldExpiryFlowTest {
 
         SeatHoldResponse hold = hold(101L);
 
-        assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getExpiresAt())
-            .isEqualTo(HELD_AT.plusSeconds(20).plus(seatHoldProperties.holdTtl()));
+        Booking saved = bookingRepository.findById(hold.bookingId()).orElseThrow();
+        assertThat(saved.getExpiresAt()).isEqualTo(HELD_AT.plusSeconds(20).plus(seatHoldProperties.holdTtl()));
+        // 생성 시각도 같은 선점 시각 — 응답의 expiresAt − createdAt이 설정 TTL과 같다
+        assertThat(saved.getCreatedAt()).isEqualTo(HELD_AT.plusSeconds(20));
+        assertThat(java.time.Duration.between(hold.createdAt().toInstant(), hold.expiresAt().toInstant()))
+            .isEqualTo(seatHoldProperties.holdTtl());
     }
 
     // --- 안전망 1: 만료 장부 스캔 ---

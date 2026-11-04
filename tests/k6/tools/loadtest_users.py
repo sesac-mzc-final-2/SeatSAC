@@ -11,7 +11,7 @@ booking은 사용자당 회차별 선점을 1건만 허용한다(user-hold). 같
   refresh  리프레시 토큰으로 Access Token만 새로 받기 (자격 증명 불필요, 로그인 호출 없음)
   tokens   K6_TOKENS_FILE 파일(--out, 줄당 1개, 권한 600) 또는 K6_TOKENS 값(쉼표) 출력. 곧 만료되면 실패
   status   계정 수·가장 이른 만료 시각
-  delete   계정 삭제 (관리자 역할 필요)
+  delete   계정 삭제 — 상태 파일에 있는 계정만 (관리자 역할 필요)
 
 비밀번호·토큰은 레포 밖 상태 파일(기본 ~/.seatsac/loadtest-users.json, 권한 600)에만 둔다.
 절대 커밋하지 않는다(발표 후 레포 공개). 표준 라이브러리만 쓴다 — 관리 API만 aws CLI를 부른다.
@@ -528,12 +528,17 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 def cmd_delete(args: argparse.Namespace) -> None:
     state = State.load(args.state)
-    emails = existing_emails(args.profile, state)
+    in_pool = existing_emails(args.profile, state)
+    # 이 도구가 만든 계정(상태 파일)만 지운다. Hosted UI 가입도 loadtest+ 주소를 쓸 수 있어 접두사만으로는 고르지 않는다
+    emails = in_pool & {user.email for user in state.users}
     for email in sorted(emails):
         aws_cli(args.profile, state.region, ["admin-delete-user", "--user-pool-id", state.user_pool_id, "--username", email])
     state.users = []
     state.save(args.state)
     print(f"계정 {len(emails)}개 삭제", file=sys.stderr)
+    others = in_pool - emails
+    if others:
+        print(f"상태 파일에 없는 {EMAIL_PREFIX} 계정 {len(others)}개는 지우지 않았다 — 직접 확인한다", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> None:

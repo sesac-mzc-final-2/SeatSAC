@@ -374,6 +374,13 @@ class AdminCommandsTest(unittest.TestCase):
         self.assertEqual(self.pool, set())
         self.assertEqual(lt.State.load(self.state_path).users, [])
 
+    def test_delete_leaves_prefix_accounts_not_in_state(self) -> None:
+        self.run_cli("create", "--authority", self.AUTHORITY, "--client-id", CLIENT_ID, "--count", "2")
+        self.pool.add("loadtest+someone@example.com")   # 도구가 만들지 않은 같은 접두사 계정 (Hosted UI 가입 등)
+        self.run_cli("delete")
+        self.assertEqual(self.pool, {"loadtest+someone@example.com"})
+        self.assertEqual(lt.State.load(self.state_path).users, [])
+
 
 if __name__ == "__main__":
     unittest.main()

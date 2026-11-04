@@ -108,6 +108,27 @@ class HoldExpiryFlowTest {
             IntStream.rangeClosed(1, 400).mapToObj(i -> new LayoutSeat(100L + i, "J" + i, true)).toList()));
     }
 
+    // --- 만료 시각의 기준 ---
+
+    /**
+     * 만료 시각은 선점 직전 시각에서 센다 — Catalog 조회가 오래 걸려도 RDS {@code expires_at}과
+     * Valkey 키의 실제 TTL이 어긋나지 않게(TTL을 짧게 설정할수록 차이가 커진다)
+     */
+    @Test
+    void expiresAtCountsFromTheMomentOfHoldNotRequestStart() {
+        screeningCache.clear();
+        given(catalogClient.findScreening(SCREENING)).willAnswer(invocation -> {
+            clock.advanceSeconds(20);   // 회차 조회에 20초가 걸렸다
+            return new CatalogClient.Screening(SCREENING, 10_004L, 1, HELD_AT.plusSeconds(3600),
+                HELD_AT.plusSeconds(10_000), "승부", "건대입구", "1관");
+        });
+
+        SeatHoldResponse hold = hold(101L);
+
+        assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getExpiresAt())
+            .isEqualTo(HELD_AT.plusSeconds(20).plus(seatHoldProperties.holdTtl()));
+    }
+
     // --- 안전망 1: 만료 장부 스캔 ---
 
     @Test

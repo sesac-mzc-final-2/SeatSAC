@@ -136,7 +136,9 @@ public class SeatHoldService {
     private Booking holdAndSave(String userId, Long screeningId, List<Long> seatIds, SeatLayout layout,
                                 Instant now, boolean retryAfterOrphan) {
         String holdId = UUID.randomUUID().toString();
-        Instant expiresAt = now.plus(seatHoldProperties.holdTtl());
+        // 만료 시각은 선점 직전 시각에서 센다. 요청 초입의 now(Catalog 조회 전)에서 세면 조회가 길어진 만큼
+        // RDS expires_at이 Valkey 키의 실제 TTL보다 앞당겨진다 — TTL을 짧게 설정할수록 커진다
+        Instant expiresAt = clock.instant().plus(seatHoldProperties.holdTtl());
 
         HoldOutcome outcome = seatHold.hold(screeningId, userId, holdId, seatIds, expiresAt);
         switch (outcome.status()) {

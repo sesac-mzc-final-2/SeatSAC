@@ -168,7 +168,7 @@ public class IdempotencyStore {
      * 이 값이 쓰이는 경우는 <b>처리 도중 파드가 죽거나 요청이 아주 오래 걸리는 경우</b>뿐이다.
      * 24시간을 그대로 쓰면 그런 키로 들어오는 재시도가 하루 동안 409를 받는다.
      *
-     * <p>선점 TTL({@link SeatHoldProperties#holdTtl()}, 설정)과 같은 값으로 둔다. 이 시간이 지나면 <b>선점 자체가 이미 만료</b>되어
+     * <p>선점 TTL과 300초 중 긴 쪽({@link SeatHoldProperties#idempotencyInProgressTtl()})으로 둔다. 이 시간이 지나면 <b>선점 자체가 이미 만료</b>되어
      * 좌석이 풀리므로, 같은 키의 재시도가 새로 선점을 잡아도 앞 요청과 좌석을 다툴 일이 없다.
      * Gateway 응답 대기(15초)는 근거로 쓸 수 없다 — 클라이언트가 포기해도 서버 처리는 계속된다.
      *
@@ -177,6 +177,6 @@ public class IdempotencyStore {
      * ({@code idem-write.lua}).
      */
     private java.time.Duration inProgressTtl() {
-        return seatHoldProperties.holdTtl();
+        return seatHoldProperties.idempotencyInProgressTtl();
     }
 }

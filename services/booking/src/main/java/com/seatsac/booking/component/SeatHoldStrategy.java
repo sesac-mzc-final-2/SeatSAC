@@ -16,7 +16,7 @@ public interface SeatHoldStrategy {
     /**
      * 요청 좌석 전부를 한 번에 잡는다(전부 성공 또는 전부 실패).
      *
-     * @param expiresAt {@code now + 300초}. 만료 장부 점수로도 쓴다
+     * @param expiresAt {@code now + 선점 TTL}(설정, 기본 300초). 만료 장부 점수로도 쓴다
      */
     HoldOutcome hold(Long screeningId, String userId, String holdId, List<Long> seatIds, Instant expiresAt);
 

@@ -26,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.seatsac.booking.config.SeatHoldProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
@@ -37,7 +38,7 @@ import org.springframework.stereotype.Service;
  *
  * <pre>
  * 1. 회차·좌석 검증 (파드 캐시, 없으면 Catalog)
- * 2. holdId 발급, expiresAt = now + 300초
+ * 2. holdId 발급, expiresAt = now + 선점 TTL(설정, 기본 300초)
  * 3. hold.lua  (좌석 키 + user-hold + ZADD hold-expiry 한 번에)
  * 4. tx        booking(PENDING) + booking_seat  → 커밋
  *              실패 시 release.lua로 정리하고 발행 없이 409
@@ -68,6 +69,7 @@ public class SeatHoldService {
     private final BookingRepositoryReader bookingReader;
     private final SeatEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
+    private final SeatHoldProperties seatHoldProperties;
 
     public SeatHoldResponse hold(String userId, SeatHoldRequest request) {
         Instant now = clock.instant();
@@ -134,7 +136,7 @@ public class SeatHoldService {
     private Booking holdAndSave(String userId, Long screeningId, List<Long> seatIds, SeatLayout layout,
                                 Instant now, boolean retryAfterOrphan) {
         String holdId = UUID.randomUUID().toString();
-        Instant expiresAt = now.plus(BookingPolicy.HOLD_TTL);
+        Instant expiresAt = now.plus(seatHoldProperties.holdTtl());
 
         HoldOutcome outcome = seatHold.hold(screeningId, userId, holdId, seatIds, expiresAt);
         switch (outcome.status()) {
@@ -190,7 +192,7 @@ public class SeatHoldService {
      */
     private boolean isCommitInFlight(Long screeningId, String activeHoldId, Instant now) {
         return seatHold.expiryOf(screeningId, activeHoldId)
-            .map(expiresAt -> expiresAt.minus(BookingPolicy.HOLD_TTL))
+            .map(expiresAt -> expiresAt.minus(seatHoldProperties.holdTtl()))
             .filter(createdAt -> createdAt.isAfter(now.minus(BookingPolicy.HOLD_COMMIT_GRACE)))
             .isPresent();
     }

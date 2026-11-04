@@ -3,6 +3,7 @@ package com.seatsac.booking.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
 
+import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.common.RedisKeys;
 import com.seatsac.booking.component.BookingRepositoryReaderForExpiry;
@@ -63,6 +64,9 @@ class HoldExpiryFlowTest {
     CatalogClient catalogClient;
 
     @Autowired
+    SeatHoldProperties seatHoldProperties;
+
+    @Autowired
     MovableClock clock;
     @Autowired
     ScreeningCache screeningCache;
@@ -110,7 +114,7 @@ class HoldExpiryFlowTest {
     void ledgerSweepExpiresHoldAndCleansEverything() {
         SeatHoldResponse hold = hold(101L, 102L);
         String holdId = bookingRepository.findById(hold.bookingId()).orElseThrow().getHoldId();
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
 
         sweeper.sweepLedger();
 
@@ -156,7 +160,7 @@ class HoldExpiryFlowTest {
     @Test
     void databaseSweepExpiresEvenWhenValkeyWasFlushed() {
         SeatHoldResponse hold = hold(101L);
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
         redis.getConnectionFactory().getConnection().serverCommands().flushDb();   // 노드 교체
 
         sweeper.sweepDatabase();
@@ -171,7 +175,7 @@ class HoldExpiryFlowTest {
     @Test
     void expiredSeatKeyNotificationExpiresTheBooking() {
         SeatHoldResponse hold = hold(101L, 102L);
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
 
         notifyExpired(RedisKeys.seat(SCREENING, 101L));
 
@@ -183,7 +187,7 @@ class HoldExpiryFlowTest {
     @Test
     void repeatedNotificationsExpireOnlyOnce() {
         SeatHoldResponse hold = hold(101L, 102L);
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
 
         notifyExpired(RedisKeys.seat(SCREENING, 101L));
         notifyExpired(RedisKeys.seat(SCREENING, 102L));
@@ -196,7 +200,7 @@ class HoldExpiryFlowTest {
     @Test
     void otherKeyExpiryNotificationsAreIgnored() {
         SeatHoldResponse hold = hold(101L);
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
 
         notifyExpired(RedisKeys.userHold(SCREENING, USER));
 
@@ -211,7 +215,7 @@ class HoldExpiryFlowTest {
         SeatHoldResponse hold = hold(101L);
         String holdId = bookingRepository.findById(hold.bookingId()).orElseThrow().getHoldId();
         startPayment(hold.bookingId());
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
 
         assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.DEFERRED);
 
@@ -239,7 +243,7 @@ class HoldExpiryFlowTest {
         List<Long> expiring = IntStream.range(0, 2)
             .mapToObj(i -> hold("user-" + i, 301L + i).bookingId())
             .toList();
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
 
         sweeper.sweepLedger();
 
@@ -269,7 +273,7 @@ class HoldExpiryFlowTest {
         // 장부에 고아 멤버도 섞어 둔다 (좌석 키·예매가 이미 사라진 경우)
         IntStream.range(0, 5).forEach(i -> redis.opsForZSet().add(RedisKeys.holdExpiry(),
             RedisKeys.holdExpiryMember(SCREENING, UUID.randomUUID().toString()), HELD_AT.toEpochMilli()));
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 36_000);   // 밤새 멈춰 있었다
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 36_000);   // 밤새 멈춰 있었다
 
         sweeper.sweepLedger();   // 첫 주기 — 배치 상한까지만
 
@@ -297,7 +301,7 @@ class HoldExpiryFlowTest {
     @Test
     void alreadySettledHoldIsReportedAsSettled() {
         SeatHoldResponse hold = hold(101L);
-        clock.advanceSeconds(BookingPolicy.HOLD_TTL.toSeconds() + 1);
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
 
         assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.EXPIRED);
         assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.ALREADY_SETTLED);

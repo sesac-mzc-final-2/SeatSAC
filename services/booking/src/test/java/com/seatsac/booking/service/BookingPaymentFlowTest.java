@@ -282,6 +282,34 @@ class BookingPaymentFlowTest {
             .isEqualTo(BookingStatus.PENDING);
     }
 
+    /**
+     * 환불 응답만 못 받고 실제로는 취소된 경우: 다음 단건 조회가 결제를 CANCELED로 읽는다.
+     * 거절(PAYMENT_FAILED)이 아니라 만료(EXPIRED)로 끝내야 한다 — 화면이 「결제 실패」가 아니라 「만료·환불」을 보여 준다
+     */
+    @Test
+    void detailExpiresWhenRefundWentThroughButResponseWasLost() {
+        Long bookingId = hold(106L);
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved;
+        });
+        willThrow(new IllegalStateException("payment 응답 없음(취소는 됐다)"))
+            .given(paymentClient).cancel(anyString(), any());
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class);
+
+        PaymentResult canceled = new PaymentResult(approved.paymentId(), bookingId, 30_000, "CANCELED",
+            "1112", null, "HOLD_EXPIRED", approved.approvedAt(), Instant.now());
+        given(paymentClient.find(anyString())).willReturn(java.util.Optional.of(canceled));
+
+        var detail = bookingDetailService.get(USER, bookingId);
+        assertThat(detail.status()).isEqualTo(BookingStatus.EXPIRED);
+        assertThat(detail.payment().status()).isEqualTo("CANCELED");
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(bookingId)).isEmpty();
+        assertThat(redis.hasKey(RedisKeys.seat(SCREENING, 106L))).isFalse();
+    }
+
     /** 환불을 확인하지 못한 예매는 다음 단건 조회가 다시 환불하고, 그때 EXPIRED로 끝낸다 */
     @Test
     void detailRetriesRefundLeftPendingByPayment() {

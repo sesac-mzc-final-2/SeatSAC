@@ -116,6 +116,16 @@ public class BookingPaymentResultApplier {
         return Applied.CONFIRMED;
     }
 
+    /**
+     * 결제가 이미 <b>취소(환불)</b>된 것을 조회로 알게 된 경우 — 승인 뒤 만료에서 환불 응답을 못 받아
+     * 예매가 PENDING으로 남았던 것이다(REFUND_PENDING). 거절(PAYMENT_FAILED)이 아니라 만료(EXPIRED)로 끝낸다.
+     * PENDING에서 결제가 취소되는 경로는 이것뿐이다(BKG-07 취소는 CONFIRMED에서만).
+     */
+    public Applied applyRefundedExpiry(Booking booking) {
+        Instant now = clock.instant();
+        return expireAfterRefund(booking, now) ? Applied.EXPIRED_REFUNDED : Applied.ALREADY_SETTLED;
+    }
+
     public Applied applyDeclined(Booking booking) {
         Instant now = clock.instant();
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(booking.getBookingId());
@@ -161,12 +171,16 @@ public class BookingPaymentResultApplier {
      * <p>계약도 이 경우를 EXPIRED로 본다 (BKG-10 409 {@code details[status=EXPIRED, reason=HOLD_EXPIRED]}).
      * 0행이면 그 사이 다른 경로가 끝낸 것이므로 아무것도 하지 않는다.
      */
-    private void expireAfterRefund(Booking booking, Instant now) {
-        bookingState.expireHold(booking.getBookingId(), now).ifPresentOrElse(hold -> {
+    private boolean expireAfterRefund(Booking booking, Instant now) {
+        return bookingState.expireHold(booking.getBookingId(), now).map(hold -> {
             eventPublisher.publish(SeatEventType.EXPIRED, hold.screeningId(), hold.seatIds(), now);
             releaseKeys(booking, hold.seatIds());
             log.info("환불 후 만료 반영 bookingId={} seats={}", hold.bookingId(), hold.seatIds().size());
-        }, () -> log.info("환불 후 만료를 반영하지 못했다(이미 처리됨) bookingId={}", booking.getBookingId()));
+            return true;
+        }).orElseGet(() -> {
+            log.info("환불 후 만료를 반영하지 못했다(이미 처리됨) bookingId={}", booking.getBookingId());
+            return false;
+        });
     }
 
     /** 확정·거절 모두 선점 키는 더 필요 없다. 실패해도 TTL·만료 스캔이 치운다 */

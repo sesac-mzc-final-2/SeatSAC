@@ -76,6 +76,10 @@ public class BookingDetailService {
                 // 다시 못 읽으면 결제 정보 없이 답한다 — 낡은 APPROVED를 EXPIRED 예매와 같이 내보내지 않는다
                 return findPayment(booking.getCurrentPaymentId());
             }
+        } else if (payment.isCanceled()) {
+            // PENDING인데 결제가 취소돼 있다 = 승인 뒤 만료에서 환불은 됐는데 응답을 못 받은 것.
+            // 거절로 보면 PAYMENT_FAILED가 되고 화면이 「결제 실패」라고 한다 → 만료로 끝낸다
+            resultApplier.applyRefundedExpiry(booking);
         } else if (!payment.isProcessing()) {
             resultApplier.applyDeclined(booking);
         }

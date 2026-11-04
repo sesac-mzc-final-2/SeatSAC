@@ -1,0 +1,218 @@
+.form {
+  padding: 30px;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.title span {
+  margin-left: auto;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.note {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid #3c424f;
+  border-radius: var(--radius-sm);
+  background: #14161c;
+}
+
+.note > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #b4bdcc;
+}
+
+.note strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.note p {
+  margin-top: 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.note ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.note b {
+  margin-right: 4px;
+  color: #c4cbd5;
+  font-weight: 500;
+}
+
+.fill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin: 20px 0 26px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.fill > span {
+  margin-right: 7px;
+}
+
+.fill button {
+  padding: 6px 10px;
+  border: 1px solid #3b424f;
+  border-radius: 5px;
+  background: none;
+  color: #b9c1cf;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fill button:hover:not(:disabled) {
+  border-color: #697385;
+}
+
+.fill button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.field label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.field label span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.field input {
+  width: 100%;
+  padding: 14px 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: #121419;
+  color: var(--color-text);
+  font-size: 14px;
+  outline: none;
+}
+
+.field input:focus {
+  border-color: #747987;
+}
+
+.field input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.numberBox {
+  position: relative;
+}
+
+.numberBox input {
+  padding-right: 45px;
+  letter-spacing: 2px;
+}
+
+.numberBox > svg {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  color: #727d8f;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 22px;
+}
+
+.error {
+  margin-top: 8px;
+  color: var(--color-danger);
+  font-size: 12px;
+}
+
+.consent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 26px 0 20px;
+  color: #7e899b;
+  font-size: 12px;
+}
+
+.consent svg {
+  flex-shrink: 0;
+}
+
+.cancel {
+  display: flex;
+  width: max-content;
+  margin: 15px auto 0;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cancel:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 540px) {
+  .form {
+    padding: 22px 18px;
+  }
+
+  .title span {
+    display: none;
+  }
+
+  /* 좁은 화면·글자 확대에서 소유자 칸이 밀려나지 않게 한 줄씩 */
+  .row {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}

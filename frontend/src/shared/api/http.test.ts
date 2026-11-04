@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetServerClock, serverNow } from "@/shared/lib/server-clock";
 import { ApiError, NetworkError, buildUrl, configureHttpAuth, http } from "./http";
 
 const jsonResponse = (status: number, body: unknown) =>
@@ -91,5 +92,18 @@ describe("http", () => {
   it("fetch가 던지면 NetworkError", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
     await expect(http("/movies")).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it("응답의 Date 헤더로 서버 시각을 맞춘다 (선점 남은 시간 안내용)", async () => {
+    const serverDate = new Date(Date.now() + 10 * 60_000);   // 서버가 10분 앞서 있다
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("{}", { status: 200, headers: { "Content-Type": "application/json", Date: serverDate.toUTCString() } }),
+    );
+    try {
+      await http("/movies");
+      expect(Math.abs(serverNow() - serverDate.getTime())).toBeLessThan(2000);
+    } finally {
+      resetServerClock();
+    }
   });
 });

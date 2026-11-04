@@ -1,0 +1,164 @@
+/*
+ * 좌석 색 — 시안(docs 디자인) 「좌석 상태 색(전 화면 공통)」을 따른다.
+ *   선택 가능 = 테두리만 있는 회색 칸 / 내가 선택 = 코랄 채움 / 다른 사람이 선점 중 = #3A3D46 + 사선
+ *   예매 완료 = #25272E + X / 리클라이너 = 폭이 넓은 칸(좌표 그대로)
+ * 이 컴포넌트 안에서만 쓰는 값이라 전역 토큰에 넣지 않았다.
+ */
+.map {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-inline: auto;
+  touch-action: manipulation;
+
+  --seat-line: #737987;
+  --seat-text: #acb3c0;
+  --seat-hover-fill: #3b404c;
+  --seat-held-fill: #3a3d46;
+  --seat-held-stripe: #4a4e5a;
+  --seat-held-line: #4b505c;
+  --seat-held-text: #7f8795;
+  --seat-booked-fill: #25272e;
+  --seat-booked-line: #30343d;
+  --seat-booked-mark: #5e6471;
+}
+
+/* 곡선 스크린 */
+.screen path {
+  fill: none;
+  stroke: #646a79;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.screen text {
+  fill: #b5bbc8;
+  font-size: 11px;
+  letter-spacing: 0.45em;
+}
+
+/* 통로 — 빈 간격으로 보이게 아주 옅게만 */
+.aisles rect {
+  fill: #ffffff05;
+}
+
+/* 줄 이름 (양쪽) */
+.rows text {
+  fill: #7c8594;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* 출입구 */
+.entrances path {
+  fill: none;
+  stroke: #798292;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.entrances text {
+  fill: #798292;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+/* 좌석 */
+.seat rect {
+  fill: transparent;
+  stroke: var(--seat-line);
+  stroke-width: 1;
+  transition:
+    fill var(--t-color),
+    stroke var(--t-color);
+}
+
+.seat text {
+  fill: var(--seat-text);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  pointer-events: none;
+  user-select: none;
+}
+
+.seat[data-selectable] {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .seat[data-selectable]:hover rect {
+    fill: var(--seat-hover-fill);
+    stroke: var(--color-text);
+  }
+}
+
+.seat[data-selectable]:focus-visible {
+  outline: none;
+}
+
+.seat[data-selectable]:focus-visible rect {
+  stroke: var(--color-text);
+  stroke-width: 2;
+}
+
+.seat[data-state="selected"] rect {
+  fill: var(--color-primary);
+  stroke: var(--color-primary);
+}
+
+.seat[data-state="selected"] text {
+  fill: var(--color-on-primary);
+}
+
+/* 다른 사람이 선점 중 — 채움은 SVG 패턴(사선), 테두리·글자만 여기서 */
+.seat[data-state="held"] rect {
+  stroke: var(--seat-held-line);
+}
+
+.seat[data-state="held"] text {
+  fill: var(--seat-held-text);
+}
+
+.heldBase {
+  fill: var(--seat-held-fill);
+}
+
+.heldStripe {
+  stroke: var(--seat-held-stripe);
+  stroke-width: 1;
+}
+
+.seat[data-state="reserved"] rect {
+  fill: var(--seat-booked-fill);
+  stroke: var(--seat-booked-line);
+}
+
+.reservedMark {
+  fill: none;
+  stroke: var(--seat-booked-mark);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.seat[data-state="inactive"] rect {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-dasharray: 2 2;
+}
+
+.seat[data-state="inactive"] text {
+  display: none;
+}
+
+/* 리클라이너는 좌석 자체가 넓다(수집 좌표). 모서리만 더 둥글게 */
+.seat[data-seat-type="RECLINER"] rect {
+  rx: 30%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seat rect {
+    transition: none;
+  }
+}

@@ -1,9 +1,11 @@
 package com.seatsac.booking.service;
 
 import com.seatsac.booking.common.BookingErrorCode;
+import com.seatsac.booking.component.CatalogClient.Screening;
 import com.seatsac.booking.component.PaymentClient;
 import com.seatsac.booking.component.PaymentClient.PaymentCancelReason;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
+import com.seatsac.booking.component.ScreeningCache;
 import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.dto.response.BookingCancelResponse;
 import com.seatsac.booking.dto.response.PaymentView;
@@ -26,6 +28,10 @@ import org.springframework.stereotype.Service;
  * 멱등이라 다시 부르면 된다.
  *
  * <p>이미 취소된 예매는 <b>그대로 200</b>이다 — 화면이 두 번 눌러도 같은 결과를 본다.
+ *
+ * <p>상영이 시작된 예매는 취소·환불하지 않는다(계약 400 {@code SCREENING_STARTED}) — 영화를 본 뒤 환불받는
+ * 길을 막는다. 화면(마이페이지)도 상영 전 예매에만 취소 버튼을 두지만, 규칙은 서버가 지킨다.
+ * 회차 정보를 못 받으면 503이고 아무것도 바꾸지 않는다(계약: booking → catalog 실패 시 선점·취소 503).
  */
 @Slf4j
 @Service
@@ -37,6 +43,7 @@ public class BookingCancelService {
     private final BookingStateService bookingState;
     private final PaymentClient paymentClient;
     private final SeatEventPublisher eventPublisher;
+    private final ScreeningCache screeningCache;
 
     public BookingCancelResponse cancel(String userId, Long bookingId) {
         Instant now = clock.instant();
@@ -56,6 +63,13 @@ public class BookingCancelService {
             // 선점 중 취소는 BKG-03 해제다. 결제 실패·만료는 이미 끝난 예매다
             throw BookingErrorCode.BOOKING_NOT_CONFIRMED.exception(ErrorDetail.of("status",
                 booking.getStatus().name(), BookingErrorCode.BOOKING_NOT_CONFIRMED.name()));
+        }
+
+        // 상태를 바꾸기 전에 확인한다. Catalog 실패는 ScreeningCache가 503(CATALOG_UNAVAILABLE)으로 올린다
+        Screening screening = screeningCache.screening(booking.getScreeningId());
+        if (screening.hasStarted(now)) {
+            throw BookingErrorCode.SCREENING_CLOSED.exception(ErrorDetail.of("screeningId",
+                booking.getScreeningId(), BookingErrorCode.SCREENING_CLOSED.name()));
         }
 
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(bookingId);

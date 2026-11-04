@@ -41,7 +41,7 @@ import org.springframework.stereotype.Service;
  * 3. hold.lua  (좌석 키 + user-hold + ZADD hold-expiry 한 번에)
  * 4. tx        booking(PENDING) + booking_seat  → 커밋
  *              실패 시 release.lua로 정리하고 발행 없이 409
- * 5. 커밋 후   INCR seat-seq → PUBLISH HELD
+ * 5. 커밋 후   다음 seq(seq-next.lua) → PUBLISH HELD
  * </pre>
  *
  * 멱등 처리(`idem:` 키)는 3.2.4에서 인터셉터로 붙인다.

@@ -21,7 +21,9 @@ const oidcConfig: AuthProviderProps = {
   client_id: env.cognito.clientId,
   redirect_uri: env.cognito.redirectUri,
   response_type: "code",
-  scope: "openid email profile",
+  // aws.cognito.signin.user.admin: user 서비스가 같은 Access Token 으로 Cognito GetUser 를 불러 프로필을 만든다
+  // (service-runtime-contract 3장). 없으면 GetUser 가 거절돼 GET /users/me 가 401 TOKEN_REJECTED → 로그인이 계속 튕긴다
+  scope: "openid email profile aws.cognito.signin.user.admin",
   automaticSilentRenew: true,
   userStore: new WebStorageStateStore({ store: new InMemoryWebStorage() }),
   // 콜백 처리 뒤 ?code=&state= 를 주소에서 지운다 (새로고침 때 재처리 방지). 이동은 /callback 화면이 한다
@@ -103,6 +105,9 @@ function SessionBridge({ children }: { children: ReactNode }) {
         return renewed?.access_token ?? null;
       },
       onSessionExpired: () => {
+        // 콜백 화면에서는 보내지 않는다 — 방금 받은 토큰이 거절된 것(scope·클라이언트 설정 문제)이라 다시 보내면
+        // Cognito 세션으로 즉시 돌아와 같은 401 을 반복한다. 콜백 화면이 오류와 다시 시도를 보여 준다
+        if (window.location.pathname === routes.callback()) return;
         void auth.removeUser().then(() => auth.signinRedirect({ state: { returnTo: currentPath() } }));
       },
     });

@@ -3,6 +3,7 @@
 - 빌드 결과는 S3 + CloudFront (OAC). 컨테이너 없음. `frontend-deploy` 워크플로가 업로드·무효화한다.
 - API는 같은 도메인의 `/api/*` → `VITE_API_BASE_URL=/api`. 로컬은 Vite 프록시 `/api` → `http://localhost:8080`(gateway).
 - 로그인은 Cognito Hosted UI (PKCE), `react-oidc-context`. Access Token 을 `Authorization: Bearer` 로. 토큰은 메모리에만(ADR-63).
+  OIDC scope 는 `openid email profile aws.cognito.signin.user.admin` — 마지막 범위가 없으면 user 서비스의 Cognito `GetUser` 가 거절돼 `GET /users/me` 가 401 `TOKEN_REJECTED` 로 끝난다.
 - SSE: 연결 → BKG-01 스냅샷 → seq 보다 큰 이벤트만 적용. 재연결 때마다 스냅샷 다시. (좌석 화면, 남궁일)
 
 ## 실행

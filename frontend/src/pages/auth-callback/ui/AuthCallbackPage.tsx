@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { Link, useNavigate } from "react-router";
 import { useSession } from "@/entities/session";
 import { myProfileQuery } from "@/entities/user";
+import { isApiError } from "@/shared/api";
 import { routes } from "@/shared/config";
 import { useDocumentTitle } from "@/shared/lib";
 import { Button, ButtonLink, EmptyState, ErrorState, Icon, LoadingBlock } from "@/shared/ui";
@@ -10,6 +11,8 @@ import styles from "./AuthCallbackPage.module.css";
 
 const PROFILE_MESSAGES: Record<string, string> = {
   IDENTITY_UNAVAILABLE: "회원 정보를 확인하는 서비스가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.",
+  TOKEN_REJECTED: "로그인 정보를 확인하지 못했어요. 다시 로그인해 주세요.",
+  UNAUTHORIZED: "로그인 정보를 확인하지 못했어요. 다시 로그인해 주세요.",
 };
 
 /**
@@ -69,15 +72,21 @@ export function AuthCallbackPage() {
   }
 
   if (authenticated && profile.isError) {
+    // 방금 받은 토큰이 거절된 401 은 다시 요청해도 같다 → 토큰을 버리고 다시 로그인
+    const rejected = isApiError(profile.error, 401);
     return (
       <ErrorState
         as="h1"
         error={profile.error}
         title="회원 정보를 준비하지 못했어요"
         messages={PROFILE_MESSAGES}
-        onRetry={() => profile.refetch()}
+        onRetry={rejected ? undefined : () => profile.refetch()}
         action={
-          returnNeedsProfile ? undefined : (
+          rejected ? (
+            <Button variant="primary" onClick={() => session.signOut()}>
+              <Icon name="log-in" /> 다시 로그인
+            </Button>
+          ) : returnNeedsProfile ? undefined : (
             <Link to={returnTo} replace className={styles.skip}>
               그냥 계속하기 <Icon name="arrow-right" size={13} />
             </Link>

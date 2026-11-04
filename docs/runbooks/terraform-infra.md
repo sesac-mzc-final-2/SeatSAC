@@ -668,6 +668,75 @@ aws sqs get-queue-attributes --queue-url "$URL" --attribute-names ApproximateNum
 
 - 삭제(11장): 큐를 지우면 남은 메시지도 사라진다. 다시 만들면 URL이 같으므로 앱 설정은 그대로다
 
+#### 6-B-5. 알림 Lambda 연결 (3.1.8, OPS-07) — **6-B-3(릴레이 켜기)보다 먼저**
+
+코드: `envs/staging/lambda.tf` · `lambdas/notification/handler.py`(테스트 `test_handler.py`). 6-B-1(큐·DLQ)이 apply된 뒤에 한다 — 같은 루트 모듈이라 순서는 Terraform이 지킨다.
+
+| 만드는 것 | 이름·값 |
+| --- | --- |
+| 함수 | `cinema-staging-notification` · python3.12 · arm64 · 128MB · 제한 30초 · VPC 밖 · 로그 형식 Text(핸들러가 JSON 한 줄을 직접 찍음) |
+| 실행 역할 | `cinema-staging-notification` → 자기 로그 그룹 쓰기 + 알림 큐 `ReceiveMessage`·`DeleteMessage`·`GetQueueAttributes`만 |
+| 로그 그룹 | `/aws/lambda/cinema-staging-notification` · 보존 7일 |
+| 이벤트 소스 매핑 | 알림 큐 → 함수 · 배치 10 · 대기 0초 · `ReportBatchItemFailures` · 최대 동시 실행 2 |
+
+동작: 메시지마다 계약(`booking.confirmed.v1`) 필수 필드를 확인하고 로그 한 줄(`eventId`·`traceId`·`bookingId`·`receiveCount` …)을 남긴다. 깨진 메시지만 실패로 보고되어 다시 수신되고(가시성 제한 180초), 3회째 실패하면 DLQ로 간다. 같은 `eventId`가 또 오면 그대로 한 줄 더 남긴다(중복은 로그에서 `eventId`로 가린다).
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명). 최신 main에서
+cd infra/terraform/envs/staging
+git pull && git log -1 --oneline
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: aws_iam_role 1 · aws_iam_role_policy 1 · aws_cloudwatch_log_group 1 · aws_lambda_function 1 · aws_lambda_event_source_mapping 1
+#         → 5 to add, 0 change, 0 destroy (6-B-1을 먼저 apply했다면. 아니면 큐 등이 같이 보인다)
+terraform apply plan.out && rm -f plan.out     # 저장된 plan에는 비밀 값이 평문
+```
+
+```bash
+# 터미널 A (cinema-admin) — 확인
+aws lambda get-function-configuration --function-name cinema-staging-notification \
+  --query '{runtime:Runtime,arch:Architectures[0],timeout:Timeout,state:State}' --output json
+#   기대: python3.12 · arm64 · 30 · Active
+aws lambda list-event-source-mappings --function-name cinema-staging-notification \
+  --query 'EventSourceMappings[].[State,BatchSize,FunctionResponseTypes[0],ScalingConfig.MaximumConcurrency]' --output text
+#   기대: Enabled  10  ReportBatchItemFailures  2     (State가 Creating·Enabling이면 1분쯤 뒤 다시)
+
+# 끝에서 끝 확인: 계약 예시 메시지(eventId만 새로)를 큐에 직접 넣는다 — 레포 루트에서
+Q=cinema-staging-notification-events
+URL=$(aws sqs get-queue-url --queue-name $Q --query QueueUrl --output text)
+BODY=$(python3 -c "import json,uuid; d=json.load(open('contracts/events/examples/booking.confirmed.v1/confirmed.json')); d['eventId']=str(uuid.uuid4()); print(json.dumps(d))")
+aws sqs send-message --queue-url "$URL" --message-body "$BODY" \
+  --message-attributes '{"type":{"DataType":"String","StringValue":"booking.confirmed"},"traceId":{"DataType":"String","StringValue":"4bf92f3577b34da6a3ce929d0e0e4736"}}' \
+  --query MessageId --output text
+sleep 10
+aws logs tail /aws/lambda/cinema-staging-notification --since 5m --format short | grep '"eventId"'
+#   기대: {"timestamp": "…+09:00", "level": "INFO", "service": "notification", "message": "예매 완료 알림 (모의 발송)", "traceId": "4bf92f35…", "eventId": "…", "bookingId": 9876, …}
+```
+
+- 예시 메시지의 `bookingId` 9876은 실제 예매가 아니다. Lambda는 로그만 남기므로 부작용이 없다
+- 이 확인이 끝나면 **6-B-3(릴레이 켜기)** 으로 간다. 켠 뒤에는 예매를 하나 확정해 같은 로그에 실제 `bookingId`·`eventId`가 찍히는지 본다(인계 #10)
+- CloudWatch Logs Insights: 로그 그룹 `/aws/lambda/cinema-staging-notification`에서 `fields @timestamp, level, eventId, traceId, bookingId, receiveCount | filter eventId = "<id>"`
+
+**DLQ 경로까지 확인(선택, 경보 메일이 온다)**: 계약에 어긋난 본문을 보낸다. 실패한 메시지는 가시성 제한(180초)마다 다시 수신되어 `receiveCount` 1→2→3으로 ERROR가 찍히고, 약 7분 뒤 DLQ로 간다 → `…-notification-dlq-not-empty` 경보(메일). 확인하고 나서 **그 메시지만** 지운다(큐 전체 purge는 하지 않는다).
+
+```bash
+aws sqs send-message --queue-url "$URL" --message-body '{"hello":"dlq-test"}' --query MessageId --output text
+# 약 7분 뒤
+DLQ=$(aws sqs get-queue-url --queue-name $Q-dlq --query QueueUrl --output text)
+aws sqs receive-message --queue-url "$DLQ" --max-number-of-messages 1 --visibility-timeout 30 \
+  --query 'Messages[0].[Body,ReceiptHandle]' --output text        # 본문이 {"hello":"dlq-test"}인지 확인
+aws sqs delete-message --queue-url "$DLQ" --receipt-handle '<위에서 나온 ReceiptHandle>'
+```
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| apply 중 매핑 생성이 `execution role … does not have permissions` | 역할 정책이 아직 퍼지지 않음(전파 지연) | 1분 뒤 `terraform apply` 다시 |
+| 큐에 메시지가 쌓이는데 로그가 없음 | 매핑 `State`가 `Disabled` 또는 `Creating` | `list-event-source-mappings` 확인. 끄고 켜는 변경은 콘솔·CLI가 아니라 `lambda.tf`의 `enabled` PR로 |
+| ERROR `envelope 필수 필드 없음`·`payload 필수 필드 없음` | booking 발행 본문이 계약과 다름 | 해당 `eventId`·`traceId`로 booking 로그 확인(남궁일), 고친 뒤 DLQ 재전송(6-B-4) |
+| ERROR `지원하지 않는 type/version` | v2 또는 다른 type을 같은 큐로 발행 | 소비자(Lambda)를 먼저 올린 뒤 발행하는 순서로 맞춘다 — 계약은 필드 추가만 허용(`.v2`는 새 이벤트) |
+| 같은 `eventId`가 로그에 여러 줄 | 아웃박스 재전송 또는 SQS 재수신(정상) | `receiveCount`·`messageId`로 구분. 하는 일이 로그뿐이라 조치 없음 |
+| 코드(`handler.py`)를 고쳤는데 반영 안 됨 | apply 전 | PR 머지 뒤 plan에 `aws_lambda_function.notification` 1 update가 보이면 apply |
+
 
 ### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-74)
 

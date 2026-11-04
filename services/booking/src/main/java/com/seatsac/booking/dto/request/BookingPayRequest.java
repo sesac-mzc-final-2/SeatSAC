@@ -26,12 +26,17 @@ public record BookingPayRequest(
         return "BookingPayRequest(method=" + method + ", card=****)";
     }
 
-    /** 모의 카드 (Payment 명세). 숫자 16자리, 만료 {@code MM/YY}, 소유자 1~50자 */
+    /**
+     * 모의 카드 (Payment 명세). 숫자 12~19자리, 만료 {@code MM/YY}, 소유자 1~50자.
+     *
+     * <p>자리수는 계약(`contracts/openapi/booking.openapi.yaml` PayRequest, `^[0-9]{12,19}$`)과 같게 둔다.
+     * 16자리로 좁혀 두면 계약·화면·payment는 받아들이는 번호를 booking만 400으로 막는다.
+     */
     public record Card(
 
-        @NotBlank @Pattern(regexp = "\\d{16}") String number,
+        @NotBlank @Pattern(regexp = "^[0-9]{12,19}$") String number,
 
-        @NotBlank @Pattern(regexp = "(0[1-9]|1[0-2])/\\d{2}") String expiry,
+        @NotBlank @Pattern(regexp = "^(0[1-9]|1[0-2])/[0-9]{2}$") String expiry,
 
         @NotBlank @Size(min = 1, max = 50) String holder
     ) {

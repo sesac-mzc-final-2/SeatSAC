@@ -17,7 +17,7 @@ import {
   type HoldFailure,
 } from "@/features/seat-selection";
 import { routes } from "@/shared/config";
-import { formatDateDots, timeOfIso, useDocumentTitle } from "@/shared/lib";
+import { formatDateDots, serverNow, timeOfIso, useDocumentTitle } from "@/shared/lib";
 import { EmptyState, ErrorState, Icon, LoadingBlock, PageHeading, useToast } from "@/shared/ui";
 import { SeatBoard, SeatBookingPanel } from "@/widgets/seat-board";
 import styles from "./ScreeningPage.module.css";
@@ -48,8 +48,8 @@ function SeatSelect() {
   const toast = useToast();
 
   const [activeHold, setActiveHold] = useState<ActiveHold | null>(null);
-  // 화면을 연 시각 — 이미 시작한 회차 안내용. 그 뒤에 시작하면 선점이 SCREENING_STARTED로 알려 준다
-  const [openedAt] = useState(() => Date.now());
+  // 화면을 연 시각(서버 기준) — 이미 시작한 회차 안내용. 그 뒤에 시작하면 선점이 SCREENING_STARTED로 알려 준다
+  const [openedAt] = useState(() => serverNow());
 
   const screeningQuery = useQuery({
     ...screeningDetailQuery(screeningId),

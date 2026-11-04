@@ -1,3 +1,4 @@
+import { serverNow } from "@/shared/lib";
 import type { BookingStatus, FailureCode } from "../model/types";
 
 /** 1석 15,000원 (docs/conventions.md 6장) */
@@ -30,8 +31,8 @@ const FAILURE_MESSAGE: Record<Exclude<FailureCode, null>, string> = {
 export const failureMessage = (code: FailureCode | undefined): string =>
   (code && FAILURE_MESSAGE[code]) || "결제가 완료되지 않았습니다. 좌석을 다시 선택해 주세요.";
 
-/** 선점이 끝날 때까지 남은 초 (음수는 0) */
-export function secondsLeft(expiresAt: string, now: number = Date.now()): number {
+/** 선점이 끝날 때까지 남은 초 (음수는 0). 기준은 서버 시각 — 만료는 서버가 서버 시계로 정한다 */
+export function secondsLeft(expiresAt: string, now: number = serverNow()): number {
   const remain = Math.floor((new Date(expiresAt).getTime() - now) / 1000);
   return Number.isFinite(remain) && remain > 0 ? remain : 0;
 }

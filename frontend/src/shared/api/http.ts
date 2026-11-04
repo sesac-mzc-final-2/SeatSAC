@@ -1,4 +1,5 @@
 import { env } from "@/shared/config";
+import { syncServerClock } from "@/shared/lib";
 
 /** contracts/schemas/error.v1.json */
 export interface ErrorDetail {
@@ -102,12 +103,16 @@ export async function http<T>(path: string, options: RequestOptions = {}): Promi
     if (body !== undefined) requestHeaders["Content-Type"] = "application/json";
     if (token) requestHeaders.Authorization = `Bearer ${token}`;
     try {
-      return await fetch(buildUrl(path, query), {
+      const sentAt = Date.now();
+      const response = await fetch(buildUrl(path, query), {
         method,
         headers: requestHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal,
       });
+      // 서버 시각 맞추기 (선점 남은 시간 안내용, shared/lib/server-clock). 헤더만 읽고 응답은 그대로다
+      syncServerClock(response.headers.get("Date"), sentAt, Date.now(), response.headers.get("Age"));
+      return response;
     } catch (error) {
       if (signal?.aborted) throw error;
       throw new NetworkError(error);

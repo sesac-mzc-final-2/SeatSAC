@@ -41,6 +41,8 @@ const oidcConfig: AuthProviderProps = {
  * 시도할지 정하는 플래그다. 없으면 비로그인 방문자를 Hosted UI 로 보내지 않는다.
  */
 const SIGNED_IN_FLAG = "seatsac.signedIn";
+/** 로그아웃 때 refresh token 폐기 요청을 기다리는 최대 시간 */
+const REVOKE_TIMEOUT_MS = 5000;
 const signedInFlag = {
   get: (): boolean => {
     try {
@@ -148,10 +150,11 @@ function SessionBridge({ children }: { children: ReactNode }) {
       signOut: () => {
         signedInFlag.set(false);
         // ① refresh token 폐기(복사된 토큰이 만료 전까지 살아 있지 않게, CWE-613) → ② 메모리 토큰 삭제 → ③ Hosted UI 세션 종료.
-        // 폐기 실패(네트워크 등)는 로그아웃을 막지 않는다
-        void auth
-          .revokeTokens(["refresh_token"])
-          .catch(() => undefined)
+        // 폐기 실패(네트워크 등)는 로그아웃을 막지 않고, 응답이 없으면 REVOKE_TIMEOUT_MS 뒤 다음 단계로 간다
+        // (oidc-client-ts 는 requestTimeoutInSeconds 가 없으면 폐기 요청에 제한 시간을 두지 않는다)
+        const revoke = auth.revokeTokens(["refresh_token"]).catch(() => undefined);
+        const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, REVOKE_TIMEOUT_MS));
+        void Promise.race([revoke, timeout])
           .then(() => auth.removeUser())
           .then(() => {
             const logoutUrl = cognitoLogoutUrl();

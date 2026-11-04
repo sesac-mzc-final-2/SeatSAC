@@ -1,7 +1,8 @@
 // 실시간 좌석 데모 ①: 같은 좌석 100명 동시 선점 → 성공 정확히 1명, 선점 p95 300ms 이하
 //
 // 필요한 것
-//   K6_TOKENS     서로 다른 Cognito 테스트 계정 토큰 100개 (쉼표 구분)
+//   K6_TOKENS_FILE 서로 다른 Cognito 테스트 계정 토큰 100개 파일(줄당 1개, 절대 경로) — tools/loadtest_users.py tokens --out
+//                 (토큰 몇 개면 K6_TOKENS 쉼표 구분도 된다)
 //                 — 회차당 선점 1건 제한 때문에 토큰이 겹치면 좌석 경쟁이 아니라
 //                   사용자 제한(ACTIVE_HOLD_EXISTS)을 재게 된다
 //   SCREENING_ID  아직 아무도 잡지 않은 회차

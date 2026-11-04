@@ -12,13 +12,36 @@
 
 ## 돌리기 전에 준비할 것
 
-### 토큰 (`K6_TOKENS`)
+### 토큰 (`K6_TOKENS_FILE`)
 
-Cognito 테스트 계정으로 **미리 발급**해 쉼표로 넘긴다. k6 안에서 로그인하지 않는다(인증 쪽에 불필요한 부하를 주지 않기 위해).
+Cognito 테스트 계정으로 **미리 발급**해 **파일로** 넘긴다(`K6_TOKENS_FILE`, 줄당 1개). 쉼표로 잇는 `K6_TOKENS`는 몇 개만 쓸 때의 대안이다 — 100개면 환경변수·인자 길이 한도에 걸릴 수 있다. k6 안에서 로그인하지 않는다(인증 쪽에 불필요한 부하를 주지 않기 위해).
+계정·토큰은 `tools/loadtest_users.py`로 준비한다(Python 표준 라이브러리만, 관리 API만 `aws` CLI).
 
 ```bash
-export K6_TOKENS="eyJ...,eyJ...,eyJ..."   # 아래 실행 예가 이 변수를 그대로 쓴다
+T=tests/k6/tools/loadtest_users.py
+# 1) 계정 100개 — 관리자 역할(cinema-admin, MFA). 메일은 보내지 않는다(SUPPRESS).
+#    상태 파일과 풀에 모두 있는 계정은 건너뛴다. 풀에만 있는 계정이 있으면 멈춘다 — 상태 파일을 잃은 경우에만
+#    --adopt를 붙여 다시 실행한다(그 계정들의 비밀번호를 새로 정한다. 같은 주소로 직접 가입한 남의 계정일 수 있다)
+python3 $T create --count 100 \
+  --authority "$(gh variable get VITE_COGNITO_AUTHORITY)" --client-id "$(gh variable get VITE_COGNITO_CLIENT_ID)"
+# 2) 토큰 — SRP 로그인. AWS 자격 증명이 필요 없다(공개 앱 클라이언트). 100명 × 2회 호출
+python3 $T login
+# 3) 돌리기 직전 — Access Token(60분)만 리프레시 토큰으로 새로 받는다(로그인 호출 없음, 리프레시 7일)
+python3 $T refresh
+python3 $T tokens --min-valid-minutes 30 --out ~/.seatsac/k6-tokens.txt   # 줄당 1개·권한 600. 30분 안에 만료될 토큰이 있으면 실패
+export K6_TOKENS_FILE=~/.seatsac/k6-tokens.txt                            # k6는 절대 경로로 받는다
+python3 $T status                                                         # 계정 수·가장 이른 만료
+# 끝나면 (선택) 계정 삭제 — 관리자 역할
+python3 $T delete
 ```
+
+- 계정은 `loadtest+001@example.com` ~ `loadtest+100@example.com`(이름 `loadtest-001`…)이고 `ADMIN` 그룹에 넣지 않는다 — 들어 있으면 `create`가 멈추고, 나중에 넣었어도 `login`·`refresh`·`tokens`가 토큰의 `cognito:groups`를 보고 멈춘다
+- 계정은 데모 주간(11/20)까지 두고 **Public 전환 전 `delete`**(런북 7-6-3)
+- **비밀번호·토큰은 레포 밖** `~/.seatsac/loadtest-users.json`(권한 600)에만 둔다. 커밋·PR·노션에 붙이지 않는다. 다른 위치는 `--state`
+- **토큰은 파일로 넘긴다**(`K6_TOKENS_FILE`). 토큰 하나가 1~1.2KB라 100개를 쉼표로 이으면 리눅스 env·인자 한도(128KiB)에 거의 닿는다. 몇 개만 쓸 때는 `K6_TOKENS`(쉼표)도 된다
+- 클러스터 안 Job(OPS-10, 김종식): 실행 직전 관리자가 Secret `k6-loadtest-tokens`(`cinema-staging`)를 `tokens --out` 파일로 만들고 → Job이 파일로 마운트해 `K6_TOKENS_FILE`로 넘기고 → 끝나면 Secret을 지운다(GitOps 예외, 런북에 명시). **gateway는 인바운드 기본 거부라 Job 파드 라벨을 `base/gateway/networkpolicy.yaml` 허용 목록과 런북 6-E 표에 함께 넣어야 한다** — 빠지면 요청이 전부 타임아웃된다
+- 사용자 프로필(`GET /users/me`)은 만들지 않는다 — booking은 `X-User-Id`(= `sub`)만 쓴다
+- 테스트: `python3 -m unittest discover -s tests/k6/tools` — 가짜 Cognito 서버가 서버 쪽 SRP로 서명을 검증한다
 
 > **같은 좌석 경쟁 시나리오는 토큰이 VU 수만큼 필요하다.** booking은 **회차당 선점 1건**만 허용하므로(`user-hold`), 토큰이 겹치면 두 번째 요청이 좌석 때문이 아니라 사용자 제한(`ACTIVE_HOLD_EXISTS`)으로 막힌다 — 재려던 것이 가려진다. 그래서 스크립트가 `setup()`에서 토큰 수를 확인하고 부족하면 **바로 멈춘다**.
 
@@ -43,14 +66,14 @@ export K6_TOKENS="eyJ...,eyJ...,eyJ..."   # 아래 실행 예가 이 변수를 �
 ```bash
 # 같은 좌석 100명 (토큰 100개 필요)
 k6 run -e BASE_URL=http://gateway:8080 -e SCREENING_ID=5123 -e SEAT_ID=4060121 \
-       -e K6_TOKENS="$K6_TOKENS" tests/k6/seat-hold-contention.js
+       -e K6_TOKENS_FILE="$K6_TOKENS_FILE" tests/k6/seat-hold-contention.js
 
 # 조회 (토큰 불필요)
 k6 run -e SCREENING_IDS=5123,5124,5125 -e THEATER_ID=1004 tests/k6/browse.js
 
 # 배포 중 부하 — 띄워 둔 상태에서 새 버전을 배포한다
 k6 run -e SCREENING_ID=5123 -e SEAT_ID_FROM=4060001 -e VUS=10 -e SEATS_PER_VU=20 \
-       -e DURATION=5m -e K6_TOKENS="$K6_TOKENS" tests/k6/deploy-during-load.js
+       -e DURATION=5m -e K6_TOKENS_FILE="$K6_TOKENS_FILE" tests/k6/deploy-during-load.js
 ```
 
 ## 읽는 법 — 0이어야 하는 것

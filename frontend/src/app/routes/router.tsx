@@ -4,6 +4,7 @@ import { BookingPayPage } from "@/pages/booking-pay";
 import { CreditsPage } from "@/pages/credits";
 import { HomePage } from "@/pages/home";
 import { MovieDetailPage } from "@/pages/movie-detail";
+import { MyPage } from "@/pages/my-page";
 import { NotFoundPage } from "@/pages/not-found";
 import { ScreeningPage } from "@/pages/screening";
 import { ShowtimesPage } from "@/pages/showtimes";
@@ -15,7 +16,7 @@ import { RouteErrorPage } from "./route-error-page";
 const page = (route: RouteObject): RouteObject => ({ ...route, errorElement: <RouteErrorPage /> });
 
 /**
- * 2.2.5 화면 목록. W8 `/me`·W9 `/admin/ai`는 각 WBS에서 추가한다.
+ * 2.2.5 화면 목록. W9 `/admin/ai`(3.3.7)는 해당 WBS에서 추가한다.
  * `/callback`은 CloudFront가 쿼리를 무시하고 index.html을 주므로 SPA 라우트로 받는다.
  */
 export const router = createBrowserRouter([
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
       page({ path: routePatterns.bookingPay, element: <BookingPayPage /> }),
       page({ path: routePatterns.credits, element: <CreditsPage /> }),
       page({ path: routePatterns.callback, element: <AuthCallbackPage /> }),
+      page({ path: routePatterns.myPage, element: <MyPage /> }),
       page({ path: "*", element: <NotFoundPage /> }),
     ],
   },

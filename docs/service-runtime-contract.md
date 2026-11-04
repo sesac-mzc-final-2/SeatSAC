@@ -122,7 +122,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | 메트릭 | 타입 | 라벨 값 | 서비스 | 쓰는 곳 |
 | --- | --- | --- | --- | --- |
 | `http_server_requests_seconds_*` (Spring 기본) | histogram | `status`, `uri`, `method` | 전체 | 5xx 비율·p95, 블루/그린 분석 |
-| `booking_seat_hold_total` | counter | `result`=`success`·`conflict`·`active_hold`·`error` | booking | 신호등·동시성 데모 |
+| `booking_seat_hold_total` | counter | `result`=`success`·`conflict`·`active_hold`·`error` | booking | 신호등·동시성 데모. `success`는 PENDING 커밋(발행 전), `conflict`=409 `SEAT_UNAVAILABLE`, `active_hold`=409 `ACTIVE_HOLD_EXISTS`, `error`=5xx(Catalog 503·Valkey·RDS). **4xx 거절(검증·시작된 회차·없는 회차)은 세지 않는다** → 신호등 분모 = 네 라벨 합 |
 | `booking_sse_connections` | gauge | — | booking | SSE 재연결 확인 (블루/그린 전환·노드 재기동 때 0으로 떨어졌다 다시 오르는 게 정상) |
 | `booking_payment_call_total` | counter | `result`=`approved`·`declined`·`timeout`·`error` | booking | **자동 롤백**(`declined`는 실패율에서 제외) |
 | `booking_hold_expiry_lag_seconds` | histogram | — | booking | 만료 반영 2초 목표. 노드 0대 구간(ADR-34) 뒤 첫 스윕은 밀린 만큼(수 시간) 큰 값이 한 번 찍히는 게 정상 → 경보는 파드 기동 후 10분 제외(3.1.7) |
@@ -132,6 +132,9 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | `catalog_seat_counts_fallback_total` | counter | — | catalog | 300ms 초과 대체 횟수 |
 | `payment_request_total` | counter | `result`=`approved`·`declined`·`processing`·`canceled` | payment | 모의 결제 결과 분포(OPS-05). 자동 롤백은 booking 쪽 `booking_payment_call_total`을 쓴다 |
 | `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
+| `cinema:http_requests:rate5m` | recording rule | `application` | 인프라 (gitops `observability/prometheusrule.yaml`, 3.1.7) | 신호등 계산용 서비스별 요청률(actuator 제외). **앱이 만드는 지표가 아니다** |
+| `cinema:http_5xx_ratio:rate5m` · `cinema:http_p95_seconds:rate5m` | recording rule | `application` | 인프라 (3.1.7) | 최근 5분 5xx 비율 · p95(SSE `…/stream` 제외). 트래픽이 없으면 값이 없다 |
+| `cinema:http_5xx_state` · `cinema:http_latency_state` · `cinema:service_state` | recording rule | `application` | 인프라 (3.1.7) | 신호등 상태 0 정상 · 1 주의 · 2 장애. 5xx 주의 ≥ 1%·장애 ≥ 5%, p95 주의 ≥ 300ms·장애 ≥ 1s, `service_state`는 둘 중 큰 값. 값이 없으면 대시보드가 회색 "트래픽 없음" |
 
 블루/그린 분석(`SeatSAC-gitops/analysis/`):
 
@@ -192,6 +195,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] ArgoCD(Helm)·root 앱·서비스 Application(Helm `argocd-apps`)·팀원 읽기 전용 화면, 플랫폼 차트 버전 고정(argo-rollouts·kube-prometheus-stack), gateway Ingress(ALB 유휴 120초·대상 정리 30초) (3.1.5, `envs/staging-k8s/argocd.tf`·`argocd_apps.tf`, gitops `apps/staging`·`base/gateway/ingress.yaml` — 코드 10/25 · **런북 6-C-2 확인 후 체크**). gateway·ALB·CloudFront `/api`는 Cognito 후
 - [ ] 앱 JDBC도 서버 인증서 검증으로: `SPRING_DATASOURCE_URL`의 `sslMode=REQUIRED`(암호화만) → `VERIFY_IDENTITY` + `rds-ca-bundle` 트러스트스토어 — 김종식. 3.1.5에서 분리: Connector/J는 PEM CA를 바로 못 읽어 initContainer로 트러스트스토어(PKCS12)를 만들어야 하고, 실제 RDS로 기동 검증이 필요해 앱이 처음 뜬 뒤 별도 PR
 - [ ] NetworkPolicy 허용 목록·기본 거부 (3.1.13, gitops `base/*/networkpolicy.yaml` — gateway ALB 대역을 public 서브넷으로 좁힘, 10/27 · **런북 6-E `np-check.sh` 확인 후 체크**, gateway는 Cognito 뒤 `REQUIRE_GATEWAY=1`로 다시)
+- [ ] 신호등 대시보드 **SeatSAC 신호등**(Grafana)·기록 규칙 `cinema:*`·CloudWatch 데이터소스(Valkey 메모리·Evictions, SQS DLQ)·Grafana Pod Identity(`cinema-staging-grafana-pod`, ServiceAccount `kube-prometheus-stack-grafana`) (3.1.7, `envs/staging/grafana.tf`·gitops `observability/`·`platform/kube-prometheus-stack/values.yaml` — 코드 11/2 · **런북 6-F 확인 후 체크**). 앱 지표(`booking_seat_hold_total` 등 5장)가 구현되기 전에는 해당 패널이 회색·"수집 없음"으로 나오는 게 정상
 - [ ] Compose `elasticmq-native:latest` → 버전 고정 — 김종식
 - [ ] `infra/terraform/envs/staging`에 Cognito·SQS·Pod Identity 모듈 추가 시 이 문서 3·6장 이름 그대로 — 김종식
 - [ ] Cognito 사용자 풀 `cinema-staging-users`·공개 앱 클라이언트·Hosted UI `cinema-staging`·`ADMIN` 그룹·Pre sign-up Lambda `cinema-staging-cognito-presignup` + `cognito_enabled = true`(gateway Application) (3.1.16, `envs/staging/cognito.tf` — 코드 10/28 · **런북 7-6-4 확인 후 체크**)

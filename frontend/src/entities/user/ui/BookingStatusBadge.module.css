@@ -1,0 +1,26 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 23px;
+  padding: 0 9px;
+  border: 1px solid #353945;
+  border-radius: 999px;
+  background: #23262e;
+  color: #b9bec9;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
+.badge[data-tone="confirmed"] {
+  border-color: #ff5a4e66;
+  background: #ff5a4e24;
+  color: #ff8b83;
+}
+.badge[data-tone="canceled"] {
+  border-color: var(--color-border);
+  background: transparent;
+  color: var(--color-muted);
+  text-decoration: line-through;
+}

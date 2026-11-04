@@ -1,0 +1,63 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.section {
+  min-height: 378px;
+}
+.heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+.heading h2 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+}
+.heading .micro {
+  padding-top: 4px;
+  text-align: right;
+}
+.genreHeading {
+  margin-top: 29px;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.saveRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 31px;
+}
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .section {
+    min-height: auto;
+  }
+}
+@media (max-width: 540px) {
+  .heading {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .heading h2 {
+    font-size: 18px;
+  }
+  .heading .micro {
+    padding-top: 0;
+    text-align: left;
+  }
+  .saveRow > button {
+    width: 100%;
+  }
+}

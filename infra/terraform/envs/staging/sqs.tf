@@ -173,16 +173,80 @@ resource "aws_iam_role" "sqs_metrics_scheduler" {
   })
 }
 
-resource "aws_iam_role_policy" "sqs_metrics_scheduler" {
+# ---- SQS 지표 유지 Lambda -----------------------------------------------
+
+data "archive_file" "sqs_metrics" {
+  type        = "zip"
+  source_file = "${path.module}/lambda/sqs_metrics/handler.py"
+  output_path = "${path.module}/.terraform/sqs_metrics.zip"
+}
+
+resource "aws_iam_role" "sqs_metrics_lambda" {
+  name = "${var.name}-sqs-metrics-lambda"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "sqs_metrics_lambda_logs" {
+  role       = aws_iam_role.sqs_metrics_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "sqs_metrics_lambda" {
   name = "sqs-get-queue-attributes"
-  role = aws_iam_role.sqs_metrics_scheduler.id
+  role = aws_iam_role.sqs_metrics_lambda.id
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid      = "ReadQueueAttributes"
+      Sid    = "ReadQueueAttributes"
+      Effect = "Allow"
+      Action = ["sqs:GetQueueAttributes"]
+      Resource = [
+        aws_sqs_queue.notification.arn,
+        aws_sqs_queue.notification_dlq.arn,
+      ]
+    }]
+  })
+}
+
+resource "aws_lambda_function" "sqs_metrics" {
+  function_name    = "${var.name}-sqs-metrics"
+  description      = "Keep notification SQS queues active for CloudWatch metrics (3.1.9)"
+  role             = aws_iam_role.sqs_metrics_lambda.arn
+  runtime          = "python3.12"
+  handler          = "handler.handler"
+  filename         = data.archive_file.sqs_metrics.output_path
+  source_code_hash = data.archive_file.sqs_metrics.output_base64sha256
+  timeout          = 10
+  memory_size      = 128
+
+  depends_on = [
+    aws_iam_role_policy_attachment.sqs_metrics_lambda_logs,
+    aws_iam_role_policy.sqs_metrics_lambda,
+  ]
+}
+
+resource "aws_iam_role_policy" "sqs_metrics_scheduler" {
+  name = "invoke-sqs-metrics-lambda"
+  role = aws_iam_role.sqs_metrics_scheduler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InvokeSqsMetricsLambda"
       Effect   = "Allow"
-      Action   = ["sqs:GetQueueAttributes"]
-      Resource = [aws_sqs_queue.notification.arn, aws_sqs_queue.notification_dlq.arn]
+      Action   = ["lambda:InvokeFunction"]
+      Resource = aws_lambda_function.sqs_metrics.arn
     }]
   })
 }
@@ -195,7 +259,7 @@ resource "aws_scheduler_schedule" "sqs_metrics" {
 
   name                = "keep-active-${each.key}"
   group_name          = aws_scheduler_schedule_group.sqs_metrics.name
-  description         = "GetQueueAttributes hourly so SQS keeps publishing CloudWatch metrics (3.1.9)"
+  description         = "Invoke SQS metrics Lambda hourly (3.1.9)"
   schedule_expression = "rate(1 hour)"
 
   flexible_time_window {
@@ -203,15 +267,15 @@ resource "aws_scheduler_schedule" "sqs_metrics" {
   }
 
   target {
-    arn      = "arn:aws:scheduler:::aws-sdk:sqs:getQueueAttributes"
+    arn      = aws_lambda_function.sqs_metrics.arn
     role_arn = aws_iam_role.sqs_metrics_scheduler.arn
+
     input = jsonencode({
-      QueueUrl       = each.value
-      AttributeNames = ["ApproximateNumberOfMessages"]
+      queue_url = each.value
     })
 
     retry_policy {
-      maximum_retry_attempts = 0 # 다음 시간에 다시 부른다
+      maximum_retry_attempts = 0
     }
   }
 }

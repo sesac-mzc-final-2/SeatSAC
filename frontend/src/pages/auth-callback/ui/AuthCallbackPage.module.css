@@ -1,0 +1,14 @@
+.skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 46px;
+  padding: 0 12px;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 600;
+  transition: color var(--t-color);
+}
+.skip:hover {
+  color: var(--color-text);
+}

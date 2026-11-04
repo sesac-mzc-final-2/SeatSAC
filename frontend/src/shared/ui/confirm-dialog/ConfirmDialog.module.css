@@ -1,0 +1,67 @@
+.dialog {
+  width: min(100% - 32px, 440px);
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-card);
+  color: var(--color-text);
+  box-shadow: 0 24px 60px #0008;
+}
+.dialog::backdrop {
+  background: #0e0f13cc;
+  backdrop-filter: blur(2px);
+}
+.dialog[open] {
+  animation: pageReveal 0.2s ease both;
+}
+.content {
+  position: relative;
+  padding: 28px;
+}
+.close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--color-muted);
+}
+.close:hover:not(:disabled) {
+  color: var(--color-text);
+  background: #ffffff10;
+}
+.title {
+  padding-right: 32px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+.description {
+  margin-top: 10px;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 24px;
+}
+@media (max-width: 540px) {
+  .content {
+    padding: 22px 20px;
+  }
+  .title {
+    font-size: 18px;
+  }
+  .actions {
+    flex-direction: column-reverse;
+  }
+  .actions > * {
+    width: 100%;
+  }
+}

@@ -16,8 +16,10 @@ import com.seatsac.booking.enums.SeatEventType;
 import com.seatsac.booking.enums.SeatStatus;
 import com.seatsac.booking.service.BookingStateService.PendingBooking;
 import com.seatsac.common.core.error.BusinessException;
+import com.seatsac.common.core.error.CommonResponseCode;
 import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.core.time.Times;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.LinkedHashSet;
@@ -43,6 +45,16 @@ import org.springframework.stereotype.Service;
  * </pre>
  *
  * 멱등 처리(`idem:` 키)는 3.2.4에서 인터셉터로 붙인다.
+ *
+ * <p>지표 {@code booking_seat_hold_total}(런타임 계약 5장) — 라벨 {@code result}:
+ * <ul>
+ *   <li>{@code success} 예매 PENDING 커밋(이벤트 발행 전에 센다 — 발행이 실패해도 선점은 성립)</li>
+ *   <li>{@code conflict} 409 {@code SEAT_UNAVAILABLE} — 데모 「같은 좌석 100명 → 성공 1 · 충돌 99」</li>
+ *   <li>{@code active_hold} 409 {@code ACTIVE_HOLD_EXISTS}</li>
+ *   <li>{@code error} 그 밖의 실패(Catalog 503·Valkey·RDS 오류 = 5xx)</li>
+ * </ul>
+ * 4xx 거절(좌석 검증·시작된 회차·없는 회차)은 선점을 시도한 게 아니라 <b>세지 않는다</b> — 신호등이
+ * 사용자 입력 오류로 빨개지면 안 된다. 멱등 재생은 인터셉터가 응답해 여기까지 오지 않는다.
  */
 @Service
 @RequiredArgsConstructor
@@ -55,9 +67,26 @@ public class SeatHoldService {
     private final BookingStateService bookingState;
     private final BookingRepositoryReader bookingReader;
     private final SeatEventPublisher eventPublisher;
+    private final MeterRegistry meterRegistry;
 
     public SeatHoldResponse hold(String userId, SeatHoldRequest request) {
         Instant now = clock.instant();
+        Held held;
+        try {
+            held = validateAndHold(userId, request, now);
+        } catch (RuntimeException e) {
+            resultOf(e).ifPresent(this::count);
+            throw e;
+        }
+        count("success");
+
+        // 커밋 후에만 발행한다 (redis-usage.md 1장)
+        eventPublisher.publish(SeatEventType.HELD, request.screeningId(), held.seatIds(), now);
+        return SeatHoldResponse.from(held.booking(), held.seatIds());
+    }
+
+    /** 1~4단계. 돌아오면 예매가 PENDING으로 커밋된 것이다 */
+    private Held validateAndHold(String userId, SeatHoldRequest request, Instant now) {
         List<Long> seatIds = validateSeats(request);
 
         Screening screening = screeningCache.screening(request.screeningId());
@@ -73,11 +102,28 @@ public class SeatHoldService {
                 .toList());
         }
 
-        Booking booking = holdAndSave(userId, request.screeningId(), seatIds, layout, now, true);
+        return new Held(holdAndSave(userId, request.screeningId(), seatIds, layout, now, true), seatIds);
+    }
 
-        // 커밋 후에만 발행한다 (redis-usage.md 1장)
-        eventPublisher.publish(SeatEventType.HELD, request.screeningId(), seatIds, now);
-        return SeatHoldResponse.from(booking, seatIds);
+    /** 커밋된 선점 — 발행·응답에 쓴다 */
+    private record Held(Booking booking, List<Long> seatIds) {
+    }
+
+    /** 지표 라벨. 4xx 거절은 비어 있다(세지 않는다) — 클래스 주석 참고 */
+    private static Optional<String> resultOf(RuntimeException e) {
+        if (!(e instanceof BusinessException business)) {
+            return Optional.of("error");   // DataAccessException 등 — 500으로 나간다
+        }
+        CommonResponseCode code = business.code().commonCode();
+        return switch (code) {
+            case SEAT_UNAVAILABLE -> Optional.of("conflict");
+            case ACTIVE_HOLD_EXISTS -> Optional.of("active_hold");
+            default -> code.status() >= 500 ? Optional.of("error") : Optional.empty();
+        };
+    }
+
+    private void count(String result) {
+        meterRegistry.counter("booking_seat_hold_total", "result", result).increment();
     }
 
     /**

@@ -1,0 +1,24 @@
+# 로컬 의존 서비스만 (앱은 ./gradlew bootRun / npm run dev). kind 없음 — 통합 검증은 EKS staging.
+services:
+  mysql:
+    image: mysql:8.4
+    ports: ["3306:3306"]
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    # staging RDS 파라미터 그룹과 같게 (3.1.3): UTC, utf8mb4. TLS 강제는 로컬에서 끔(sslMode 기본값으로 접속)
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci", "--default-time-zone=+00:00"]
+    volumes:
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro   # 스키마·계정 생성 SQL (03a 2️⃣)
+      - mysql-data:/var/lib/mysql
+  valkey:
+    image: valkey/valkey:8.2
+    ports: ["6379:6379"]
+    # staging ElastiCache 파라미터 그룹과 같게 (3.1.3): noeviction, 만료 이벤트 Ex
+    command: ["valkey-server", "--notify-keyspace-events", "Ex", "--maxmemory-policy", "noeviction"]
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.7.1   # 버전 고정(3.1.17) — 로컬·Testcontainers 재현성. 올릴 때는 이 태그만 바꾸고 PR
+    ports: ["9324:9324", "9325:9325"]
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+volumes:
+  mysql-data:

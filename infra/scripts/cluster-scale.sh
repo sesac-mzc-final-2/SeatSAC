@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------
 # 3.1.14 EKS 노드그룹 켜기·끄기 (cluster-schedule 워크플로와 사람이 같은 스크립트를 쓴다. 정시 실행은 EventBridge Scheduler)
-#   사용: infra/scripts/cluster-scale.sh up|down|status [desired]
-#     up     : 모든 노드그룹 desired = 1 (또는 [desired]) → 인스턴스 InService까지 대기
-#     down   : 모든 노드그룹 desired = 0
-#     status : 현재 desired·min·max·InService 수만 출력
-#   환경변수: CLUSTER(기본 cinema-staging-eks), AWS_REGION(기본 ap-northeast-2), WAIT_SECONDS(기본 600)
+#   사용: infra/scripts/cluster-scale.sh up|down|status [desired] [노드그룹]
+#     up     : 기본 노드그룹 desired = 1 (또는 [desired]) → 인스턴스 InService까지 대기
+#              평소 꺼 두는 노드그룹(OPTIONAL_NODEGROUPS, 기본 ng-ai)은 **빼고** 켠다 → 평일 아침 자동 켜기·`up 2` 부하 테스트에 ng-ai가 따라 켜지지 않는다
+#     down   : 모든 노드그룹 desired = 0 (ng-ai 포함 — 끄기는 전부 끄는 쪽이 안전하다. 숫자 인자는 무시)
+#     status : 현재 desired·min·max·InService 수만 출력 (모든 노드그룹)
+#   노드그룹을 지정하면 그것만 조작한다(이름이 같거나 "-이름"으로 끝나면 일치):
+#     cluster-scale.sh up ng-ai        ng-ai 1대 켜기 (AI 데모·6-G-2 확인)
+#     cluster-scale.sh down ng-ai      ng-ai 끄기
+#     cluster-scale.sh status ng-ai    ng-ai만 표시
+#   [desired] 숫자와 [노드그룹]은 순서 무관(`up 2 ng-ai` = `up ng-ai 2`)
+#   환경변수: CLUSTER(기본 cinema-staging-eks), AWS_REGION(기본 ap-northeast-2), WAIT_SECONDS(기본 600), OPTIONAL_NODEGROUPS(기본 ng-ai, 공백 구분)
 #   WAIT_SECONDS는 실행 전체의 대기 한도: ACTIVE 대기·변경 결과 대기·InService 대기가 모두 같은 deadline을 쓴다
 #   (aws eks wait는 최대 약 40분까지 기다리므로 쓰지 않는다 — Actions timeout 20분보다 길다)
 #   권한: 사람은 AWS_PROFILE=cinema-admin, CI는 cinema-gha-cluster-schedule
@@ -14,15 +20,32 @@
 set -euo pipefail
 
 ACTION="${1:-status}"
+if [ $# -gt 0 ]; then shift; fi
 CLUSTER="${CLUSTER:-cinema-staging-eks}"
 export AWS_REGION="${AWS_REGION:-ap-northeast-2}"
 WAIT_SECONDS="${WAIT_SECONDS:-600}"
+OPTIONAL_NODEGROUPS="${OPTIONAL_NODEGROUPS-ng-ai}"    # 평소 0대 — up 기본 대상에서 뺀다 (빈 값으로 지정하면 제외 없음)
+
+DESIRED_ARG=""
+TARGET=""
+for a in "$@"; do
+  if [[ "$a" =~ ^[0-9]+$ ]]; then
+    if [ -n "$DESIRED_ARG" ]; then echo "desired 숫자는 하나만: $*" >&2; exit 2; fi
+    DESIRED_ARG="$a"
+  else
+    if [ -n "$TARGET" ]; then echo "노드그룹은 하나만: $*" >&2; exit 2; fi
+    TARGET="$a"
+  fi
+done
 
 case "$ACTION" in
-  up)     DESIRED="${2:-1}" ;;
-  down)   DESIRED=0 ;;
+  up)     DESIRED="${DESIRED_ARG:-1}" ;;
+  down)   DESIRED=0 ;;      # 워크플로가 down에도 desired를 넘기므로 숫자 인자는 무시
   status) DESIRED="" ;;
-  *) echo "사용: $0 up|down|status [desired]" >&2; exit 2 ;;
+  *)
+    echo "사용: $0 up|down|status [desired] [노드그룹]" >&2
+    case "${1:-}" in up|down|status) echo "힌트: 동작이 먼저다 → $0 $1 $ACTION" >&2 ;; esac   # 옛 형식 'ng-ai up' 실수 방지
+    exit 2 ;;
 esac
 if [ -n "$DESIRED" ] && ! [[ "$DESIRED" =~ ^[0-9]+$ ]]; then
   echo "desired는 0 이상의 정수: $DESIRED" >&2; exit 2
@@ -33,8 +56,36 @@ POLL_SECONDS="${POLL_SECONDS:-15}"
 
 summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then echo "$*" >> "$GITHUB_STEP_SUMMARY"; fi; echo "$*"; }
 
-NGS=$(aws eks list-nodegroups --cluster-name "$CLUSTER" --query 'nodegroups[]' --output text)
-if [ -z "$NGS" ]; then echo "::error::$CLUSTER 에 노드그룹이 없습니다"; exit 1; fi
+ALL_NGS=$(aws eks list-nodegroups --cluster-name "$CLUSTER" --query 'nodegroups[]' --output text)
+if [ -z "$ALL_NGS" ]; then echo "::error::$CLUSTER 에 노드그룹이 없습니다"; exit 1; fi
+
+# 노드그룹 이름이 키와 같거나 "-키"로 끝나면 일치 (실제 이름은 cinema-staging-ng-ai 처럼 접두사가 붙는다)
+matches() {
+  local ng="$1" key
+  for key in $2; do
+    if [ "$ng" = "$key" ] || [[ "$ng" == *-"$key" ]]; then return 0; fi
+  done
+  return 1
+}
+
+# 조작 대상 고르기: 지정 > up 기본(평소 0대 제외) > down·status(전부)
+NGS=""
+if [ -n "$TARGET" ]; then
+  for ng in $ALL_NGS; do
+    if matches "$ng" "$TARGET"; then NGS="$NGS $ng"; fi
+  done
+  NGS="${NGS# }"
+  if [ -z "$NGS" ]; then echo "::error::노드그룹 '$TARGET' 가 없습니다 (있는 것: $ALL_NGS)"; exit 1; fi
+elif [ "$ACTION" = "up" ]; then
+  for ng in $ALL_NGS; do
+    if ! matches "$ng" "$OPTIONAL_NODEGROUPS"; then NGS="$NGS $ng"; fi
+  done
+  NGS="${NGS# }"
+  if [ -z "$NGS" ]; then echo "::error::켤 노드그룹이 없습니다 (제외: $OPTIONAL_NODEGROUPS)"; exit 1; fi
+else
+  NGS="$ALL_NGS"
+fi
+echo "대상 노드그룹($ACTION): $NGS"
 
 ng_field() { aws eks describe-nodegroup --cluster-name "$CLUSTER" --nodegroup-name "$1" --query "$2" --output text; }
 in_service() {
@@ -149,7 +200,9 @@ summary "### $CLUSTER 노드그룹 ($ACTION, $(TZ=Asia/Seoul date '+%F %H:%M KST
 summary ""
 summary "| 노드그룹 | desired | min | max | InService | 상태 |"
 summary "| --- | --- | --- | --- | --- | --- |"
-for ng in $NGS; do
+SHOW_NGS="$NGS"
+if [ -z "$TARGET" ]; then SHOW_NGS="$ALL_NGS"; fi   # 지정이 없으면 전체 표시 — up 때 ng-ai가 0으로 남은 것도 보인다
+for ng in $SHOW_NGS; do
   read -r cur min max status < <(ng_field "$ng" '[nodegroup.scalingConfig.desiredSize,nodegroup.scalingConfig.minSize,nodegroup.scalingConfig.maxSize,nodegroup.status]')
   summary "| $ng | $cur | $min | $max | $(in_service "$ng") | $status |"
 done

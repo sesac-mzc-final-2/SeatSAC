@@ -1116,7 +1116,7 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
 #### 6-G-1. 적용 (rc1 전, 김종식)
 
 1. `envs/staging`: ECR `cinema/ai`(`ecr.tf` 목록), ElastiCache `cinema-staging-ai-valkey`(`ai_valkey.tf` — Valkey 8.2 `cache.t4g.micro`, 파라미터 그룹 `maxmemory-policy noeviction`·`reserved-memory-percent 50`, TLS, SG 6379는 노드 SG만, 메모리 80% 경보), 노드그룹 `ng-ai`(`eks.tf` — t3.large, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai:NoSchedule`)
-   - `cluster_schedule.tf`의 스케줄 대상에서 `ng-ai`를 **뺀다**(평일 아침 자동 기동 금지). `infra/scripts/cluster-scale.sh`에 `ng-ai` 대상 추가
+   - `cluster_schedule.tf`의 스케줄 대상에서 `ng-ai`를 **뺀다**(평일 아침 자동 기동 금지). `infra/scripts/cluster-scale.sh`는 `up`·`up 2`에서 `ng-ai`를 빼고 켜고(`OPTIONAL_NODEGROUPS`, 기본 `ng-ai`) `down`은 `ng-ai`까지 끈다. 단독 조작은 `up ng-ai`·`down ng-ai`(8-1-2)
 2. gitops `base/ai`·`overlays/staging/ai`(`image-tag`는 `newTag`만) 머지 → GitHub 저장소 변수 `AI_BUILD_PUSH_ENABLED=true`(Settings → Secrets and variables → Actions → Variables). 이 순서가 거꾸로면 build-push의 ECR push 또는 gitops 태그 커밋이 실패한다. 켠 뒤 Actions → build-push → Run workflow `services=ai`로 첫 이미지를 만든다(그 전 ai 머지는 이미지 없이 지나갔다)
 3. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`
 4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
@@ -1127,12 +1127,12 @@ A. 기동 확인 — 6-G-3 데모 준비에서도 **이 A만** 다시 쓴다
 
 ```bash
 kubectl -n argocd get application cinema-ai                      # Synced (ng-ai 0이면 Health는 Progressing·파드 Pending이 정상)
-infra/scripts/cluster-scale.sh ng-ai up
+infra/scripts/cluster-scale.sh up ng-ai
 kubectl -n cinema-staging get pod -l app.kubernetes.io/name=ai -o wide   # NODE가 ng-ai, READY 1/1
 kubectl -n cinema-staging port-forward svc/ai 8085:8080 &
 curl -s localhost:8085/actuator/health/readiness                  # {"status":"UP"} = 스냅샷 첫 적재 + ai Valkey PING
 curl -s localhost:8085/actuator/prometheus | grep ai_snapshot_age_seconds
-infra/scripts/np-check.sh                                         # gateway → ai ALLOWED, catalog → ai BLOCKED
+infra/scripts/np-check.sh                                         # gateway → ai ALLOWED, catalog → ai BLOCKED — np-check.sh에 ai 검사를 넣은 뒤에만 나온다(후속 작업). 그 전에는 이 줄을 건너뛴다
 kill %1                                                           # port-forward 종료
 ```
 
@@ -1140,19 +1140,19 @@ B. 플래그 off 확인·정리 — **적용 직후에만**(플래그를 켠 뒤
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://{배포ID}.cloudfront.net/api/ai/presets   # 플래그 off = 404
-infra/scripts/cluster-scale.sh ng-ai down
+infra/scripts/cluster-scale.sh down ng-ai
 ```
 
 #### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
 
 1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태)
-2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`ng-ai up` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`ng-ai down`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
+2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
 3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
-4. 데모가 끝난 뒤에만 `cluster-scale.sh ng-ai down`
+4. 데모가 끝난 뒤에만 `cluster-scale.sh down ng-ai`
 
 #### 6-G-4. 끄기·되돌리기 (5분)
 
-1. `cluster-scale.sh ng-ai down` — ai 파드가 내려가면 `/api/ai/**`는 gateway 503(라우트가 켜져 있을 때). 화면은 챗봇 비활성 안내
+1. `cluster-scale.sh down ng-ai` — ai 파드가 내려가면 `/api/ai/**`는 gateway 503(라우트가 켜져 있을 때). 화면은 챗봇 비활성 안내
 2. 데모 주간이 아니면 `APP_AI_ENABLED=false` PR로 404로 되돌림(데모 주간은 머지 금지라 1번만)
 3. 기존 서비스·RDS·Valkey는 바뀐 게 없으므로 추가 조치 없음
 
@@ -1161,7 +1161,7 @@ infra/scripts/cluster-scale.sh ng-ai down
 | 구간 | 상태 | 이유 |
 | --- | --- | --- |
 | 부하 테스트 4.2.1 · 블루/그린 전환 테스트 4.2.2 | `ng-ai` 0 · 플래그 off | 테스트 환경 = 1차 데모 환경. 스냅샷 적재 호출이 catalog에 섞이지 않게 |
-| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 (플래그는 켜져 있어도 됨) | 좌석 데모 p95 측정 보호 |
+| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 뒤 데모 주간은 머지 금지라 끌 수 없다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
 | 재생성 리허설 3.1.15 | `ng-ai` 0 · 플래그 off로 기록 | 소요 시간 비교 기준 유지 |
 | staging에서 ai 확인(M6 중) | 테스트가 돌지 않는 시간에만, 스크럼에서 시간 공유 | — |
 
@@ -1555,9 +1555,10 @@ terraform output cluster_schedules      # {<노드그룹>-up = ENABLED, <노드�
 ```bash
 export AWS_PROFILE=cinema-admin
 infra/scripts/cluster-scale.sh status
-infra/scripts/cluster-scale.sh down
-infra/scripts/cluster-scale.sh up        # 노드그룹당 1대
-infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1
+infra/scripts/cluster-scale.sh down        # 전부 0 (ng-ai 포함)
+infra/scripts/cluster-scale.sh up          # ng-a·ng-c 노드그룹당 1대 (ng-ai는 켜지 않는다)
+infra/scripts/cluster-scale.sh up 2        # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1 (ng-ai 제외)
+infra/scripts/cluster-scale.sh up ng-ai    # ng-ai만 1대 켜기 (AI 데모·6-G). 끄기: down ng-ai, 확인: status ng-ai
 ```
 
 ### 8-1-3. 확인

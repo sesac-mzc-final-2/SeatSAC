@@ -108,8 +108,11 @@ jobs:
             sleep 2
           done
           [ -n "$ok" ] || { echo "::error::60초 안에 liveness가 200이 아니다 (읽기 전용 루트에서 쓰기 시도·모델 경로 확인)"; exit 1; }
-          curl -fsS localhost:18080/actuator/health/readiness; echo
-          curl -fsS localhost:18080/actuator/prometheus | grep -q "^http_server_requests_seconds_count{application=\"$SVC\"" \
+          # readiness는 첫 스냅샷 적재와 ai Valkey PING이 있어야 200이다 — CI 컨테이너에는 둘 다 없어 503이 정상이다. 응답 형식(200·503)만 본다
+          code=$(curl -sS -o /dev/null -w '%{http_code}' localhost:18080/actuator/health/readiness)
+          [[ "$code" == 200 || "$code" == 503 ]] || { echo "::error::readiness 응답이 200/503이 아니다: $code"; exit 1; }
+          # 라벨 순서에 의존하지 않는다 (application 라벨이 첫 번째가 아니어도 통과)
+          curl -fsS localhost:18080/actuator/prometheus | grep -Eq 'http_server_requests_seconds_count\{[^}]*application="'"$SVC"'"' \
             || { echo "::error::/actuator/prometheus 에 http_server_requests_seconds{application=\"$SVC\"} 가 없다 (런타임 계약 5장)"; exit 1; }
           # 인증 헤더 없는 요청 → 401 + 공통 오류 형식(error.v1.json): traceId 32자리 소문자 16진수, details 배열
           body=$(curl -sS -o - -w '\n%{http_code}' localhost:18080/ai/presets)

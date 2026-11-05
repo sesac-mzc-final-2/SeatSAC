@@ -2,7 +2,7 @@
 
 > 기준 2026-10-21. 원본은 `contracts/` 파일이고 이 문서는 목록과 확정 결정만 담는다. 파일과 이 문서가 다르면 **파일이 맞다**.
 > 근거: API 명세서 v1.1(10/21), 2.2.4 Catalog·User API 명세 v0.3(10/21), 계약 대조표(15번), 10/22 회의록2 결정(ADR-54·55).
-> ⚠️AI 11/5 AI 재도입(ADR-82): `ai.openapi.yaml` 외부 2개 추가. 상세는 최종 기능명세서 v4 15장.
+> ⚠️AI 11/5 AI 재도입(ADR-82): `ai.openapi.yaml` 외부 2개 **추가 예정**(계약 파일은 후속 PR에서 먼저 합의 — 그 PR이 머지되기 전까지 아래 ⚠️AI 항목은 계획이다). 상세는 최종 기능명세서 v4 15장.
 
 ---
 
@@ -13,7 +13,7 @@
 | `openapi/catalog.openapi.yaml` | 외부 9개 (조회 6 · 관리자 3) | 한채연 |
 | `openapi/booking.openapi.yaml` | 외부 7개 (좌석 현황·SSE·선점·해제·결제·조회·취소) | 남궁일 |
 | `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장) | 한채연 |
-| ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문, 추천 질문 목록) | 김서현 · 한채연 |
+| ⚠️AI(예정) `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문, 추천 질문 목록) — 파일은 후속 PR | 김서현 · 한채연 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 3개 | 남궁일 |
@@ -22,7 +22,7 @@
 | `schemas/error.v1.json` | 공통 오류 응답 | 전원 |
 | `*/examples/**` | 예시 메시지 = 서비스 테스트 fixture | 각 담당 |
 
-합계: 외부 **23**(⚠️AI +2) · 내부 8 · 이벤트 2.
+합계: 외부 21 · 내부 8 · 이벤트 2 (⚠️AI 계약 파일이 추가되면 외부 +2 = 23).
 
 ## 2. API 목록
 
@@ -47,8 +47,8 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
-| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404. `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns?, rows?, sql?, asOf, llm}`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖도 **200**(`path` `REJECTED`·`OUT_OF_SCOPE`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED` · 503 `AI_LLM_UNAVAILABLE`·`AI_SNAPSHOT_NOT_READY`. `Idempotency-Key` 없음(조회 전용) |
-| ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` (화면 버튼) |
+| ⚠️AI(계약 예정) USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404. `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns?, rows?, sql?, asOf, llm}`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖도 **200**(`path` `REJECTED`·`OUT_OF_SCOPE`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED` · 503 `AI_LLM_UNAVAILABLE`·`AI_SNAPSHOT_NOT_READY`. `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI(계약 예정) USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` (화면 버튼) |
 
 ### 내부 (`http://{service}:8080/internal/**`)
 

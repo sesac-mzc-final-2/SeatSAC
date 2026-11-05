@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.awaitility.Awaitility.await;
 
+import com.seatsac.catalog.config.CatalogProperties;
 import com.seatsac.common.web.client.InternalRestClientFactory;
 import com.sun.net.httpserver.HttpServer;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -66,15 +67,24 @@ class BookingSeatCountWarmupTest {
         breakers = CircuitBreakerRegistry.of(CircuitBreakerConfig.custom()
             .slidingWindowSize(1).minimumNumberOfCalls(1).failureRateThreshold(50)
             .waitDurationInOpenState(Duration.ofSeconds(10)).build());
-        client = new BookingSeatCountClient(
-            new InternalRestClientFactory().create("http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofMillis(300)),
-            breakers, meters);
+        client = newClient("http://127.0.0.1:" + server.getAddress().getPort());
         warmup = new BookingSeatCountWarmup(client);
     }
 
     @AfterEach
     void stop() {
+        client.shutdown();
         server.stop(0);
+    }
+
+    /** 운영과 같은 300ms(연결·응답·전체 예산) 클라이언트 */
+    private BookingSeatCountClient newClient(String bookingUrl) {
+        Duration timeout = Duration.ofMillis(300);
+        return new BookingSeatCountClient(
+            new InternalRestClientFactory().create(bookingUrl, timeout, timeout),
+            breakers, meters,
+            new CatalogProperties(new CatalogProperties.Cache(Duration.ofMinutes(10)),
+                new CatalogProperties.Services(bookingUrl, timeout)));
     }
 
     @Test
@@ -111,13 +121,17 @@ class BookingSeatCountWarmupTest {
 
     @Test
     void connectionRefusedIsSwallowedAndLeavesCircuitAndCounterUntouched() {
-        BookingSeatCountWarmup unreachable = new BookingSeatCountWarmup(new BookingSeatCountClient(
-            new InternalRestClientFactory().create("http://127.0.0.1:1", Duration.ofMillis(300)), breakers, meters));
+        BookingSeatCountClient unreachableClient = newClient("http://127.0.0.1:1");
+        BookingSeatCountWarmup unreachable = new BookingSeatCountWarmup(unreachableClient);
 
-        assertThatCode(unreachable::warmUp).doesNotThrowAnyException();
+        try {
+            assertThatCode(unreachable::warmUp).doesNotThrowAnyException();
 
-        assertThat(queries).isEmpty();
-        assertUntouched();
+            assertThat(queries).isEmpty();
+            assertUntouched();
+        } finally {
+            unreachableClient.shutdown();
+        }
     }
 
     @Test

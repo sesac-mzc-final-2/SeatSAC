@@ -47,7 +47,7 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
-| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404. `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns?, rows?, sql?, asOf, llm}`. SQL 거부·범위 밖도 **200**(`path` `REJECTED`·`OUT_OF_SCOPE`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED` · 503 `AI_LLM_UNAVAILABLE`·`AI_SNAPSHOT_NOT_READY`. `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404. `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns?, rows?, sql?, asOf, llm}`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖도 **200**(`path` `REJECTED`·`OUT_OF_SCOPE`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED` · 503 `AI_LLM_UNAVAILABLE`·`AI_SNAPSHOT_NOT_READY`. `Idempotency-Key` 없음(조회 전용) |
 | ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` (화면 버튼) |
 
 ### 내부 (`http://{service}:8080/internal/**`)

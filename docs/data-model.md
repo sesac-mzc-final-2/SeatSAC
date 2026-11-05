@@ -89,14 +89,14 @@
 | ElastiCache Valkey 8.2 | `notify-keyspace-events Ex`(만료 감지, ADR-44), 전송 중 암호화, `maxmemory-policy noeviction`(선점 키가 밀려나면 안 됨), 노드 **`cache.t4g.micro`** + 메모리 80%·Evictions 경보(ADR-59) |
 | 시드 적재 | 3.1.12 후 `lotte-seed/load/run.sh`(관리자): 일회성 Job이 catalog Flyway를 먼저 적용하고 시드를 `catalog_migrator`로 1회 넣은 뒤 검증(극장 132·상영관 39·좌석 6,767·회차 8,360·영화 22). 재실행 안전, 끝나면 Job·ConfigMap 삭제. 시드 파일은 레포·gitops에 두지 않는다 |
 | 가용성·백업 | RDS **Single-AZ**(ADR-61) `db.t4g.small`, 자동 백업 7일(03:00 KST), 최종 스냅샷 없음(재생성 리허설용) · 자동 백업은 삭제 후에도 보존 |
-| ⚠️AI ElastiCache ai Valkey 8.2 | `cinema-staging-ai-valkey` `cache.t4g.micro` 1노드, `maxmemory-policy allkeys-lru`, `reserved-memory-percent 50`(벡터 검색 조건), 전송 중 암호화, 메모리 80% 경보. **기존 Valkey와 별도** — 좌석 선점 키와 메모리를 나누지 않는다(ADR-85). 밤에도 유지(ElastiCache는 정지 불가, 월 약 $12) |
+| ⚠️AI ElastiCache ai Valkey 8.2 | `cinema-staging-ai-valkey` `cache.t4g.micro` 1노드, `maxmemory-policy noeviction`(한도 키가 밀려나지 않게, 모든 키 TTL), `reserved-memory-percent 50`(벡터 검색 조건), 전송 중 암호화, 메모리 80% 경보. **기존 Valkey와 별도** — 좌석 선점 키와 메모리를 나누지 않는다(ADR-85). 밤에도 유지(ElastiCache는 정지 불가, 월 약 $12) |
 | 만들지 않는 것 | 리포트 뷰(`v_*_report`)·`stats_db`·⚠️AI `ai_readonly` 계정 — catalog Flyway V2 `v_screening_report`는 머지하지 않음(ADR-60). ai는 RDS에 접근하지 않는다(ADR-84) |
 
 ## 6. ⚠️AI ai 서비스 데이터 (RDS 밖, ADR-84·85)
 
 ### 6-1. SQLite 스냅샷 (ai 파드 메모리, `:memory:`)
 
-공개 API(`PUBLIC_API_BASE_URL` = CloudFront `/api`)의 응답만으로 채운다. **사이트에서 누구나 볼 수 있는 값만** 들어가고, 시드 원본·롯데 스냅샷·포스터는 들어오지 않는다. 디스크·이미지·레포·PVC에 남지 않고, 파드가 꺼지면 사라진다.
+공개 API(`PUBLIC_API_BASE_URL` = CloudFront `/api`)의 응답만으로 채운다. 갱신마다 새 메모리 DB에 쓰고, 다 채운 뒤 읽기 전용으로 잠가(`PRAGMA query_only=ON` + authorizer) 질의용과 바꾼다 — `mode=ro`는 `:memory:`에 쓸 수 없다(`docs/service-runtime-contract.md` 9-2). **사이트에서 누구나 볼 수 있는 값만** 들어가고, 시드 원본·롯데 스냅샷·포스터는 들어오지 않는다. 디스크·이미지·레포·PVC에 남지 않고, 파드가 꺼지면 사라진다.
 
 | 테이블 | 컬럼 | 출처(공개 API) | 갱신 |
 | --- | --- | --- | --- |

@@ -27,7 +27,7 @@
 | 내부 API | `/internal/**` — Gateway 라우팅 금지, NetworkPolicy로 호출자 제한 |
 | 헬스 | `/actuator/health/liveness`, `/actuator/health/readiness` (ALB는 gateway readiness만). ⚠️AI ai(Python)도 **같은 경로**로 맞춘다 — 프로브·PodMonitor 템플릿 공용 |
 | 메트릭 | `/actuator/prometheus` (ai도 같은 경로, `prometheus_client`) |
-| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`, `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만) |
+| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`, `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만). ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
 
 ## 2. 코드·API 이름
 
@@ -85,12 +85,14 @@
 | --- | --- | --- |
 | `ai:exact:{sha256(정규화 질문)}` | 1시간 | 정확 일치 캐시: SQL 템플릿 + 슬롯 + 경로(프리셋·NL2SQL). **결과는 캐시하지 않는다**(스냅샷에서 다시 실행) |
 | `ai:semcache:{id}` (HASH, 인덱스 `ai_semcache_idx`) | 1시간 | 의미 캐시: 슬롯을 `{time}`·`{date}`·`{theater}`·`{movie}`·`{n}`으로 바꾼 질문의 임베딩(384차원 FLOAT32, COSINE) + SQL 템플릿 + 슬롯 종류 |
-| `ai:session:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·슬롯). 파드가 바뀌어도 유지 |
+| `ai:session:{userId}:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·슬롯). 파드가 바뀌어도 유지. **키에 `X-User-Id`를 넣어 사용자별로 격리**한다 — 다른 사용자의 `sessionId`를 보내도 그 사용자 키에는 닿지 않는다. `sessionId`는 서버가 UUID로 발급하고, 요청의 `sessionId`가 이 사용자 키에 없으면(만료·남의 것·위조) 새 세션으로 시작한다(오류 아님) |
 | `ai:quota:min:{userId}:{yyyyMMddHHmm}` · `ai:quota:day:{userId}:{yyyyMMdd}` | 60초 · 1일 | 사용 한도 카운터(분당 10·하루 100). gateway 요청 수 제한(ADR-62)과 별개인 **ai 앱 안** 한도 |
-| `ai:inflight:{userId}` | 30초 | 사용자당 동시 1건(`SET NX`) |
+| `ai:inflight:{userId}` | **40초** | 사용자당 동시 1건. `SET NX PX 40000`, 값은 요청마다 새 토큰. 끝나면 **값이 내 토큰일 때만** 지운다(Lua 비교 후 `DEL` — 늦게 끝난 요청이 다음 요청의 잠금을 지우지 않게). TTL 40초가 gateway 라우트 28초·요청 전체 기한 25초(`APP_AI_REQUEST_DEADLINE_SECONDS`)보다 길어 갱신 없이도 처리 중 만료되지 않는다. 파드가 죽어 못 지운 경우만 TTL로 풀린다 |
 
 - "내 예매" 같은 **개인 질문은 캐시하지 않는다**(다른 사용자에게 적중 방지)
-- 파라미터 그룹: `maxmemory-policy allkeys-lru`(캐시라 밀려나도 됨), `reserved-memory-percent 50`(t4g.micro에서 벡터 검색 필수 조건), TLS
+- 파라미터 그룹: `maxmemory-policy noeviction`, `reserved-memory-percent 50`(t4g.micro에서 벡터 검색 필수 조건), TLS. `allkeys-lru`로 두면 메모리가 찰 때 한도·동시 1건 키(`ai:quota:*`·`ai:inflight:*`)도 지워져 한도를 우회할 수 있어서 **아무 키도 지우지 않는** `noeviction`으로 한다
+- 그래서 **모든 `ai:*` 키에 TTL**을 단다(위 표). 의미 캐시는 앱이 최대 5,000건으로 제한(넘으면 저장하지 않음 — 1건 약 2.5KB, 합 약 13MB로 가용 메모리 약 250MB의 5%)
+- 메모리가 차서 쓰기가 실패하면: 캐시 저장 실패는 **무시**(적중 안 됨과 같음), 한도·동시 1건 키 쓰기 실패는 **거부**(503 `AI_LLM_UNAVAILABLE`, `reason` `QUOTA_STORE_UNAVAILABLE`) — 한도 확인 없이 Claude를 부르지 않는다. 경보: 메모리 80%
 
 ## 5. SQS
 
@@ -132,7 +134,7 @@
 | 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애 — **다시 시도하면 될 수 있다**. 토큰 자체가 거절된 경우는 위 401) |
 | 409 | ⚠️AI `AI_QUERY_IN_PROGRESS` | ai — 같은 사용자의 질문이 처리 중(동시 1건) |
 | 429 | ⚠️AI `AI_QUOTA_EXCEEDED` | ai — 사용 한도 초과. `details[].reason` `PER_MINUTE`·`PER_DAY`. gateway 요청 수 제한(ADR-62 미도입)과 다른, ai 앱 안의 비용 보호 |
-| 503 | ⚠️AI `AI_LLM_UNAVAILABLE` | ai — Claude API 타임아웃·과부하·지출 한도·서킷 열림. `details[].reason` `TIMEOUT`·`OVERLOADED`·`RATE_LIMITED`·`SPEND_LIMIT`·`CIRCUIT_OPEN` |
+| 503 | ⚠️AI `AI_LLM_UNAVAILABLE` | ai — Claude API 타임아웃·과부하·지출 한도·서킷 열림. `details[].reason` `TIMEOUT`·`OVERLOADED`·`RATE_LIMITED`·`SPEND_LIMIT`·`CIRCUIT_OPEN`·`QUOTA_STORE_UNAVAILABLE`(ai Valkey에 한도를 기록하지 못함) |
 | 503 | ⚠️AI `AI_SNAPSHOT_NOT_READY` | ai — 기동 직후 SQLite 스냅샷 첫 적재 전 |
 
 새 코드는 이 표와 해당 OpenAPI 응답 `description`에 함께 추가한다. ⚠️AI ai 코드는 `services/ai` 안에서 정의하고 `libs/`의 `CommonResponseCode`는 바꾸지 않는다(Python이라 `libs/`를 쓰지 않음). 형식은 `error.v1.json` 그대로

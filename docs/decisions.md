@@ -35,7 +35,7 @@
 | 22 | 내부 브로커 없음: Pub/Sub + keyspace 알림 + sorted set | 만료 반영 2초 초과 시 재검토 |
 | 44 | 만료: keyspace(Ex) + `hold-expiry` 1초 스캔 + RDS 10초 스캔, 조건부 UPDATE로 한 번만 | 노션 본문 "ADR-21" = 이 항목 |
 | ⚠️AI 84 | AI 데이터: **ai 파드 메모리 SQLite 스냅샷**, CloudFront 공개 API로만 적재(오늘 1분·나머지 10분). RDS·기존 Valkey·리포트 뷰·`ai_readonly` 없음. 실행은 읽기 전용·5초·500행, SQL 검증 sqlglot(SQLite). 포스터·시드 원본 미포함 | 기존 MSA DB를 건드리지 않음. 60 유지 |
-| ⚠️AI 85 | AI 캐시: 새 ElastiCache **`cinema-staging-ai-valkey`** `t4g.micro`(벡터 검색, `allkeys-lru`, 예약 메모리 50%). 정확 일치 + **의미 캐시**(로컬 임베딩 `paraphrase-multilingual-MiniLM-L12-v2`, 슬롯 치환 뒤 임베딩, 유사도 0.92) + 세션 + 사용 한도. 개인 질문은 캐시 안 함 | 59는 기존 Valkey에만 해당(그대로) |
+| ⚠️AI 85 | AI 캐시: 새 ElastiCache **`cinema-staging-ai-valkey`** `t4g.micro`(벡터 검색, `noeviction` + 모든 키 TTL — 한도 키 보호, 예약 메모리 50%). 정확 일치 + **의미 캐시**(로컬 임베딩 `paraphrase-multilingual-MiniLM-L12-v2`, 슬롯 치환 뒤 임베딩, 유사도 0.92) + 세션(사용자별 키) + 사용 한도. 개인 질문은 캐시 안 함 | 59는 기존 Valkey에만 해당(그대로) |
 
 ## 3. 서비스 간 통신·계약·결제·알림
 

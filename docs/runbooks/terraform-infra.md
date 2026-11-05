@@ -1115,21 +1115,30 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
 
 #### 6-G-1. 적용 (rc1 전, 김종식)
 
-1. `envs/staging`: ECR `cinema/ai`(`ecr.tf` 목록), ElastiCache `cinema-staging-ai-valkey`(`ai_valkey.tf` — Valkey 8.2 `cache.t4g.micro`, 파라미터 그룹 `maxmemory-policy allkeys-lru`·`reserved-memory-percent 50`, TLS, SG 6379는 노드 SG만, 메모리 80% 경보), 노드그룹 `ng-ai`(`eks.tf` — t3.large, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai:NoSchedule`)
+1. `envs/staging`: ECR `cinema/ai`(`ecr.tf` 목록), ElastiCache `cinema-staging-ai-valkey`(`ai_valkey.tf` — Valkey 8.2 `cache.t4g.micro`, 파라미터 그룹 `maxmemory-policy noeviction`·`reserved-memory-percent 50`, TLS, SG 6379는 노드 SG만, 메모리 80% 경보), 노드그룹 `ng-ai`(`eks.tf` — t3.large, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai:NoSchedule`)
    - `cluster_schedule.tf`의 스케줄 대상에서 `ng-ai`를 **뺀다**(평일 아침 자동 기동 금지). `infra/scripts/cluster-scale.sh`에 `ng-ai` 대상 추가
-2. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`
-3. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
+2. gitops `base/ai`·`overlays/staging/ai`(`image-tag`는 `newTag`만) 머지 → GitHub 저장소 변수 `AI_BUILD_PUSH_ENABLED=true`(Settings → Secrets and variables → Actions → Variables). 이 순서가 거꾸로면 build-push의 ECR push 또는 gitops 태그 커밋이 실패한다. 켠 뒤 Actions → build-push → Run workflow `services=ai`로 첫 이미지를 만든다(그 전 ai 머지는 이미지 없이 지나갔다)
+3. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`
+4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
 
-#### 6-G-2. 확인
+#### 6-G-2. 확인 (적용 직후, 플래그 off)
+
+A. 기동 확인 — 6-G-3 데모 준비에서도 **이 A만** 다시 쓴다
 
 ```bash
 kubectl -n argocd get application cinema-ai                      # Synced (ng-ai 0이면 Health는 Progressing·파드 Pending이 정상)
-infra/scripts/cluster-scale.sh ng-ai up                           # 확인할 때만
-kubectl -n cinema-staging get pod -l app.kubernetes.io/name=ai -o wide   # NODE가 ng-ai
+infra/scripts/cluster-scale.sh ng-ai up
+kubectl -n cinema-staging get pod -l app.kubernetes.io/name=ai -o wide   # NODE가 ng-ai, READY 1/1
 kubectl -n cinema-staging port-forward svc/ai 8085:8080 &
 curl -s localhost:8085/actuator/health/readiness                  # {"status":"UP"} = 스냅샷 첫 적재 + ai Valkey PING
 curl -s localhost:8085/actuator/prometheus | grep ai_snapshot_age_seconds
 infra/scripts/np-check.sh                                         # gateway → ai ALLOWED, catalog → ai BLOCKED
+kill %1                                                           # port-forward 종료
+```
+
+B. 플래그 off 확인·정리 — **적용 직후에만**(플래그를 켠 뒤에는 하지 않는다)
+
+```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://{배포ID}.cloudfront.net/api/ai/presets   # 플래그 off = 404
 infra/scripts/cluster-scale.sh ng-ai down
 ```
@@ -1137,8 +1146,9 @@ infra/scripts/cluster-scale.sh ng-ai down
 #### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
 
 1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태)
-2. AI 데모 당일(11/17) 30분 전: `cluster-scale.sh ng-ai up` → 6-G-2 확인 → 로그인 후 `/api/ai/chat` 200
-3. 데모 뒤 `cluster-scale.sh ng-ai down`
+2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`ng-ai up` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`ng-ai down`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
+3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
+4. 데모가 끝난 뒤에만 `cluster-scale.sh ng-ai down`
 
 #### 6-G-4. 끄기·되돌리기 (5분)
 

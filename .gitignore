@@ -56,6 +56,8 @@ kubeconfig
 .kotlin/
 # frontend 예시 env (공개 값만) — .env.* 무시 규칙의 예외
 !frontend/.env.example
+# ai 예시 env (키 이름만, 값 비움) — 같은 예외. 실제 키는 services/ai/.env (커밋 금지)
+!services/ai/.env.example
 
 # Vite 의존성 사전 번들 캐시 (보통 node_modules/.vite, 프로젝트 루트에 생길 때도 있음)
 .vite/

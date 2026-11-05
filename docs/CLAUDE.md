@@ -61,7 +61,7 @@
 | 내부 API | `/internal/**` — Gateway 라우팅 금지, NetworkPolicy로 호출자 제한 |
 | 헬스 | `/actuator/health/liveness`, `/actuator/health/readiness` (ALB는 gateway readiness만). ⚠️AI ai(Python)도 **같은 경로**로 맞춘다 — 프로브·PodMonitor 템플릿 공용 |
 | 메트릭 | `/actuator/prometheus` (ai도 같은 경로, `prometheus_client`) |
-| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`, `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만) |
+| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`, `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만). ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
 
 ### 2. 코드·API 이름
 
@@ -119,12 +119,14 @@
 | --- | --- | --- |
 | `ai:exact:{sha256(정규화 질문)}` | 1시간 | 정확 일치 캐시: SQL 템플릿 + 슬롯 + 경로(프리셋·NL2SQL). **결과는 캐시하지 않는다**(스냅샷에서 다시 실행) |
 | `ai:semcache:{id}` (HASH, 인덱스 `ai_semcache_idx`) | 1시간 | 의미 캐시: 슬롯을 `{time}`·`{date}`·`{theater}`·`{movie}`·`{n}`으로 바꾼 질문의 임베딩(384차원 FLOAT32, COSINE) + SQL 템플릿 + 슬롯 종류 |
-| `ai:session:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·슬롯). 파드가 바뀌어도 유지 |
+| `ai:session:{userId}:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·슬롯). 파드가 바뀌어도 유지. **키에 `X-User-Id`를 넣어 사용자별로 격리**한다 — 다른 사용자의 `sessionId`를 보내도 그 사용자 키에는 닿지 않는다. `sessionId`는 서버가 UUID로 발급하고, 요청의 `sessionId`가 이 사용자 키에 없으면(만료·남의 것·위조) 새 세션으로 시작한다(오류 아님) |
 | `ai:quota:min:{userId}:{yyyyMMddHHmm}` · `ai:quota:day:{userId}:{yyyyMMdd}` | 60초 · 1일 | 사용 한도 카운터(분당 10·하루 100). gateway 요청 수 제한(ADR-62)과 별개인 **ai 앱 안** 한도 |
-| `ai:inflight:{userId}` | 30초 | 사용자당 동시 1건(`SET NX`) |
+| `ai:inflight:{userId}` | **40초** | 사용자당 동시 1건. `SET NX PX 40000`, 값은 요청마다 새 토큰. 끝나면 **값이 내 토큰일 때만** 지운다(Lua 비교 후 `DEL` — 늦게 끝난 요청이 다음 요청의 잠금을 지우지 않게). TTL 40초가 gateway 라우트 28초·요청 전체 기한 25초(`APP_AI_REQUEST_DEADLINE_SECONDS`)보다 길어 갱신 없이도 처리 중 만료되지 않는다. 파드가 죽어 못 지운 경우만 TTL로 풀린다 |
 
 - "내 예매" 같은 **개인 질문은 캐시하지 않는다**(다른 사용자에게 적중 방지)
-- 파라미터 그룹: `maxmemory-policy allkeys-lru`(캐시라 밀려나도 됨), `reserved-memory-percent 50`(t4g.micro에서 벡터 검색 필수 조건), TLS
+- 파라미터 그룹: `maxmemory-policy noeviction`, `reserved-memory-percent 50`(t4g.micro에서 벡터 검색 필수 조건), TLS. `allkeys-lru`로 두면 메모리가 찰 때 한도·동시 1건 키(`ai:quota:*`·`ai:inflight:*`)도 지워져 한도를 우회할 수 있어서 **아무 키도 지우지 않는** `noeviction`으로 한다
+- 그래서 **모든 `ai:*` 키에 TTL**을 단다(위 표). 의미 캐시는 앱이 최대 5,000건으로 제한(넘으면 저장하지 않음 — 1건 약 2.5KB, 합 약 13MB로 가용 메모리 약 250MB의 5%)
+- 메모리가 차서 쓰기가 실패하면: 캐시 저장 실패는 **무시**(적중 안 됨과 같음), 한도·동시 1건 키 쓰기 실패는 **거부**(503 `AI_LLM_UNAVAILABLE`, `reason` `QUOTA_STORE_UNAVAILABLE`) — 한도 확인 없이 Claude를 부르지 않는다. 경보: 메모리 80%
 
 ### 5. SQS
 
@@ -166,7 +168,7 @@
 | 503 | `BOOKING_UNAVAILABLE`, ⚠️ `IDENTITY_UNAVAILABLE` | user (`IDENTITY_UNAVAILABLE` = Cognito 호출 실패·타임아웃·장애 — **다시 시도하면 될 수 있다**. 토큰 자체가 거절된 경우는 위 401) |
 | 409 | ⚠️AI `AI_QUERY_IN_PROGRESS` | ai — 같은 사용자의 질문이 처리 중(동시 1건) |
 | 429 | ⚠️AI `AI_QUOTA_EXCEEDED` | ai — 사용 한도 초과. `details[].reason` `PER_MINUTE`·`PER_DAY`. gateway 요청 수 제한(ADR-62 미도입)과 다른, ai 앱 안의 비용 보호 |
-| 503 | ⚠️AI `AI_LLM_UNAVAILABLE` | ai — Claude API 타임아웃·과부하·지출 한도·서킷 열림. `details[].reason` `TIMEOUT`·`OVERLOADED`·`RATE_LIMITED`·`SPEND_LIMIT`·`CIRCUIT_OPEN` |
+| 503 | ⚠️AI `AI_LLM_UNAVAILABLE` | ai — Claude API 타임아웃·과부하·지출 한도·서킷 열림. `details[].reason` `TIMEOUT`·`OVERLOADED`·`RATE_LIMITED`·`SPEND_LIMIT`·`CIRCUIT_OPEN`·`QUOTA_STORE_UNAVAILABLE`(ai Valkey에 한도를 기록하지 못함) |
 | 503 | ⚠️AI `AI_SNAPSHOT_NOT_READY` | ai — 기동 직후 SQLite 스냅샷 첫 적재 전 |
 
 새 코드는 이 표와 해당 OpenAPI 응답 `description`에 함께 추가한다. ⚠️AI ai 코드는 `services/ai` 안에서 정의하고 `libs/`의 `CommonResponseCode`는 바꾸지 않는다(Python이라 `libs/`를 쓰지 않음). 형식은 `error.v1.json` 그대로
@@ -274,7 +276,7 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
-| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404. `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns?, rows?, sql?, asOf, llm}`. SQL 거부·범위 밖도 **200**(`path` `REJECTED`·`OUT_OF_SCOPE`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED` · 503 `AI_LLM_UNAVAILABLE`·`AI_SNAPSHOT_NOT_READY`. `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404. `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns?, rows?, sql?, asOf, llm}`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖도 **200**(`path` `REJECTED`·`OUT_OF_SCOPE`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED` · 503 `AI_LLM_UNAVAILABLE`·`AI_SNAPSHOT_NOT_READY`. `Idempotency-Key` 없음(조회 전용) |
 | ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` (화면 버튼) |
 
 #### 내부 (`http://{service}:8080/internal/**`)
@@ -412,7 +414,7 @@
 
 | 서비스 | ConfigMap 키 | Secret `{svc}-secrets` 키 |
 | --- | --- | --- |
-| gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 404, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080`, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
+| gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 404, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
 | booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`, `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 큐와 3.1.8 알림 Lambda 연결 뒤 `true`(런북 6-B-3) — 큐만 있고 받는 쪽이 없으면 메시지가 DLQ로도 못 가고 7일 뒤 사라진다` | `SPRING_DATASOURCE_PASSWORD` |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL`, `APP_COGNITO_ENDPOINT`(선택, 기본 `https://cognito-idp.{AWS_REGION}.amazonaws.com`, `AWS_REGION`이 없으면 `ap-northeast-2` — 프로필 첫 생성 때 `GetUser`) | `SPRING_DATASOURCE_PASSWORD` |
@@ -536,8 +538,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 14 | NetworkPolicy 허용 목록 (6장) | 김종식 (3.1.13) | 전 서비스 내부 호출 | 내부 API 통합 후 | `infra/scripts/np-check.sh` 전부 ✅ — Cognito 뒤 `REQUIRE_GATEWAY=1`로 gateway → payment BLOCKED까지. **그리고** ALB → gateway 실경로(스크립트 밖): ALB 대상 그룹 gateway healthy + CloudFront `/api/movies` 200 (런북 6-E) |
 | 15 | 부하 테스트 시나리오 대상 API·데이터 | 남궁일 | 김종식 OPS-10 (k6 Job) | 4.2.1 전 | k6 스크립트 dry-run |
 | ⚠️AI 16 | ECR `cinema/ai`·ai Valkey·`ai-secrets`·`cinema-infra-endpoints` 키 2개·`ng-ai`·Application `cinema-ai` | 김종식 (3.1.18·3.1.19) | 김서현 staging 배포 | rc1(11/6) | `kubectl -n argocd get application cinema-ai`, `ng-ai` 1대일 때 ai readiness 200 |
-| ⚠️AI 17 | gitops `base/ai`·`overlays/staging/ai` + CI(`changed-services.sh` ai 분기, `pr-check` `python`) | 김종식 (3.1.20) | 김서현 (main 머지 = 배포) | 3.4.8 골격 머지 | PR `image`(ai)·`python` 통과 |
-| ⚠️AI 18 | gateway `/api/ai/**` 라우트(플래그 off) + 분석 쿼리 `/ai` 제외 | 한채연(3.3.8)·김종식(3.1.21) | 김서현·한채연 화면 | **rc1(11/6)** | 플래그 off에서 `/api/ai/chat` 404, gateway 블루/그린 통과 |
+| ⚠️AI 17 | CI(`changed-services.sh` ai 분기, `pr-check` `python`·ai 기동 확인, `build-push` ai) — **#79에 먼저 포함**(3.4.8 PR이 검사를 받도록) · gitops `base/ai`·`overlays/staging/ai` | 김종식 (3.1.20) | 김서현 (main 머지 = 배포) | CI는 3.4.8 리베이스 전, gitops는 3.1.18 apply 후 | PR `image`(ai)·`python` 통과 |
+| ⚠️AI 18 | gateway `/api/ai/**` 라우트(플래그 off, 라우트 metadata `response-timeout: 28000`) + 분석 쿼리 `/ai` 제외 | 한채연(3.3.8)·김종식(3.1.21) | 김서현·한채연 화면 | **rc1(11/6)** | 플래그 off에서 `/api/ai/chat` 404, gateway 블루/그린 통과 |
 | ⚠️AI 19 | `contracts/openapi/ai.openapi.yaml` + 예시 | 김서현·한채연 (2.2.8) | 한채연 채팅 화면(3.3.7) | 11/6 | contract-check 통과 |
 
 ### 8. 인프라 쪽 남은 정리
@@ -556,9 +558,9 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] `infra/terraform/envs/staging`에 Cognito·SQS·Pod Identity 모듈 추가 시 이 문서 3·6장 이름 그대로 — 김종식
 - [ ] Cognito 사용자 풀 `cinema-staging-users`·공개 앱 클라이언트·Hosted UI `cinema-staging`·`ADMIN` 그룹·Pre sign-up Lambda `cinema-staging-cognito-presignup` + `cognito_enabled = true`(gateway Application) (3.1.16, `envs/staging/cognito.tf` — 코드 10/28 · **런북 7-6-4 확인 후 체크**)
 - [ ] 알림 Lambda `cinema-staging-notification`(python3.12·arm64·30초·VPC 밖)·실행 역할·로그 그룹(7일)·SQS 이벤트 소스 매핑(배치 10·`ReportBatchItemFailures`·동시 2) (3.1.8, `envs/staging/lambda.tf`·`lambdas/notification` — 코드 11/2 · 런북 6-B-5 확인 후 체크). 배포는 Terraform `archive_file`(Pre sign-up Lambda와 같은 방식, `lambda-deploy` 워크플로 없음)`
-- [ ] ⚠️AI ai 인프라: ECR `cinema/ai` · ElastiCache `cinema-staging-ai-valkey`(Valkey 8.2 `cache.t4g.micro`, `allkeys-lru`·`reserved-memory-percent 50`·TLS, 메모리 80% 경보) · `ai-secrets`(`ANTHROPIC_API_KEY` sensitive) · `cinema-infra-endpoints` 키 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL` · `argocd_apps.tf`에 `ai` (3.1.18, rc1)
+- [ ] ⚠️AI ai 인프라: ECR `cinema/ai` · ElastiCache `cinema-staging-ai-valkey`(Valkey 8.2 `cache.t4g.micro`, `noeviction`·`reserved-memory-percent 50`·TLS, 메모리 80% 경보) · `ai-secrets`(`ANTHROPIC_API_KEY` sensitive) · `cinema-infra-endpoints` 키 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL` · `argocd_apps.tf`에 `ai` (3.1.18, rc1)
 - [ ] ⚠️AI 노드그룹 `ng-ai`(t3.large 1대, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai`) · EventBridge Scheduler 대상에서 제외 · `cluster-scale.sh`에 `ng-ai` · Budgets 금액 재확정 (3.1.19, rc1)
-- [ ] ⚠️AI gitops `base/ai`(Deployment·Service·NetworkPolicy·PodMonitor, HPA·Flyway Job 없음) · `overlays/staging/ai` · CI `changed-services.sh`·`pr-check` `python`·`np-check.sh` (3.1.20)
+- [ ] ⚠️AI gitops `base/ai`(Deployment·Service·NetworkPolicy·PodMonitor, HPA·Flyway Job 없음) · `overlays/staging/ai` · `np-check.sh` · 저장소 변수 `AI_BUILD_PUSH_ENABLED=true` (3.1.20). CI(`changed-services.sh`·`pr-check` `python`·`build-push` ai)는 #79에서 먼저
 - [ ] ⚠️AI gateway 분석 쿼리 `uri!~"/ai.*"` (3.1.21, **rc1 전**)
 - [ ] ⚠️AI AI 대시보드 `SeatSAC AI` + 런북 6-G(켜기·끄기·질의 금지 구간) (3.1.22)
 
@@ -570,7 +572,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 포트·헬스·메트릭 | 8080. `/actuator/health/liveness`(프로세스만), `/actuator/health/readiness`(스냅샷 첫 적재 완료 + ai Valkey PING), `/actuator/prometheus` | Java 서비스와 같은 프로브·PodMonitor 템플릿(`app.kubernetes.io/name: ai`, 포트 `http`, 15초). startupProbe 5초 × 30회(임베딩 모델·첫 스냅샷 적재) |
 | 이미지 | `python:3.12-slim`, UID 10001, 임베딩 모델(`paraphrase-multilingual-MiniLM-L12-v2`, ONNX, fastembed)을 **빌드 때** `/app/models`에 넣는다(실행 중 다운로드 없음). 시드·스냅샷 파일은 이미지에 넣지 않는다 | `build-push`가 ECR `cinema/ai:{sha7}` → gitops `overlays/staging/ai/image-tag`. Trivy 동일 기준 |
 | 비루트·파일 | 쓰기 경로 `/tmp`만. SQLite는 **메모리 DB(`:memory:`)** — 디스크에 남기지 않음 | `runAsNonRoot`, `readOnlyRootFilesystem` + `/tmp` emptyDir |
-| 로그 | stdout JSON 한 줄(`timestamp`·`level`·`service=ai`·`traceId`·`userId`·`path`·`latencyMs`·`tokens`). **질문·SQL·결과 행 수만, 결과 행 내용은 남기지 않는다** | `kubectl logs` |
+| 로그 | stdout JSON 한 줄(`timestamp`·`level`·`service=ai`·`traceId`·`userId`·`path`·`latencyMs`·`tokens`·`questionLength`·`questionHash`·`sqlTemplate`·`rowCount`). **질문 원문·SQL 리터럴 값·결과 행·Claude 응답 본문은 남기지 않는다** — 질문에 이메일·전화번호 같은 개인정보가 들어올 수 있다. `questionHash` = HMAC-SHA256(질문, 파드 기동 때 만든 임의 키) 앞 16자(같은 파드 안 반복 질문 추적용, 되돌릴 수 없음), `sqlTemplate` = 리터럴을 `?`로 바꾼 SQL(sqlglot). 디버깅에 원문이 필요하면 로컬에서 재현한다 | `kubectl logs` |
 | 오류·traceId | `error.v1.json` 형식 그대로, `X-Trace-Id` 받으면 그대로·없으면 32자리 생성. 코드는 `services/ai` 안(conventions 6장 ⚠️AI 행). `libs/` 변경 없음 | — |
 | 배포 | 별도 ArgoCD Application `cinema-ai` | `argocd_apps.tf` `argocd_services`에 `ai` 추가. **다른 Application 파일은 수정하지 않는다** |
 
@@ -582,19 +584,32 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `AI_VALKEY_HOST` · `PUBLIC_API_BASE_URL` | `cinema-infra-endpoints`(Terraform) | 이름 그대로 읽음 |
 | `APP_AI_VALKEY_PORT` / `APP_AI_VALKEY_TLS` | `6379` / `true` | |
 | `APP_AI_MODEL` | `claude-sonnet-5-5` | ADR-83. 교체는 이 값만 |
-| `APP_AI_LLM_TIMEOUT_SECONDS` | `25` | 내부 REST 3초의 예외. gateway `/api/ai/**` 응답 30초 안 |
-| `APP_AI_LLM_MAX_CALLS_PER_QUERY` | `3` | 도구 선택 1 + 검증 실패 재요청 1 + SQL 오류 재요청 1 |
+| `APP_AI_REQUEST_DEADLINE_SECONDS` | `25` | 요청 하나의 **전체 기한**(Claude 호출·SQL 실행·재요청 전부). 넘으면 남은 호출을 하지 않고 503 `AI_LLM_UNAVAILABLE`(`reason` `TIMEOUT`). 아래 시간 예산 |
+| `APP_AI_LLM_TIMEOUT_SECONDS` | `15` | Claude 호출 1회 상한. 실제로는 `min(15, 전체 기한까지 남은 시간)`. 내부 REST 3초의 예외 |
+| `APP_AI_LLM_MAX_CALLS_PER_QUERY` | `3` | 도구 선택 1 + 검증 실패 재요청 1 + SQL 오류 재요청 1. 3회를 다 써도 **전체 기한 25초 안**에서만(15초 × 3을 보장하지 않는다) |
 | `APP_AI_PROMPT_CACHE_ENABLED` | `true` | 스키마 설명(system)에 프롬프트 캐싱. 지표 `kind=cache_read`로 따로 |
-| `APP_AI_SQL_TIMEOUT_SECONDS` / `APP_AI_MAX_ROWS` | `5` / `500` | SQLite 읽기 전용(`mode=ro`·`PRAGMA query_only=ON`), progress handler로 5초 중단, `fetchmany(500)` |
+| `APP_AI_SQL_TIMEOUT_SECONDS` / `APP_AI_MAX_ROWS` | `5` / `500` | progress handler로 5초 중단(전체 기한이 더 짧으면 그쪽), `fetchmany(500)`. 읽기 전용 방식은 9-2 |
 | `APP_AI_SNAPSHOT_TODAY_INTERVAL` / `APP_AI_SNAPSHOT_OTHER_INTERVAL` / `APP_AI_SNAPSHOT_DAYS` | `60s` / `600s` / `7` | 오늘 회차 1분, 나머지 10분, 오늘~+6일 |
 | `APP_AI_CACHE_TTL` / `APP_AI_SESSION_TTL` | `1h` / `30m` | |
 | `APP_AI_SEMANTIC_CACHE_ENABLED` / `APP_AI_SEMANTIC_THRESHOLD` | `true` / `0.92` | rc2까지 의미 캐시가 안 되면 `false`로 정확 일치 캐시만(B1) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `10` / `100` | 사용자당. 동시 1건 |
 | `ANTHROPIC_API_KEY` (Secret `ai-secrets`) | Terraform sensitive 변수 → K8s Secret | staging 키. 로컬은 개발 전용 키를 `.env`에 |
 
+**시간 예산** (`/api/ai/chat` 한 번, 바깥이 항상 안쪽보다 길다)
+
+| 층 | 상한 | 넘으면 |
+| --- | --- | --- |
+| CloudFront 원본 응답 대기 | 30초 (기존 설정, 3.1.11) | 504 |
+| gateway `/api/ai/**` 라우트 `response-timeout` | **28초** (`28000`) | 504 `UPSTREAM_TIMEOUT` |
+| ai 요청 전체 기한 `APP_AI_REQUEST_DEADLINE_SECONDS` | **25초** | 503 `AI_LLM_UNAVAILABLE` `TIMEOUT` — 정상 경로에서는 여기서 먼저 끝나 화면이 ai의 오류 형식을 받는다 |
+| └ Claude 호출 1회 | min(15초, 남은 시간) × 최대 3회 | 다음 호출 없이 위 503 |
+| └ SQLite 실행 1회 | min(5초, 남은 시간) | `REJECTED` 또는 SQL 오류 재요청 |
+| `ai:inflight:{userId}` 잠금 | 40초 | 25초 기한보다 길어 처리 중 풀리지 않는다 |
+
 #### 9-2. 실행 규칙
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey
+- SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
 - 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회)은 CloudFront → gateway → catalog로 들어간다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2)·좌석 데모 중에는 `ng-ai` desired 0 · 플래그 off** → 테스트 환경 = 데모 환경 (런북 6-G)
 - `ng-ai`는 EventBridge Scheduler 평일 켜기 대상에서 **뺀다**(평소 0대). 켜기·끄기는 `cluster-scale.sh ng-ai up|down` 또는 `cluster-schedule` 수동
 - 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 데모 주간에는 플래그·ai 코드 모두 머지 금지
@@ -693,14 +708,14 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | ElastiCache Valkey 8.2 | `notify-keyspace-events Ex`(만료 감지, ADR-44), 전송 중 암호화, `maxmemory-policy noeviction`(선점 키가 밀려나면 안 됨), 노드 **`cache.t4g.micro`** + 메모리 80%·Evictions 경보(ADR-59) |
 | 시드 적재 | 3.1.12 후 `lotte-seed/load/run.sh`(관리자): 일회성 Job이 catalog Flyway를 먼저 적용하고 시드를 `catalog_migrator`로 1회 넣은 뒤 검증(극장 132·상영관 39·좌석 6,767·회차 8,360·영화 22). 재실행 안전, 끝나면 Job·ConfigMap 삭제. 시드 파일은 레포·gitops에 두지 않는다 |
 | 가용성·백업 | RDS **Single-AZ**(ADR-61) `db.t4g.small`, 자동 백업 7일(03:00 KST), 최종 스냅샷 없음(재생성 리허설용) · 자동 백업은 삭제 후에도 보존 |
-| ⚠️AI ElastiCache ai Valkey 8.2 | `cinema-staging-ai-valkey` `cache.t4g.micro` 1노드, `maxmemory-policy allkeys-lru`, `reserved-memory-percent 50`(벡터 검색 조건), 전송 중 암호화, 메모리 80% 경보. **기존 Valkey와 별도** — 좌석 선점 키와 메모리를 나누지 않는다(ADR-85). 밤에도 유지(ElastiCache는 정지 불가, 월 약 $12) |
+| ⚠️AI ElastiCache ai Valkey 8.2 | `cinema-staging-ai-valkey` `cache.t4g.micro` 1노드, `maxmemory-policy noeviction`(한도 키가 밀려나지 않게, 모든 키 TTL), `reserved-memory-percent 50`(벡터 검색 조건), 전송 중 암호화, 메모리 80% 경보. **기존 Valkey와 별도** — 좌석 선점 키와 메모리를 나누지 않는다(ADR-85). 밤에도 유지(ElastiCache는 정지 불가, 월 약 $12) |
 | 만들지 않는 것 | 리포트 뷰(`v_*_report`)·`stats_db`·⚠️AI `ai_readonly` 계정 — catalog Flyway V2 `v_screening_report`는 머지하지 않음(ADR-60). ai는 RDS에 접근하지 않는다(ADR-84) |
 
 ### 6. ⚠️AI ai 서비스 데이터 (RDS 밖, ADR-84·85)
 
 #### 6-1. SQLite 스냅샷 (ai 파드 메모리, `:memory:`)
 
-공개 API(`PUBLIC_API_BASE_URL` = CloudFront `/api`)의 응답만으로 채운다. **사이트에서 누구나 볼 수 있는 값만** 들어가고, 시드 원본·롯데 스냅샷·포스터는 들어오지 않는다. 디스크·이미지·레포·PVC에 남지 않고, 파드가 꺼지면 사라진다.
+공개 API(`PUBLIC_API_BASE_URL` = CloudFront `/api`)의 응답만으로 채운다. 갱신마다 새 메모리 DB에 쓰고, 다 채운 뒤 읽기 전용으로 잠가(`PRAGMA query_only=ON` + authorizer) 질의용과 바꾼다 — `mode=ro`는 `:memory:`에 쓸 수 없다(`docs/service-runtime-contract.md` 9-2). **사이트에서 누구나 볼 수 있는 값만** 들어가고, 시드 원본·롯데 스냅샷·포스터는 들어오지 않는다. 디스크·이미지·레포·PVC에 남지 않고, 파드가 꺼지면 사라진다.
 
 | 테이블 | 컬럼 | 출처(공개 API) | 갱신 |
 | --- | --- | --- | --- |
@@ -762,7 +777,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 22 | 내부 브로커 없음: Pub/Sub + keyspace 알림 + sorted set | 만료 반영 2초 초과 시 재검토 |
 | 44 | 만료: keyspace(Ex) + `hold-expiry` 1초 스캔 + RDS 10초 스캔, 조건부 UPDATE로 한 번만 | 노션 본문 "ADR-21" = 이 항목 |
 | ⚠️AI 84 | AI 데이터: **ai 파드 메모리 SQLite 스냅샷**, CloudFront 공개 API로만 적재(오늘 1분·나머지 10분). RDS·기존 Valkey·리포트 뷰·`ai_readonly` 없음. 실행은 읽기 전용·5초·500행, SQL 검증 sqlglot(SQLite). 포스터·시드 원본 미포함 | 기존 MSA DB를 건드리지 않음. 60 유지 |
-| ⚠️AI 85 | AI 캐시: 새 ElastiCache **`cinema-staging-ai-valkey`** `t4g.micro`(벡터 검색, `allkeys-lru`, 예약 메모리 50%). 정확 일치 + **의미 캐시**(로컬 임베딩 `paraphrase-multilingual-MiniLM-L12-v2`, 슬롯 치환 뒤 임베딩, 유사도 0.92) + 세션 + 사용 한도. 개인 질문은 캐시 안 함 | 59는 기존 Valkey에만 해당(그대로) |
+| ⚠️AI 85 | AI 캐시: 새 ElastiCache **`cinema-staging-ai-valkey`** `t4g.micro`(벡터 검색, `noeviction` + 모든 키 TTL — 한도 키 보호, 예약 메모리 50%). 정확 일치 + **의미 캐시**(로컬 임베딩 `paraphrase-multilingual-MiniLM-L12-v2`, 슬롯 치환 뒤 임베딩, 유사도 0.92) + 세션(사용자별 키) + 사용 한도. 개인 질문은 캐시 안 함 | 59는 기존 Valkey에만 해당(그대로) |
 
 ### 3. 서비스 간 통신·계약·결제·알림
 
@@ -870,7 +885,7 @@ SeatSAC-gitops/
 | 항목 | 규칙 |
 | --- | --- |
 | 승인 | 1명 (11/13 이후 2명). `libs/`·`build-logic/` 변경은 2명(김종식 + 영향받는 서비스 담당) |
-| 필수 검사 (ruleset) | `java`·`gitleaks`·`image`·`frontend`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 여섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공. `frontend`도 같은 방식: `frontend 변경 감지` job이 `frontend/**` 변경이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가. ⚠️AI `python`(pr-check)도 같은 「변경 없으면 건너뜀」 방식으로 필수 검사에 추가 → 일곱 검사 |
+| 필수 검사 (ruleset) | `java`·`gitleaks`·`image`·`frontend`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 여섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공. `frontend`도 같은 방식: `frontend 변경 감지` job이 `frontend/**` 변경이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가. ⚠️AI `python`(pr-check)도 같은 「변경 없으면 건너뜀」 방식으로 필수 검사에 추가 → 일곱 검사(워크플로가 main에 들어간 뒤 ruleset에 `python`을 추가한다 — 그 전에 추가하면 job이 없어 모든 PR이 대기) |
 | 크기 | 400줄 이하 권장(생성 코드·lock 제외) |
 | 리뷰 응답 | 24시간 이내(주말 제외) |
 | 머지 후 | 작성자가 ArgoCD Synced·Healthy(또는 frontend 배포 완료)까지 확인 — `kubectl -n argocd get applications` 또는 `kubectl -n argocd port-forward svc/argocd-server 8080:80`(읽기 전용 화면) |
@@ -901,9 +916,9 @@ SeatSAC-gitops/
 
 | 워크플로 | 트리거 | 하는 일 |
 | --- | --- | --- |
-| `pr-check` | PR | ⚠️AI `python`: `services/ai/**`가 바뀐 PR만 Python 3.12 → `uv sync` → `ruff check` → `pytest`(Claude API는 목, 키·AWS 권한 없음, 바뀌지 않으면 건너뜀 = 성공 — 필수 검사로 추가). `image`의 서비스 고르기(`changed-services.sh`)는 `ALL_SERVICES`에 `ai`가 있고 **ai만 Gradle `bootJar` 없이 `docker build services/ai`**. `java`: 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ) · `gitleaks` · `image`: 바뀐 서비스만 bootJar → `docker build` → 비루트 확인 → Trivy(push 안 함, AWS 권한 없음. `build-logic/`·`gradle/`·이미지 스크립트·워크플로가 바뀌면 5개 전부) · `lambda`: `lambdas/notification` 단위 테스트(Python 3.12 `unittest`, 의존성·AWS 권한 없음, 필수 검사 아님) · `frontend`: `frontend/**`가 바뀐 PR만 node 24 → `npm ci` → `npm run check`(tsc -b · eslint · steiger FSD · vitest) → `npm run build`(`dist/index.html` 확인). frontend-deploy와 같은 node·npm 설정, AWS 권한 없음. 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행. 2단계: springdoc 생성본 vs 계약 diff |
+| `pr-check` | PR | ⚠️AI `python`: `services/ai/**`가 바뀐 PR만 Python 3.12 → `uv sync --locked`(uv 버전은 `services/ai/Dockerfile`의 `ARG UV_VERSION`) → `ruff check` → `pytest`(Claude API는 목, 키·AWS 권한 없음, 바뀌지 않으면 건너뜀 = 성공 — 필수 검사로 추가). `image`의 서비스 고르기(`changed-services.sh`)는 Java 5개 + `ai`이고, **`services/{svc}/build.gradle.kts`가 없는 ai는 Gradle `bootJar` 없이 `docker build services/ai`**. ai 이미지는 PR에서 **실제로 띄워 본다**(`--read-only --tmpfs /tmp`, liveness·readiness 200, `http_server_requests_seconds{application="ai"}`, 헤더 없는 `/ai/presets` → 401 + `error.v1.json` 형식). `services/{svc}/Dockerfile`이 아직 없는 서비스는 고르지 않는다. `java`: 빌드·테스트(Testcontainers MySQL 8.4·Valkey 8.2·ElasticMQ) · `gitleaks` · `image`: 바뀐 서비스만 bootJar → `docker build` → 비루트 확인 → Trivy(push 안 함, AWS 권한 없음. `build-logic/`·`gradle/`·이미지 스크립트·워크플로가 바뀌면 5개 전부) · `lambda`: `lambdas/notification` 단위 테스트(Python 3.12 `unittest`, 의존성·AWS 권한 없음, 필수 검사 아님) · `frontend`: `frontend/**`가 바뀐 PR만 node 24 → `npm ci` → `npm run check`(tsc -b · eslint · steiger FSD · vitest) → `npm run build`(`dist/index.html` 확인). frontend-deploy와 같은 node·npm 설정, AWS 권한 없음. 실패하면 같은 PR 브랜치에 고쳐서 push → 자동 재실행. 2단계: springdoc 생성본 vs 계약 diff |
 | `contract-check` | PR (항상, 변경 없으면 건너뜀) | Redocly lint, JSON Schema·예시 검증, oasdiff·스키마 하위 호환 |
-| `build-push` | main 머지(`services/**`, 바뀐 서비스만) + 수동(`services`=all 또는 목록, main에서만) | bootJar → x86 이미지 → Trivy(CRITICAL·수정 가능이면 실패) → ECR `cinema/{svc}:{sha7}`(OIDC `cinema-gha-ecr-push`, 같은 태그 있으면 건너뜀) → `SeatSAC-gitops` `overlays/staging/{svc}/image-tag`의 **`newTag`만** yq로 GitHub App `seatsac-build-push`(gitops에만 설치, Contents 쓰기) 토큰으로 main에 커밋(조직 정책상 Deploy key 불가). 레지스트리(계정 ID)는 gitops에 쓰지 않는다(Public, ADR-74) — Terraform ArgoCD Application이 붙인다. booking·gateway가 같이 바뀌면 booking만(블루/그린 동시 금지). ⚠️AI ai는 `docker build services/ai`(Gradle 없음) → ECR `cinema/ai` → `overlays/staging/ai/image-tag` |
+| `build-push` | main 머지(`services/**`, 바뀐 서비스만) + 수동(`services`=all 또는 목록, main에서만) | bootJar → x86 이미지 → Trivy(CRITICAL·수정 가능이면 실패) → ECR `cinema/{svc}:{sha7}`(OIDC `cinema-gha-ecr-push`, 같은 태그 있으면 건너뜀) → `SeatSAC-gitops` `overlays/staging/{svc}/image-tag`의 **`newTag`만** yq로 GitHub App `seatsac-build-push`(gitops에만 설치, Contents 쓰기) 토큰으로 main에 커밋(조직 정책상 Deploy key 불가). 레지스트리(계정 ID)는 gitops에 쓰지 않는다(Public, ADR-74) — Terraform ArgoCD Application이 붙인다. booking·gateway가 같이 바뀌면 booking만(블루/그린 동시 금지). ⚠️AI ai는 `docker build services/ai`(Gradle 없음) → ECR `cinema/ai` → `overlays/staging/ai/image-tag`. 저장소 변수 **`AI_BUILD_PUSH_ENABLED`가 `true`가 아니면 ai는 건너뛴다**(경고) — ECR `cinema/ai`(3.1.18)·gitops `overlays/staging/ai`(3.1.20)가 생긴 뒤 김종식이 켠다(런북 6-G-1). 그 전에는 ai 머지가 빌드·배포 없이 끝난다 |
 | `frontend-deploy` | main 머지(`frontend/**`) + 수동 | Vite 빌드 → S3(`/assets/*` 1년 immutable, `index.html` no-cache) → 무효화 |
 | `lambda-deploy` | **없음(현재)** | Lambda 배포는 Terraform `archive_file`(3.1.16 Pre sign-up, 3.1.8 알림)이 코드를 묶어 올린다. 코드가 바뀌면 `infra-plan`에 함수 update가 보이고 apply는 김종식이 로컬에서 `cinema-admin`으로. 별칭(alias)은 쓰지 않는다. 필요해지면 이 워크플로를 추가(CI에 배포 권한이 필요) |
 | `infra-plan` | PR(`infra/terraform/**`·`lambdas/**`, 필수 검사 아님) | `terraform plan`(OIDC `cinema-gha-tf-plan`) → PR 코멘트. **apply는 김종식이 로컬에서 `cinema-admin`으로** |
@@ -929,4 +944,3 @@ SeatSAC-gitops/
 | 팀원 평소 작업은 `cinema-dev` 프로필(MFA). `cinema-admin`은 김종식 + 백업 관리자 남궁일 | ADR-47 |
 | 작업·진척은 노션 WBS만. GitHub Issues 안 씀 | 03b |
 | 발표 후 Public 전환 전: gitleaks 전체 이력 스캔, 시드·원본·`.env`·tfvars 없음 확인. ⚠️AI 개발용·staging Claude API 키 폐기(Anthropic 콘솔) | — |
-

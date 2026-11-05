@@ -1128,13 +1128,20 @@ A. 기동 확인 — 6-G-3 데모 준비에서도 **이 A만** 다시 쓴다
 ```bash
 kubectl -n argocd get application cinema-ai                      # Synced (ng-ai 0이면 Health는 Progressing·파드 Pending이 정상)
 infra/scripts/cluster-scale.sh up ng-ai
+kubectl -n cinema-staging rollout status deployment/ai --timeout=10m  # 파드가 준비될 때까지 대기; 실패하면 원인을 확인하고 중단
 kubectl -n cinema-staging get pod -l app.kubernetes.io/name=ai -o wide   # NODE가 ng-ai, READY 1/1
-kubectl -n cinema-staging port-forward svc/ai 8085:8080 &
+kubectl -n cinema-staging port-forward svc/ai 8085:8080
+```
+
+`Forwarding from 127.0.0.1:8085 -> 8080` 메시지를 확인하고 port-forward를 실행 상태로 둔다. 연결에 실패하면 오류를 해결한 뒤 다시 실행한다. 다른 터미널에서 확인한다.
+
+```bash
 curl -s localhost:8085/actuator/health/readiness                  # {"status":"UP"} = 스냅샷 첫 적재 + ai Valkey PING
 curl -s localhost:8085/actuator/prometheus | grep ai_snapshot_age_seconds
 infra/scripts/np-check.sh                                         # gateway → ai ALLOWED, catalog → ai BLOCKED — np-check.sh에 ai 검사를 넣은 뒤에만 나온다(후속 작업). 그 전에는 이 줄을 건너뛴다
-kill %1                                                           # port-forward 종료
 ```
+
+확인이 끝나면 port-forward 터미널에서 Ctrl-C로 종료한다.
 
 B. 플래그 off 확인·정리 — **적용 직후에만**(플래그를 켠 뒤에는 하지 않는다)
 

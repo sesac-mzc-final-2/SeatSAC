@@ -100,13 +100,13 @@
 
 | 테이블 | 컬럼 | 출처(공개 API) | 갱신 |
 | --- | --- | --- | --- |
-| `movie` | `movie_id` PK, `title`, `title_en`, `view_grade`, `slot_minutes`, `release_date`, `director`, `genres`(쉼표), `synopsis` | `GET /movies?status=NOW_SHOWING` + `GET /movies/{id}` | 10분 |
+| `movie` | `movie_id` PK, `title`, `title_en`, `view_grade`, `slot_minutes`, `release_date`, `director`, `genres`(쉼표), `synopsis` | `GET /movies?status=NOW_SHOWING`을 `page=0`부터 `totalPages - 1`까지 모두 조회한 뒤 목록의 각 영화에 `GET /movies/{id}` 호출 | 10분 |
 | `theater` | `theater_id` PK, `name`, `region`, `has_layout` | `GET /theaters?hasLayout=true` | 10분 |
 | `screening` | `screening_id` PK, `movie_id`, `theater_id`, `auditorium_id`, `auditorium_name`, `screen_type`, `business_date`(`YYYY-MM-DD`), `starts_at`·`ends_at`(KST `YYYY-MM-DD HH:MM`), `start_hour`(0~23), `film_format`, `total_seats`, `remaining_seats`, `remaining_seats_source`, `fetched_at` | `GET /screenings?date&theaterId` (극장 4곳 × 오늘~+6일) | **오늘 1분**, 나머지 10분 |
 | `snapshot_meta` | `table_name`, `scope`, `refreshed_at` | — | 적재마다 |
 
 - 넣지 않는 것: `posterUrl`(롯데 포스터 표시 금지), 배치도·좌석 ID, 예매·결제·사용자 데이터
-- 시각은 모두 KST 문자열(질문이 KST 기준이라 LLM이 변환하지 않게). 시작한 회차는 공개 API가 이미 빼서 준다
+- 시각은 모두 KST 문자열(질문이 KST 기준이라 LLM이 변환하지 않게). 공개 API는 시작한 회차를 제외하지만 적재 후 시간이 흐르므로, SQLite에서 회차를 반환하는 모든 질의는 현재 KST와 `starts_at`을 비교해 `starts_at > 현재 KST`인 회차만 반환한다
 - 컬럼 한국어 설명·enum 뜻·few-shot은 `services/ai/src/seatsac_ai/resources/schema.yaml`(AI-10). 이 파일이 NL2SQL 정확도의 대부분을 정한다
 - 답에는 "○시 ○분 기준"(`fetched_at`)을 붙인다
 

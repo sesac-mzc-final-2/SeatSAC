@@ -6,7 +6,7 @@
 #              평소 꺼 두는 노드그룹(OPTIONAL_NODEGROUPS, 기본 ng-ai)은 **빼고** 켠다 → 평일 아침 자동 켜기·`up 2` 부하 테스트에 ng-ai가 따라 켜지지 않는다
 #     down   : 모든 노드그룹 desired = 0 (ng-ai 포함 — 끄기는 전부 끄는 쪽이 안전하다. 숫자 인자는 무시)
 #     status : 현재 desired·min·max·InService 수만 출력 (모든 노드그룹)
-#   노드그룹을 지정하면 그것만 조작한다(이름이 같거나 "-이름"으로 끝나면 일치):
+#   노드그룹을 지정하면 그것만 조작한다(이름이 같거나 하이픈으로 구분된 키에 접두사·생성 접미사가 붙어도 일치):
 #     cluster-scale.sh up ng-ai        ng-ai 1대 켜기 (AI 데모·6-G-2 확인)
 #     cluster-scale.sh down ng-ai      ng-ai 끄기
 #     cluster-scale.sh status ng-ai    ng-ai만 표시
@@ -59,11 +59,11 @@ summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then echo "$*" >> "$GITHUB_STE
 ALL_NGS=$(aws eks list-nodegroups --cluster-name "$CLUSTER" --query 'nodegroups[]' --output text)
 if [ -z "$ALL_NGS" ]; then echo "::error::$CLUSTER 에 노드그룹이 없습니다"; exit 1; fi
 
-# 노드그룹 이름이 키와 같거나 "-키"로 끝나면 일치 (실제 이름은 cinema-staging-ng-ai 처럼 접두사가 붙는다)
+# 키 전체가 하이픈 경계로 구분되면 접두사·생성 접미사가 있어도 일치 (ng-a는 ng-ai와 다름)
 matches() {
   local ng="$1" key
   for key in $2; do
-    if [ "$ng" = "$key" ] || [[ "$ng" == *-"$key" ]]; then return 0; fi
+    if [ "$ng" = "$key" ] || [[ "$ng" == *-"$key" || "$ng" == "$key"-* || "$ng" == *-"$key"-* ]]; then return 0; fi
   done
   return 1
 }

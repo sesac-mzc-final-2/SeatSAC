@@ -2,6 +2,7 @@
 
 > 기준 2026-10-21. 원본은 노션 WBS 2.2.2 「ERD·서비스별 스키마」(ERD 6차, 완료)와 각 서비스 Flyway V1. 이 문서는 개발·인프라가 함께 보는 **요약**이다. 테이블 정의가 바뀌면 Flyway 파일이 먼저, 이 문서가 다음이다.
 > 10/22 결정 반영(ADR-59·60·61). 스키마는 4개(catalog·booking·user·payment)뿐이다.
+> ⚠️AI 11/5 AI 재도입(ADR-82~87)에도 **RDS는 바뀌지 않는다**(리포트 뷰·`ai_readonly` 없음, ADR-60 유지). ai 데이터는 6장.
 
 ---
 
@@ -88,6 +89,33 @@
 | ElastiCache Valkey 8.2 | `notify-keyspace-events Ex`(만료 감지, ADR-44), 전송 중 암호화, `maxmemory-policy noeviction`(선점 키가 밀려나면 안 됨), 노드 **`cache.t4g.micro`** + 메모리 80%·Evictions 경보(ADR-59) |
 | 시드 적재 | 3.1.12 후 `lotte-seed/load/run.sh`(관리자): 일회성 Job이 catalog Flyway를 먼저 적용하고 시드를 `catalog_migrator`로 1회 넣은 뒤 검증(극장 132·상영관 39·좌석 6,767·회차 8,360·영화 22). 재실행 안전, 끝나면 Job·ConfigMap 삭제. 시드 파일은 레포·gitops에 두지 않는다 |
 | 가용성·백업 | RDS **Single-AZ**(ADR-61) `db.t4g.small`, 자동 백업 7일(03:00 KST), 최종 스냅샷 없음(재생성 리허설용) · 자동 백업은 삭제 후에도 보존 |
-| 만들지 않는 것 | 리포트 뷰(`v_*_report`)·`stats_db` — catalog Flyway V2 `v_screening_report`는 머지하지 않음(ADR-60) |
+| ⚠️AI ElastiCache ai Valkey 8.2 | `cinema-staging-ai-valkey` `cache.t4g.micro` 1노드, `maxmemory-policy allkeys-lru`, `reserved-memory-percent 50`(벡터 검색 조건), 전송 중 암호화, 메모리 80% 경보. **기존 Valkey와 별도** — 좌석 선점 키와 메모리를 나누지 않는다(ADR-85). 밤에도 유지(ElastiCache는 정지 불가, 월 약 $12) |
+| 만들지 않는 것 | 리포트 뷰(`v_*_report`)·`stats_db`·⚠️AI `ai_readonly` 계정 — catalog Flyway V2 `v_screening_report`는 머지하지 않음(ADR-60). ai는 RDS에 접근하지 않는다(ADR-84) |
+
+## 6. ⚠️AI ai 서비스 데이터 (RDS 밖, ADR-84·85)
+
+### 6-1. SQLite 스냅샷 (ai 파드 메모리, `:memory:`)
+
+공개 API(`PUBLIC_API_BASE_URL` = CloudFront `/api`)의 응답만으로 채운다. **사이트에서 누구나 볼 수 있는 값만** 들어가고, 시드 원본·롯데 스냅샷·포스터는 들어오지 않는다. 디스크·이미지·레포·PVC에 남지 않고, 파드가 꺼지면 사라진다.
+
+| 테이블 | 컬럼 | 출처(공개 API) | 갱신 |
+| --- | --- | --- | --- |
+| `movie` | `movie_id` PK, `title`, `title_en`, `view_grade`, `slot_minutes`, `release_date`, `director`, `genres`(쉼표), `synopsis` | `GET /movies?status=NOW_SHOWING` + `GET /movies/{id}` | 10분 |
+| `theater` | `theater_id` PK, `name`, `region`, `has_layout` | `GET /theaters?hasLayout=true` | 10분 |
+| `screening` | `screening_id` PK, `movie_id`, `theater_id`, `auditorium_id`, `auditorium_name`, `screen_type`, `business_date`(`YYYY-MM-DD`), `starts_at`·`ends_at`(KST `YYYY-MM-DD HH:MM`), `start_hour`(0~23), `film_format`, `total_seats`, `remaining_seats`, `remaining_seats_source`, `fetched_at` | `GET /screenings?date&theaterId` (극장 4곳 × 오늘~+6일) | **오늘 1분**, 나머지 10분 |
+| `snapshot_meta` | `table_name`, `scope`, `refreshed_at` | — | 적재마다 |
+
+- 넣지 않는 것: `posterUrl`(롯데 포스터 표시 금지), 배치도·좌석 ID, 예매·결제·사용자 데이터
+- 시각은 모두 KST 문자열(질문이 KST 기준이라 LLM이 변환하지 않게). 시작한 회차는 공개 API가 이미 빼서 준다
+- 컬럼 한국어 설명·enum 뜻·few-shot은 `services/ai/src/seatsac_ai/resources/schema.yaml`(AI-10). 이 파일이 NL2SQL 정확도의 대부분을 정한다
+- 답에는 "○시 ○분 기준"(`fetched_at`)을 붙인다
+
+### 6-2. 개인 데이터
+
+"내 예매"는 SQLite에 넣지 않고 요청마다 `GET {PUBLIC_API_BASE_URL}/users/me/bookings`를 **사용자의 토큰 그대로** 호출해 답한다. 캐시하지 않고, Claude API에는 예매 행을 보내지 않는다(템플릿 문장으로 답).
+
+### 6-3. ai Valkey 키
+
+`docs/conventions.md` 4장 ⚠️AI 표.
 
 <노션 반영 필요> 2.2.2 ERD에서 ai·stats 스키마·리포트 뷰 삭제(ADR-50·51·60), catalog V2 `v_screening_report` 머지 안 함, outbox_message 행의 "알림 발송 방식 팀 재확인 중" → "10/21 아웃박스 확정", Valkey `maxmemory-policy noeviction` 추가

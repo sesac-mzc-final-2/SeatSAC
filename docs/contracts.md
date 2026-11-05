@@ -2,6 +2,7 @@
 
 > 기준 2026-10-21. 원본은 `contracts/` 파일이고 이 문서는 목록과 확정 결정만 담는다. 파일과 이 문서가 다르면 **파일이 맞다**.
 > 근거: API 명세서 v1.1(10/21), 2.2.4 Catalog·User API 명세 v0.3(10/21), 계약 대조표(15번), 10/22 회의록2 결정(ADR-54·55).
+> ⚠️AI 11/5 AI 재도입(ADR-82): `ai.openapi.yaml` 외부 2개 추가. 상세는 최종 기능명세서 v4 15장.
 
 ---
 
@@ -12,6 +13,7 @@
 | `openapi/catalog.openapi.yaml` | 외부 9개 (조회 6 · 관리자 3) | 한채연 |
 | `openapi/booking.openapi.yaml` | 외부 7개 (좌석 현황·SSE·선점·해제·결제·조회·취소) | 남궁일 |
 | `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장) | 한채연 |
+| ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문, 추천 질문 목록) | 김서현 · 한채연 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 3개 | 남궁일 |
@@ -20,7 +22,7 @@
 | `schemas/error.v1.json` | 공통 오류 응답 | 전원 |
 | `*/examples/**` | 예시 메시지 = 서비스 테스트 fixture | 각 담당 |
 
-합계: 외부 21 · 내부 8 · 이벤트 2.
+합계: 외부 **23**(⚠️AI +2) · 내부 8 · 이벤트 2.
 
 ## 2. API 목록
 
@@ -45,6 +47,8 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
+| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404. `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns?, rows?, sql?, asOf, llm}`. SQL 거부·범위 밖도 **200**(`path` `REJECTED`·`OUT_OF_SCOPE`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED` · 503 `AI_LLM_UNAVAILABLE`·`AI_SNAPSHOT_NOT_READY`. `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` (화면 버튼) |
 
 ### 내부 (`http://{service}:8080/internal/**`)
 
@@ -61,6 +65,8 @@
 
 공통: 재시도 없음(위 1건 제외), Resilience4j 서킷(실패율 50%·10초), 호출 깊이 1, `X-Trace-Id`·`X-User-Id` 전달.
 
+⚠️AI ai는 내부 API를 부르지 않는다. 공개 API(`GET /movies`·`/movies/{id}`·`/theaters`·`/screenings`, 사용자 토큰으로 `GET /users/me/bookings`)를 CloudFront 주소로 호출한다(ADR-84). 기존 계약 변경 없음.
+
 ## 3. 확정 결정 (10/22)
 
 | # | 항목 | 결정 | 근거 |
@@ -69,7 +75,7 @@
 | 2 | userId | Cognito `sub` 문자열(`format: uuid`), DB `CHAR(36)` | ADR-37, ERD 6차 |
 | 3 | 프로필 email·name | user가 Access Token으로 Cognito `GetUser`. `NotAuthorizedException`은 **401 `UNAUTHORIZED`**(`details[].reason` `TOKEN_REJECTED`), 그 밖의 실패는 **503 `IDENTITY_UNAVAILABLE`** | 2.2.4 v0.3, ADR-54 |
 | 4 | `GET /internal/theaters` | **만든다** (USR-05 극장 검증, Catalog 실패 시 검증 생략) | API 명세서 10장 #6 |
-| 5 | 범위 | 위 29개가 전부. 요청 수 제한(429) 없음 | ADR-50·62 |
+| 5 | 범위 | 위 29개 + ⚠️AI ai 외부 2개 = 31개. gateway 요청 수 제한(429)은 없음 — ai의 429 `AI_QUOTA_EXCEEDED`는 ai 앱 안 비용 보호 | ADR-62·82 |
 | 6 | booking.confirmed v1 payload | `screeningId`·`seatCount`·`confirmedAt` **필수** (발행자 booking 하나, 구현 전) | API 명세서 9-2, ADR-55 |
 | 7 | traceId 형식 | 스키마에 `pattern: ^[0-9a-f]{32}$` (오류·좌석 이벤트·알림 공통), 오류의 traceId는 null 불가 | GW-03 10/21, ADR-55 |
 | 8 | 오류 `details` | **항상 배열**(필수, 없으면 `[]`), 원소 `{field, value?, reason?}` | 2.2.4 v0.3, API 명세서 1-4 |

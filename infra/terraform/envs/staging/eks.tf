@@ -2,6 +2,8 @@
 # 3.1.2 EKS 클러스터 · 노드그룹 · 애드온 · 팀 접근(Access Entry) · ALB 준비
 #   - Kubernetes 1.36 (표준 지원 ~2027-08), 인증 모드 API(Access Entry만, aws-auth ConfigMap 없음)
 #   - 노드: On-Demand t3.large × 2 = ng-a(AZ a) 1대 + ng-c(AZ c) 1대 (ADR-7·34)
+#   - ⚠️AI ng-ai: ai 전용 t3.large 1대, 평소 0대 (3.1.19, ADR-86). 라벨·taint cinema/workload=ai(NoSchedule) →
+#     ai 파드(nodeSelector + toleration)만 올라가고 기존 5개 서비스는 올라가지 않는다. 켜기는 cluster-scale.sh up ng-ai만
 #     밤·주말 0대는 EventBridge Scheduler(cluster_schedule.tf)·cluster-schedule 워크플로(백업·수동)가 desired_size만 바꾼다(3.1.14). 모듈이 desired_size 변경을 무시하므로 drift 없음
 #   - 애드온: vpc-cni(NetworkPolicy 켬) · coredns · kube-proxy · eks-pod-identity-agent · metrics-server(HPA)
 #   - 파드 권한은 Pod Identity만 (IRSA 안 씀)
@@ -57,7 +59,7 @@ module "eks" {
     metrics-server         = { most_recent = false, addon_version = "v0.9.0-eksbuild.13" }
   }
 
-  eks_managed_node_groups = {
+  eks_managed_node_groups = merge({
     for az, idx in { a = 0, c = 1 } : "ng-${az}" => {
       name             = "${var.name}-ng-${az}"
       ami_type         = "AL2023_x86_64_STANDARD"
@@ -81,7 +83,40 @@ module "eks" {
         ssm = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
       }
     }
-  }
+    }, {
+    # ⚠️AI ai 전용 (3.1.19, ADR-86). 평소 desired 0 — 평일 아침 자동 켜기(cluster_schedule.tf)에서 빠진다
+    "ng-ai" = {
+      name           = "${var.name}-ng-ai"
+      ami_type       = "AL2023_x86_64_STANDARD"
+      instance_types = [var.node_instance_type]
+      capacity_type  = "ON_DEMAND"
+
+      subnet_ids = module.vpc.private_subnets # 1대뿐이라 AZ를 고정하지 않는다 → 한 AZ에 t3.large 여유가 없어도 다른 AZ로 뜬다
+
+      min_size     = 0
+      max_size     = 1 # 2대 이상 필요 없음(ai replicas 1). 실수로 up 2를 해도 1대로 막힌다
+      desired_size = 0 # 만들 때만 쓰인다. 이후 desired는 모듈이 무시 → cluster-scale.sh up ng-ai·down ng-ai
+
+      update_config = { max_unavailable = 1 }
+
+      labels = {
+        "cinema/workload" = "ai"
+      }
+
+      # ai 파드만 toleration을 가진다. 데몬셋(aws-node·kube-proxy·pod-identity-agent·node-exporter)은 모든 taint를 견딘다
+      taints = {
+        ai = {
+          key    = "cinema/workload"
+          value  = "ai"
+          effect = "NO_SCHEDULE"
+        }
+      }
+
+      iam_role_additional_policies = {
+        ssm = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      }
+    }
+  })
 
   access_entries = {
     # 김종식 + 백업 관리자(ADR-47): 클러스터 전체 관리자
@@ -114,6 +149,12 @@ module "eks" {
   tags = {
     Name = "${var.name}-eks"
   }
+}
+
+locals {
+  # 평소 꺼 두는 노드그룹 키 — 평일 아침 자동 켜기(cluster_schedule.tf)에서 뺀다. 끄기에는 남긴다(잊고 켜 둔 ng-ai를 23:07에 끈다).
+  # cluster-scale.sh의 OPTIONAL_NODEGROUPS(기본 ng-ai)와 같은 목록이어야 한다
+  optional_node_groups = ["ng-ai"]
 }
 
 # ---- ALB → 파드 (target-type ip) --------------------------------------

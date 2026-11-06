@@ -16,12 +16,12 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class RedisKeys {
 
-    /** 좌석 선점. 저장 값 = holdId, TTL 300초 */
+    /** 좌석 선점. 저장 값 = holdId, TTL = 선점 TTL(설정, 기본 300초) */
     public static String seat(Long screeningId, Long seatId) {
         return "seat:{" + screeningId + "}:" + seatId;
     }
 
-    /** 회차당 진행 중 선점 1건 제한. 저장 값 = holdId, TTL 300초 */
+    /** 회차당 진행 중 선점 1건 제한. 저장 값 = holdId, TTL = 선점 TTL(설정, 기본 300초) */
     public static String userHold(Long screeningId, String userId) {
         return "user-hold:{" + screeningId + "}:" + userId;
     }

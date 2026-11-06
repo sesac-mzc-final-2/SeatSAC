@@ -57,7 +57,7 @@ class BookingDtoJsonTest {
     @Test
     void holdResponseUsesKstOffsetAndHidesHoldId() throws Exception {
         Booking booking = Booking.pending("11111111-1111-4111-8111-111111111111", 42L,
-            "hold-uuid-must-not-leak", List.of("J7", "J8"), 2, NOW.plus(BookingPolicy.HOLD_TTL), NOW);
+            "hold-uuid-must-not-leak", List.of("J7", "J8"), 2, NOW.plusSeconds(BookingPolicy.DEFAULT_HOLD_TTL_SECONDS), NOW);
 
         String json = mapper.writeValueAsString(SeatHoldResponse.from(booking, List.of(101L, 102L)));
 

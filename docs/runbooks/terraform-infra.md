@@ -1109,6 +1109,88 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
 
 <노션 반영 필요> WBS 3.1.7 메모에 "CloudWatch 데이터소스 + Pod Identity(`cinema-staging-grafana-pod`), 기록 규칙·대시보드는 gitops `observability/`", 기능명세서 OPS-05에서 "토큰 사용량" 삭제(AI 서비스 범위 제외, ADR-50)
 
+### 6-G. ⚠️AI ai 서비스 — 인프라·켜기·끄기·질의 금지 구간 (3.1.18~3.1.22, ADR-82~87) — ⬜
+
+> ai는 기존 RDS·Valkey·NetworkPolicy·Application을 건드리지 않는다. 문제가 생기면 **6-G-4 끄기**만 하면 1차 데모 환경은 원래대로다.
+
+#### 6-G-1. 적용 (rc1 전, 김종식)
+
+1. `envs/staging`: ECR `cinema/ai`(`ecr.tf` 목록), ElastiCache `cinema-staging-ai-valkey`(`ai_valkey.tf` — Valkey 8.2 `cache.t4g.micro`, 파라미터 그룹 `maxmemory-policy noeviction`·`reserved-memory-percent 50`, TLS, SG 6379는 노드 SG만, 메모리 80% 경보), 노드그룹 `ng-ai`(`eks.tf` — t3.large, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai:NoSchedule`)
+   - `cluster_schedule.tf`의 **켜기** 일정에서 `ng-ai`를 뺀다(평일 아침 자동 기동 금지, `eks.tf` `local.optional_node_groups`). **끄기**(23:07) 일정에는 남긴다 — 저녁에 켜 두고 잊어도 같이 꺼진다(이미 0이면 "No changes needed" 오류 1건 = 정상). `infra/scripts/cluster-scale.sh`는 `up`·`up 2`에서 `ng-ai`를 빼고 켜고(`OPTIONAL_NODEGROUPS`, 기본 `ng-ai`) `down`은 `ng-ai`까지 끈다. 단독 조작은 `up ng-ai`·`down ng-ai`(8-1-2)
+   - 적용·확인(3.1.19 단독 — ai 파드 없이, 노드가 켜져 있는 시간에). **저장소 루트에서** 실행한다(Terraform은 `-chdir`로 `envs/staging`을 읽고, 스크립트 경로는 루트 기준):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars -out=plan.out
+                                                      # 기대: 9 to add, 1 to change, 0 to destroy
+                                                      #   추가: ng-ai 노드그룹 + IAM 역할 + 정책 연결 4 + 시작 템플릿 + null_resource 1 + EventBridge 일정 ng-ai-…-down 1
+                                                      #   변경: 스케줄러 정책 1(대상에 ng-ai). ng-a·ng-c 변경·삭제 0, ng-ai 켜기 일정 없음 — 다르면 apply하지 않는다
+     terraform -chdir=infra/terraform/envs/staging apply plan.out && rm -f infra/terraform/envs/staging/plan.out
+                                                      # 노드그룹 생성 2~3분 (desired 0이라 노드는 안 뜬다)
+     # 아래는 apply가 끝난 뒤에만 — 그 전에는 ng-ai 일정·노드그룹이 없어 조회·up이 실패한다
+     aws scheduler list-schedules --group-name cinema-staging-cluster --query 'Schedules[].Name'   # ng-ai는 -down만
+     infra/scripts/cluster-scale.sh up ng-ai
+     kubectl get nodes -l cinema/workload=ai          # 1대 Ready (2~3분)
+     kubectl get node -l cinema/workload=ai -o jsonpath='{.items[0].spec.taints}'   # cinema/workload=ai, NoSchedule
+     kubectl get pods -A -o wide | grep "$(kubectl get node -l cinema/workload=ai -o name | cut -d/ -f2)"   # 데몬셋(aws-node·kube-proxy·eks-pod-identity-agent·node-exporter)만. 앱 파드가 있으면 taint 누락
+     infra/scripts/cluster-scale.sh down ng-ai
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars
+                                                      # 두 번째: No changes (desired는 Terraform이 무시)
+     ```
+2. gitops `base/ai`·`overlays/staging/ai`(`image-tag`는 `newTag`만) 머지 → GitHub 저장소 변수 `AI_BUILD_PUSH_ENABLED=true`(Settings → Secrets and variables → Actions → Variables). 이 순서가 거꾸로면 build-push의 ECR push 또는 gitops 태그 커밋이 실패한다. 켠 뒤 Actions → build-push → Run workflow `services=ai`로 첫 이미지를 만든다(그 전 ai 머지는 이미지 없이 지나갔다)
+3. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`
+4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
+
+#### 6-G-2. 확인 (적용 직후, 플래그 off)
+
+A. 기동 확인 — 6-G-3 데모 준비에서도 **이 A만** 다시 쓴다
+
+```bash
+kubectl -n argocd get application cinema-ai                      # Synced (ng-ai 0이면 Health는 Progressing·파드 Pending이 정상)
+infra/scripts/cluster-scale.sh up ng-ai
+kubectl -n cinema-staging rollout status deployment/ai --timeout=10m  # 파드가 준비될 때까지 대기; 실패하면 원인을 확인하고 중단
+kubectl -n cinema-staging get pod -l app.kubernetes.io/name=ai -o wide   # NODE가 ng-ai, READY 1/1
+kubectl -n cinema-staging port-forward svc/ai 8085:8080
+```
+
+`Forwarding from 127.0.0.1:8085 -> 8080` 메시지를 확인하고 port-forward를 실행 상태로 둔다. 연결에 실패하면 오류를 해결한 뒤 다시 실행한다. 다른 터미널에서 확인한다.
+
+```bash
+curl -s localhost:8085/actuator/health/readiness                  # {"status":"UP"} = 스냅샷 첫 적재 + ai Valkey PING
+curl -s localhost:8085/actuator/prometheus | grep ai_snapshot_age_seconds
+infra/scripts/np-check.sh                                         # gateway → ai ALLOWED, catalog → ai BLOCKED — np-check.sh에 ai 검사를 넣은 뒤에만 나온다(후속 작업). 그 전에는 이 줄을 건너뛴다
+```
+
+확인이 끝나면 port-forward 터미널에서 Ctrl-C로 종료한다.
+
+B. 플래그 off 확인·정리 — **적용 직후에만**(플래그를 켠 뒤에는 하지 않는다)
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://{배포ID}.cloudfront.net/api/ai/presets   # 플래그 off = 404
+infra/scripts/cluster-scale.sh down ng-ai
+```
+
+#### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
+
+1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태)
+2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
+3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
+4. 데모가 끝난 뒤에만 `cluster-scale.sh down ng-ai`
+
+#### 6-G-4. 끄기·되돌리기 (5분)
+
+1. `cluster-scale.sh down ng-ai` — ai 파드가 내려가면 `/api/ai/**`는 gateway 503(라우트가 켜져 있을 때). 화면은 챗봇 비활성 안내
+2. 데모 주간이 아니면 `APP_AI_ENABLED=false` PR로 404로 되돌림(데모 주간은 머지 금지라 1번만)
+3. 기존 서비스·RDS·Valkey는 바뀐 게 없으므로 추가 조치 없음
+
+#### 6-G-5. AI 질의 금지 구간
+
+| 구간 | 상태 | 이유 |
+| --- | --- | --- |
+| 부하 테스트 4.2.1 · 블루/그린 전환 테스트 4.2.2 | `ng-ai` 0 · 플래그 off | 테스트 환경 = 1차 데모 환경. 스냅샷 적재 호출이 catalog에 섞이지 않게 |
+| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 뒤 데모 주간은 머지 금지라 끌 수 없다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
+| 재생성 리허설 3.1.15 | `ng-ai` 0 · 플래그 off로 기록 | 소요 시간 비교 기준 유지 |
+| staging에서 ai 확인(M6 중) | 테스트가 돌지 않는 시간에만, 스크럼에서 시간 공유 | — |
+
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
 코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito는 `cognito.tf`(3.1.16, 7-6).
@@ -1448,9 +1530,9 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 
 | 시각 (KST) | 동작 | 비고 |
 | --- | --- | --- |
-| 월~금 08:23 | **EventBridge** 노드그룹마다 desired 1 | 노드 Ready까지 2~3분, 파드 Ready까지 5~10분 더 |
+| 월~금 08:23 | **EventBridge** 노드그룹마다 desired 1 (⚠️AI `ng-ai`는 제외) | 노드 Ready까지 2~3분, 파드 Ready까지 5~10분 더 |
 | 월~금 08:53 | GitHub 백업 `up` (이미 켜져 있으면 no-op) | 월~금 07~10시(KST)에 도착한 실행만 동작 — 토요일 아침에 늦게 온 켜기는 건너뜀 |
-| 월~금 23:07 | **EventBridge** desired 0 | 금요일 밤에 꺼져 월요일 아침까지 0대 |
+| 월~금 23:07 | **EventBridge** desired 0 (`ng-ai` 포함) | 금요일 밤에 꺼져 월요일 아침까지 0대 |
 | 월~금 23:37 · 다음 날 00:37 | GitHub 백업 `down` (no-op 또는 대신 끄기) | 월~금 22~23시·화~토 0~5시(KST)에 도착한 실행만 동작 — 늦게 온 끄기가 근무 시간에 끄지 않게 |
 | 데모 주간 11/16~20 | 예약 끄기 멈춤 (24시간) | EventBridge 끄기는 `cluster_schedule_demo_start` 0시에 끝남(end_date), 백업도 날짜로 건너뜀. 발표 후 수동 `down` |
 | 임시로 밤에도 켜 둠 | `envs/staging` tfvars `cluster_keep_on = true` → apply | EventBridge 끄기 DISABLED → 백업도 그 상태를 보고 건너뜀. 끝나면 `false` → apply. (예전 Variables `CLUSTER_KEEP_ON`은 쓰지 않음 — 지운다) |
@@ -1499,9 +1581,10 @@ terraform output cluster_schedules      # {<노드그룹>-up = ENABLED, <노드�
 ```bash
 export AWS_PROFILE=cinema-admin
 infra/scripts/cluster-scale.sh status
-infra/scripts/cluster-scale.sh down
-infra/scripts/cluster-scale.sh up        # 노드그룹당 1대
-infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1
+infra/scripts/cluster-scale.sh down        # 전부 0 (ng-ai 포함)
+infra/scripts/cluster-scale.sh up          # ng-a·ng-c 노드그룹당 1대 (ng-ai는 켜지 않는다)
+infra/scripts/cluster-scale.sh up 2        # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1 (ng-ai 제외)
+infra/scripts/cluster-scale.sh up ng-ai    # ng-ai만 1대 켜기 (AI 데모·6-G). 끄기: down ng-ai, 확인: status ng-ai
 ```
 
 ### 8-1-3. 확인

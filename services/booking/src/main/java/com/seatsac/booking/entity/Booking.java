@@ -88,7 +88,7 @@ public class Booking {
      * 선점 성공 직후의 PENDING 예매. amount는 좌석 수로 계산하고, 저장 뒤에는 세지 않는다.
      *
      * @param now        흐름에서 Clock으로 한 번 구한 값
-     * @param expiresAt  {@code now + }{@link BookingPolicy#HOLD_TTL}
+     * @param expiresAt  {@code now + }선점 TTL({@link com.seatsac.booking.config.SeatHoldProperties#holdTtl()})
      * @throws IllegalArgumentException 좌석 수가 1~4가 아니거나 {@code seatLabels} 크기와 다를 때
      *                                  (사용자 입력 검증은 흐름 서비스가 먼저 하고 400으로 돌려준다)
      */

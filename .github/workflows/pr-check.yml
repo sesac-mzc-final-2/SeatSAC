@@ -78,11 +78,15 @@ jobs:
       IMG: pr-check/${{ matrix.service }}:pr-${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v4
+      # Java 서비스만 Gradle bootJar. ai(Python, ADR-82)는 build.gradle.kts가 없어 docker build만 한다
       - uses: actions/setup-java@v4
+        if: hashFiles(format('services/{0}/build.gradle.kts', matrix.service)) != ''
         with: { distribution: temurin, java-version: "21" }
       - uses: gradle/actions/setup-gradle@v4
+        if: hashFiles(format('services/{0}/build.gradle.kts', matrix.service)) != ''
         with: { cache-read-only: true } # PR은 캐시를 읽기만 (main 캐시를 PR이 덮어쓰지 않게)
       - name: bootJar
+        if: hashFiles(format('services/{0}/build.gradle.kts', matrix.service)) != ''
         run: ./gradlew ":services:$SVC:bootJar" --no-daemon -x test # 테스트는 java job
       - name: 이미지 빌드 (x86, push 안 함)
         run: docker build --platform linux/amd64 -t "$IMG" "services/$SVC"
@@ -91,6 +95,32 @@ jobs:
           user=$(docker image inspect -f '{{.Config.User}}' "$IMG")
           [[ "$user" =~ ^[0-9]+$ && "$user" != 0 ]] || { echo "::error::Dockerfile USER가 숫자 UID(0 아님)가 아니다: '$user' (docs/service-runtime-contract.md 4장)"; exit 1; }
           echo "USER $user"
+      # Python 서비스(ai)는 DB가 필요 없어 이미지를 실제로 띄워 본다 — 런타임 계약 9장의 readOnlyRootFilesystem·/tmp만·
+      # 헬스 경로·지표 이름·오류 형식을 staging 배포 전에 잡는다. Java 서비스는 RDS가 필요해 여기서 띄우지 않는다
+      - name: 기동 확인 (Python 서비스 — 읽기 전용 루트 + /tmp만)
+        if: hashFiles(format('services/{0}/pyproject.toml', matrix.service)) != ''
+        run: |
+          docker run -d --name smoke --read-only --tmpfs /tmp --user 10001 -e APP_ENV=staging -p 18080:8080 "$IMG"
+          trap 'docker logs smoke 2>&1 | tail -50; docker rm -f smoke >/dev/null' EXIT
+          ok=
+          for i in $(seq 1 30); do
+            curl -fsS localhost:18080/actuator/health/liveness >/dev/null 2>&1 && { ok=1; break; }
+            sleep 2
+          done
+          [ -n "$ok" ] || { echo "::error::60초 안에 liveness가 200이 아니다 (읽기 전용 루트에서 쓰기 시도·모델 경로 확인)"; exit 1; }
+          # readiness는 첫 스냅샷 적재와 ai Valkey PING이 있어야 200이다 — CI 컨테이너에는 둘 다 없어 503이 정상이다. 응답 형식(200·503)만 본다
+          code=$(curl -sS -o /dev/null -w '%{http_code}' localhost:18080/actuator/health/readiness)
+          [[ "$code" == 200 || "$code" == 503 ]] || { echo "::error::readiness 응답이 200/503이 아니다: $code"; exit 1; }
+          # 라벨 순서에 의존하지 않는다 (application 라벨이 첫 번째가 아니어도 통과)
+          curl -fsS localhost:18080/actuator/prometheus | grep -Eq 'http_server_requests_seconds_count\{[^}]*application="'"$SVC"'"' \
+            || { echo "::error::/actuator/prometheus 에 http_server_requests_seconds{application=\"$SVC\"} 가 없다 (런타임 계약 5장)"; exit 1; }
+          # 인증 헤더 없는 요청 → 401 + 공통 오류 형식(error.v1.json): traceId 32자리 소문자 16진수, details 배열
+          body=$(curl -sS -o - -w '\n%{http_code}' localhost:18080/ai/presets)
+          code=${body##*$'\n'}; json=${body%$'\n'*}
+          [ "$code" = 401 ] || { echo "::error::X-User-Id 없이 /ai/presets 가 $code (401이어야 함)"; exit 1; }
+          jq -e '(.code|type=="string") and (.traceId|test("^[0-9a-f]{32}$")) and (.details|type=="array")' <<<"$json" >/dev/null \
+            || { echo "::error::오류 응답이 error.v1.json 형식이 아니다: $json"; exit 1; }
+          echo "기동·헬스·지표·오류 형식 확인 통과"
       - name: Trivy
         run: bash .github/scripts/trivy-scan.sh "$IMG" "cinema/$SVC (PR)"
 
@@ -113,6 +143,66 @@ jobs:
             success|skipped) echo "이미지 검사 통과" ;;
             *) echo "::error::이미지 빌드·Trivy 실패 — image-build 로그 확인 (런북 13장)"; exit 1 ;;
           esac
+
+  # ---- 3.1.20 python 검사: services/ai/** 가 바뀐 PR만 ruff · pytest (ADR-82, docs/repo-workflow.md 4장) ----
+  # 필수 검사 이름은 "python". 변경이 없으면 건너뜀 = 성공 (frontend·contract-check와 같은 방식).
+  # Claude API는 테스트에서 목으로만 → 키·AWS 권한 없음. uv 버전은 services/ai/Dockerfile 의 ARG UV_VERSION 하나만 본다
+  python-changes:
+    name: python 변경 감지
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          files=$(git diff --no-renames --name-only -z "$BASE" HEAD | tr '\0' '\n')
+          if grep -qE '^services/ai/' <<<"$files"; then
+            echo "services/ai/ 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif grep -qxF '.github/workflows/pr-check.yml' <<<"$files" && [ -f services/ai/pyproject.toml ]; then
+            echo "워크플로 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "services/ai 변경 없음(또는 아직 없음) → 건너뜀"; echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  python:
+    # ruleset 필수 검사는 이 job. 변경 감지가 실패하면(skipped = 통과로 새지 않게) 여기서 실패시킨다
+    needs: python-changes
+    if: always() && (needs.python-changes.result != 'success' || needs.python-changes.outputs.changed == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: services/ai
+    env:
+      UV_PYTHON: "3.12"
+      UV_PYTHON_DOWNLOADS: never # setup-python 의 3.12만 쓴다 (Dockerfile python:3.12-slim 과 같은 마이너)
+    steps:
+      - name: 변경 감지 결과 확인
+        if: needs.python-changes.result != 'success'
+        working-directory: .
+        run: |
+          echo "::error::python 변경 감지 실패 (result=${{ needs.python-changes.result }}) — python-changes 로그 확인"
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: uv 설치 (Dockerfile 과 같은 버전)
+        run: |
+          v=$(sed -n 's/^ARG UV_VERSION=//p' Dockerfile)
+          [ -n "$v" ] || { echo "::error::services/ai/Dockerfile 에 ARG UV_VERSION 이 없다"; exit 1; }
+          python -m pip install --disable-pip-version-check "uv==$v"
+          uv --version
+      - name: uv sync (uv.lock 그대로 — pyproject 와 안 맞으면 실패)
+        run: uv sync --locked
+      - name: ruff check
+        run: uv run --locked ruff check .
+      - name: pytest
+        run: uv run --locked pytest
 
   # ---- 3.3.5 frontend 검사: frontend/** 가 바뀐 PR만 (frontend-deploy 와 같은 node 24 · npm ci · npm run build) ----
   # node 는 24 (jsdom 30·vitest 가 22.22+ 를 요구, 로컬 개발도 24). 올릴 때 frontend-deploy 와 같이 올린다

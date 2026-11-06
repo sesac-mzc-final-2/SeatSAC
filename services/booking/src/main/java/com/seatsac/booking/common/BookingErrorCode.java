@@ -35,6 +35,7 @@ public enum BookingErrorCode implements ErrorCode {
 
     // 400 SCREENING_STARTED
     SCREENING_CLOSED(CommonResponseCode.SCREENING_STARTED, "이미 상영이 시작된 회차입니다."),
+    BOOKING_CLOSED(CommonResponseCode.SCREENING_STARTED, "예매가 마감된 회차입니다(상영 시작 5분 전부터)."),
 
     // 401 / 403
     USER_HEADER_MISSING(CommonResponseCode.UNAUTHORIZED, "인증 정보가 없습니다."),

@@ -23,6 +23,16 @@ public final class BookingPolicy {
     public static final int DEFAULT_HOLD_TTL_SECONDS = 300;
 
     /**
+     * 예매 마감 — 상영 시작 5분 전부터 선점(BKG-02)·결제(BKG-10)를 받지 않는다.
+     *
+     * <p>결제 요청 하나는 호출·재시도·조회를 합쳐 계약상 약 12초면 끝나므로, 5분 전에 마감하면 결제가
+     * 상영 시작 뒤에 승인되는 일이 없다 → 「상영 시작 뒤 취소 불가」(BKG-07)와 부딪혀 환불할 수 없는
+     * 확정 예매가 생기지 않는다. 선점도 같이 막는다 — 선점만 열어 두면 결제할 수 없는 좌석이 TTL 동안 묶인다.
+     * 취소는 이 값이 아니라 상영 시작 시각 기준이다.
+     */
+    public static final Duration BOOKING_CUTOFF = Duration.ofMinutes(5);
+
+    /**
      * 파드 캐시 TTL — 회차 정보 10분(명세 12.3).
      *
      * <p>좌석 배치는 명세 12.3이 1일로 적었지만 <b>10분</b>으로 줄였다(10/22, PR #7 리뷰).

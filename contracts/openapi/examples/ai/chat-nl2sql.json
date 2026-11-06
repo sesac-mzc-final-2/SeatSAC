@@ -1,0 +1,27 @@
+{
+  "summary": "NL2SQL — 프리셋에 없는 질문(\"잔여석 비율 10% 이하\"). Claude가 run_sql로 SQL을 만들고 검증 통과, LIMIT 500 보강",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "매진이 임박한(잔여석 10% 이하) 오늘 회차는 1개입니다. (19시 42분 기준)",
+    "path": "NL2SQL",
+    "columns": [
+      { "name": "movie_title", "type": "text" },
+      { "name": "theater_name", "type": "text" },
+      { "name": "starts_at", "type": "text" },
+      { "name": "remaining_seats", "type": "integer" },
+      { "name": "total_seats", "type": "integer" },
+      { "name": "remaining_ratio", "type": "real" }
+    ],
+    "rows": [
+      [ "영화 제목", "건대입구", "2026-11-17 20:40", 12, 184, 0.065 ]
+    ],
+    "rowCount": 1,
+    "truncated": false,
+    "sql": "SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats, s.total_seats, ROUND(1.0 * s.remaining_seats / s.total_seats, 3) AS remaining_ratio FROM screening s JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id WHERE s.business_date = '2026-11-17' AND s.starts_at > '2026-11-17 19:42' AND s.total_seats > 0 AND 1.0 * s.remaining_seats / s.total_seats <= 0.1 ORDER BY remaining_ratio LIMIT 500",
+    "presetId": null,
+    "asOf": "2026-11-17T19:42:00+09:00",
+    "llm": { "calls": 1, "inputTokens": 455, "outputTokens": 212, "cacheReadTokens": 3810, "cacheWriteTokens": 0 },
+    "latencyMs": 3240,
+    "rejection": null
+  }
+}

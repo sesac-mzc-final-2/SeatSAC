@@ -38,7 +38,7 @@ import reactor.netty.http.server.HttpServer;
 
 /**
  * 3.3.8 AI 라우트 — 플래그 {@code app.ai.enabled=true}일 때. 꺼진 기본 상태(404)는 {@link GatewayIntegrationTest}에서 본다.
- * 기본 응답 타임아웃을 1초로 줄여 두고 2초 늦게 답하는 가짜 서비스를 붙여, AI 라우트만 30초가 적용되는지(다른 라우트는 503) 확인한다.
+ * 기본 응답 타임아웃을 1초로 줄여 두고 2초 늦게 답하는 가짜 서비스를 붙여, AI 라우트만 28초가 적용되는지(다른 라우트는 503) 확인한다.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
@@ -50,7 +50,7 @@ class GatewayAiRouteTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String CLIENT_ID = "test-client";
     private static final String SUB = "8f4b2c1e-0d3a-4c6b-9e7f-1a2b3c4d5e6f";
-    private static final Duration SLOW = Duration.ofSeconds(2); // 기본 1초보다 길고 AI 30초보다 짧다
+    private static final Duration SLOW = Duration.ofSeconds(2); // 기본 1초보다 길고 AI 28초보다 짧다
 
     private static final RSAKey KEY = rsaKey("k1");
 
@@ -112,10 +112,10 @@ class GatewayAiRouteTest {
     }
 
     @Test
-    void 응답_타임아웃_30초는_AI_라우트에만_적용된다() {
+    void 응답_타임아웃_28초는_AI_라우트에만_적용된다() {
         String token = token(KEY, Map.of());
 
-        // ai: 기본(1초)보다 늦게 답해도 라우트 타임아웃(30초) 안이라 200
+        // ai: 기본(1초)보다 늦게 답해도 라우트 타임아웃(28초) 안이라 200
         assertThat(get("/api/ai/slow", token).expectStatus().isOk()
             .expectBody(JsonNode.class).returnResult().getResponseBody().get("service").asText()).isEqualTo("ai");
 
@@ -129,16 +129,16 @@ class GatewayAiRouteTest {
     }
 
     @Test
-    void 라우트_id는_ai_이고_메타데이터_타임아웃은_30초() {
+    void 라우트_id는_ai_이고_메타데이터_타임아웃은_28초() {
         // 3.1.21 gateway 블루/그린 분석이 routeId="ai"로 AI 요청을 5xx 판정에서 뺀다 — id가 바뀌면 분석이 깨진다
         Route ai = routeLocator.getRoutes().filter(r -> AiRouteConfig.ROUTE_ID.equals(r.getId())).blockFirst();
         assertThat(ai).isNotNull();
-        assertThat(ai.getMetadata()).containsEntry(RouteMetadataUtils.RESPONSE_TIMEOUT_ATTR, 30_000);
+        assertThat(ai.getMetadata()).containsEntry(RouteMetadataUtils.RESPONSE_TIMEOUT_ATTR, 28_000);
 
         List<String> withOwnTimeout = routeLocator.getRoutes()
             .filter(r -> r.getMetadata().containsKey(RouteMetadataUtils.RESPONSE_TIMEOUT_ATTR))
             .map(Route::getId).collectList().block();
-        assertThat(withOwnTimeout).containsExactlyInAnyOrder("ai", "booking-seat-stream"); // SSE(-1)와 AI(30초)만
+        assertThat(withOwnTimeout).containsExactlyInAnyOrder("ai", "booking-seat-stream"); // SSE(-1)와 AI(28초)만
     }
 
     // ---------- helpers ----------

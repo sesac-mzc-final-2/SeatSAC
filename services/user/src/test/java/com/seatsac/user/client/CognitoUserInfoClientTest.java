@@ -1,5 +1,6 @@
 package com.seatsac.user.client;
 
+import com.seatsac.common.test.StubHttpServer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

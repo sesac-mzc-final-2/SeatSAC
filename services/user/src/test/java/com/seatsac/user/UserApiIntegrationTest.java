@@ -12,7 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.WithCurrentUser;
-import com.seatsac.user.client.StubHttpServer;
+import com.seatsac.common.test.StubHttpServer;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;

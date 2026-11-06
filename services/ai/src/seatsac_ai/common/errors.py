@@ -109,7 +109,14 @@ def quota_exceeded(
 
 
 def llm_unavailable(
-    reason: Literal["TIMEOUT", "OVERLOADED", "RATE_LIMITED", "SPEND_LIMIT", "CIRCUIT_OPEN"],
+        reason: Literal[
+        "TIMEOUT",
+        "OVERLOADED",
+        "RATE_LIMITED",
+        "SPEND_LIMIT",
+        "CIRCUIT_OPEN",
+        "QUOTA_STORE_UNAVAILABLE",
+    ],
 ) -> ApiError:
     return ApiError(
         503,

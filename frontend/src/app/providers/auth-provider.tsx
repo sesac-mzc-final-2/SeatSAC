@@ -1,5 +1,5 @@
 import { InMemoryWebStorage, WebStorageStateStore, type User } from "oidc-client-ts";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { AuthProvider as OidcProvider, hasAuthParams, useAuth, type AuthProviderProps } from "react-oidc-context";
 import {
   SessionContext,
@@ -97,8 +97,11 @@ function cognitoLogoutUrl(): string | null {
 function SessionBridge({ children }: { children: ReactNode }) {
   const auth = useAuth();
 
-  // 401 처리: 1회 갱신 → 그래도 401 이면 세션 만료로 보고 로그인 흐름 시작 (2.2.5 공통 규칙)
-  useEffect(() => {
+  // 401 처리: 1회 갱신 → 그래도 401 이면 세션 만료로 보고 로그인 흐름 시작 (2.2.5 공통 규칙).
+  // useLayoutEffect 인 이유: 자식(콜백 화면)의 쿼리는 passive effect 에서 첫 요청을 보내는데, 자식 effect 가 부모보다 먼저 돈다.
+  // useEffect 면 토큰을 막 받은 렌더에서 getAccessToken 이 아직 이전 닫힘(auth.user 없음)이라 첫 GET /users/me 가
+  // 토큰 없이 나가 401 → 조용한 갱신 → 재요청으로 끝나고, 갱신된 사용자에는 state 가 없어 returnTo 까지 잃는다
+  useLayoutEffect(() => {
     configureHttpAuth({
       getAccessToken: () => auth.user?.access_token ?? null,
       onUnauthorized: async () => {
@@ -132,13 +135,18 @@ function SessionBridge({ children }: { children: ReactNode }) {
     }
   }, [auth]);
 
+  // 돌아갈 경로는 콜백으로 받은 사용자에만 실려 온다. 조용한 갱신으로 사용자가 바뀌면 state 가 없어지므로 마지막 값을 들고 있는다
+  const parsedReturnTo = readReturnTo(auth.user?.state);
+  const [returnTo, setReturnTo] = useState<string | null>(parsedReturnTo);
+  if (parsedReturnTo !== null && parsedReturnTo !== returnTo) setReturnTo(parsedReturnTo);
+
   const session = useMemo<Session>(() => {
     const status: SessionStatus = auth.isLoading ? "loading" : auth.isAuthenticated ? "authenticated" : "anonymous";
     return {
       status,
       user: auth.user && status === "authenticated" ? toSessionUser(auth.user) : null,
       error: auth.error ?? null,
-      returnTo: readReturnTo(auth.user?.state),
+      returnTo,
       signIn: (returnTo) => {
         void auth.signinRedirect({ state: { returnTo: returnTo ?? "/" } });
       },
@@ -156,7 +164,7 @@ function SessionBridge({ children }: { children: ReactNode }) {
           });
       },
     };
-  }, [auth]);
+  }, [auth, returnTo]);
 
   return <SessionContext.Provider value={session}>{children}</SessionContext.Provider>;
 }

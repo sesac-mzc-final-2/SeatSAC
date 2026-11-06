@@ -2,9 +2,9 @@
 services:
   mysql:
     image: mysql:8.4
-    ports: ["3306:3306"]
+    ports: ["127.0.0.1:3306:3306"]   # 로컬 PC에서만 접속 (다른 호스트에 공개하지 않는다)
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: local   # 로컬 Compose 전용 값(계정 비밀번호와 같은 local). 이미 만든 볼륨은 그대로 → 바꾸려면 down -v
     # staging RDS 파라미터 그룹과 같게 (3.1.3): UTC, utf8mb4. TLS 강제는 로컬에서 끔(sslMode 기본값으로 접속)
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci", "--default-time-zone=+00:00"]
     volumes:
@@ -12,12 +12,12 @@ services:
       - mysql-data:/var/lib/mysql
   valkey:
     image: valkey/valkey:8.2
-    ports: ["6379:6379"]
+    ports: ["127.0.0.1:6379:6379"]
     # staging ElastiCache 파라미터 그룹과 같게 (3.1.3): noeviction, 만료 이벤트 Ex
     command: ["valkey-server", "--notify-keyspace-events", "Ex", "--maxmemory-policy", "noeviction"]
   elasticmq:
-    image: softwaremill/elasticmq-native:latest
-    ports: ["9324:9324", "9325:9325"]
+    image: softwaremill/elasticmq-native:1.7.1   # 버전 고정(3.1.17) — 로컬·Testcontainers 재현성. 올릴 때는 이 태그만 바꾸고 PR
+    ports: ["127.0.0.1:9324:9324", "127.0.0.1:9325:9325"]
     volumes:
       - ./elasticmq.conf:/opt/elasticmq.conf:ro
 volumes:

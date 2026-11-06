@@ -4,7 +4,7 @@
 name: infra-plan
 on:
   pull_request:
-    paths: ["infra/terraform/**"]
+    paths: ["infra/terraform/**", "lambdas/**"]   # Lambda 코드는 Terraform archive_file이 묶어 올린다 → 코드만 바뀐 PR도 plan(함수 update)을 본다
 
 permissions:
   id-token: write

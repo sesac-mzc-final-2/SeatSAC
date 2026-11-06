@@ -73,7 +73,7 @@ def test_json_log_has_contract_fields():
 def test_settings_defaults_match_runtime_contract():
     s = Settings(_env_file=None)
     assert s.ai_model == "claude-sonnet-5-5"
-        assert (s.llm_timeout_seconds, s.llm_max_calls_per_query) == (15, 3)
+    assert (s.llm_timeout_seconds, s.llm_max_calls_per_query) == (15, 3)
     assert s.request_deadline_seconds == 25
     assert (s.sql_timeout_seconds, s.max_rows) == (5, 500)
     assert (s.snapshot_today_interval, s.snapshot_other_interval, s.snapshot_days) == (60, 600, 7)

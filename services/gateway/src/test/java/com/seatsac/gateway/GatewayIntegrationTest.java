@@ -118,6 +118,16 @@ class GatewayIntegrationTest {
     }
 
     @Test
+    void AI_라우트는_플래그가_꺼져_있으면_토큰이_있어도_404() {
+        // app.ai.enabled 기본값 false (3.3.8) → 라우트 자체가 없어 /api/internal 처리와 같은 404. 켜진 경우는 GatewayAiRouteTest
+        String token = token(KEY, Map.of());
+        expectError(post("/api/ai/chat", token), 404, "NOT_FOUND");
+        expectError(get("/api/ai/presets", token), 404, "NOT_FOUND");
+        // 로그인 규칙(/api/**)은 라우트와 무관하게 먼저 적용된다
+        expectError(get("/api/ai/presets", null), 401, "UNAUTHORIZED");
+    }
+
+    @Test
     void 인코딩으로_내부_경로에_닿으려_하면_400() {
         WebTestClient.ResponseSpec response = client.get()
             .uri(URI.create("http://localhost:" + port + "/api/movies/%2e%2e/internal/screenings/1"))

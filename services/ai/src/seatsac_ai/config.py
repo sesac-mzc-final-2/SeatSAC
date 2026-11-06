@@ -48,7 +48,11 @@ class Settings(BaseSettings):
 
     # LLM (ADR-83)
     ai_model: str = Field("claude-sonnet-5-5", alias="APP_AI_MODEL")
-    llm_timeout_seconds: int = Field(25, alias="APP_AI_LLM_TIMEOUT_SECONDS")
+    # 요청 하나의 전체 기한(Claude 호출·SQL 실행·재요청 전부).
+    # 시간 예산(9-1): CloudFront 30 > gateway 28 > 이 값 25
+    request_deadline_seconds: int = Field(25, alias="APP_AI_REQUEST_DEADLINE_SECONDS")
+    # Claude 호출 1회 상한. 실제로는 min(이 값, 전체 기한까지 남은 시간)
+    llm_timeout_seconds: int = Field(15, alias="APP_AI_LLM_TIMEOUT_SECONDS")
     llm_max_calls_per_query: int = Field(3, alias="APP_AI_LLM_MAX_CALLS_PER_QUERY")
     prompt_cache_enabled: bool = Field(True, alias="APP_AI_PROMPT_CACHE_ENABLED")
     anthropic_api_key: SecretStr | None = Field(None, alias="ANTHROPIC_API_KEY")

@@ -28,6 +28,17 @@ class SeatHoldPropertiesTest {
                 .isEqualTo(Duration.ofSeconds(60)));
     }
 
+    /** 범위 경계 30·600초는 받는다 */
+    @Test
+    void acceptsBoundaryValues() {
+        runner.withPropertyValues("app.seat-hold.ttl-seconds=30")
+            .run(context -> assertThat(context.getBean(SeatHoldProperties.class).holdTtl())
+                .isEqualTo(Duration.ofSeconds(30)));
+        runner.withPropertyValues("app.seat-hold.ttl-seconds=600")
+            .run(context -> assertThat(context.getBean(SeatHoldProperties.class).holdTtl())
+                .isEqualTo(Duration.ofSeconds(600)));
+    }
+
     /** 잘못된 ConfigMap 값을 조용히 쓰지 않는다 — 기동이 실패한다 */
     @Test
     void rejectsValuesOutsideRange() {

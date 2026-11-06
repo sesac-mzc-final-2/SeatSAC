@@ -1117,17 +1117,24 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
 
 1. `envs/staging`: ECR `cinema/ai`(`ecr.tf` 목록), ElastiCache `cinema-staging-ai-valkey`(`ai_valkey.tf` — Valkey 8.2 `cache.t4g.micro`, 파라미터 그룹 `maxmemory-policy noeviction`·`reserved-memory-percent 50`, TLS, SG 6379는 노드 SG만, 메모리 80% 경보), 노드그룹 `ng-ai`(`eks.tf` — t3.large, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai:NoSchedule`)
    - `cluster_schedule.tf`의 **켜기** 일정에서 `ng-ai`를 뺀다(평일 아침 자동 기동 금지, `eks.tf` `local.optional_node_groups`). **끄기**(23:07) 일정에는 남긴다 — 저녁에 켜 두고 잊어도 같이 꺼진다(이미 0이면 "No changes needed" 오류 1건 = 정상). `infra/scripts/cluster-scale.sh`는 `up`·`up 2`에서 `ng-ai`를 빼고 켜고(`OPTIONAL_NODEGROUPS`, 기본 `ng-ai`) `down`은 `ng-ai`까지 끈다. 단독 조작은 `up ng-ai`·`down ng-ai`(8-1-2)
-   - 확인(3.1.19 단독 — ai 파드 없이, 노드가 켜져 있는 시간에):
+   - 적용·확인(3.1.19 단독 — ai 파드 없이, 노드가 켜져 있는 시간에). **저장소 루트에서** 실행한다(Terraform은 `-chdir`로 `envs/staging`을 읽고, 스크립트 경로는 루트 기준):
      ```bash
-     terraform plan                                   # 기대: ng-ai 노드그룹(+ IAM 역할·정책 연결·시작 템플릿) 추가, EventBridge 일정 ng-ai-…-down 1개 추가,
-                                                      #       스케줄러 정책 1개 변경(대상에 ng-ai). ng-a·ng-c 변경·삭제 0, ng-ai 켜기 일정 없음
+     export AWS_PROFILE=cinema-admin
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars -out=plan.out
+                                                      # 기대: 9 to add, 1 to change, 0 to destroy
+                                                      #   추가: ng-ai 노드그룹 + IAM 역할 + 정책 연결 4 + 시작 템플릿 + null_resource 1 + EventBridge 일정 ng-ai-…-down 1
+                                                      #   변경: 스케줄러 정책 1(대상에 ng-ai). ng-a·ng-c 변경·삭제 0, ng-ai 켜기 일정 없음 — 다르면 apply하지 않는다
+     terraform -chdir=infra/terraform/envs/staging apply plan.out && rm -f infra/terraform/envs/staging/plan.out
+                                                      # 노드그룹 생성 2~3분 (desired 0이라 노드는 안 뜬다)
+     # 아래는 apply가 끝난 뒤에만 — 그 전에는 ng-ai 일정·노드그룹이 없어 조회·up이 실패한다
      aws scheduler list-schedules --group-name cinema-staging-cluster --query 'Schedules[].Name'   # ng-ai는 -down만
      infra/scripts/cluster-scale.sh up ng-ai
      kubectl get nodes -l cinema/workload=ai          # 1대 Ready (2~3분)
      kubectl get node -l cinema/workload=ai -o jsonpath='{.items[0].spec.taints}'   # cinema/workload=ai, NoSchedule
      kubectl get pods -A -o wide | grep "$(kubectl get node -l cinema/workload=ai -o name | cut -d/ -f2)"   # 데몬셋(aws-node·kube-proxy·eks-pod-identity-agent·node-exporter)만. 앱 파드가 있으면 taint 누락
      infra/scripts/cluster-scale.sh down ng-ai
-     terraform plan                                   # 두 번째: No changes (desired는 Terraform이 무시)
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars
+                                                      # 두 번째: No changes (desired는 Terraform이 무시)
      ```
 2. gitops `base/ai`·`overlays/staging/ai`(`image-tag`는 `newTag`만) 머지 → GitHub 저장소 변수 `AI_BUILD_PUSH_ENABLED=true`(Settings → Secrets and variables → Actions → Variables). 이 순서가 거꾸로면 build-push의 ECR push 또는 gitops 태그 커밋이 실패한다. 켠 뒤 Actions → build-push → Run workflow `services=ai`로 첫 이미지를 만든다(그 전 ai 머지는 이미지 없이 지나갔다)
 3. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`

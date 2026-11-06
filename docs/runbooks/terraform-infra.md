@@ -1157,7 +1157,7 @@ kubectl -n cinema-staging port-forward svc/ai 8085:8080
 ```bash
 curl -s localhost:8085/actuator/health/readiness                  # {"status":"UP"} = 스냅샷 첫 적재 + ai Valkey PING
 curl -s localhost:8085/actuator/prometheus | grep ai_snapshot_age_seconds
-infra/scripts/np-check.sh                                         # gateway → ai ALLOWED, catalog → ai BLOCKED — np-check.sh에 ai 검사를 넣은 뒤에만 나온다(후속 작업). 그 전에는 이 줄을 건너뛴다
+REQUIRE_GATEWAY=1 REQUIRE_AI=1 infra/scripts/np-check.sh          # gateway → ai OPEN, 나머지 → ai BLOCKED, ai → 다른 서비스 BLOCKED (3.1.20). gateway·ai 파드가 없으면 실패(없으면 gateway → ai를 건너뛰고 통과할 수 있다)
 ```
 
 확인이 끝나면 port-forward 터미널에서 Ctrl-C로 종료한다.

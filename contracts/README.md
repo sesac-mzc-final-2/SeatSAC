@@ -7,6 +7,7 @@
 | `events/` | 메시지 JSON Schema (draft 2020-12). `seat-event.v1.json`(Valkey Pub/Sub → SSE), `booking.confirmed.v1.json`(SQS) | 발행·소비 서비스, Lambda |
 | `schemas/` | 공용 스키마. `error.v1.json`(오류 응답 `{code, message, traceId, details?}`) | 모든 서비스 (Java·Python 테스트가 같은 파일을 읽음) |
 | `*/examples/{스키마 이름}/` | 예시 메시지·응답. CI가 스키마로 검증하고, 서비스 테스트의 fixture로도 쓴다 | 테스트 |
+| `openapi/examples/{service}/` | OpenAPI 응답 예시를 파일로 둔 것(`ai`). 내용은 Example Object `{ "summary", "value" }`이고 YAML이 `examples: { 이름: { $ref } }`로 참조한다. Redocly가 `$ref`를 풀어 스키마로 검증(`no-invalid-media-type-examples`) | 화면, 서비스 테스트(`value`) |
 | `tools/` | 계약 CI 도구 (`check.sh`, `check_schema_compat.py`) | 사람·CI |
 | `redocly.yaml` | OpenAPI lint 규칙 | CI |
 
@@ -73,5 +74,6 @@ contracts/tools/check.sh origin/feat/X   # 다른 기준과 비교
 - 이벤트: `events/{이름}.v{N}.json`, 예시는 `events/examples/{이름}.v{N}/*.json` (최소 1개)
 - 루트에 `security: []`를 두고, 인증이 필요한 operation에만 `security: [ { bearerAuth: [] } ]`
 - 오류 응답은 `$ref: "../schemas/error.v1.json"` (내부 API는 `../../schemas/error.v1.json`). 어떤 `code`가 나오는지는 응답 `description`에 적는다
+- 응답 예시를 파일로 둘 때(예시가 길거나 테스트 fixture로 쓸 때): `openapi/examples/{service}/{이름}.json`에 **Example Object** `{ "summary": "…", "value": { … } }`를 두고 YAML에서 `examples: { 이름: { $ref: "./examples/{service}/{이름}.json" } }`로 참조한다. Redocly가 `$ref`를 풀어 `value`를 스키마로 검증한다(오류). `value: { $ref: … }`처럼 값 안의 `$ref`는 풀리지 않아 검증에 실패하니 쓰지 않는다. 테스트는 파일의 `value`를 읽는다
 - 확장 필드: `x-feature-id`(기능명세서 ID, 예 `BKG-02`), `x-required-role: ADMIN`(관리자 경로), `x-caller`(내부 API 호출자 = NetworkPolicy 허용 목록), `x-status: proposed`(❓ 결정 전 제안 API)
 - `description`·`summary` 값에 `: `나 `{`가 들어가면 따옴표로 감싼다 (YAML 파싱 오류)

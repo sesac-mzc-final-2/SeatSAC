@@ -82,6 +82,11 @@ output "valkey_primary_endpoint" {
   value       = aws_elasticache_replication_group.valkey.primary_endpoint_address
 }
 
+output "ai_valkey_primary_endpoint" {
+  description = "⚠️AI ai Valkey — staging-k8s가 이름으로 조회해 cinema-infra-endpoints AI_VALKEY_HOST에 넣는다 (포트 6379, TLS)"
+  value       = aws_elasticache_replication_group.ai_valkey.primary_endpoint_address
+}
+
 # ---- CloudFront·S3 (3.1.11) → GitHub Variables(frontend-deploy) · global(무효화 권한) ----
 output "cloudfront_domain_name" {
   description = "화면·API 주소: https://<이 값>/ , https://<이 값>/api/*"

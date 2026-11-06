@@ -1136,8 +1136,40 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
      terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars
                                                       # 두 번째: No changes (desired는 Terraform이 무시)
      ```
+   - 적용·확인(3.1.18 `envs/staging` — ECR `cinema/ai`·ai Valkey. 저장소 루트에서):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars -out=plan.out
+                                                      # 기대(3.1.19 apply 뒤 기준): 9 to add, 0 to change, 0 to destroy
+                                                      #   ECR cinema/ai 3(저장소·수명 주기·저장소 정책) · SG ai-valkey 1 + 인바운드(노드 SG → 6379) 1
+                                                      #   파라미터 그룹 ai-valkey8 1 · 복제 그룹 cinema-staging-ai-valkey 1 · 경보 2(메모리 80%·Evictions)
+                                                      #   기존 valkey·ECR 5개 변경 0 — 다르면 apply하지 않는다
+     terraform -chdir=infra/terraform/envs/staging apply plan.out && rm -f infra/terraform/envs/staging/plan.out
+                                                      # ElastiCache 생성 10~15분
+     aws elasticache describe-replication-groups --replication-group-id cinema-staging-ai-valkey \
+       --query 'ReplicationGroups[0].{status:Status,tls:TransitEncryptionEnabled,node:CacheNodeType}'   # available · true · cache.t4g.micro
+     aws elasticache describe-cache-parameters --cache-parameter-group-name cinema-staging-ai-valkey8 --source user \
+       --query 'Parameters[].[ParameterName,ParameterValue]' --output text                            # maxmemory-policy noeviction · reserved-memory-percent 50
+     aws ecr describe-repositories --repository-names cinema/ai --query 'repositories[0].imageTagMutability'   # "IMMUTABLE"
+     ```
 2. gitops `base/ai`·`overlays/staging/ai`(`image-tag`는 `newTag`만) 머지 → GitHub 저장소 변수 `AI_BUILD_PUSH_ENABLED=true`(Settings → Secrets and variables → Actions → Variables). 이 순서가 거꾸로면 build-push의 ECR push 또는 gitops 태그 커밋이 실패한다. 켠 뒤 Actions → build-push → Run workflow `services=ai`로 첫 이미지를 만든다(그 전 ai 머지는 이미지 없이 지나갔다)
 3. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`
+   - 적용·확인(3.1.18 `envs/staging-k8s` — 2단계 build-push가 `overlays/staging/ai/image-tag`에 실제 태그를 커밋한 뒤. `staging-k8s.tfvars`에 `ai_enabled = true`·`cloudfront_distribution_id`가 이미 있다):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key   # staging 키 붙여넣기(화면·셸 기록에 안 남음). 파일에 쓰지 않는다
+     cd infra/terraform/envs/staging-k8s
+     terraform plan -var-file=staging-k8s.tfvars -out=plan.out
+                                                      # 기대: Secret ai-secrets 1 add · ConfigMap cinema-infra-endpoints 1 change(AI_VALKEY_HOST·PUBLIC_API_BASE_URL 추가)
+                                                      #       helm_release argocd-apps 1 change(cinema-ai 추가). 다른 Application·Secret 변경 0, destroy 0
+                                                      #   키가 없거나 비었으면 "TF_VAR_anthropic_api_key가 필요하다"로 plan이 멈춘다(정상 — 빈 키로 덮어쓰지 않게)
+     terraform apply plan.out && rm -f plan.out       # 저장된 plan에는 키가 평문
+     unset TF_VAR_anthropic_api_key
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data}' | jq 'keys'   # ["ANTHROPIC_API_KEY"] — 값은 출력하지 않는다
+     kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.PUBLIC_API_BASE_URL}{"\n"}'   # https://<배포 도메인>/api
+     kubectl -n argocd get application cinema-ai                                         # Synced · Progressing(ng-ai 0대라 Pending이 정상)
+     ```
+   - `ai_enabled = true`인 동안 **이 폴더의 모든 plan·apply**(ai와 상관없는 변경도)에 `TF_VAR_anthropic_api_key`가 필요하다. 키를 바꾸면 다시 apply → ArgoCD에서 `cinema-ai` Restart
 4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
 
 #### 6-G-2. 확인 (적용 직후, 플래그 off)

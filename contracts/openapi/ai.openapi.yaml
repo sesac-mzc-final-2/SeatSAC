@@ -57,7 +57,8 @@ paths:
           description: |
             답. `path`로 처리 경로를 구분하고 화면은 `answer` 문장 + `columns`/`rows` 표 + "`asOf` 기준"을 보여준다.
             `llm.calls`가 0이면 Claude API를 부르지 않은 것(캐시·내 예매) — 데모 화면에 그대로 표시.
-            `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)도 200이며 `columns`·`rows`·`sql`은 null.
+            `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)도 200이며 `columns`·`rows`는 null.
+            `sql`은 `REJECTED`일 때 거부된 SQL(화면은 보여주지 않아도 됨), `OUT_OF_SCOPE`는 null.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ChatResponse" }

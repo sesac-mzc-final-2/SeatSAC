@@ -244,7 +244,7 @@ components:
           maxItems: 500
           items:
             type: array
-            items: { type: [string, integer, number, boolean, "null"] }
+            items: { type: [string, integer, number, "null"], description: "`Column.type` text → string, integer → integer, real → number. SQLite에 boolean은 없다(0·1 integer)" }
           description: "`columns` 순서의 값 배열. 최대 500행(`truncated`). MY_BOOKINGS는 본인 예매만. REJECTED·OUT_OF_SCOPE는 null"
         rowCount: { type: integer, minimum: 0, description: "`rows` 길이(null이면 0)" }
         truncated: { type: boolean, description: "500행에서 잘렸으면 true(LIMIT 없는 SQL은 LIMIT 500을 붙여 실행)" }

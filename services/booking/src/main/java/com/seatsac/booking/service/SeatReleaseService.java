@@ -63,7 +63,7 @@ public class SeatReleaseService {
         }
 
         // 커밋 후: Valkey 정리 → 발행. 이미 CANCELED로 커밋됐으니 정리 실패로 500을 내지 않는다
-        // (좌석 키는 TTL 300초로, 장부 멤버는 만료 스캔이 치운다)
+        // (좌석 키는 선점 TTL(설정)로, 장부 멤버는 만료 스캔이 치운다)
         try {
             seatHold.release(booking.getScreeningId(), userId, booking.getHoldId(), seatIds);
         } catch (DataAccessException e) {

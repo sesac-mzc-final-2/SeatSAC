@@ -2,7 +2,8 @@ package com.seatsac.booking.component;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.seatsac.booking.common.BookingPolicy;
+import com.seatsac.booking.config.SeatHoldConfig;
+import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.RedisKeys;
 import com.seatsac.booking.component.SeatHoldStrategy.HoldOutcome.Status;
 import com.seatsac.booking.config.RedisConfig;
@@ -29,11 +30,14 @@ import org.springframework.test.context.ActiveProfiles;
  */
 @DataRedisTest   // JPA·Flyway를 띄우지 않는다 — 이 테스트는 Valkey만 쓴다
 @ActiveProfiles("test")
-@Import({ValkeyContainerSupport.class, RedisConfig.class, SeatHoldRedisRepository.class})
+@Import({ValkeyContainerSupport.class, RedisConfig.class, SeatHoldConfig.class, SeatHoldRedisRepository.class})
 class SeatHoldRedisRepositoryTest {
 
     private static final Long SCREENING = 42L;
     private static final Instant NOW = Instant.parse("2026-10-22T03:00:00Z");
+
+    @Autowired
+    SeatHoldProperties seatHoldProperties;
 
     @Autowired
     SeatHoldRedisRepository repository;
@@ -45,7 +49,7 @@ class SeatHoldRedisRepositoryTest {
     @BeforeEach
     void clear() {
         redis.getConnectionFactory().getConnection().serverCommands().flushDb();
-        expiresAt = NOW.plus(BookingPolicy.HOLD_TTL);
+        expiresAt = NOW.plus(seatHoldProperties.holdTtl());
     }
 
     @Test
@@ -58,7 +62,7 @@ class SeatHoldRedisRepositoryTest {
         assertThat(redis.opsForValue().get(RedisKeys.seat(SCREENING, 102L))).isEqualTo(holdId);
         assertThat(redis.opsForValue().get(RedisKeys.userHold(SCREENING, user(1)))).isEqualTo(holdId);
         assertThat(redis.getExpire(RedisKeys.seat(SCREENING, 101L)))
-            .isBetween(BookingPolicy.HOLD_TTL.toSeconds() - 5, BookingPolicy.HOLD_TTL.toSeconds());
+            .isBetween(seatHoldProperties.holdTtl().toSeconds() - 5, seatHoldProperties.holdTtl().toSeconds());
         // 장부 등록도 같은 스크립트에서 (A2)
         assertThat(redis.opsForZSet().score(RedisKeys.holdExpiry(),
             RedisKeys.holdExpiryMember(SCREENING, holdId))).isEqualTo((double) expiresAt.toEpochMilli());

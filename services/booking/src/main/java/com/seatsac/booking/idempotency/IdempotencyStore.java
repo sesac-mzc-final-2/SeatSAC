@@ -10,6 +10,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.seatsac.booking.config.SeatHoldProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
@@ -39,6 +40,7 @@ public class IdempotencyStore {
     private final StringRedisTemplate redis;
     private final ObjectMapper mapper;
     private final RedisScript<Long> idempotencyWriteScript;
+    private final SeatHoldProperties seatHoldProperties;
 
     /** 요청 본문 해시 — 같은 바이트면 같은 값이라야 하므로 직렬화한 본문을 그대로 해싱한다 */
     public String hash(byte[] requestBody) {
@@ -63,7 +65,7 @@ public class IdempotencyStore {
         String fresh = serialize(IdempotencyRecord.inProgress(requestHash, owner));
 
         if (Boolean.TRUE.equals(redis.opsForValue()
-            .setIfAbsent(redisKey, fresh, BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL))) {
+            .setIfAbsent(redisKey, fresh, inProgressTtl()))) {
             return Begin.acquired(owner);
         }
 
@@ -71,7 +73,7 @@ public class IdempotencyStore {
         if (stored == null) {
             // 확인하는 사이 TTL이 끝났다. 한 번 더 잡아 보고, 그래도 안 되면 처리 중으로 본다
             if (Boolean.TRUE.equals(redis.opsForValue()
-                .setIfAbsent(redisKey, fresh, BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL))) {
+                .setIfAbsent(redisKey, fresh, inProgressTtl()))) {
                 return Begin.acquired(owner);
             }
             return Begin.existing(IdempotencyRecord.inProgress(requestHash, null));
@@ -113,7 +115,7 @@ public class IdempotencyStore {
             // 이미 바뀌었거나 지워졌을 수도 있다. 어느 쪽이든 응답은 그대로 내보낸다
             // (예매는 이미 커밋됐다). 그대로 남은 경우에만 처리 중 TTL로 풀린다
             log.warn("멱등 키 쓰기 실패 mode={} — 키 상태를 확인할 수 없다(그대로면 처리 중 TTL {}초 뒤 만료)",
-                mode, BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds(), e);
+                mode, inProgressTtl().toSeconds(), e);
             return false;
         }
     }
@@ -159,5 +161,27 @@ public class IdempotencyStore {
         public Optional<IdempotencyRecord> existingRecord() {
             return Optional.ofNullable(existing);
         }
+    }
+
+    /**
+     * 처리 중({@code IN_PROGRESS}) 멱등 키의 TTL. 요청이 끝나면 저장(DONE) 또는 삭제로 바뀌므로
+     * 이 값이 쓰이는 경우는 <b>처리 도중 파드가 죽거나 요청이 아주 오래 걸리는 경우</b>뿐이다.
+     * 24시간을 그대로 쓰면 그런 키로 들어오는 재시도가 하루 동안 409를 받는다.
+     *
+     * <p>선점 TTL({@link SeatHoldProperties#holdTtl()}, 설정)과 같은 값으로 둔다. 이 시간이 지나면 <b>선점 자체가 이미 만료</b>되어
+     * 좌석이 풀리므로, 같은 키의 재시도가 새로 선점을 잡아도 앞 요청과 좌석을 다툴 일이 없다.
+     * Gateway 응답 대기(15초)는 근거로 쓸 수 없다 — 클라이언트가 포기해도 서버 처리는 계속된다.
+     *
+     * <p><b>결제(BKG-10)도 이 TTL을 쓴다.</b> 결제 중에는 만료가 보류(DEFERRED)되므로 위 「선점이 이미
+     * 만료」 근거는 결제에 맞지 않는다. 결제 요청 하나는 결제 호출·재시도·조회를 합쳐 계약상 약 12초까지
+     * 걸리므로, 설정 하한 30초로 줄여도 정상 처리 중에 키가 풀리지 않는다. 그래도 먼저 풀리면
+     * {@code current_payment_id} 유일 제약과 결제 서비스의 예매당 1회(ADR-24)가 이중 결제를 막는다.
+     *
+     * <p>TTL이 끝난 뒤 늦게 끝난 요청이 그 사이 들어온 요청의 응답을 덮어쓰는 문제는 TTL로
+     * 막지 않는다 — 저장·삭제를 <b>처리권(owner)이 같을 때만</b> 하도록 했다
+     * ({@code idem-write.lua}).
+     */
+    private java.time.Duration inProgressTtl() {
+        return seatHoldProperties.holdTtl();
     }
 }

@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.common.RedisKeys;
@@ -52,6 +53,9 @@ class SeatHoldIdempotencyTest {
     private static final String OTHER_USER = "22222222-2222-4222-8222-222222222222";
     private static final Instant NOW = Instant.parse("2026-10-23T03:00:00Z");
     private static final String BODY = "{\"screeningId\":42,\"seatIds\":[101,102]}";
+
+    @Autowired
+    SeatHoldProperties seatHoldProperties;
 
     @Autowired
     MockMvc mvc;
@@ -140,9 +144,9 @@ class SeatHoldIdempotencyTest {
             RedisKeys.idempotency(WithCurrentUser.DEFAULT_USER, HOLD_REQUEST), TimeUnit.SECONDS);
 
         assertThat(inProgressTtl).isBetween(
-            BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds() - 5,
-            BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL.toSeconds());
-        assertThat(BookingPolicy.IDEMPOTENCY_IN_PROGRESS_TTL)
+            seatHoldProperties.holdTtl().toSeconds() - 5,
+            seatHoldProperties.holdTtl().toSeconds());
+        assertThat(seatHoldProperties.holdTtl())
             .isLessThan(BookingPolicy.IDEMPOTENCY_TTL);
     }
 

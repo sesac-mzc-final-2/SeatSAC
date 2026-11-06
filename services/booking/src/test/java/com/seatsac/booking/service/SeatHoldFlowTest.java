@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 
+import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.common.ScreeningNotFoundException;
@@ -60,6 +61,9 @@ class SeatHoldFlowTest {
     CatalogClient catalogClient;
 
     @Autowired
+    SeatHoldProperties seatHoldProperties;
+
+    @Autowired
     com.seatsac.booking.component.ScreeningCache screeningCache;
     @Autowired
     SeatHoldService seatHoldService;
@@ -104,7 +108,7 @@ class SeatHoldFlowTest {
         assertThat(response.status()).isEqualTo(BookingStatus.PENDING);
         assertThat(response.seatLabels()).containsExactly("J7", "J8");
         assertThat(response.amount()).isEqualTo(30_000);
-        assertThat(response.expiresAt().toInstant()).isEqualTo(NOW.plus(BookingPolicy.HOLD_TTL));
+        assertThat(response.expiresAt().toInstant()).isEqualTo(NOW.plus(seatHoldProperties.holdTtl()));
 
         Booking saved = bookingRepository.findById(response.bookingId()).orElseThrow();
         assertThat(saved.getStatus()).isEqualTo(BookingStatus.PENDING);
@@ -179,7 +183,7 @@ class SeatHoldFlowTest {
     void staleOrphanUserHoldIsCleanedAndHoldSucceeds() {
         String orphanHoldId = UUID.randomUUID().toString();
         seatHold.hold(SCREENING, USER, orphanHoldId, List.of(103L),
-            NOW.plus(BookingPolicy.HOLD_TTL).minus(BookingPolicy.HOLD_COMMIT_GRACE).minusSeconds(1));
+            NOW.plus(seatHoldProperties.holdTtl()).minus(BookingPolicy.HOLD_COMMIT_GRACE).minusSeconds(1));
         assertThat(bookingRepository.findByHoldId(orphanHoldId)).isEmpty();
 
         SeatHoldResponse response = seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L)));
@@ -199,7 +203,7 @@ class SeatHoldFlowTest {
     @Test
     void secondRequestWhileFirstIsStillCommittingIsRejected() {
         String committingHoldId = UUID.randomUUID().toString();
-        seatHold.hold(SCREENING, USER, committingHoldId, List.of(103L), NOW.plus(BookingPolicy.HOLD_TTL));
+        seatHold.hold(SCREENING, USER, committingHoldId, List.of(103L), NOW.plus(seatHoldProperties.holdTtl()));
         assertThat(bookingRepository.findByHoldId(committingHoldId)).isEmpty();   // 아직 커밋 전
 
         assertThatThrownBy(() -> seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))))

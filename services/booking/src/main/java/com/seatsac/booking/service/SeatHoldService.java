@@ -26,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import com.seatsac.booking.config.SeatHoldProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
@@ -37,7 +38,7 @@ import org.springframework.stereotype.Service;
  *
  * <pre>
  * 1. 회차·좌석 검증 (파드 캐시, 없으면 Catalog)
- * 2. holdId 발급, expiresAt = now + 300초
+ * 2. holdId 발급, expiresAt = 선점 직전 시각 + 선점 TTL(설정, 기본 300초)
  * 3. hold.lua  (좌석 키 + user-hold + ZADD hold-expiry 한 번에)
  * 4. tx        booking(PENDING) + booking_seat  → 커밋
  *              실패 시 release.lua로 정리하고 발행 없이 409
@@ -68,29 +69,31 @@ public class SeatHoldService {
     private final BookingRepositoryReader bookingReader;
     private final SeatEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
+    private final SeatHoldProperties seatHoldProperties;
 
     public SeatHoldResponse hold(String userId, SeatHoldRequest request) {
-        Instant now = clock.instant();
         Held held;
         try {
-            held = validateAndHold(userId, request, now);
+            held = validateAndHold(userId, request);
         } catch (RuntimeException e) {
             resultOf(e).ifPresent(this::count);
             throw e;
         }
         count("success");
 
-        // 커밋 후에만 발행한다 (redis-usage.md 1장)
-        eventPublisher.publish(SeatEventType.HELD, request.screeningId(), held.seatIds(), now);
+        // 커밋 후에만 발행한다 (redis-usage.md 1장). 이벤트 시각 = 예매 생성 시각(응답 createdAt과 같다)
+        eventPublisher.publish(SeatEventType.HELD, request.screeningId(), held.seatIds(),
+            held.booking().getCreatedAt());
         return SeatHoldResponse.from(held.booking(), held.seatIds());
     }
 
     /** 1~4단계. 돌아오면 예매가 PENDING으로 커밋된 것이다 */
-    private Held validateAndHold(String userId, SeatHoldRequest request, Instant now) {
+    private Held validateAndHold(String userId, SeatHoldRequest request) {
         List<Long> seatIds = validateSeats(request);
 
         Screening screening = screeningCache.screening(request.screeningId());
-        if (screening.hasStarted(now)) {
+        // 시작 여부는 회차를 읽은 뒤의 시각으로 본다 — Catalog 조회가 길어진 만큼 판정이 늦어지지 않게
+        if (screening.hasStarted(clock.instant())) {
             throw BookingErrorCode.SCREENING_CLOSED.exception(
                 ErrorDetail.of("screeningId", request.screeningId(), BookingErrorCode.SCREENING_CLOSED.name()));
         }
@@ -102,7 +105,7 @@ public class SeatHoldService {
                 .toList());
         }
 
-        return new Held(holdAndSave(userId, request.screeningId(), seatIds, layout, now, true), seatIds);
+        return new Held(holdAndSave(userId, request.screeningId(), seatIds, layout, true), seatIds);
     }
 
     /** 커밋된 선점 — 발행·응답에 쓴다 */
@@ -132,15 +135,19 @@ public class SeatHoldService {
      * @param retryAfterOrphan 고아 키를 정리한 뒤 한 번만 다시 시도한다(무한 재시도 방지)
      */
     private Booking holdAndSave(String userId, Long screeningId, List<Long> seatIds, SeatLayout layout,
-                                Instant now, boolean retryAfterOrphan) {
+                                boolean retryAfterOrphan) {
         String holdId = UUID.randomUUID().toString();
-        Instant expiresAt = now.plus(BookingPolicy.HOLD_TTL);
+        // 선점 시각은 선점 직전에 구한다. 요청 초입의 now(Catalog 조회 전)를 쓰면 조회가 길어진 만큼
+        // RDS expires_at이 Valkey 키의 실제 TTL보다 앞당겨지고(TTL을 짧게 설정할수록 커진다),
+        // created_at~expires_at 간격도 설정 TTL보다 길어진다 → 만료·생성 시각과 이 아래 판단에 모두 이 값을 쓴다
+        Instant heldAt = clock.instant();
+        Instant expiresAt = heldAt.plus(seatHoldProperties.holdTtl());
 
         HoldOutcome outcome = seatHold.hold(screeningId, userId, holdId, seatIds, expiresAt);
         switch (outcome.status()) {
             case SEAT_TAKEN -> throw seatUnavailable(screeningId, outcome.takenSeatIds());
             case ACTIVE_HOLD -> {
-                Optional<Booking> active = bookingReader.findPendingByHoldId(outcome.activeHoldId(), now);
+                Optional<Booking> active = bookingReader.findPendingByHoldId(outcome.activeHoldId(), heldAt);
                 if (active.isPresent()) {
                     Booking pending = active.get();
                     throw BookingErrorCode.ACTIVE_HOLD_EXISTS.exception(
@@ -150,7 +157,7 @@ public class SeatHoldService {
                 // 아직 커밋 중일 수 있다: hold.lua는 RDS 커밋 전에 user-hold·장부를 쓴다.
                 // 같은 사용자의 두 번째 요청(더블클릭·재시도)을 고아로 보고 지우면 첫 요청의
                 // 선점 1건 제한과 만료 장부가 깨진다 → 만들어진 지 얼마 안 됐으면 409로 돌려준다
-                if (isCommitInFlight(screeningId, outcome.activeHoldId(), now)) {
+                if (isCommitInFlight(screeningId, outcome.activeHoldId(), heldAt)) {
                     throw BookingErrorCode.ACTIVE_HOLD_EXISTS.exception(
                         ErrorDetail.of("screeningId", screeningId, "HOLD_IN_PROGRESS"));
                 }
@@ -162,18 +169,18 @@ public class SeatHoldService {
                 if (!retryAfterOrphan) {
                     throw BookingErrorCode.ACTIVE_HOLD_EXISTS.exception();
                 }
-                return holdAndSave(userId, screeningId, seatIds, layout, now, false);
+                return holdAndSave(userId, screeningId, seatIds, layout, false);
             }
             default -> { /* OK — 아래에서 저장한다 */ }
         }
 
         try {
             return bookingState.createPending(new PendingBooking(userId, screeningId, holdId, seatIds,
-                layout.labelsOf(seatIds), expiresAt), now);
+                layout.labelsOf(seatIds), expiresAt), heldAt);
         } catch (RuntimeException e) {
             // 유일 제약 위반 등. Valkey를 되돌리고 이벤트는 발행하지 않는다.
             // 되돌리기가 실패해도 원래 예외를 그대로 던진다 — 409를 500으로 바꾸면 안 된다
-            // (남은 좌석 키는 TTL 300초로 사라진다)
+            // (남은 좌석 키는 선점 TTL이 지나면 사라진다)
             try {
                 seatHold.release(screeningId, userId, holdId, seatIds);
             } catch (DataAccessException cleanupFailure) {
@@ -187,10 +194,15 @@ public class SeatHoldService {
     /**
      * 장부 점수(만료 시각)에서 선점 생성 시각을 구해, 아직 RDS 커밋이 끝나지 않았을 수 있는
      * 창인지 본다. 장부에 멤버가 없으면(이미 정리됐거나 장부만 날아간 경우) 고아로 본다.
+     *
+     * <p>생성 시각은 <b>지금</b> 설정 TTL로 거꾸로 구한다. TTL 설정을 바꾸면 그 전에 만든 선점이
+     * 남아 있는 동안(이전 TTL만큼) 판정이 어긋난다 — 줄이면 고아 키를 처리 중으로 봐 409, 늘리면
+     * 커밋 중인 선점을 고아로 볼 수 있다. 값은 데모 준비 때 한 번 바꾸고, 바꾼 직후 이전 TTL 동안은
+     * 선점 시험을 하지 않는다. 생성 시각을 장부와 따로 저장하면 없앨 수 있다(후속).
      */
     private boolean isCommitInFlight(Long screeningId, String activeHoldId, Instant now) {
         return seatHold.expiryOf(screeningId, activeHoldId)
-            .map(expiresAt -> expiresAt.minus(BookingPolicy.HOLD_TTL))
+            .map(expiresAt -> expiresAt.minus(seatHoldProperties.holdTtl()))
             .filter(createdAt -> createdAt.isAfter(now.minus(BookingPolicy.HOLD_COMMIT_GRACE)))
             .isPresent();
     }

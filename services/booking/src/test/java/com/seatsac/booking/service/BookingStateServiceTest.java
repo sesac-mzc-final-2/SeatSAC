@@ -3,8 +3,8 @@ package com.seatsac.booking.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.BookingErrorCode;
-import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.entity.Booking;
 import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.repository.BookingRepository;
@@ -40,6 +40,9 @@ class BookingStateServiceTest {
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
 
     @Autowired
+    SeatHoldProperties seatHoldProperties;
+
+    @Autowired
     BookingStateService bookingStateService;
     @Autowired
     BookingRepository bookingRepository;
@@ -58,7 +61,7 @@ class BookingStateServiceTest {
         Instant now = clock.instant();
 
         Booking saved = bookingStateService.createPending(
-            command(42L, List.of(101L, 102L), now.plus(BookingPolicy.HOLD_TTL)), now);
+            command(42L, List.of(101L, 102L), now.plus(seatHoldProperties.holdTtl())), now);
 
         Booking found = bookingRepository.findById(saved.getBookingId()).orElseThrow();
         assertThat(found.getStatus()).isEqualTo(BookingStatus.PENDING);
@@ -76,10 +79,10 @@ class BookingStateServiceTest {
     @Test
     void createPendingRejectsSeatAlreadyTaken() {
         Instant now = clock.instant();
-        bookingStateService.createPending(command(77L, List.of(201L), now.plus(BookingPolicy.HOLD_TTL)), now);
+        bookingStateService.createPending(command(77L, List.of(201L), now.plus(seatHoldProperties.holdTtl())), now);
 
         assertThatThrownBy(() -> bookingStateService.createPending(
-            command(77L, List.of(201L, 202L), now.plus(BookingPolicy.HOLD_TTL)), now))
+            command(77L, List.of(201L, 202L), now.plus(seatHoldProperties.holdTtl())), now))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code())
             .isEqualTo(BookingErrorCode.SEAT_UNAVAILABLE);
@@ -97,7 +100,7 @@ class BookingStateServiceTest {
     @Test
     void createPendingRejectsSeatCountMismatch() {
         Instant now = clock.instant();
-        Instant expiresAt = now.plus(BookingPolicy.HOLD_TTL);
+        Instant expiresAt = now.plus(seatHoldProperties.holdTtl());
 
         // 좌석 번호 목록과 좌석 수가 어긋나면 amount가 틀어진다 — 저장 전에 막는다
         assertThatThrownBy(() -> Booking.pending(USER_ID, 1L, "hold", List.of("J7"), 2, expiresAt, now))

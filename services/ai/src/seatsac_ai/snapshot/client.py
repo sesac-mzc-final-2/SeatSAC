@@ -29,6 +29,14 @@ class SnapshotFetchError(RuntimeError):
     """공개 API 호출이 끝내 실패했다. 적재기는 이번 갱신을 버리고 이전 스냅샷을 유지한다."""
 
 
+def _field(body: Any, key: str, kind: type, path: str) -> Any:
+    """계약상 필수인 칸을 꺼낸다. 없거나 모양이 다르면 실패(빈 목록 성공으로 보지 않는다)."""
+    value = body.get(key) if isinstance(body, dict) else None
+    if not isinstance(value, kind) or isinstance(value, bool):
+        raise SnapshotFetchError(f"GET {path}: '{key}' 없음 또는 형식 오류(계약 위반)")
+    return value
+
+
 class PublicApiClient:
     def __init__(self, base_url: str, http: httpx.AsyncClient | None = None) -> None:
         self._base = base_url.rstrip("/")
@@ -68,21 +76,24 @@ class PublicApiClient:
             body = await self._get_json(
                 "/movies", {"status": "NOW_SHOWING", "page": page, "size": _PAGE_SIZE}
             )
-            items.extend(body.get("content", []))
-            if page + 1 >= int(body.get("totalPages", 1)):
+            items.extend(_field(body, "content", list, "/movies"))
+            if page + 1 >= _field(body, "totalPages", int, "/movies"):
                 return items
         log.warning("movies: %d쪽에서 멈춤(상한). 이후 영화는 스냅샷에 없다", _MAX_PAGES)
         return items
 
     async def get_movie(self, movie_id: int) -> dict[str, Any]:
-        return await self._get_json(f"/movies/{movie_id}")
+        body = await self._get_json(f"/movies/{movie_id}")
+        if not isinstance(body, dict):
+            raise SnapshotFetchError(f"GET /movies/{movie_id}: 객체가 아님")
+        return body
 
     async def list_theaters(self) -> list[dict[str, Any]]:
         body = await self._get_json("/theaters", {"hasLayout": "true"})
-        return list(body.get("items", []))
+        return list(_field(body, "items", list, "/theaters"))
 
     async def list_screenings(self, day: date, theater_id: int) -> list[dict[str, Any]]:
         body = await self._get_json(
             "/screenings", {"date": day.isoformat(), "theaterId": theater_id}
         )
-        return list(body.get("items", []))
+        return list(_field(body, "items", list, "/screenings"))

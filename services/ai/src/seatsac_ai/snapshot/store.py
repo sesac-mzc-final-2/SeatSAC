@@ -25,10 +25,9 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
+from seatsac_ai.common.metrics import SNAPSHOT_SCOPES as SCOPES
 from seatsac_ai.snapshot import schema
 from seatsac_ai.snapshot.mapper import KST, format_minute
-
-SCOPES = ("today", "other")
 
 _ALLOWED_ACTIONS = frozenset({sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION})
 

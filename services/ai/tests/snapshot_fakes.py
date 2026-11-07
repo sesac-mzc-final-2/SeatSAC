@@ -41,10 +41,10 @@ def screening(screening_id: int = 100, starts: str = "2026-11-06T20:00:00+09:00"
         "filmFormat": "2D",
         "totalSeats": 100,
         "remainingSeats": 40,
-        "remainingSeatsSource": "LIVE",
+        "remainingSeatsSource": "BOOKING",
         "movie": {"movieId": 1, "title": "영화1"},
         "theater": {"theaterId": 10, "name": "극장10"},
-        "auditorium": {"auditoriumId": 7, "name": "1관", "screenType": "GENERAL"},
+        "auditorium": {"auditoriumId": 7, "name": "1관", "screenType": "NORMAL"},
     }
     data.update(kw)
     return data

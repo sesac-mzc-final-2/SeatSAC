@@ -104,14 +104,16 @@ def create_schema(conn: sqlite3.Connection) -> None:
         conn.execute(ddl)
 
 
-def insert_sql(table: str, columns: tuple[str, ...]) -> str:
-    """`INSERT OR REPLACE`(이름 있는 자리표). 같은 PK가 다시 오면 덮어쓴다."""
+def insert_sql(table: str, columns: tuple[str, ...], on_conflict: str = "REPLACE") -> str:
+    """이름 있는 자리표 INSERT. 기본은 같은 PK를 덮어쓰고(`REPLACE`), `IGNORE`면 기존 행을 둔다."""
     names = ", ".join(columns)
     marks = ", ".join(f":{c}" for c in columns)
-    return f"INSERT OR REPLACE INTO {table} ({names}) VALUES ({marks})"
+    return f"INSERT OR {on_conflict} INTO {table} ({names}) VALUES ({marks})"
 
 
 MOVIE_INSERT = insert_sql("movie", MOVIE_COLUMNS)
+# 상세 호출이 실패한 영화: 이전 스냅샷의 행이 있으면 그대로 두고, 없을 때만 요약으로 넣는다
+MOVIE_INSERT_IF_ABSENT = insert_sql("movie", MOVIE_COLUMNS, on_conflict="IGNORE")
 THEATER_INSERT = insert_sql("theater", THEATER_COLUMNS)
 SCREENING_INSERT = insert_sql("screening", SCREENING_COLUMNS)
 META_INSERT = insert_sql("snapshot_meta", META_COLUMNS)

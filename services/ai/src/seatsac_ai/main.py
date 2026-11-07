@@ -48,15 +48,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.readiness = ReadinessRegistry()
 
-    # 스냅샷(3.4.9). 공개 API 주소가 없으면 켜지 않는다(로컬·CI 스모크).
+    # 스냅샷(3.4.9). 공개 API 주소가 없으면 켜지 않는다(local). staging이면 readiness DOWN.
     # 켜면 첫 적재가 끝나야 readiness가 UP이 된다.
     app.state.snapshot = None
     if settings.public_api_base_url:
         snapshot = build_snapshot(settings, settings.public_api_base_url)
         app.state.snapshot = snapshot
         app.state.readiness.register("snapshot", snapshot.store.is_ready)
+    elif settings.app_env == "staging":
+        # staging에서는 스냅샷이 readiness 조건이다(계약 9장). 주소가 빠졌으면 조용히 UP이 되지 않게
+        # 점검을 DOWN으로 등록한다. 기동은 막지 않는다 — CI 스모크는 503도 통과로 본다.
+        log.error("PUBLIC_API_BASE_URL이 없다 — 스냅샷 없이 readiness DOWN으로 둔다")
+        app.state.readiness.register("snapshot", lambda: False)
     else:
-        log.warning("PUBLIC_API_BASE_URL이 없어 스냅샷 적재를 시작하지 않는다")
+        log.warning("PUBLIC_API_BASE_URL이 없어 스냅샷 적재를 시작하지 않는다(local)")
 
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)

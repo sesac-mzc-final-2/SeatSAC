@@ -82,3 +82,26 @@ def test_transport_error_and_bad_json():
         asyncio.run(make(boom).list_theaters())
     with pytest.raises(SnapshotFetchError):
         asyncio.run(make(lambda r: httpx.Response(200, content=b"<html>")).list_theaters())
+
+
+@pytest.mark.parametrize(
+    "call, body",
+    [
+        ("theaters", {}),
+        ("theaters", {"items": None}),
+        ("screenings", {"oops": []}),
+        ("movies", {"totalPages": 1}),
+        ("movies", {"content": [], "totalPages": "1"}),
+        ("movie", []),
+    ],
+)
+def test_missing_required_field_is_failure_not_empty(call, body):
+    c = make(lambda r: httpx.Response(200, json=body))
+    run = {
+        "theaters": c.list_theaters,
+        "screenings": lambda: c.list_screenings(date(2026, 11, 6), 1),
+        "movies": c.list_movies,
+        "movie": lambda: c.get_movie(1),
+    }[call]
+    with pytest.raises(SnapshotFetchError):
+        asyncio.run(run())

@@ -1136,8 +1136,54 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
      terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars
                                                       # 두 번째: No changes (desired는 Terraform이 무시)
      ```
+   - 적용·확인(3.1.18 `envs/staging` — ECR `cinema/ai`·ai Valkey. 저장소 루트에서):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars -out=plan.out
+                                                      # 기대(3.1.19 apply 뒤 기준): 9 to add, 0 to change, 0 to destroy
+                                                      #   ECR cinema/ai 3(저장소·수명 주기·저장소 정책) · SG ai-valkey 1 + 인바운드(노드 SG → 6379) 1
+                                                      #   파라미터 그룹 ai-valkey8 1 · 복제 그룹 cinema-staging-ai-valkey 1 · 경보 2(메모리 80%·Evictions)
+                                                      #   기존 valkey·ECR 5개 변경 0 — 다르면 apply하지 않는다
+                                                      #   (브랜치에서 이미 apply했다면 No changes. 그 경우 **머지 전 main 기준 plan에는 이 9개가 destroy로 나온다**
+                                                      #    → 머지할 때까지 main에서 envs/staging apply 금지, 팀에 공유)
+     terraform -chdir=infra/terraform/envs/staging apply plan.out && rm -f infra/terraform/envs/staging/plan.out
+                                                      # ElastiCache 생성 10~15분
+     aws elasticache describe-replication-groups --replication-group-id cinema-staging-ai-valkey \
+       --query 'ReplicationGroups[0].{status:Status,tls:TransitEncryptionEnabled,node:CacheNodeType}'   # available · true · cache.t4g.micro
+     aws elasticache describe-cache-parameters --cache-parameter-group-name cinema-staging-ai-valkey8 --source user \
+       --query 'Parameters[].[ParameterName,ParameterValue]' --output text                            # maxmemory-policy noeviction · reserved-memory-percent 50
+     aws ecr describe-repositories --repository-names cinema/ai --query 'repositories[0].imageTagMutability'   # "IMMUTABLE"
+     ```
 2. gitops `base/ai`·`overlays/staging/ai`(`image-tag`는 `newTag`만) 머지 → GitHub 저장소 변수 `AI_BUILD_PUSH_ENABLED=true`(Settings → Secrets and variables → Actions → Variables). 이 순서가 거꾸로면 build-push의 ECR push 또는 gitops 태그 커밋이 실패한다. 켠 뒤 Actions → build-push → Run workflow `services=ai`로 첫 이미지를 만든다(그 전 ai 머지는 이미지 없이 지나갔다)
 3. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`
+   - 적용·확인(3.1.18 `envs/staging-k8s` — 2단계 build-push가 `overlays/staging/ai/image-tag`에 실제 태그를 커밋한 뒤. `staging-k8s.tfvars`에 `ai_enabled = true`·`cloudfront_distribution_id`가 이미 있다):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key   # 처음 만들 때만. staging 키 붙여넣기(화면·셸 기록에 안 남음). 파일에 쓰지 않는다
+     cd infra/terraform/envs/staging-k8s
+     terraform apply -var-file=staging-k8s.tfvars     # -out을 쓰지 않는다: 저장된 plan 파일에는 키가 평문으로 남는다. 화면의 plan을 보고 yes
+                                                      # 기대: Secret ai-secrets 1 add · ConfigMap cinema-infra-endpoints 1 change(AI_VALKEY_HOST·PUBLIC_API_BASE_URL 추가)
+                                                      #       helm_release argocd-apps 1 change(cinema-ai 추가). 다른 Application·Secret 변경 0, destroy 0 — 다르면 no
+                                                      #   Secret이 아직 없는데 키가 없거나 비었으면 "TF_VAR_anthropic_api_key가 필요하다"로 멈춘다(정상)
+     unset TF_VAR_anthropic_api_key
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data}' | jq 'keys'   # ["ANTHROPIC_API_KEY"] — 값은 출력하지 않는다
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자(길이만 출력, 값은 출력하지 않는다)
+     kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.PUBLIC_API_BASE_URL}{"\n"}'   # https://<배포 도메인>/api
+     kubectl -n argocd get application cinema-ai                                         # Synced · 처음 10분 Progressing, 그 뒤 Degraded
+     ```
+   - `cinema-ai` Health: ng-ai가 0대면 파드가 Pending이라 **10분 뒤 Degraded가 정상**이다(Deployment `progressDeadlineSeconds` 기본 600초 초과 → `ProgressDeadlineExceeded`). ng-ai를 켜고 파드가 Ready가 되면 Healthy로 돌아온다. ng-ai를 켠 상태에서 Degraded면 진짜 문제(이미지·Secret·readiness) — 6-G-2로 확인
+   - **평소 이 폴더의 plan·apply에는 키가 필요 없다**(`ai.tf` `ignore_changes = [data]` — 처음 만들 때만 요구). 백업 관리자도 키 없이 다른 변경을 할 수 있다
+   - **키 교체**(유출·만료·Public 전환 전 폐기): 키는 어디에도 보관·전달하지 않는다. 팀 Anthropic 계정에서 새 키 발급 → 아래 → ArgoCD에서 `cinema-ai` Restart → 이전 키 폐기
+     ```bash
+     read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key
+     echo "키 길이: ${#TF_VAR_anthropic_api_key}"                          # 0이면 다시 read. 값은 출력하지 않는다
+     # 교체 때는 Secret이 이미 있어 precondition이 빈 키를 막지 못한다 → 키 확인과 apply를 한 줄로 묶어 비었으면 실행 자체를 안 한다
+     [[ "$TF_VAR_anthropic_api_key" =~ [^[:space:]] ]] \
+       && terraform apply -var-file=staging-k8s.tfvars -replace='kubernetes_secret_v1.ai[0]' \
+       || echo "키가 비었거나 apply가 취소·실패했다 — Secret 상태를 아래로 확인"    # 기대: ai-secrets 1 replace만
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자 (0이면 다시 교체)
+     unset TF_VAR_anthropic_api_key
+     ```
 4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
 
 #### 6-G-2. 확인 (적용 직후, 플래그 off)
@@ -1145,7 +1191,7 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
 A. 기동 확인 — 6-G-3 데모 준비에서도 **이 A만** 다시 쓴다
 
 ```bash
-kubectl -n argocd get application cinema-ai                      # Synced (ng-ai 0이면 Health는 Progressing·파드 Pending이 정상)
+kubectl -n argocd get application cinema-ai                      # Synced (ng-ai 0이면 파드 Pending → Health는 10분 뒤 Degraded가 정상, 6-G-1 3단계)
 infra/scripts/cluster-scale.sh up ng-ai
 kubectl -n cinema-staging rollout status deployment/ai --timeout=10m  # 파드가 준비될 때까지 대기; 실패하면 원인을 확인하고 중단
 kubectl -n cinema-staging get pod -l app.kubernetes.io/name=ai -o wide   # NODE가 ng-ai, READY 1/1

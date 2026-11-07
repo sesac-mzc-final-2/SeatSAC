@@ -127,6 +127,12 @@ variable "valkey_node_type" {
   default     = "cache.t4g.micro"
 }
 
+variable "ai_valkey_node_type" {
+  description = "⚠️AI ai Valkey (ADR-85): t4g.micro, 메모리 80% 경보가 계속 울리면 t4g.small"
+  type        = string
+  default     = "cache.t4g.micro"
+}
+
 # ---- CloudFront·S3 (3.1.11) --------------------------------------------
 variable "gateway_ingress_stack" {
   description = "gateway Ingress의 <namespace>/<이름>(gitops 3.1.5). LB Controller가 ALB에 태그 ingress.k8s.aws/stack=<이 값>을 붙인다 → CloudFront /api/* 원본을 자동으로 찾는다"

@@ -91,12 +91,8 @@ public class SeatHoldService {
     private Held validateAndHold(String userId, SeatHoldRequest request) {
         List<Long> seatIds = validateSeats(request);
 
-        Screening screening = screeningCache.screening(request.screeningId());
-        // 시작 여부는 회차를 읽은 뒤의 시각으로 본다 — Catalog 조회가 길어진 만큼 판정이 늦어지지 않게
-        if (screening.hasStarted(clock.instant())) {
-            throw BookingErrorCode.SCREENING_CLOSED.exception(
-                ErrorDetail.of("screeningId", request.screeningId(), BookingErrorCode.SCREENING_CLOSED.name()));
-        }
+        // 예매 마감(상영 시작 5분 전)이면 400 SCREENING_STARTED
+        Screening screening = screeningCache.openForBooking(request.screeningId());
         SeatLayout layout = screeningCache.layout(screening.auditoriumId(), screening.layoutVersion());
         if (!layout.containsAll(seatIds)) {
             throw BookingErrorCode.INVALID_SEATS.exception(seatIds.stream()

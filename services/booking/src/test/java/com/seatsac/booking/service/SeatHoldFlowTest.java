@@ -144,6 +144,34 @@ class SeatHoldFlowTest {
             .isEqualTo(CommonResponseCode.SCREENING_STARTED.name());
     }
 
+    /** 예매 마감: 상영 시작 5분 전부터 선점을 받지 않는다 — 경계(정확히 5분 전)는 마감 */
+    @Test
+    void holdIsClosedFromFiveMinutesBeforeStart() {
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, NOW.plus(BookingPolicy.BOOKING_CUTOFF), NOW.plusSeconds(7000),
+            "승부", "건대입구", "1관"));
+
+        assertThatThrownBy(() -> seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(e -> {
+                BusinessException ex = (BusinessException) e;
+                assertThat(ex.code().responseCode()).isEqualTo(CommonResponseCode.SCREENING_STARTED.name());
+                assertThat(ex.details()).singleElement()
+                    .satisfies(detail -> assertThat(detail.reason()).isEqualTo("BOOKING_CLOSED"));
+            });
+        assertThat(bookingRepository.count()).isZero();
+    }
+
+    @Test
+    void holdIsOpenUntilJustBeforeTheCutoff() {
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, NOW.plus(BookingPolicy.BOOKING_CUTOFF).plusSeconds(1), NOW.plusSeconds(7000),
+            "승부", "건대입구", "1관"));
+
+        assertThat(seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))).status())
+            .isEqualTo(BookingStatus.PENDING);
+    }
+
     @Test
     void secondHoldInSameScreeningReturnsActiveHoldWithBookingId() {
         SeatHoldResponse first = seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L)));

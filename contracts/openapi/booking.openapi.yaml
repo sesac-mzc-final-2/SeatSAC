@@ -115,7 +115,7 @@ paths:
         "400":
           description: |
             VALIDATION_FAILED(좌석 0개·5개 이상·중복·배치에 없음·비활성, Idempotency-Key 없음) ·
-            SCREENING_STARTED(상영 시작 후)
+            SCREENING_STARTED(예매 마감 — 상영 시작 5분 전부터. details[{ field: "screeningId", value, reason: "BOOKING_CLOSED" }])
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -217,7 +217,12 @@ paths:
                     bookingId: 9876
                     status: PAYMENT_FAILED
                     payment: { paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", status: FAILED, failureCode: CARD_DECLINED }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "400":
+          description: |
+            VALIDATION_FAILED(결제 수단·카드 형식, Idempotency-Key 없음) ·
+            SCREENING_STARTED(예매 마감 — 상영 시작 5분 전부터. 결제를 부르지 않는다, 선점은 TTL로 풀린다.
+            details[{ field: "screeningId", value, reason: "BOOKING_CLOSED" }])
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/NotOwner" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -230,7 +235,7 @@ paths:
         "503":
           description: |
             PAYMENT_RESULT_UNKNOWN — details[{ field: "paymentId", value }]. 예매는 PENDING 유지, 화면은 GET /bookings/{id}를 2초 간격 최대 5회 ·
-            SERVICE_UNAVAILABLE — Payment 서킷 열림
+            SERVICE_UNAVAILABLE — Payment 서킷 열림, 또는 Catalog 응답 없음(예매 마감 확인 전 — 결제를 부르지 않는다)
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   /bookings/{bookingId}/cancel:
@@ -276,9 +281,6 @@ components:
       { name: Idempotency-Key, in: header, required: false, description: "상태 전이 자체가 멱등이라 선택", schema: { type: string, format: uuid } }
 
   responses:
-    ValidationFailed:
-      description: "VALIDATION_FAILED — details[]에 { field, value?, reason }"
-      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     Unauthorized:
       description: UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }

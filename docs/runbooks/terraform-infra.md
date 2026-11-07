@@ -1167,6 +1167,7 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
                                                       #   Secret이 아직 없는데 키가 없거나 비었으면 "TF_VAR_anthropic_api_key가 필요하다"로 멈춘다(정상)
      unset TF_VAR_anthropic_api_key
      kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data}' | jq 'keys'   # ["ANTHROPIC_API_KEY"] — 값은 출력하지 않는다
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자(길이만 출력, 값은 출력하지 않는다)
      kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.PUBLIC_API_BASE_URL}{"\n"}'   # https://<배포 도메인>/api
      kubectl -n argocd get application cinema-ai                                         # Synced · 처음 10분 Progressing, 그 뒤 Degraded
      ```
@@ -1175,8 +1176,12 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
    - **키 교체**(유출·만료·Public 전환 전 폐기): 키는 어디에도 보관·전달하지 않는다. 팀 Anthropic 계정에서 새 키 발급 → 아래 → ArgoCD에서 `cinema-ai` Restart → 이전 키 폐기
      ```bash
      read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key
-     [ -n "$TF_VAR_anthropic_api_key" ] || echo "키가 비었다 — 중단"       # 비었으면 apply하지 않는다(교체 때는 precondition이 막지 못한다: Secret이 이미 있어서)
-     terraform apply -var-file=staging-k8s.tfvars -replace='kubernetes_secret_v1.ai[0]'   # 기대: ai-secrets 1 replace만
+     echo "키 길이: ${#TF_VAR_anthropic_api_key}"                          # 0이면 다시 read. 값은 출력하지 않는다
+     # 교체 때는 Secret이 이미 있어 precondition이 빈 키를 막지 못한다 → 키 확인과 apply를 한 줄로 묶어 비었으면 실행 자체를 안 한다
+     [[ "$TF_VAR_anthropic_api_key" =~ [^[:space:]] ]] \
+       && terraform apply -var-file=staging-k8s.tfvars -replace='kubernetes_secret_v1.ai[0]' \
+       || echo "키가 비었거나 apply가 취소·실패했다 — Secret 상태를 아래로 확인"    # 기대: ai-secrets 1 replace만
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자 (0이면 다시 교체)
      unset TF_VAR_anthropic_api_key
      ```
 4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)

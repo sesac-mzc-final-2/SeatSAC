@@ -5,6 +5,8 @@
 #     → 백업 관리자도 키 없이 긴급 변경 가능, 다른 변경 때문에 apply하다가 Secret을 덮어쓰는 일도 없다
 #   - 처음 만들 때 키가 없으면 plan이 멈춘다(아래 data + precondition: Secret이 아직 없을 때만 키를 요구)
 #   - 교체: 새 키를 팀 Anthropic 계정에서 발급 → apply -replace='kubernetes_secret_v1.ai[0]' → ArgoCD cinema-ai Restart (런북 6-G-1)
+#     ⚠ 교체 때는 Secret이 이미 있어 아래 precondition이 빈 키를 막지 못한다(HCL로는 생성·교체와 평소 plan을 구분할 수 없다).
+#       런북 6-G-1의 키 확인 + apply 한 줄 명령으로만 교체하고, 끝나면 값 길이(wc -c)가 0보다 큰지 확인한다
 #     키는 어디에도 보관하지 않는다(사람 사이에 전달하지 않는다). 잃어버리면 새로 발급해 교체한다
 #   - Anthropic 월 지출 한도 $20은 Anthropic 콘솔에서(AWS Budgets 밖). 발표 후 Public 전환 전 키 폐기
 # ------------------------------------------------------------------

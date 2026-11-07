@@ -28,6 +28,14 @@ data "aws_elasticache_replication_group" "ai_valkey" {
 data "aws_cloudfront_distribution" "this" {
   count = var.ai_enabled ? 1 : 0
   id    = var.cloudfront_distribution_id
+
+  lifecycle {
+    # data를 읽기 전에 확인해야 안내가 나온다(ConfigMap 쪽에 두면 provider의 id 필수 오류가 먼저 난다)
+    precondition {
+      condition     = var.cloudfront_distribution_id != null
+      error_message = "ai_enabled = true면 cloudfront_distribution_id가 필요하다 (PUBLIC_API_BASE_URL, staging-k8s.tfvars)"
+    }
+  }
 }
 
 data "aws_cognito_user_pool_clients" "this" {
@@ -48,7 +56,7 @@ locals {
   ai_endpoints = {
     # ai(Python)는 ${} 치환 없이 이 이름을 그대로 읽는다 (런타임 계약 9-1)
     AI_VALKEY_HOST      = local.ai_valkey_host
-    PUBLIC_API_BASE_URL = local.cf_domain == null ? null : "https://${local.cf_domain}/api" # 스냅샷 적재·내 예매 (ADR-88)
+    PUBLIC_API_BASE_URL = local.cf_domain == null ? null : "https://${local.cf_domain}/api" # 스냅샷 적재·내 예매 (ADR-84)
   }
 
   infra_endpoints = merge({
@@ -74,10 +82,6 @@ resource "kubernetes_config_map_v1" "infra_endpoints" {
   data = local.infra_endpoints
 
   lifecycle {
-    precondition {
-      condition     = !var.ai_enabled || var.cloudfront_distribution_id != null
-      error_message = "ai_enabled = true면 cloudfront_distribution_id가 필요하다 (PUBLIC_API_BASE_URL, staging-k8s.tfvars)"
-    }
     precondition {
       condition     = !var.cognito_enabled || length(local.cognito_client_id) > 0
       error_message = "cognito_enabled = true인데 사용자 풀 ${var.cognito_user_pool_name}의 앱 클라이언트를 찾지 못했다 (클라이언트는 하나여야 한다)"

@@ -110,7 +110,7 @@ variable "cognito_user_pool_name" {
   default     = "cinema-staging-users"
 }
 
-# ---- ⚠️AI ai 서비스 (3.1.18, ADR-89·90) ---------------------------------
+# ---- ⚠️AI ai 서비스 (3.1.18, ADR-85·86) ---------------------------------
 variable "ai_enabled" {
   description = "envs/staging에 ai Valkey·ECR cinema/ai가 생긴 뒤 true → Secret ai-secrets · cinema-infra-endpoints AI_* · Application cinema-ai (런북 6-G-1)"
   type        = bool
@@ -130,7 +130,7 @@ variable "cloudfront_distribution_id" {
 }
 
 variable "anthropic_api_key" {
-  description = "ai-secrets ANTHROPIC_API_KEY (staging 키, ADR-87). 파일에 쓰지 않는다 — apply 직전 `read -s TF_VAR_anthropic_api_key; export TF_VAR_anthropic_api_key`"
+  description = "ai-secrets ANTHROPIC_API_KEY (staging 키, ADR-83). Secret을 처음 만들 때·교체(-replace)할 때만 필요(ai.tf). 파일에 쓰지 않는다 — `read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key`"
   type        = string
   default     = null
   sensitive   = true

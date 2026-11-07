@@ -128,7 +128,7 @@ variable "valkey_node_type" {
 }
 
 variable "ai_valkey_node_type" {
-  description = "⚠️AI ai Valkey (ADR-89): t4g.micro, 메모리 80% 경보가 계속 울리면 t4g.small"
+  description = "⚠️AI ai Valkey (ADR-85): t4g.micro, 메모리 80% 경보가 계속 울리면 t4g.small"
   type        = string
   default     = "cache.t4g.micro"
 }

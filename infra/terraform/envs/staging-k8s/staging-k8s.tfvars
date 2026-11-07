@@ -22,6 +22,6 @@ cognito_enabled = true
 
 # ⬇ ⚠️AI 3.1.18: envs/staging apply(ai_valkey.tf·ECR cinema/ai) 뒤 이 폴더 apply (런북 6-G-1)
 #   → Secret ai-secrets + cinema-infra-endpoints AI_VALKEY_HOST·PUBLIC_API_BASE_URL + Application cinema-ai
-#   ai_enabled = true인 동안 이 폴더의 모든 plan·apply에 TF_VAR_anthropic_api_key가 필요하다(없으면 plan이 멈춘다 — 빈 키로 덮어쓰지 않게)
+#   TF_VAR_anthropic_api_key는 ai-secrets를 처음 만들 때·교체할 때만 필요하다(ai.tf, 평소 plan·apply에는 불필요)
 ai_enabled                 = true
 cloudfront_distribution_id = "E316HLOWJ7VZO1" # global.tfvars frontend_distribution_ids와 같은 값 (비밀 아님)

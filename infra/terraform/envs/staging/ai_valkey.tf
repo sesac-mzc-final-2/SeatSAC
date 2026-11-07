@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------
-# ⚠️AI 3.1.18 ai 전용 ElastiCache Valkey (ADR-89 — 레포 임시 ADR-85, 런타임 계약 9장)
+# ⚠️AI 3.1.18 ai 전용 ElastiCache Valkey (ADR-85, 런타임 계약 9장)
 #   - 기존 Valkey(valkey.tf, 좌석 선점)와 다른 클러스터: AI 부하·메모리가 좌석 데모에 영향을 주지 않게
 #   - 용도: 정확 일치 캐시 · 의미 캐시(벡터 검색) · 세션 · 사용 한도. 원본 데이터 없음(휘발성) → 스냅샷·복제본 없음
 #   - noeviction + 모든 키 TTL(앱 책임): allkeys-lru면 메모리가 찰 때 한도 키(ai:quota:*·ai:inflight:*)도 지워져 한도를 우회할 수 있다
@@ -83,7 +83,7 @@ locals {
       statistic   = "Maximum"
       threshold   = 80
       periods     = 2
-      description = "ai Valkey 메모리 80% 초과 — noeviction이라 가득 차면 캐시·한도 쓰기가 실패한다. TTL 없는 키·캐시 TTL 확인, 필요하면 t4g.small (ADR-89)"
+      description = "ai Valkey 메모리 80% 초과 — noeviction이라 가득 차면 캐시·한도 쓰기가 실패한다. TTL 없는 키·캐시 TTL 확인, 필요하면 t4g.small (ADR-85)"
     }
     ai-valkey-evictions = {
       metric      = "Evictions"

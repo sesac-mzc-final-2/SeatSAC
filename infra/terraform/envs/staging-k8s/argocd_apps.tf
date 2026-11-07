@@ -7,8 +7,9 @@
 #   - Helm으로 만드는 이유: kubernetes_manifest는 plan 때 Application CRD가 있어야 해서 ArgoCD 설치와 한 번에
 #     apply할 수 없다(3.1.4의 argocd_apps_enabled 단계 제거). Helm은 설치 순서(depends_on)만 지키면 된다
 #   - gateway는 cognito_enabled = true일 때만: COGNITO_ISSUER_URI·CLIENT_ID가 빈 값이면 기동 실패(런타임 계약 3장)
-#   - ⚠️AI ai(cinema-ai)는 ai_enabled = true일 때만 (3.1.18, ADR-90). 다른 Application은 그대로다.
-#     ng-ai가 평소 0대라 Application Health는 Progressing·파드 Pending이 정상
+#   - ⚠️AI ai(cinema-ai)는 ai_enabled = true일 때만 (3.1.18, ADR-86). 다른 Application은 그대로다.
+#     ng-ai가 평소 0대라 파드는 Pending → Health는 처음 10분 Progressing, 그 뒤 Degraded(Deployment
+#     progressDeadlineSeconds 기본 600초 초과)가 정상. ng-ai를 켜고 파드가 뜨면 Healthy로 돌아온다
 #   - 이미지 태그는 Terraform이 관리하지 않는다(build-push → gitops → ArgoCD). 태그가 바뀌어도 plan 변경 없음
 #   - finalizer: Application을 지우면 ArgoCD가 만든 리소스(gateway Ingress → ALB 포함)도 지운다
 #     삭제 순서는 런북 11장: 이 릴리스를 먼저 destroy(-target) → Application·ALB가 사라진 뒤 나머지

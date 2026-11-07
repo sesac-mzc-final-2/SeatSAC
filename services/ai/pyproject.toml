@@ -8,6 +8,8 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pydantic-settings>=2.6",
     "prometheus-client>=0.21",
+    # 스냅샷 적재(3.4.9)가 서비스 실행 중에 공개 API를 부른다. 이미지는 --no-dev로 설치하므로 dev가 아닌 여기에 둔다.
+    "httpx>=0.27",
     # 임베딩 모델을 이미지 빌드 때 내려받는 데 쓴다. 의미 캐시 구현은 3.4.5.
     "fastembed>=0.4",
 ]
@@ -15,7 +17,6 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3",
-    "httpx>=0.27",
     "ruff>=0.8",
 ]
 

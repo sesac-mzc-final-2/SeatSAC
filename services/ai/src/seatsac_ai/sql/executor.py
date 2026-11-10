@@ -3,6 +3,7 @@
 검증을 통과한 SQL(`ValidatedSql`)만 받아 스냅샷에서 실행한다.
 - 시간 상한: progress handler가 5초(또는 요청의 남은 시간)를 넘으면 SQLite를 멈춘다
 - 행 상한: fetchmany(500)
+- BLOB 결과는 SQL_ERROR(응답 JSON으로 바꿀 수 없다)
 - 쓰기는 스냅샷 연결의 authorizer가 막는다(여기서 또 막지 않는다)
 
 동시 실행: 스냅샷의 한 세대 연결을 여러 질의가 함께 쓰고, progress handler는 **연결에 하나**만
@@ -66,6 +67,10 @@ def execute(
             cursor = conn.execute(query.sql, dict(params or {}))
             rows = [list(r) for r in cursor.fetchmany(max_rows)]
             names = [d[0] for d in cursor.description or ()]
+            # BLOB(bytes)은 응답 JSON으로 바꿀 수 없다(UnicodeDecodeError → 500).
+            # 스냅샷에는 BLOB 칸이 없으니 SQL 오류로 돌려 Claude 재요청 경로를 탄다(#91 리뷰)
+            if any(isinstance(v, bytes) for row in rows for v in row):
+                raise SqlExecutionError(SQL_ERROR, "BLOB 값은 돌려줄 수 없습니다")
         except sqlite3.OperationalError as exc:
             if "interrupted" in str(exc):
                 message = f"{timeout_seconds:g}초 안에 끝나지 않았습니다"

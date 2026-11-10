@@ -117,8 +117,20 @@ def _check_functions(tree: exp.Expression) -> None:
             raise SqlRejected(FORBIDDEN_FUNCTION, f"함수 {name}는 쓸 수 없습니다", name)
 
 
+def _ctes_in_scope(table: exp.Table) -> set[str]:
+    """이 표 위치에서 보이는 WITH 이름만. 문장 전체에서 모으면 안쪽 서브쿼리의 WITH 이름으로
+    바깥의 sqlite_master 를 가릴 수 있다(#91 리뷰: FROM (WITH sqlite_master AS …), sqlite_master)."""
+    names: set[str] = set()
+    node = table.parent
+    while node is not None:
+        with_ = node.args.get("with") or node.args.get("with_")
+        if isinstance(with_, exp.With):
+            names |= {cte.alias_or_name.lower() for cte in with_.expressions}
+        node = node.parent
+    return names
+
+
 def _check_tables(tree: exp.Expression) -> frozenset[str]:
-    cte_names = {cte.alias_or_name.lower() for cte in tree.find_all(exp.CTE)}
     used: set[str] = set()
     for table in tree.find_all(exp.Table):
         if not isinstance(table.this, exp.Identifier):
@@ -128,8 +140,8 @@ def _check_tables(tree: exp.Expression) -> frozenset[str]:
         db = table.db.lower()
         if db and db != "main":
             raise SqlRejected(FORBIDDEN_OBJECT, f"{db}.{name}은 조회할 수 없습니다", f"{db}.{name}")
-        if not db and name in cte_names:
-            continue  # WITH로 만든 임시 이름
+        if not db and name in _ctes_in_scope(table):
+            continue  # 이 위치에서 보이는 WITH 임시 이름
         if name not in _ALLOWED_TABLES:
             raise SqlRejected(FORBIDDEN_OBJECT, f"{name} 표는 조회할 수 없습니다", name)
         used.add(name)
@@ -148,9 +160,18 @@ def _apply_limit(tree: exp.Query, max_rows: int) -> bool:
             return False
         limit.set("expression", exp.Literal.number(max_rows))
         return True
-    # LIMIT :n 같은 식 → min(식, 500). 값이 작으면 그대로 쓰인다
+    # LIMIT :n 같은 식 → max(0, min(식, 500)). 값이 작으면 그대로 쓰이고,
+    # 음수(SQLite에서 "상한 없음")는 0이 된다
     limit.set(
         "expression",
-        exp.Anonymous(this="min", expressions=[value.copy(), exp.Literal.number(max_rows)]),
+        exp.Anonymous(
+            this="max",
+            expressions=[
+                exp.Literal.number(0),
+                exp.Anonymous(
+                    this="min", expressions=[value.copy(), exp.Literal.number(max_rows)]
+                ),
+            ],
+        ),
     )
     return True

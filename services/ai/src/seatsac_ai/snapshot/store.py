@@ -40,11 +40,19 @@ def _authorizer(action: int, *_args: Any) -> int:
     return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
 
 
+# 문자열·BLOB 하나의 최대 크기. printf('%.*c', 300000000, 'x') 같은 SQL 한 줄이
+# SQLite 명령 한 단계 안에서 수백 MB를 만들면 5초 중단(progress handler)이 끼어들 틈이 없어 파드가 OOM으로 죽는다(#91 리뷰).
+# 스냅샷 값은 짧고 결과는 500행이라 1MB면 충분하다.
+MAX_VALUE_BYTES = 1_000_000
+
+
 def lock_connection(conn: sqlite3.Connection) -> None:
     """연결을 읽기 전용으로 잠근다. 순서가 중요하다: authorizer가 PRAGMA를 막기 전에 먼저 켠다."""
     conn.commit()
     conn.execute("PRAGMA query_only = ON")
     conn.set_authorizer(_authorizer)
+    # SQL이 아니라 연결 설정이라 authorizer·query_only와 상관없이 걸리고, SQL로 되돌릴 수 없다
+    conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_VALUE_BYTES)
 
 
 class _Generation:

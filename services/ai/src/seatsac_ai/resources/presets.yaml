@@ -1,6 +1,8 @@
 # 추천 질문 프리셋 12개 (WBS 3.4.4 · AI-04 · 기능명세서 v4 17-4)
 #
 # - presetId·title·example 은 GET /ai/presets 로 화면 버튼에 나간다.
+#   example 의 {movie} 는 응답할 때 스냅샷에서 지금 상영 회차가 가장 많은 영화 제목으로 채운다
+#   (스냅샷 준비 전에는 계약 예시처럼 "영화 제목"). 실제 없는 제목이 버튼에 나가지 않게(#92 리뷰).
 #   버튼을 누르면 example 문장이 그대로 POST /ai/chat 의 message 로 간다.
 # - description 은 Claude가 읽는다. 질문이 이 프리셋에 맞으면 run_preset 도구를 고른다.
 # - params 는 질문에서 뽑는 슬롯 종류(time·date·theater·movie·n). SQL의 :이름 과 같다.
@@ -45,7 +47,7 @@ presets:
 
   - presetId: movie_theaters
     title: 영화별 상영 극장·시간
-    example: 고양이 탐정 어디서 몇 시에 해?
+    example: "{movie} 어디서 몇 시에 해?"
     description: 특정 영화를 오늘부터 상영하는 극장과 시각
     params: [movie]
     sql: |
@@ -115,7 +117,7 @@ presets:
 
   - presetId: movie_next_screening
     title: 영화 다음 회차
-    example: 별의 항해 다음 회차 언제야?
+    example: "{movie} 다음 회차 언제야?"
     description: 특정 영화의 가장 빠른 다음 회차 5개
     params: [movie]
     sql: |
@@ -143,7 +145,7 @@ presets:
 
   - presetId: movie_runtime
     title: 영화 상영 시간
-    example: 철의 심장 몇 분짜리야?
+    example: "{movie} 몇 분짜리야?"
     description: 특정 영화의 상영 시간(분). 실제 러닝타임이 없는 영화는 회차 간격으로 대신한다
     params: [movie]
     sql: |

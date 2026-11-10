@@ -123,6 +123,8 @@ def test_sql_template_hides_values_for_logs():
 def test_filters_started(sql, expected):
     assert filters_started(sql) is expected
 
+
+@pytest.mark.parametrize(
     "sql",
     [
         "SELECT * FROM (WITH sqlite_master AS (SELECT 1) SELECT 1), sqlite_master",

@@ -85,13 +85,15 @@ def test_quota_error_matches_spec_details_and_retry_after():
     assert err.headers == {"Retry-After": "42"}
 
 
-def test_chat_placeholder_returns_snapshot_not_ready(client, user_headers):
+def test_chat_without_snapshot_returns_snapshot_not_ready(client, user_headers):
     r = client.post("/ai/chat", json={"message": "오늘 20시 이후 회차"}, headers=user_headers)
     assert r.status_code == 503
     assert_error_v1(r.json(), "AI_SNAPSHOT_NOT_READY")
 
 
-def test_presets_placeholder_returns_empty_items(client, user_headers):
+def test_presets_lists_twelve_buttons(client, user_headers):
     r = client.get("/ai/presets", headers=user_headers)
     assert r.status_code == 200
-    assert r.json() == {"items": []}
+    items = r.json()["items"]
+    assert len(items) == 12
+    assert set(items[0]) == {"presetId", "title", "example"}

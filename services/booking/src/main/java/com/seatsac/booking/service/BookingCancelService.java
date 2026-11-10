@@ -1,9 +1,11 @@
 package com.seatsac.booking.service;
 
 import com.seatsac.booking.common.BookingErrorCode;
+import com.seatsac.booking.component.CatalogClient.Screening;
 import com.seatsac.booking.component.PaymentClient;
 import com.seatsac.booking.component.PaymentClient.PaymentCancelReason;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
+import com.seatsac.booking.component.ScreeningCache;
 import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.dto.response.BookingCancelResponse;
 import com.seatsac.booking.dto.response.PaymentView;
@@ -26,6 +28,16 @@ import org.springframework.stereotype.Service;
  * 멱등이라 다시 부르면 된다.
  *
  * <p>이미 취소된 예매는 <b>그대로 200</b>이다 — 화면이 두 번 눌러도 같은 결과를 본다.
+ *
+ * <p>상영이 시작된 예매는 취소·환불하지 않는다(계약 400 {@code SCREENING_STARTED}) — 영화를 본 뒤 환불받는
+ * 길을 막는다. 화면(마이페이지)도 상영 전 예매에만 취소 버튼을 두지만, 규칙은 서버가 지킨다.
+ * 회차 정보를 못 받으면 503이고 아무것도 바꾸지 않는다(계약: booking → catalog 실패 시 선점·취소 503).
+ * Catalog가 회차를 404로 답해도 503이다 — 확정 예매의 회차가 없다는 것은 시드 재적재 같은 운영 문제이고,
+ * 「예매 없음」(404)으로 답하면 화면이 예매가 사라진 것으로 안내한다. 그 밖의 Catalog 4xx는 우리 요청의
+ * 결함이라 500으로 드러낸다({@link com.seatsac.booking.component.CatalogClient#unavailable}).
+ *
+ * <p>취소는 <b>상영 시작</b> 기준이다. 선점·결제는 시작 5분 전에 마감되므로(BOOKING_CUTOFF) 상영 시작 뒤에
+ * 확정되는 예매는 없다.
  */
 @Slf4j
 @Service
@@ -37,6 +49,7 @@ public class BookingCancelService {
     private final BookingStateService bookingState;
     private final PaymentClient paymentClient;
     private final SeatEventPublisher eventPublisher;
+    private final ScreeningCache screeningCache;
 
     public BookingCancelResponse cancel(String userId, Long bookingId) {
         Instant now = clock.instant();
@@ -56,6 +69,13 @@ public class BookingCancelService {
             // 선점 중 취소는 BKG-03 해제다. 결제 실패·만료는 이미 끝난 예매다
             throw BookingErrorCode.BOOKING_NOT_CONFIRMED.exception(ErrorDetail.of("status",
                 booking.getStatus().name(), BookingErrorCode.BOOKING_NOT_CONFIRMED.name()));
+        }
+
+        // 상태를 바꾸기 전에 확인한다. 시각은 회차를 읽은 뒤에 구한다(Catalog 조회가 길어져도 늦게 판정하지 않게)
+        Screening screening = screeningCache.screeningOfBooking(bookingId, booking.getScreeningId());
+        if (screening.hasStarted(clock.instant())) {
+            throw BookingErrorCode.SCREENING_CLOSED.exception(ErrorDetail.of("screeningId",
+                booking.getScreeningId(), BookingErrorCode.SCREENING_CLOSED.name()));
         }
 
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(bookingId);

@@ -24,7 +24,7 @@ import reactor.core.publisher.Mono;
  * <pre>
  * 공개(토큰 안 읽음)  GET /api/movies/**, /api/theaters/**, /api/screenings/**(좌석 현황·SSE 포함), /api/auditoriums/**
  * ADMIN             /api/admin/**
- * 로그인            그 밖의 /api/**
+ * 로그인            그 밖의 /api/** (/api/ai/** 포함 — 라우트는 플래그 app.ai.enabled 로 켜지며, 꺼져 있으면 토큰이 있어도 404)
  * 인증 없음          /actuator/health/**(ALB·kubelet), /actuator/prometheus(클러스터 안 수집. 외부는 CloudFront가 /api/*만 ALB로 보냄)
  * </pre>
  * 오류는 공통 형식으로 401 UNAUTHORIZED, 403 FORBIDDEN.

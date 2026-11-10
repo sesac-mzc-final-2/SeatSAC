@@ -3,6 +3,7 @@
 # 3.1.13 NetworkPolicy 확인 (OPS-15) — 런타임 계약 6장 허용 목록이 실제로 지켜지는지 TCP 연결로 본다
 #   사용: infra/scripts/np-check.sh            (관리자 cinema-admin, 노드 켜짐)
 #         REQUIRE_GATEWAY=1 infra/scripts/np-check.sh   (Cognito 뒤 — gateway 파드가 없으면 실패)
+#         REQUIRE_AI=1 infra/scripts/np-check.sh        (⚠️AI ng-ai를 켰을 때 — ai 파드가 없으면 실패, 런북 6-G-2)
 #   방법: 각 서비스 파드 안에서 bash /dev/tcp 로 다른 서비스 8080에 붙어 본다(curl 불필요)
 #     OPEN    = 연결 성공
 #     BLOCKED = 시간 초과(timeout 종료 코드 124) — VPC CNI 정책은 패킷을 버리므로 차단은 시간 초과로 보인다
@@ -15,18 +16,20 @@ set -uo pipefail
 
 NS="${NS:-cinema-staging}"
 TIMEOUT="${TIMEOUT:-3}"
-SERVICES="gateway catalog booking user payment"
+SERVICES="gateway catalog booking user payment ai"     # ⚠️AI ai: ng-ai가 평소 0대라 파드가 없으면 건너뛴다 (3.1.20)
 REQUIRED="catalog booking user payment"                 # 항상 있어야 하는 서비스
 [ "${REQUIRE_GATEWAY:-0}" = "1" ] && REQUIRED="gateway $REQUIRED"   # Cognito 전에는 gateway가 없어도 된다
+[ "${REQUIRE_AI:-0}" = "1" ] && REQUIRED="$REQUIRED ai"             # ng-ai를 켰을 때만 ai가 있어야 한다
 
 # 런타임 계약 6장: 호출하는 쪽 → 허용된 대상 (monitoring·ALB·분석 Job은 앱 파드가 아니라 여기서 보지 않는다)
 allowed() {
   case "$1" in
-    gateway) echo "catalog booking user" ;;
+    gateway) echo "catalog booking user ai" ;;
     catalog) echo "booking" ;;
     booking) echo "catalog payment" ;;
     user)    echo "booking catalog" ;;
     payment) echo "" ;;
+    ai)      echo "" ;;                    # ⚠️AI ai는 클러스터 안 서비스를 부르지 않는다(공개 API는 CloudFront로 나간다)
   esac
 }
 
@@ -86,7 +89,7 @@ for from in $SERVICES; do
   if [ -z "$pod" ]; then
     case " $REQUIRED " in
       *" $from "*) missing="$missing $from" ;;
-      *) echo "$from: Running 파드 없음 — 건너뜀 (Cognito 전 허용. 뒤에는 REQUIRE_GATEWAY=1)" ;;
+      *) echo "$from: Running 파드 없음 — 건너뜀 (gateway는 Cognito 전, ai는 ng-ai 0대일 때 정상. 반드시 보려면 REQUIRE_GATEWAY=1·REQUIRE_AI=1)" ;;
     esac
     continue
   fi

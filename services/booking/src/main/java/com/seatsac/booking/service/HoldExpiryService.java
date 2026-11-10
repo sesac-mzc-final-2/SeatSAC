@@ -97,7 +97,7 @@ public class HoldExpiryService {
     }
 
     /**
-     * 좌석 키는 TTL 300초로 대개 이미 사라졌지만, RDS 스캔 경로에서는 시계 차이로 아직 살아 있을
+     * 좌석 키는 선점 TTL(설정, 기본 300초)로 대개 이미 사라졌지만, RDS 스캔 경로에서는 시계 차이로 아직 살아 있을
      * 수 있다 — holdId가 내 것일 때만 지우는 {@code release.lua}로 정리한다.
      */
     private void releaseKeys(ExpiredHold hold) {

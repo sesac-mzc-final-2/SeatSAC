@@ -15,8 +15,22 @@ public final class BookingPolicy {
     public static final int MIN_SEATS_PER_HOLD = 1;
     public static final int MAX_SEATS_PER_HOLD = 4;
 
-    /** 선점 TTL. expires_at = now + 300초, Valkey 좌석 키·user-hold 키의 EX 값과 같다 */
-    public static final Duration HOLD_TTL = Duration.ofSeconds(300);
+    /**
+     * 선점 TTL 기본값(초). 실제 값은 설정 {@code app.seat-hold.ttl-seconds}
+     * ({@code APP_SEAT_HOLD_TTL_SECONDS})를 {@link com.seatsac.booking.config.SeatHoldProperties}로 읽는다 —
+     * 데모에서 만료를 짧게 보여 줄 때 코드를 바꾸지 않고 ConfigMap만 바꾼다.
+     */
+    public static final int DEFAULT_HOLD_TTL_SECONDS = 300;
+
+    /**
+     * 예매 마감 — 상영 시작 5분 전부터 선점(BKG-02)·결제(BKG-10)를 받지 않는다.
+     *
+     * <p>결제 요청 하나는 호출·재시도·조회를 합쳐 계약상 약 12초면 끝나므로, 5분 전에 마감하면 결제가
+     * 상영 시작 뒤에 승인되는 일이 없다 → 「상영 시작 뒤 취소 불가」(BKG-07)와 부딪혀 환불할 수 없는
+     * 확정 예매가 생기지 않는다. 선점도 같이 막는다 — 선점만 열어 두면 결제할 수 없는 좌석이 TTL 동안 묶인다.
+     * 취소는 이 값이 아니라 상영 시작 시각 기준이다.
+     */
+    public static final Duration BOOKING_CUTOFF = Duration.ofMinutes(5);
 
     /**
      * 파드 캐시 TTL — 회차 정보 10분(명세 12.3).
@@ -58,24 +72,9 @@ public final class BookingPolicy {
      * 깨진다 — 선점이 만들어진 지 이 시간 안이면 「처리 중」으로 보고 409를 돌려준다.
      *
      * <p>트랜잭션은 보통 수 ms라 10초면 넉넉하다. 진짜 고아(파드가 죽은 경우)는 10초 뒤 다음
-     * 요청에서 정리되고, 그 전에도 RDS 만료 스캔이 300초 안에 치운다.
+     * 요청에서 정리되고, 그 전에도 RDS 만료 스캔이 선점 TTL 안에 치운다.
      */
     public static final Duration HOLD_COMMIT_GRACE = Duration.ofSeconds(10);
-
-    /**
-     * 처리 중({@code IN_PROGRESS}) 멱등 키의 TTL. 요청이 끝나면 저장(DONE) 또는 삭제로 바뀌므로
-     * 이 값이 쓰이는 경우는 <b>처리 도중 파드가 죽거나 요청이 아주 오래 걸리는 경우</b>뿐이다.
-     * 24시간을 그대로 쓰면 그런 키로 들어오는 재시도가 하루 동안 409를 받는다.
-     *
-     * <p>{@link #HOLD_TTL}과 같은 값으로 둔다. 이 시간이 지나면 <b>선점 자체가 이미 만료</b>되어
-     * 좌석이 풀리므로, 같은 키의 재시도가 새로 선점을 잡아도 앞 요청과 좌석을 다툴 일이 없다.
-     * Gateway 응답 대기(15초)는 근거로 쓸 수 없다 — 클라이언트가 포기해도 서버 처리는 계속된다.
-     *
-     * <p>TTL이 끝난 뒤 늦게 끝난 요청이 그 사이 들어온 요청의 응답을 덮어쓰는 문제는 TTL로
-     * 막지 않는다 — 저장·삭제를 <b>처리권(owner)이 같을 때만</b> 하도록 했다
-     * ({@code idem-write.lua}).
-     */
-    public static final Duration IDEMPOTENCY_IN_PROGRESS_TTL = HOLD_TTL;
 
     /** 멱등 키 TTL 24시간 — 화면이 재시도할 수 있는 동안 첫 응답을 들고 있는다 (ADR-19) */
     public static final Duration IDEMPOTENCY_TTL = Duration.ofHours(24);

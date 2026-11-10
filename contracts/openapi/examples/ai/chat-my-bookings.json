@@ -1,0 +1,29 @@
+{
+  "summary": "MY_BOOKINGS — 개인 질문(\"내 예매\"). 요청의 Authorization 그대로 GET /users/me/bookings 호출, 캐시·Claude 전송 없음(토큰 0)",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "확정된 예매가 1건 있습니다. 11월 18일 14:30 건대입구 6관 J7, J8입니다. (19시 43분 기준)",
+    "path": "MY_BOOKINGS",
+    "columns": [
+      { "name": "booking_id", "type": "integer" },
+      { "name": "status", "type": "text" },
+      { "name": "movie_title", "type": "text" },
+      { "name": "theater_name", "type": "text" },
+      { "name": "auditorium_name", "type": "text" },
+      { "name": "starts_at", "type": "text" },
+      { "name": "seat_labels", "type": "text" },
+      { "name": "amount", "type": "integer" }
+    ],
+    "rows": [
+      [ 9876, "CONFIRMED", "영화 제목", "건대입구", "6관", "2026-11-18 14:30", "J7, J8", 30000 ]
+    ],
+    "rowCount": 1,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:43:12+09:00",
+    "llm": { "calls": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0 },
+    "latencyMs": 142,
+    "rejection": null
+  }
+}

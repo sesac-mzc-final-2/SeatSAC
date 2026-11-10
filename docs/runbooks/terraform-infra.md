@@ -577,7 +577,7 @@ aws ecr initiate-layer-upload --repository-name cinema/booking --profile cinema-
 | 큐 정책 | 두 큐 모두 TLS가 아닌 요청 거부 |
 | Pod Identity | 역할 `cinema-staging-booking-pod`(이름 그대로, 난수 접미사 없음) → `sqs:SendMessage`·`sqs:GetQueueUrl` on 알림 큐만. 연결 `cinema-staging` / ServiceAccount `booking` |
 | 경보 2개 → SNS `cinema-alerts` → 메일 | `cinema-staging-notification-dlq-not-empty`: DLQ 메시지 > 0 (같은 메시지를 SQS가 3번 내줬는데 삭제되지 않음 — 보통 Lambda 실패) · `cinema-staging-notification-oldest-2d`: 알림 큐의 가장 오래된 메시지 > 2일 (받는 쪽이 없음 — DLQ로 안 가고 7일 뒤 삭제되는 경우) |
-| 지표 유지 | EventBridge Scheduler `cinema-staging-sqs-metrics/keep-active-{notification,dlq}`: 1시간마다 `GetQueueAttributes` — SQS는 6시간 넘게 호출이 없는 큐의 지표를 끊어 경보가 "데이터 없음"으로 조용해지므로 |
+| 지표 유지 | EventBridge Scheduler `cinema-staging-sqs-metrics/keep-active-{notification,dlq}` → 1시간마다 Lambda `cinema-staging-sqs-metrics`가 그 큐에 `GetQueueAttributes`(Scheduler universal target은 `Get*` 같은 읽기 API를 지원하지 않아 Lambda를 거친다) — SQS는 6시간 넘게 호출이 없는 큐의 지표를 끊어 경보가 "데이터 없음"으로 조용해지므로 |
 
 **순서**: ① SeatSAC PR 머지 → `envs/staging` apply(연결이 먼저 있어야 한다) → ② gitops PR 머지(ServiceAccount) → booking 새 파드에 자격 증명 주입. 순서가 바뀌면 파드가 자격 증명 없이 뜬다 → ArgoCD에서 booking **Restart**
 
@@ -591,7 +591,8 @@ terraform init -backend-config=backend.hcl
 terraform plan -var-file=staging.tfvars -out=plan.out
 #   기대: aws_sqs_queue 2 · aws_sqs_queue_redrive_allow_policy 1 · aws_sqs_queue_policy 2 · aws_cloudwatch_metric_alarm 2
 #         module.booking_pod_identity (IAM 역할·정책·연결 등 4) · 지표 유지 Scheduler(그룹 1·역할 1·정책 1·일정 2)
-#         → 약 16 to add, 0 change, 0 destroy
+#         · 지표 유지 Lambda(함수 1·역할 1·정책 1·로그 정책 연결 1) → 처음 만들 때 약 20 to add, 0 change, 0 destroy
+#   (#55 apply가 universal target 일정에서 실패했다면 이미 만들어진 것은 그대로 두고 나머지만 add·change로 나온다)
 terraform apply plan.out && rm -f plan.out     # 저장된 plan에는 비밀 값이 평문
 terraform output -raw booking_pod_role_arn | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/'
 ```
@@ -615,6 +616,7 @@ aws cloudwatch describe-alarms --alarm-names cinema-staging-notification-dlq-not
   --query 'MetricAlarms[].[AlarmName,StateValue]' --output text              # 둘 다 OK 또는 INSUFFICIENT_DATA
 aws iam get-role --role-name cinema-staging-booking-pod --query 'Role.RoleName' --output text   # 정확한 이름(접미사 없음)
 aws scheduler list-schedules --group-name cinema-staging-sqs-metrics --query 'Schedules[].[Name,State]' --output text   # keep-active-* 2개 ENABLED
+aws logs tail /aws/lambda/cinema-staging-sqs-metrics --since 2h | grep -c 'REPORT'      # 약 4 (일정 2개 × 시간당 1회 × 2시간) — apply 뒤 2시간 넘게 지나서 본다. apply 직후면 0~2
 
 # gitops PR 머지 뒤(booking 새 파드) — Pod Identity가 주입됐는지 (값은 출력하지 않는다)
 P=$(kubectl -n cinema-staging get pods -l app.kubernetes.io/name=booking -o jsonpath='{.items[*].metadata.name}'); P=${P%% *}
@@ -632,6 +634,7 @@ kubectl -n cinema-staging get pod "$P" -o jsonpath='{range .spec.containers[0].e
 
 - 꺼 두는 동안 확정된 예매는 아웃박스에 `PENDING`으로 남는다(DB라 사라지지 않음) → Lambda가 붙은 뒤 켜면 순서대로 보내진다. **기다리는 쪽이 안전하다**
 - Lambda 전에 켜야 하면(3.2.6 통합 확인 등): 메시지는 큐에 쌓이기만 하고 받는 쪽이 없어 **DLQ로도 가지 않는다** → 보존 7일이 지나면 SQS가 조용히 지운다. 2일째에 `…-notification-oldest-2d` 경보가 오니 그 전에 Lambda를 붙이거나 릴레이를 다시 끈다
+- 그 경우 예매가 확정돼 메시지가 큐에 남아 있다면 `…-notification-oldest-2d` 경보가 **온다**(가장 오래된 메시지가 48시간을 넘긴 뒤, 받는 쪽이 없다는 정확한 신호. 확정이 하나도 없어 큐가 비어 있으면 오지 않는다). 예상된 경보이니 스크럼에 "Lambda 연결 전 릴레이 켬, 경보 예상"을 먼저 공유한다. 데모(인계 #10: 확정 → Lambda 로그에 `eventId`)도 Lambda가 전제라 **기본은 Lambda 뒤에 켠다**(남궁일·김종식 합의 10/30)
 - 큐에서 사라진 경우의 복구: 아웃박스 행은 `SENT`로 남아 있다(릴레이가 지우지 않음) → 그 기간 행을 `PENDING`으로 되돌리면 같은 `eventId`(= `message_key`)로 다시 보내진다. DB 손 작업이라 남궁일과 함께(`UPDATE booking_db.outbox_message SET status='PENDING', attempt_count=0, next_attempt_at=:now WHERE status='SENT' AND sent_at BETWEEN :from AND :to`), Lambda는 `eventId`로 중복을 무시한다
 
 ```yaml
@@ -661,8 +664,78 @@ aws sqs get-queue-attributes --queue-url "$URL" --attribute-names ApproximateNum
 | 아웃박스 행이 `FAILED` | 10회 재시도 실패(릴레이를 큐보다 먼저 켬 등) | 원인을 고친 뒤 남궁일과 `FAILED` → `PENDING` 되돌림(손 작업, 3.2.6 런북) |
 | DLQ 경보 메일 | 같은 메시지가 3번 수신됐는데 삭제되지 않음: Lambda 실패·제한 시간 초과, 처리가 가시성 제한(180초)보다 김, 사람이 콘솔·CLI로 수신해 봄 | DLQ 메시지의 수신 횟수(`aws sqs receive-message --queue-url <DLQ URL> --attribute-names ApproximateReceiveCount ApproximateFirstReceiveTimestamp --visibility-timeout 0`)와 Lambda 로그(CloudWatch)의 `eventId`·오류를 함께 본다 → 고친 뒤 `aws sqs start-message-move-task --source-arn <DLQ ARN>`으로 DLQ → 알림 큐 재전송 |
 | `…-notification-oldest-2d` 경보 메일 | 받는 쪽 없음: Lambda 연결 전에 릴레이를 켬, 이벤트 소스 매핑 꺼짐·오류 | Lambda 연결(3.1.8) 또는 릴레이 끄기(`APP_OUTBOX_RELAY_ENABLED=false` gitops PR). 7일을 넘겼으면 6-B-3 복구 |
+| `keep-active-*` 일정 실행 실패·`aws logs tail`에 호출이 없음 | 일정 역할에 `lambda:InvokeFunction`이 없음, Lambda 역할에 `sqs:GetQueueAttributes`가 없음 | `aws scheduler get-schedule --group-name cinema-staging-sqs-metrics --name keep-active-notification`, Lambda 로그의 `AccessDenied` → `sqs.tf` 정책 확인 |
 
 - 삭제(11장): 큐를 지우면 남은 메시지도 사라진다. 다시 만들면 URL이 같으므로 앱 설정은 그대로다
+
+#### 6-B-5. 알림 Lambda 연결 (3.1.8, OPS-07) — **6-B-3(릴레이 켜기)보다 먼저**
+
+코드: `envs/staging/lambda.tf` · `lambdas/notification/handler.py`(테스트 `test_handler.py`). 6-B-1(큐·DLQ)이 apply된 뒤에 한다 — 같은 루트 모듈이라 순서는 Terraform이 지킨다.
+
+| 만드는 것 | 이름·값 |
+| --- | --- |
+| 함수 | `cinema-staging-notification` · python3.12 · arm64 · 128MB · 제한 30초 · VPC 밖 · 로그 형식 Text(핸들러가 JSON 한 줄을 직접 찍음) |
+| 실행 역할 | `cinema-staging-notification` → 자기 로그 그룹 쓰기 + 알림 큐 `ReceiveMessage`·`DeleteMessage`·`GetQueueAttributes`만 |
+| 로그 그룹 | `/aws/lambda/cinema-staging-notification` · 보존 7일 |
+| 이벤트 소스 매핑 | 알림 큐 → 함수 · 배치 10 · 대기 0초 · `ReportBatchItemFailures` · 최대 동시 실행 2 |
+
+동작: 메시지마다 계약(`booking.confirmed.v1`) 필수 필드를 확인하고 로그 한 줄(`eventId`·`traceId`·`bookingId`·`receiveCount` …)을 남긴다. 깨진 메시지만 실패로 보고되어 다시 수신되고(가시성 제한 180초), 3회째 실패하면 DLQ로 간다. 같은 `eventId`가 또 오면 그대로 한 줄 더 남긴다(중복은 로그에서 `eventId`로 가린다).
+
+```bash
+# 터미널 B (0장 Terraform 자격 증명). 최신 main에서
+cd infra/terraform/envs/staging
+git pull && git log -1 --oneline
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: aws_iam_role 1 · aws_iam_role_policy 1 · aws_cloudwatch_log_group 1 · aws_lambda_function 1 · aws_lambda_event_source_mapping 1
+#         → 5 to add, 0 change, 0 destroy (6-B-1을 먼저 apply했다면. 아니면 큐 등이 같이 보인다)
+terraform apply plan.out && rm -f plan.out     # 저장된 plan에는 비밀 값이 평문
+```
+
+```bash
+# 터미널 A (cinema-admin) — 확인
+aws lambda get-function-configuration --function-name cinema-staging-notification \
+  --query '{runtime:Runtime,arch:Architectures[0],timeout:Timeout,state:State}' --output json
+#   기대: python3.12 · arm64 · 30 · Active
+aws lambda list-event-source-mappings --function-name cinema-staging-notification \
+  --query 'EventSourceMappings[].[State,BatchSize,FunctionResponseTypes[0],ScalingConfig.MaximumConcurrency]' --output text
+#   기대: Enabled  10  ReportBatchItemFailures  2     (State가 Creating·Enabling이면 1분쯤 뒤 다시)
+
+# 끝에서 끝 확인: 계약 예시 메시지(eventId만 새로)를 큐에 직접 넣는다 — 레포 루트에서
+Q=cinema-staging-notification-events
+URL=$(aws sqs get-queue-url --queue-name $Q --query QueueUrl --output text)
+BODY=$(python3 -c "import json,uuid; d=json.load(open('contracts/events/examples/booking.confirmed.v1/confirmed.json')); d['eventId']=str(uuid.uuid4()); print(json.dumps(d))")
+aws sqs send-message --queue-url "$URL" --message-body "$BODY" \
+  --message-attributes '{"type":{"DataType":"String","StringValue":"booking.confirmed"},"traceId":{"DataType":"String","StringValue":"4bf92f3577b34da6a3ce929d0e0e4736"}}' \
+  --query MessageId --output text
+sleep 10
+aws logs tail /aws/lambda/cinema-staging-notification --since 5m --format short | grep '"eventId"'
+#   기대: {"timestamp": "…+09:00", "level": "INFO", "service": "notification", "message": "예매 완료 알림 (모의 발송)", "traceId": "4bf92f35…", "eventId": "…", "bookingId": 9876, …}
+```
+
+- 예시 메시지의 `bookingId` 9876은 실제 예매가 아니다. Lambda는 로그만 남기므로 부작용이 없다
+- 이 확인이 끝나면 **6-B-3(릴레이 켜기)** 으로 간다. 켠 뒤에는 예매를 하나 확정해 같은 로그에 실제 `bookingId`·`eventId`가 찍히는지 본다(인계 #10)
+- CloudWatch Logs Insights: 로그 그룹 `/aws/lambda/cinema-staging-notification`에서 `fields @timestamp, level, eventId, traceId, bookingId, receiveCount | filter eventId = "<id>"`
+
+**DLQ 경로까지 확인(선택, 경보 메일이 온다)**: 계약에 어긋난 본문을 보낸다. 실패한 메시지는 가시성 제한(180초)마다 다시 수신되어 `receiveCount` 1→2→3으로 ERROR가 찍히고, 약 7분 뒤 DLQ로 간다 → `…-notification-dlq-not-empty` 경보(메일). 확인하고 나서 **그 메시지만** 지운다(큐 전체 purge는 하지 않는다).
+
+```bash
+aws sqs send-message --queue-url "$URL" --message-body '{"hello":"dlq-test"}' --query MessageId --output text
+# 약 7분 뒤
+DLQ=$(aws sqs get-queue-url --queue-name $Q-dlq --query QueueUrl --output text)
+aws sqs receive-message --queue-url "$DLQ" --max-number-of-messages 1 --visibility-timeout 30 \
+  --query 'Messages[0].[Body,ReceiptHandle]' --output text        # 본문이 {"hello":"dlq-test"}인지 확인
+aws sqs delete-message --queue-url "$DLQ" --receipt-handle '<위에서 나온 ReceiptHandle>'
+```
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| apply 중 매핑 생성이 `execution role … does not have permissions` | 역할 정책이 아직 퍼지지 않음(전파 지연) | 1분 뒤 `terraform apply` 다시 |
+| 큐에 메시지가 쌓이는데 로그가 없음 | 매핑 `State`가 `Disabled` 또는 `Creating` | `list-event-source-mappings` 확인. 끄고 켜는 변경은 콘솔·CLI가 아니라 `lambda.tf`의 `enabled` PR로 |
+| ERROR `envelope 필수 필드 없음`·`payload 필수 필드 없음` | booking 발행 본문이 계약과 다름 | 해당 `eventId`·`traceId`로 booking 로그 확인(남궁일), 고친 뒤 DLQ 재전송(6-B-4) |
+| ERROR `지원하지 않는 type/version` | v2 또는 다른 type을 같은 큐로 발행 | 소비자(Lambda)를 먼저 올린 뒤 발행하는 순서로 맞춘다 — 계약은 필드 추가만 허용(`.v2`는 새 이벤트) |
+| 같은 `eventId`가 로그에 여러 줄 | 아웃박스 재전송 또는 SQS 재수신(정상) | `receiveCount`·`messageId`로 구분. 하는 일이 로그뿐이라 조치 없음 |
+| 코드(`handler.py`)를 고쳤는데 반영 안 됨 | apply 전 | PR 머지 뒤 plan에 `aws_lambda_function.notification` 1 update가 보이면 apply |
 
 
 ### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-74)
@@ -757,7 +830,7 @@ terraform output argocd_service_apps                        # Cognito 전: catal
 | 단계 | 일어나는 일 |
 | --- | --- |
 | 1 | 새 태그 커밋(build-push) 또는 설정 PR → Rollout이 **preview** ReplicaSet을 띄움(active는 그대로 트래픽 처리) |
-| 2 | preview Ready → `prePromotionAnalysis` 시작: 분석 Job이 `{svc}-preview:8080`에 조회 4분 30초(200이 95% 미만이면 실패), Prometheus 지표 2분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
+| 2 | preview 확장과 **동시에**(Ready 전) `prePromotionAnalysis` 시작: 분석 Job이 preview Ready를 기다린 뒤 `{svc}-preview:8080`에 조회 6분(200이 95% 미만이면 실패), Prometheus 지표 4분 지연 뒤 1분 × 3회 (런타임 계약 5장) |
 | 3a | 통과 → active Service를 preview 해시로 전환 → 이전 버전 60초 뒤 축소 |
 | 3b | 실패 → **abort**: active 그대로(= 자동 롤백, 사용자 영향 없음), preview 30초 뒤 축소. Rollout·ArgoCD 앱이 `Degraded` |
 
@@ -824,7 +897,7 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 ```bash
 # SeatSAC main에 booking 변경 머지 → build-push가 gitops 태그 커밋 (또는 수동 실행 services=booking)
 kubectl argo rollouts get rollout booking -n cinema-staging --watch
-#   기대: Preview(새 해시) Running → AnalysisRun Running(약 5분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
+#   기대: Preview(새 해시) Running → AnalysisRun Running(약 6분) → Successful → Active 전환 → 이전 ReplicaSet 60초 뒤 ScaledDown
 kubectl -n cinema-staging get analysisrun -l rollouts-pod-template-hash          # 최신 Successful
 kubectl -n cinema-staging get jobs | grep -i preview-traffic                       # 분석 Job Complete
 ```
@@ -881,6 +954,7 @@ kubectl -n cinema-staging get jobs | grep -i preview-traffic                    
 | user | booking · catalog | 예매 내역 · 회차 요약·극장 검증 |
 | payment | (없음) | 호출하는 쪽이 아니다 |
 | 분석 Job `rollout-smoke` | booking · gateway (preview) | 3.1.6 |
+| 부하 테스트 Job `k6-loadtest` | gateway | 4.2.1 OPS-10 (6-H, 실행 중에만 있다) |
 | `monitoring` namespace | 전체 | Prometheus 수집 |
 
 ```bash
@@ -953,6 +1027,334 @@ payment  → user      BLOCKED  BLOCKED  ✅
 | `ERROR:EXEC` 전부 | exec 권한 없음(`cinema-dev`)·컨테이너 이름이 서비스 이름과 다름·이미지에 bash 없음 | `cinema-admin`으로, `kubectl -n cinema-staging get pod <파드> -o jsonpath='{.spec.containers[*].name}'` |
 | `ERROR:NOT_READY`·`REFUSED` | 대상 서비스가 기동 중·CrashLoop | 대상이 Ready가 된 뒤 다시(정책 문제 아님) |
 | gateway 배포 후 화면 `/api` 502·504 | ALB ENI가 public 서브넷 밖에 생김(서브넷 태그) 또는 대역 변경 | ALB 서브넷 확인 → gitops `base/gateway/networkpolicy.yaml` ipBlock을 `staging.tfvars public_subnets`와 맞춤 |
+
+### 6-F. 신호등 대시보드 (3.1.7, OPS-05) — ⬜
+
+Grafana 대시보드 **SeatSAC 신호등**과 기록 규칙 `cinema:*`는 gitops `observability/`(Application `cinema-observability`)가 올린다. Valkey 메모리·Evictions, SQS DLQ 패널은 **CloudWatch** 데이터소스라서 Grafana 파드에 읽기 권한이 필요하다(Terraform `envs/staging/grafana.tf`, Pod Identity). 나머지 패널은 Prometheus.
+
+| 패널 묶음 | 데이터 | 지금 나오는가 |
+| --- | --- | --- |
+| 서비스 신호등 5개 · API별 상태 표 · 블루/그린 버전별 요청 수 · 오류율 | `http_server_requests_seconds_*` (Spring 기본) | 서비스가 기동해 트래픽이 있으면 바로 |
+| 결제 timeout·error 비율 · 결제 호출 결과 | `booking_payment_call_total` | 남궁일 구현 후 (없으면 회색 "결제 호출 없음") |
+| 선점 결과 · SSE 연결 · 만료 지연 · 아웃박스 | `booking_seat_hold_total` 등 | 남궁일 구현 후 (없으면 "수집 없음") |
+| 캐시 적중률 · 잔여 좌석 대체 | `catalog_*` | 한채연 구현 후 |
+| Valkey 메모리 · Evictions · 알림 큐 · DLQ | CloudWatch | Pod Identity 연결 + Grafana 파드 재시작 뒤 |
+
+#### 6-F-1. 적용 순서 (**Terraform apply → gitops 머지 → Grafana 파드 재시작**)
+
+연결(Pod Identity)보다 **먼저 떠 있던 Grafana 파드는 자격 증명을 받지 못한다**(ServiceAccount·환경변수는 파드를 만들 때 정해진다, 3.1.9 booking 사례와 같다). 그래서 마지막에 한 번 다시 시작한다.
+
+```bash
+# ① Terraform (터미널 B, 0장 자격 증명, 최신 main에서)
+cd infra/terraform/envs/staging
+git pull && git log -1 --oneline
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: module.grafana_pod_identity (IAM 역할 1 · 정책 1 · 정책 연결 1 · Pod Identity 연결 1) → 4 to add, 0 change, 0 destroy
+#   (노드그룹 release_version 변경이 같이 보이면 AMI 갱신 — 6-B-1 참고)
+terraform apply plan.out && rm -f plan.out     # 저장된 plan에는 비밀 값이 평문
+```
+
+```text
+② SeatSAC-gitops 관측 PR 머지 → ArgoCD 자동 sync
+   - cinema-observability 앱 생성(Synced·Healthy), kube-prometheus-stack 앱은 values 변경으로 한 번 더 sync
+③ ArgoCD UI(관리자) → kube-prometheus-stack 앱 → Grafana Deployment → Actions → Restart
+   (kubectl delete / rollout restart 금지 — 클러스터는 GitOps만. ①이 끝난 뒤에 하는 게 핵심)
+```
+
+②를 ①보다 먼저 머지해도 안전하다(CloudWatch 패널만 오류, 나머지는 정상). 순서를 어겼다면 ③만 다시 하면 된다.
+
+#### 6-F-2. 확인
+
+```bash
+# 터미널 A (cinema-admin, 노드 켜짐)
+kubectl -n argocd get applications                                   # cinema-observability · kube-prometheus-stack : Synced / Healthy
+kubectl -n monitoring get prometheusrule cinema-traffic-light
+kubectl -n monitoring get cm dashboard-seatsac-traffic-light --show-labels      # grafana_dashboard=1
+# Grafana 파드에 Pod Identity 환경변수가 있는가 (③ 재시작 뒤. 없으면 CloudWatch 패널이 인증 오류)
+kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
+  -o jsonpath='{range .items[*].spec.containers[*]}{.name}{": "}{range .env[*]}{.name}{" "}{end}{"\n"}{end}' | grep AWS_CONTAINER
+```
+
+| 확인 | 방법 | 기대 |
+| --- | --- | --- |
+| 기록 규칙 로드 | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090` → http://localhost:9090/rules | 그룹 `cinema-traffic-light` 규칙 6개 모두 health **ok** |
+| 규칙 값 | Prometheus에서 `cinema:service_state` | 트래픽이 있는 서비스마다 0 (결과 없음 = 트래픽 없음, 정상) |
+| Grafana 접속 | `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80` → http://localhost:3000, 계정 `admin`. 비밀번호는 관리자가 Secret `kube-prometheus-stack-grafana`의 `admin-password` 키를 읽는다 (화면·채팅·PR에 붙이지 않는다) | 로그인 됨 |
+| 대시보드 | Dashboards → **SeatSAC 신호등** | 트래픽 있는 서비스는 초록 "정상", 없는 서비스는 회색 "트래픽 없음" |
+| CloudWatch | Connections → Data sources → CloudWatch → Save & test | "Data source is working". 실패하면 6-F-4 |
+| Valkey·DLQ 패널 | 대시보드 ② 핵심 지표 | 메모리 %가 숫자, Evictions 0, DLQ 0 (값이 1~2분 늦게 나올 수 있다) |
+
+- 비밀번호가 sync마다 바뀌어 로그인이 안 되면 알려 준다. 차트가 `adminPassword`를 비우면 렌더링마다 랜덤이 될 수 있어, Terraform이 만든 Secret + `grafana.admin.existingSecret`으로 고정하는 후속 작업이 필요하다
+- 접속은 port-forward만 된다(Ingress 없음). 발표 PC에서 미리 접속해 두고 시간 범위를 데모 구간에 맞춘다
+
+#### 6-F-3. 데모에서 쓰는 법
+
+1. **무중단 배포**: 시간 범위 "최근 30분", ④ 무중단 배포 행. k6 트래픽 중 booking PR을 머지하면 "버전별 요청 수"에서 한 해시의 선이 내려가고 새 해시가 올라간다(블루/그린은 비율 분할이 아니라 한 번에 전환). 같은 구간에 "오류율" 0%·"5xx 건수" 0이 유지된다. SSE 연결 수는 전환 뒤 0으로 떨어졌다 다시 오른다
+2. **자동 롤백**: 실패 버전을 배포하면 AnalysisRun이 실패해 전환이 일어나지 않는다. 대시보드에서는 active 해시가 그대로 이어지고 preview 해시는 분석 트래픽만 받다 사라진다
+3. **동시성**: ⑤ 실시간 좌석 행의 "선점 성공·충돌 건수" 카드(선택한 시간 범위의 건수)로 같은 좌석 100명 요청이 success 1 · conflict 99로 읽힌다 — 시간 범위를 데모 직전부터로 잡는다(booking이 `result` 4개 값을 기동 때 0으로 등록해야 첫 1건이 빠지지 않는다. "선점 결과 / 초"는 rate라 한순간에 몰리면 작은 봉우리로만 보인다). 지연 카드(9999)는 결제 결과 미확인 503(`PAYMENT_RESULT_UNKNOWN`)을 표시할 수 있다. 이 응답이 5xx 또는 `timeout|error`로 집계되고 적격 요청 수가 작으면 한 건도 임계값을 넘길 수 있다. 예를 들어 적격 서비스 요청 20건 중 5xx 1건은 5%이고, 결제 호출 19건 중 `timeout|error` 1건은 약 5.26%이다. 실제 신호와 분석 결과는 5xx·p95·결제 오류율 기준으로 판단한다. `"선점 p95"`의 300ms는 동시성 데모 목표이고, 서비스 요청 p95는 300ms에서 주의, 1초에서 장애로 판정한다.
+
+#### 6-F-4. 문제 해결
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 대시보드 목록에 **SeatSAC 신호등**이 없음 | ConfigMap 라벨이 없거나 사이드카가 못 읽음, `cinema-observability` 앱 미sync | `kubectl -n monitoring get cm -l grafana_dashboard=1`, 사이드카 로그 `kubectl -n monitoring logs deploy/kube-prometheus-stack-grafana -c grafana-sc-dashboard`, ArgoCD 앱 상태 |
+| 서비스 신호등이 전부 회색 "트래픽 없음" | 정말 요청이 없음(정상) 또는 수집 실패 | Prometheus에서 `cinema:http_requests:rate5m`. 비었는데 요청이 있으면 `http_server_requests_seconds_count`에 `namespace="cinema-staging"`·`application` 라벨이 있는지(PodMonitor, 6-D-1) |
+| 5xx가 나는데 초록 | 5분 평균이라 한두 건은 1% 미만 · 규칙 미로드 | Prometheus `/rules` health, 대시보드 "5xx 건수 / 분"과 "API별 상태" 표 |
+| gateway API 표의 `uri`가 `/**`·라우트 이름 같은 값 | Spring Cloud Gateway(WebFlux)는 라우트 기준 uri를 기록할 수 있다 | 배포 후 1회 표를 보고 필요하면 대시보드 쿼리·표를 PR로 조정 (서비스 신호등은 `application` 기준이라 영향 없음) |
+| 선점 p95 · 선점 결과가 "수집 없음" | booking이 `uri="/seats/hold"` 태그나 `booking_seat_hold_total`을 아직 내지 않음 | Prometheus에서 `http_server_requests_seconds_count{application="booking"}`의 실제 `uri`를 보고 다르면 대시보드 쿼리 수정 PR. 지표 미구현이면 남궁일 구현 후 |
+| CloudWatch 패널 오류 (`NoCredentialProviders` · `failed to load config` · `AccessDenied`) | Grafana 파드가 연결보다 먼저 떠서 환경변수가 없음, 또는 역할·연결 없음 | 위 확인 명령에 `AWS_CONTAINER_*`가 없으면 6-F-1 ③(재시작). 있는데 `AccessDenied`면 `aws iam list-attached-role-policies --role-name cinema-staging-grafana-pod`로 연결된 **관리형 정책**을 찾고(모듈이 사용자 지정 정책을 관리형으로 만들어 붙이므로 `list-role-policies`는 인라인 정책만 보여 비어 있어도 정상), `aws iam get-policy-version --policy-arn <위에서 나온 ARN> --version-id <aws iam get-policy의 DefaultVersionId>`로 `cloudwatch:GetMetricData`·`GetMetricStatistics`·`ListMetrics` 3개가 있는지 확인. 이어서 `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks`로 연결(namespace monitoring · SA `kube-prometheus-stack-grafana`) 확인 |
+| Save & test는 되는데 CloudWatch 패널이 "No data" | 지표 지연(1~2분) · 시간 범위가 노드를 끈 구간이 아님에도 SQS 큐가 비활성 | 시간 범위를 30분 이상으로. SQS 지표는 큐에 활동이 있어야 나오며 지표 유지 Lambda가 주기적으로 깨운다(6-B) |
+| Valkey 패널이 클러스터를 못 찾음 | 노드 구성 변경(복제본 추가)으로 `CacheClusterId`가 달라짐 | 대시보드 JSON의 `cinema-staging-valkey-001`을 CloudWatch의 실제 ID로 바꾸는 PR |
+| 화면에서 고친 내용이 사라짐 | 대시보드 원본은 ConfigMap(영속 저장소 없음) | 고친 JSON(대시보드 설정 → JSON Model)을 gitops `observability/dashboards/`에 PR |
+
+<노션 반영 필요> WBS 3.1.7 메모에 "CloudWatch 데이터소스 + Pod Identity(`cinema-staging-grafana-pod`), 기록 규칙·대시보드는 gitops `observability/`", 기능명세서 OPS-05에서 "토큰 사용량" 삭제(AI 서비스 범위 제외, ADR-50)
+
+### 6-G. ⚠️AI ai 서비스 — 인프라·켜기·끄기·질의 금지 구간 (3.1.18~3.1.22, ADR-82~87) — ⬜
+
+> ai는 기존 RDS·Valkey·NetworkPolicy·Application을 건드리지 않는다. 문제가 생기면 **6-G-4 끄기**만 하면 1차 데모 환경은 원래대로다.
+
+#### 6-G-1. 적용 (rc1 전, 김종식)
+
+1. `envs/staging`: ECR `cinema/ai`(`ecr.tf` 목록), ElastiCache `cinema-staging-ai-valkey`(`ai_valkey.tf` — Valkey 8.2 `cache.t4g.micro`, 파라미터 그룹 `maxmemory-policy noeviction`·`reserved-memory-percent 50`, TLS, SG 6379는 노드 SG만, 메모리 80% 경보), 노드그룹 `ng-ai`(`eks.tf` — t3.large, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai:NoSchedule`)
+   - `cluster_schedule.tf`의 **켜기** 일정에서 `ng-ai`를 뺀다(평일 아침 자동 기동 금지, `eks.tf` `local.optional_node_groups`). **끄기**(23:07) 일정에는 남긴다 — 저녁에 켜 두고 잊어도 같이 꺼진다(이미 0이면 "No changes needed" 오류 1건 = 정상). `infra/scripts/cluster-scale.sh`는 `up`·`up 2`에서 `ng-ai`를 빼고 켜고(`OPTIONAL_NODEGROUPS`, 기본 `ng-ai`) `down`은 `ng-ai`까지 끈다. 단독 조작은 `up ng-ai`·`down ng-ai`(8-1-2)
+   - 적용·확인(3.1.19 단독 — ai 파드 없이, 노드가 켜져 있는 시간에). **저장소 루트에서** 실행한다(Terraform은 `-chdir`로 `envs/staging`을 읽고, 스크립트 경로는 루트 기준):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars -out=plan.out
+                                                      # 기대: 9 to add, 1 to change, 0 to destroy
+                                                      #   추가: ng-ai 노드그룹 + IAM 역할 + 정책 연결 4 + 시작 템플릿 + null_resource 1 + EventBridge 일정 ng-ai-…-down 1
+                                                      #   변경: 스케줄러 정책 1(대상에 ng-ai). ng-a·ng-c 변경·삭제 0, ng-ai 켜기 일정 없음 — 다르면 apply하지 않는다
+     terraform -chdir=infra/terraform/envs/staging apply plan.out && rm -f infra/terraform/envs/staging/plan.out
+                                                      # 노드그룹 생성 2~3분 (desired 0이라 노드는 안 뜬다)
+     # 아래는 apply가 끝난 뒤에만 — 그 전에는 ng-ai 일정·노드그룹이 없어 조회·up이 실패한다
+     aws scheduler list-schedules --group-name cinema-staging-cluster --query 'Schedules[].Name'   # ng-ai는 -down만
+     infra/scripts/cluster-scale.sh up ng-ai
+     kubectl get nodes -l cinema/workload=ai          # 1대 Ready (2~3분)
+     kubectl get node -l cinema/workload=ai -o jsonpath='{.items[0].spec.taints}'   # cinema/workload=ai, NoSchedule
+     kubectl get pods -A -o wide | grep "$(kubectl get node -l cinema/workload=ai -o name | cut -d/ -f2)"   # 데몬셋(aws-node·kube-proxy·eks-pod-identity-agent·node-exporter)만. 앱 파드가 있으면 taint 누락
+     infra/scripts/cluster-scale.sh down ng-ai
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars
+                                                      # 두 번째: No changes (desired는 Terraform이 무시)
+     ```
+   - 적용·확인(3.1.18 `envs/staging` — ECR `cinema/ai`·ai Valkey. 저장소 루트에서):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     terraform -chdir=infra/terraform/envs/staging plan -var-file=staging.tfvars -out=plan.out
+                                                      # 기대(3.1.19 apply 뒤 기준): 9 to add, 0 to change, 0 to destroy
+                                                      #   ECR cinema/ai 3(저장소·수명 주기·저장소 정책) · SG ai-valkey 1 + 인바운드(노드 SG → 6379) 1
+                                                      #   파라미터 그룹 ai-valkey8 1 · 복제 그룹 cinema-staging-ai-valkey 1 · 경보 2(메모리 80%·Evictions)
+                                                      #   기존 valkey·ECR 5개 변경 0 — 다르면 apply하지 않는다
+                                                      #   (브랜치에서 이미 apply했다면 No changes. 그 경우 **머지 전 main 기준 plan에는 이 9개가 destroy로 나온다**
+                                                      #    → 머지할 때까지 main에서 envs/staging apply 금지, 팀에 공유)
+     terraform -chdir=infra/terraform/envs/staging apply plan.out && rm -f infra/terraform/envs/staging/plan.out
+                                                      # ElastiCache 생성 10~15분
+     aws elasticache describe-replication-groups --replication-group-id cinema-staging-ai-valkey \
+       --query 'ReplicationGroups[0].{status:Status,tls:TransitEncryptionEnabled,node:CacheNodeType}'   # available · true · cache.t4g.micro
+     aws elasticache describe-cache-parameters --cache-parameter-group-name cinema-staging-ai-valkey8 --source user \
+       --query 'Parameters[].[ParameterName,ParameterValue]' --output text                            # maxmemory-policy noeviction · reserved-memory-percent 50
+     aws ecr describe-repositories --repository-names cinema/ai --query 'repositories[0].imageTagMutability'   # "IMMUTABLE"
+     ```
+2. gitops `base/ai`·`overlays/staging/ai`(`image-tag`는 `newTag`만) 머지 → GitHub 저장소 변수 `AI_BUILD_PUSH_ENABLED=true`(Settings → Secrets and variables → Actions → Variables). 이 순서가 거꾸로면 build-push의 ECR push 또는 gitops 태그 커밋이 실패한다. 켠 뒤 Actions → build-push → Run workflow `services=ai`로 첫 이미지를 만든다(그 전 ai 머지는 이미지 없이 지나갔다)
+3. `envs/staging-k8s`: Secret `ai-secrets`(`ANTHROPIC_API_KEY` — `TF_VAR_anthropic_api_key`로 넣고 tfvars·셸 기록에 남기지 않는다), `cinema-infra-endpoints`에 `AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`(CloudFront 도메인 + `/api`), `argocd_apps.tf` `argocd_services`에 `ai` → Application `cinema-ai`
+   - 적용·확인(3.1.18 `envs/staging-k8s` — 2단계 build-push가 `overlays/staging/ai/image-tag`에 실제 태그를 커밋한 뒤. `staging-k8s.tfvars`에 `ai_enabled = true`·`cloudfront_distribution_id`가 이미 있다):
+     ```bash
+     export AWS_PROFILE=cinema-admin
+     read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key   # 처음 만들 때만. staging 키 붙여넣기(화면·셸 기록에 안 남음). 파일에 쓰지 않는다
+     cd infra/terraform/envs/staging-k8s
+     terraform apply -var-file=staging-k8s.tfvars     # -out을 쓰지 않는다: 저장된 plan 파일에는 키가 평문으로 남는다. 화면의 plan을 보고 yes
+                                                      # 기대: Secret ai-secrets 1 add · ConfigMap cinema-infra-endpoints 1 change(AI_VALKEY_HOST·PUBLIC_API_BASE_URL 추가)
+                                                      #       helm_release argocd-apps 1 change(cinema-ai 추가). 다른 Application·Secret 변경 0, destroy 0 — 다르면 no
+                                                      #   Secret이 아직 없는데 키가 없거나 비었으면 "TF_VAR_anthropic_api_key가 필요하다"로 멈춘다(정상)
+     unset TF_VAR_anthropic_api_key
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data}' | jq 'keys'   # ["ANTHROPIC_API_KEY"] — 값은 출력하지 않는다
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자(길이만 출력, 값은 출력하지 않는다)
+     kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.PUBLIC_API_BASE_URL}{"\n"}'   # https://<배포 도메인>/api
+     kubectl -n argocd get application cinema-ai                                         # Synced · 처음 10분 Progressing, 그 뒤 Degraded
+     ```
+   - `cinema-ai` Health: ng-ai가 0대면 파드가 Pending이라 **10분 뒤 Degraded가 정상**이다(Deployment `progressDeadlineSeconds` 기본 600초 초과 → `ProgressDeadlineExceeded`). ng-ai를 켜고 파드가 Ready가 되면 Healthy로 돌아온다. ng-ai를 켠 상태에서 Degraded면 진짜 문제(이미지·Secret·readiness) — 6-G-2로 확인
+   - **평소 이 폴더의 plan·apply에는 키가 필요 없다**(`ai.tf` `ignore_changes = [data]` — 처음 만들 때만 요구). 백업 관리자도 키 없이 다른 변경을 할 수 있다
+   - **키 교체**(유출·만료·Public 전환 전 폐기): 키는 어디에도 보관·전달하지 않는다. 팀 Anthropic 계정에서 새 키 발급 → 아래 → ArgoCD에서 `cinema-ai` Restart → 이전 키 폐기
+     ```bash
+     read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key
+     echo "키 길이: ${#TF_VAR_anthropic_api_key}"                          # 0이면 다시 read. 값은 출력하지 않는다
+     # 교체 때는 Secret이 이미 있어 precondition이 빈 키를 막지 못한다 → 키 확인과 apply를 한 줄로 묶어 비었으면 실행 자체를 안 한다
+     [[ "$TF_VAR_anthropic_api_key" =~ [^[:space:]] ]] \
+       && terraform apply -var-file=staging-k8s.tfvars -replace='kubernetes_secret_v1.ai[0]' \
+       || echo "키가 비었거나 apply가 취소·실패했다 — Secret 상태를 아래로 확인"    # 기대: ai-secrets 1 replace만
+     kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자 (0이면 다시 교체)
+     unset TF_VAR_anthropic_api_key
+     ```
+4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
+
+#### 6-G-2. 확인 (적용 직후, 플래그 off)
+
+A. 기동 확인 — 6-G-3 데모 준비에서도 **이 A만** 다시 쓴다
+
+```bash
+kubectl -n argocd get application cinema-ai                      # Synced (ng-ai 0이면 파드 Pending → Health는 10분 뒤 Degraded가 정상, 6-G-1 3단계)
+infra/scripts/cluster-scale.sh up ng-ai
+kubectl -n cinema-staging rollout status deployment/ai --timeout=10m  # 파드가 준비될 때까지 대기; 실패하면 원인을 확인하고 중단
+kubectl -n cinema-staging get pod -l app.kubernetes.io/name=ai -o wide   # NODE가 ng-ai, READY 1/1
+kubectl -n cinema-staging port-forward svc/ai 8085:8080
+```
+
+`Forwarding from 127.0.0.1:8085 -> 8080` 메시지를 확인하고 port-forward를 실행 상태로 둔다. 연결에 실패하면 오류를 해결한 뒤 다시 실행한다. 다른 터미널에서 확인한다.
+
+```bash
+curl -s localhost:8085/actuator/health/readiness                  # {"status":"UP"} = 스냅샷 첫 적재 + ai Valkey PING
+curl -s localhost:8085/actuator/prometheus | grep ai_snapshot_age_seconds
+REQUIRE_GATEWAY=1 REQUIRE_AI=1 infra/scripts/np-check.sh          # gateway → ai OPEN, 나머지 → ai BLOCKED, ai → 다른 서비스 BLOCKED (3.1.20). gateway·ai 파드가 없으면 실패(없으면 gateway → ai를 건너뛰고 통과할 수 있다)
+```
+
+확인이 끝나면 port-forward 터미널에서 Ctrl-C로 종료한다.
+
+B. 플래그 off 확인·정리 — **적용 직후에만**(플래그를 켠 뒤에는 하지 않는다)
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://{배포ID}.cloudfront.net/api/ai/presets   # 플래그 off = 404
+infra/scripts/cluster-scale.sh down ng-ai
+```
+
+#### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
+
+1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태)
+2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
+3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
+4. 데모가 끝난 뒤에만 `cluster-scale.sh down ng-ai`
+
+#### 6-G-4. 끄기·되돌리기 (5분)
+
+1. `cluster-scale.sh down ng-ai` — ai 파드가 내려가면 `/api/ai/**`는 gateway 503(라우트가 켜져 있을 때). 화면은 챗봇 비활성 안내
+2. 데모 주간이 아니면 `APP_AI_ENABLED=false` PR로 404로 되돌림(데모 주간은 머지 금지라 1번만)
+3. 기존 서비스·RDS·Valkey는 바뀐 게 없으므로 추가 조치 없음
+
+#### 6-G-5. AI 질의 금지 구간
+
+| 구간 | 상태 | 이유 |
+| --- | --- | --- |
+| 부하 테스트 4.2.1 · 블루/그린 전환 테스트 4.2.2 | `ng-ai` 0 · 플래그 off | 테스트 환경 = 1차 데모 환경. 스냅샷 적재 호출이 catalog에 섞이지 않게 |
+| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 뒤 데모 주간은 머지 금지라 끌 수 없다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
+| 재생성 리허설 3.1.15 | `ng-ai` 0 · 플래그 off로 기록 | 소요 시간 비교 기준 유지 |
+| staging에서 ai 확인(M6 중) | 테스트가 돌지 않는 시간에만, 스크럼에서 시간 공유 | — |
+
+### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)
+
+코드: SeatSAC `tests/k6/`(시나리오 4개 · `run-in-cluster.sh` · `tools/loadtest_users.py`·`pick_targets.py`·`sse_lag.py`) · SeatSAC-gitops `base/gateway/networkpolicy.yaml`(`k6-loadtest` → gateway 허용). Terraform 변경 없음. 시나리오·읽는 법은 `tests/k6/README.md`
+
+| 완료 기준 (WBS 4.2.1) | 어떻게 잰다 | 합격 |
+| --- | --- | --- |
+| 같은 좌석 100명 동시 → 성공 정확히 1명 | `run-in-cluster.sh contention` | `hold_success == 1`, `hold_active_hold == 0` |
+| 선점 응답 p95 300ms 이하 | 같은 실행의 `hold_latency` | p95 < 300ms |
+| 사용자당 진행 중 선점 1건 | `run-in-cluster.sh user-hold` | 체크 5개 전부 ✓ |
+| 다른 화면 반영 1초 이내 | `tools/sse_lag.py`(CloudFront 경유, 화면과 같은 경로) + `deploy` 부하 | 이벤트 지연 p95 ≤ 1초, 하트비트 15초 간격 |
+| 만료 반영 2초 | Prometheus `booking_hold_expiry_lag_seconds` (contention 승자의 선점이 300초 뒤 만료) | p95 < 2초 |
+| (참고) 커넥션 풀 | `hikaricp_connections_pending{application="booking"}` | 0 — 0이 아니면 풀 5 → 10 검토(남궁일) |
+
+**GitOps 예외**: 이 테스트는 관리자(`cinema-admin`)가 `run-in-cluster.sh`로 **실행 중에만 있는** Job·ConfigMap(스크립트)·Secret(토큰)을 `cinema-staging`에 만들고 끝나면 지운다. 라벨 `app.kubernetes.io/name=k6-loadtest`로만 만들고 지우며, ArgoCD가 관리하는 리소스는 건드리지 않는다(추적 라벨이 없어 selfHeal·prune 대상이 아님). 스크립트는 Job을 먼저 만들고 ConfigMap·Secret은 처음부터 Job의 ownerReference를 달고 만든다 → 중간에 죽어도 Job TTL(15분) 뒤 같이 지워진다. 남았으면 `tests/k6/run-in-cluster.sh cleanup`
+
+#### 6-H-1. 준비 (실행 당일, 레포 루트)
+
+```bash
+export AWS_PROFILE=cinema-admin
+# 0) 조건: 평일 노드 켜짐 시간 · ng-ai 0 · 블루/그린 진행 중 아님 · 스크럼에 시간 공유(4.2.2·ai 확인과 겹치지 않게, 6-G-5)
+infra/scripts/cluster-scale.sh status ng-ai                         # desired 0
+kubectl -n cinema-staging get rollout                               # booking·gateway Healthy (Progressing·Paused면 기다린다)
+
+# 1) 노드 증설 — 부하 발생기가 측정 대상과 CPU를 다투지 않게 + HPA 증설 여유 (끝나면 6-H-4에서 되돌린다)
+infra/scripts/cluster-scale.sh up 2                                 # ng-a·ng-c 2대씩 = 4대 (ng-ai 제외)
+kubectl get nodes                                                   # 4대 Ready
+
+# 2) 계정·토큰 (계정은 한 번만 create. 토큰 Access 60분 — 돌리기 직전에 refresh)
+T=tests/k6/tools/loadtest_users.py
+python3 $T status                                                   # 계정 100 — 없으면 tests/k6/README.md 1)부터
+python3 $T refresh && python3 $T tokens --min-valid-minutes 40 --out ~/.seatsac/k6-tokens.txt
+export K6_TOKENS_FILE=~/.seatsac/k6-tokens.txt
+
+# 3) 대상 회차·좌석 (공개 조회 API만, 시작 60분 이상 남은 회차 · 시나리오마다 다른 회차)
+API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api"
+eval "$(python3 tests/k6/tools/pick_targets.py --base-url "$API")"  # 고른 회차 설명은 화면(stderr)에 나온다
+env | grep -E '^(CONTENTION|USERHOLD|DEPLOY|BROWSE)_|^THEATER_'      # 리포트에 적는다
+```
+
+- `pick_targets.py`가 회차를 못 찾으면 `--date`로 다음 날을 고른다(예매 마감 = 상영 시작 5분 전)
+- 토큰 파일·`~/.seatsac/`은 레포 밖이다. 커밋·PR·노션에 붙이지 않는다
+
+#### 6-H-2. 실행 (이 순서로)
+
+```bash
+R=tests/k6/run-in-cluster.sh       # 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
+
+# ① 사용자당 선점 1건 (토큰 1개, 30초)
+$R user-hold -e SCREENING_ID=$USERHOLD_SCREENING_ID -e SEAT_IDS=$USERHOLD_SEAT_IDS
+
+# ② 같은 좌석 100명 (1분 안에 끝난다) — 다른 터미널에서 SSE를 같이 연다(이벤트 HELD 1건, 300초 뒤 EXPIRED 1건)
+python3 tests/k6/tools/sse_lag.py --duration 360 --url "$API/screenings/$CONTENTION_SCREENING_ID/seats/stream"   # 터미널 B
+$R contention -e SCREENING_ID=$CONTENTION_SCREENING_ID -e SEAT_ID=$CONTENTION_SEAT_ID                         # 터미널 A
+#    → 「성공 1 · 사용자 제한 0 · p95 …ms」 확인. 300초 뒤 터미널 B에 EXPIRED → 만료 반영(6-H-3)
+
+# ③ 조회 캐시 (토큰 없음, 약 2분)
+$R browse -e SCREENING_IDS=$BROWSE_SCREENING_IDS -e THEATER_ID=$THEATER_ID -e THEATER_DATE=$THEATER_DATE
+
+# ④ 부하 중 SSE 반영 — 배포 없이 deploy 시나리오를 2분(선점·결제·취소가 계속 돌아 이벤트가 많다)
+python3 tests/k6/tools/sse_lag.py --duration 150 --url "$API/screenings/$DEPLOY_SCREENING_ID/seats/stream"      # 터미널 B
+$R deploy -e SCREENING_ID=$DEPLOY_SCREENING_ID -e SEAT_ID_FROM=$DEPLOY_SEAT_ID_FROM -e DURATION=2m              # 터미널 A
+kubectl -n cinema-staging get hpa booking -w                                                                    # 터미널 C — 증설되면 리포트에
+```
+
+- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 `pick_targets.py`로 새로 고른다), user-hold는 바로 다시 된다(스스로 해제)
+- 같은 시각에 k6 Job은 하나만 돈다(스크립트가 막는다 — 결과가 섞인다)
+- 블루/그린 중 무중단 확인(`deploy` + 실제 배포)은 4.2.2(6-D)
+
+#### 6-H-3. Prometheus로 확인
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090    # http://localhost:9090/graph
+```
+
+| 확인 | 쿼리 | 합격 |
+| --- | --- | --- |
+| 만료 반영 | `histogram_quantile(0.95, sum by (le) (increase(booking_hold_expiry_lag_seconds_bucket[15m])))` | < 2 — **파드 기동 후 10분 안의 첫 스윕은 제외**(노드 0대 구간 뒤 밀린 만료가 한 번 크게 찍힌다, 런타임 계약 5장) |
+| 선점 결과 | `sum by (result) (increase(booking_seat_hold_total[10m]))` | contention 직후 success 1 · conflict 99 근처 |
+| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_pending{application="booking"}[15m])` | 0 |
+| 5xx | `sum(increase(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[15m])) by (application)` | 0 (ai 제외) |
+| CPU | `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cinema-staging",container!=""}[1m]))` | 리포트에 최대값 |
+
+#### 6-H-4. 정리
+
+```bash
+tests/k6/run-in-cluster.sh cleanup                                  # 남은 Job·ConfigMap·Secret 없음 확인
+kubectl -n cinema-staging get job,configmap,secret -l app.kubernetes.io/name=k6-loadtest   # No resources
+infra/scripts/cluster-scale.sh up 1                                 # 노드그룹당 1대로 되돌림
+rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파일(계정은 11/20까지 둔다 — 7-6-3)
+```
+
+#### 6-H-5. 리포트 (WBS 4.2.1 산출물)
+
+실행마다 `~/.seatsac/k6-results/{실행 ID}.log` 머리말에 실행 시각·git SHA·노드 수·서비스 이미지가 남는다. 리포트에는 아래만 옮긴다(토큰·계정·계정 ID·IP 없음).
+
+| 항목 | 값 |
+| --- | --- |
+| 일시 · git SHA · 이미지(booking·gateway) · 노드 수 | |
+| 대상 회차(시나리오별) · 좌석 | |
+| contention: 성공 수 · 409 HELD · 사용자 제한 · p95/중앙값/최대 | |
+| user-hold: 체크 5개 | |
+| browse: 영화·상영시간·좌석 현황 p95 · 실패율 | |
+| SSE: 이벤트 수 · 지연 p50/p95/최대 · 하트비트 간격 | |
+| 만료 반영 p95 · 커넥션 풀 대기 최대 · booking HPA 레플리카 최대 · 5xx | |
+| 판정 · 남은 문제 | |
+
+#### 6-H-6. 막힐 때
+
+| 증상 | 원인 · 조치 |
+| --- | --- |
+| 요청이 전부 타임아웃(`status 0`, `server_errors`) | gateway NetworkPolicy에 `k6-loadtest` 허용이 없다 → gitops `base/gateway/networkpolicy.yaml` 확인(6-E 표) |
+| 401 | 토큰 만료 — `loadtest_users.py refresh` → `tokens --out` 다시 |
+| `hold_active_hold > 0` | 토큰이 VU보다 적거나 같은 사용자가 그 회차에 선점을 남겼다 → 300초 기다리거나 다른 회차(`pick_targets.py`) |
+| 400 `SCREENING_STARTED`(`BOOKING_CLOSED`) | 회차 시작 5분 전부터 마감 → `pick_targets.py`로 다시 고른다 |
+| 파드 Pending(180초) | 노드 부족 — `cluster-scale.sh up 2`. 이벤트는 스크립트가 출력한다 |
+| ai 파드 때문에 멈춤 | `cluster-scale.sh down ng-ai`(6-G-5). 정말 필요할 때만 `ALLOW_AI=1` |
+| p95만 넘는다 | 리포트에 그대로 적는다. booking CPU·`hikaricp_connections_pending`·노드 배치(k6 파드가 booking과 같은 노드인지 — 로그 머리말)를 같이 본다 |
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
@@ -1128,6 +1530,7 @@ aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username '<이�
 ```
 
 - 이메일·비밀번호는 PR·노션·런북에 적지 않는다. 그룹 변경은 **다음 토큰부터** 반영(다시 로그인)
+- 부하 테스트 계정(4.2.1, **레포 루트에서** 실행 — 위 명령들은 `envs/staging-k8s`에서 돈다): `python3 tests/k6/tools/loadtest_users.py create --count 100 --authority … --client-id …` / `delete` — `cinema-admin`(김종식·백업 남궁일). `loadtest+NNN@example.com`, `ADMIN` 그룹 아님(있으면 `create`가 멈춘다). 데모 주간(11/20)까지 두고 **Public 전환 전 `delete`**. 사용법 `tests/k6/README.md`
 
 #### 7-6-4. 확인
 
@@ -1292,9 +1695,9 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 
 | 시각 (KST) | 동작 | 비고 |
 | --- | --- | --- |
-| 월~금 08:23 | **EventBridge** 노드그룹마다 desired 1 | 노드 Ready까지 2~3분, 파드 Ready까지 5~10분 더 |
+| 월~금 08:23 | **EventBridge** 노드그룹마다 desired 1 (⚠️AI `ng-ai`는 제외) | 노드 Ready까지 2~3분, 파드 Ready까지 5~10분 더 |
 | 월~금 08:53 | GitHub 백업 `up` (이미 켜져 있으면 no-op) | 월~금 07~10시(KST)에 도착한 실행만 동작 — 토요일 아침에 늦게 온 켜기는 건너뜀 |
-| 월~금 23:07 | **EventBridge** desired 0 | 금요일 밤에 꺼져 월요일 아침까지 0대 |
+| 월~금 23:07 | **EventBridge** desired 0 (`ng-ai` 포함) | 금요일 밤에 꺼져 월요일 아침까지 0대 |
 | 월~금 23:37 · 다음 날 00:37 | GitHub 백업 `down` (no-op 또는 대신 끄기) | 월~금 22~23시·화~토 0~5시(KST)에 도착한 실행만 동작 — 늦게 온 끄기가 근무 시간에 끄지 않게 |
 | 데모 주간 11/16~20 | 예약 끄기 멈춤 (24시간) | EventBridge 끄기는 `cluster_schedule_demo_start` 0시에 끝남(end_date), 백업도 날짜로 건너뜀. 발표 후 수동 `down` |
 | 임시로 밤에도 켜 둠 | `envs/staging` tfvars `cluster_keep_on = true` → apply | EventBridge 끄기 DISABLED → 백업도 그 상태를 보고 건너뜀. 끝나면 `false` → apply. (예전 Variables `CLUSTER_KEEP_ON`은 쓰지 않음 — 지운다) |
@@ -1343,9 +1746,10 @@ terraform output cluster_schedules      # {<노드그룹>-up = ENABLED, <노드�
 ```bash
 export AWS_PROFILE=cinema-admin
 infra/scripts/cluster-scale.sh status
-infra/scripts/cluster-scale.sh down
-infra/scripts/cluster-scale.sh up        # 노드그룹당 1대
-infra/scripts/cluster-scale.sh up 2      # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1
+infra/scripts/cluster-scale.sh down        # 전부 0 (ng-ai 포함)
+infra/scripts/cluster-scale.sh up          # ng-a·ng-c 노드그룹당 1대 (ng-ai는 켜지 않는다)
+infra/scripts/cluster-scale.sh up 2        # 부하 테스트(OPS-10) 때 노드그룹당 2대 → 끝나면 up 1 (ng-ai 제외)
+infra/scripts/cluster-scale.sh up ng-ai    # ng-ai만 1대 켜기 (AI 데모·6-G). 끄기: down ng-ai, 확인: status ng-ai
 ```
 
 ### 8-1-3. 확인

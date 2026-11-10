@@ -4,7 +4,9 @@
 #   → AWS가 KST 시각에 정확히 노드그룹 desired를 바꾼다. GitHub cluster-schedule은 30분 뒤 백업 + 수동 실행용으로 남긴다
 #
 #   월~금 08:23 KST  desired 1  (노드그룹마다 일정 1개, eks:UpdateNodegroupConfig 직접 호출 — Lambda 없음)
+#                               ⚠️AI 평소 꺼 두는 노드그룹(local.optional_node_groups = ng-ai, eks.tf)은 켜기 일정을 만들지 않는다 (3.1.19, ADR-86)
 #   월~금 23:07 KST  desired 0  (데모 주간 시작일 0시부터 멈춤 = 24시간 가동, var.cluster_keep_on=true면 멈춤)
+#                               ng-ai도 포함 — 저녁에 켜 두고 잊어도 같이 꺼진다(이미 0이면 "No changes needed" 오류 1건 = 정상)
 #
 #   - 노드그룹 이름은 모듈이 접미사를 붙여 만들므로 모듈 출력에서 받는다(global이 아니라 여기 두는 이유)
 #   - 이미 같은 값이면 EKS가 "No changes needed"로 거절한다 → 실패로 세지만 해가 없다(재시도 2회 뒤 버림)
@@ -41,7 +43,7 @@ locals {
       for action, a in local.cluster_schedule_actions : "${ng_key}-${action}" => merge(a, {
         node_group = ng.name
         action     = action
-      })
+      }) if !(action == "up" && contains(local.optional_node_groups, ng_key)) # ng-ai는 끄기 일정만
     }
   ]...)
 }

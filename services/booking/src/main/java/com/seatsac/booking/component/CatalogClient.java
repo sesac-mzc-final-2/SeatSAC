@@ -1,6 +1,7 @@
 package com.seatsac.booking.component;
 
 import com.seatsac.booking.common.BookingErrorCode;
+import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.common.ScreeningNotFoundException;
 import com.seatsac.common.core.error.BusinessException;
 import com.seatsac.common.core.error.CommonResponseCode;
@@ -93,9 +94,14 @@ public class CatalogClient {
         String theaterName,
         String auditoriumName
     ) {
-        /** 상영이 이미 시작됐는지 — 선점·취소 조건 (명세 5장) */
+        /** 상영이 이미 시작됐는지 — 취소 조건 (BKG-07) */
         public boolean hasStarted(Instant now) {
-            return startsAt != null && !startsAt.isAfter(now);
+            return !startsAt.isAfter(now);
+        }
+
+        /** 예매가 마감됐는지(상영 시작 5분 전부터) — 선점·결제 조건 */
+        public boolean isClosedForBooking(Instant now) {
+            return !startsAt.minus(BookingPolicy.BOOKING_CUTOFF).isAfter(now);
         }
     }
 

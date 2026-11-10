@@ -4,8 +4,10 @@
 /services/user/         @imi21123
 /services/booking/      @namgungil
 /services/payment/      @namgungil
+/services/ai/           @seohyeon-tomato
 /frontend/              @imi21123 @namgungil
 /contracts/             @imi21123 @namgungil
+/contracts/openapi/ai*  @seohyeon-tomato @imi21123
 /contracts/tools/       @pinodo
 /contracts/redocly.yaml @pinodo
 /libs/                  @pinodo @imi21123 @namgungil

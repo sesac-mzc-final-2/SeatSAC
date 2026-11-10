@@ -1,0 +1,64 @@
+.timer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 25px;
+  padding: 22px 26px;
+  border: 1px solid #414755;
+  border-radius: 10px;
+  background: #20232b;
+}
+
+.timer > div {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.timer strong {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.timer p {
+  margin-top: 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.timer > span {
+  font-size: 31px;
+  font-weight: 650;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timer[data-urgent] > span {
+  color: var(--color-primary);
+  animation: pulse 1s ease infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timer[data-urgent] > span {
+    animation: none;
+  }
+}
+
+@media (max-width: 540px) {
+  .timer {
+    gap: 12px;
+    padding: 16px;
+    align-items: flex-start;
+  }
+
+  .timer > span {
+    font-size: 26px;
+  }
+}

@@ -57,7 +57,7 @@ class BookingDtoJsonTest {
     @Test
     void holdResponseUsesKstOffsetAndHidesHoldId() throws Exception {
         Booking booking = Booking.pending("11111111-1111-4111-8111-111111111111", 42L,
-            "hold-uuid-must-not-leak", List.of("J7", "J8"), 2, NOW.plus(BookingPolicy.HOLD_TTL), NOW);
+            "hold-uuid-must-not-leak", List.of("J7", "J8"), 2, NOW.plusSeconds(BookingPolicy.DEFAULT_HOLD_TTL_SECONDS), NOW);
 
         String json = mapper.writeValueAsString(SeatHoldResponse.from(booking, List.of(101L, 102L)));
 
@@ -80,6 +80,28 @@ class BookingDtoJsonTest {
                 new SeatHoldRequest(42L, List.of()))).hasSize(1);                     // 0석
             assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
                 new BookingPayRequest.Card("4111", "13/28", "KIM")))).hasSize(2);     // 자리수, 월
+        }
+    }
+
+    /**
+     * 카드 번호 자리수는 계약(`^[0-9]{12,19}$`)과 같아야 한다 — booking만 16자리로 좁히면
+     * 화면·payment는 받아들이는 번호를 여기서 400으로 막는다.
+     */
+    @Test
+    void cardNumberAcceptsContractRange() {
+        try (var factory = Validation.buildDefaultValidatorFactory()) {
+            Validator validator = factory.getValidator();
+
+            for (String number : List.of("4".repeat(12), "4".repeat(16), "4".repeat(19))) {
+                assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
+                    new BookingPayRequest.Card(number, "12/28", "KIM"))))
+                    .as("계약이 허용하는 자리수: %s자리", number.length()).isEmpty();
+            }
+            for (String number : List.of("4".repeat(11), "4".repeat(20), "4242-4242-4242-4242")) {
+                assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
+                    new BookingPayRequest.Card(number, "12/28", "KIM"))))
+                    .as("계약 밖: %s", number).hasSize(1);
+            }
         }
     }
 

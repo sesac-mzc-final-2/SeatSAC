@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willReturn;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,6 +13,7 @@ import static org.mockito.Mockito.verify;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.seatsac.booking.common.RedisKeys;
+import com.seatsac.booking.common.ScreeningNotFoundException;
 import com.seatsac.booking.component.CatalogClient;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout.LayoutSeat;
@@ -123,6 +125,12 @@ class BookingPaymentFlowTest {
             "1112", null, null, Instant.now(), null);
     }
 
+    /** 결제 취소(환불) 응답 — 상태가 CANCELED여야 환불로 본다 */
+    private PaymentResult canceledFor(Long bookingId) {
+        return new PaymentResult(UUID.randomUUID().toString(), bookingId, 30_000, "CANCELED",
+            "1112", null, "HOLD_EXPIRED", Instant.now(), Instant.now());
+    }
+
     private PaymentResult declined(Long bookingId) {
         return new PaymentResult(UUID.randomUUID().toString(), bookingId, 30_000, "FAILED",
             "0000", "CARD_DECLINED", null, null, null);
@@ -133,6 +141,7 @@ class BookingPaymentFlowTest {
     @Test
     void approvedPaymentConfirmsBookingAndWritesOutboxInOneTransaction() throws Exception {
         Long bookingId = hold(101L, 102L);
+        long seqAfterHold = Long.parseLong(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING)));
         given(paymentClient.request(any())).willReturn(approved(bookingId));
 
         BookingPaymentResponse response = bookingPaymentService.pay(USER, bookingId, payRequest());
@@ -165,15 +174,17 @@ class BookingPaymentFlowTest {
 
         // 커밋 후: 선점 키 정리 + CONFIRMED 발행(선점 HELD 1 → 확정 2)
         assertThat(redis.hasKey(RedisKeys.seat(SCREENING, 101L))).isFalse();
-        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo("2");
+        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo(String.valueOf(seqAfterHold + 1));
     }
 
-    /** Catalog 조회가 실패해도 확정은 진행하고 이름·시각만 비운다 (계약이 null을 허용하는 이유) */
+    /**
+     * 승인 뒤 알림 본문의 Catalog 조회가 실패해도 확정은 진행하고 이름·시각만 비운다 (계약이 null을 허용하는 이유).
+     * 결제 전 마감 확인은 선점 때 채운 파드 캐시로 통과한다 — 알림 본문은 Catalog를 직접 부른다
+     */
     @Test
     void catalogFailureEmptiesTheNotificationButStillConfirms() throws Exception {
         Long bookingId = hold(101L);
         given(paymentClient.request(any())).willReturn(approved(bookingId));
-        screeningCache.clear();
         willThrow(new IllegalStateException("catalog down")).given(catalogClient)
             .findScreening(SCREENING);
 
@@ -211,6 +222,7 @@ class BookingPaymentFlowTest {
     @Test
     void approvedButExpiredRefundsAndRejects() {
         Long bookingId = hold(101L);
+        given(paymentClient.cancel(anyString(), any())).willReturn(canceledFor(bookingId));
         // 결제를 부르는 "사이에" 만료되는 상황 — 검증은 이미 지나갔다
         given(paymentClient.request(any())).willAnswer(invocation -> {
             expire(bookingId);
@@ -225,8 +237,134 @@ class BookingPaymentFlowTest {
         verify(paymentClient).cancel(anyString(), org.mockito.ArgumentMatchers
             .eq(PaymentCancelReason.HOLD_EXPIRED));
         assertThat(outboxMessageRepository.count()).isZero();
+        // 환불하고 여기서 끝낸다. 만료 스캔에 넘기면 안 된다 — 스캔은 결제를 요청한 예매
+        // (current_payment_id 있음)를 계속 보류하므로 아무도 다시 조회하지 않으면 영구히 PENDING이다
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
-            .isEqualTo(BookingStatus.PENDING);   // 만료 스캔이 EXPIRED로 바꾼다
+            .isEqualTo(BookingStatus.EXPIRED);
+        // 좌석 행도 같이 지운다. 남으면 좌석 현황에는 비어 보이는데 유일 제약 때문에 다시 선점되지 않는다
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(bookingId)).isEmpty();
+    }
+
+    /** 승인 뒤 만료인데 <b>환불 호출이 실패</b>하면 예매를 PENDING으로 남긴다 — 다음 조회가 다시 환불한다 */
+    @Test
+    void approvedButExpiredKeepsPendingWhenRefundFails() {
+        Long bookingId = hold(102L);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved(bookingId);
+        });
+        willThrow(new IllegalStateException("payment 응답 없음"))
+            .given(paymentClient).cancel(anyString(), any());
+
+        // 「만료·환불됨」(409 refunded=true)이 아니라 결과 미확인(503) — 돈이 아직 잡혀 있을 수 있다
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
+
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.PENDING);
+        assertThat(outboxMessageRepository.count()).isZero();
+    }
+
+    /** 취소 호출이 예외 없이 끝나도 응답이 CANCELED가 아니면 환불로 보지 않는다 */
+    @Test
+    void approvedButExpiredKeepsPendingWhenCancelIsNotConfirmed() {
+        Long bookingId = hold(105L);
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved;
+        });
+        given(paymentClient.cancel(anyString(), any())).willReturn(approved);   // 아직 APPROVED
+
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.PENDING);
+    }
+
+    /**
+     * 환불 응답만 못 받고 실제로는 취소된 경우: 다음 단건 조회가 결제를 CANCELED로 읽는다.
+     * 거절(PAYMENT_FAILED)이 아니라 만료(EXPIRED)로 끝내야 한다 — 화면이 「결제 실패」가 아니라 「만료·환불」을 보여 준다
+     */
+    @Test
+    void detailExpiresWhenRefundWentThroughButResponseWasLost() {
+        Long bookingId = hold(106L);
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved;
+        });
+        willThrow(new IllegalStateException("payment 응답 없음(취소는 됐다)"))
+            .given(paymentClient).cancel(anyString(), any());
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class);
+
+        PaymentResult canceled = new PaymentResult(approved.paymentId(), bookingId, 30_000, "CANCELED",
+            "1112", null, "HOLD_EXPIRED", approved.approvedAt(), Instant.now());
+        given(paymentClient.find(anyString())).willReturn(java.util.Optional.of(canceled));
+
+        var detail = bookingDetailService.get(USER, bookingId);
+        assertThat(detail.status()).isEqualTo(BookingStatus.EXPIRED);
+        assertThat(detail.payment().status()).isEqualTo("CANCELED");
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(bookingId)).isEmpty();
+        assertThat(redis.hasKey(RedisKeys.seat(SCREENING, 106L))).isFalse();
+    }
+
+    /** 환불을 확인하지 못한 예매는 다음 단건 조회가 다시 환불하고, 그때 EXPIRED로 끝낸다 */
+    @Test
+    void detailRetriesRefundLeftPendingByPayment() {
+        Long bookingId = hold(103L);
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willAnswer(invocation -> {
+            expire(bookingId);
+            return approved;
+        });
+        willThrow(new IllegalStateException("payment 응답 없음"))
+            .given(paymentClient).cancel(anyString(), any());
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class);
+
+        // 환불이 아직 안 되는 동안의 조회: 예매 PENDING + 결제 APPROVED (둘 다 사실이다)
+        given(paymentClient.find(anyString())).willReturn(java.util.Optional.of(approved));
+        var stillPending = bookingDetailService.get(USER, bookingId);
+        assertThat(stillPending.status()).isEqualTo(BookingStatus.PENDING);
+        assertThat(stillPending.payment().status()).isEqualTo("APPROVED");
+
+        // payment가 돌아오면 조회가 환불하고 만료로 끝낸다. 응답의 결제는 다시 읽은 CANCELED
+        PaymentResult canceled = new PaymentResult(approved.paymentId(), bookingId, 30_000, "CANCELED",
+            "1112", null, "HOLD_EXPIRED", approved.approvedAt(), Instant.now());
+        willReturn(canceled).given(paymentClient).cancel(anyString(), any());
+        given(paymentClient.find(anyString()))
+            .willReturn(java.util.Optional.of(approved), java.util.Optional.of(canceled));
+
+        var detail = bookingDetailService.get(USER, bookingId);
+        assertThat(detail.status()).isEqualTo(BookingStatus.EXPIRED);
+        assertThat(detail.payment().status()).isEqualTo("CANCELED");
+    }
+
+    /** 환불 뒤 결제를 다시 읽지 못하면 결제 없이 답한다 — 낡은 APPROVED를 EXPIRED 예매와 같이 내보내지 않는다 */
+    @Test
+    void detailOmitsStaleApprovalWhenRereadFailsAfterRefund() {
+        Long bookingId = hold(104L);
+        given(paymentClient.cancel(anyString(), any())).willReturn(canceledFor(bookingId));
+        PaymentResult approved = approved(bookingId);
+        given(paymentClient.request(any())).willThrow(
+            com.seatsac.booking.common.BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception());
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class);
+        expire(bookingId);
+
+        given(paymentClient.find(anyString()))
+            .willReturn(java.util.Optional.of(approved))
+            .willThrow(new IllegalStateException("payment 응답 없음"));
+
+        var detail = bookingDetailService.get(USER, bookingId);
+        assertThat(detail.status()).isEqualTo(BookingStatus.EXPIRED);
+        assertThat(detail.payment()).isNull();
     }
 
     // --- 예매당 1회 ---
@@ -265,6 +403,56 @@ class BookingPaymentFlowTest {
         verify(paymentClient, never()).request(any());
     }
 
+    // --- 예매 마감 (상영 시작 5분 전) ---
+
+    /** 마감 뒤 결제는 Payment를 부르지 않고 400 — 돈이 나가지 않고 예매는 PENDING 그대로(선점은 TTL로 풀린다) */
+    @Test
+    void paymentIsRejectedFromFiveMinutesBeforeStart() {
+        Long bookingId = hold(101L);
+        startScreeningIn(240);   // 4분 뒤 시작 = 마감 지남
+
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(e -> {
+                BusinessException ex = (BusinessException) e;
+                assertThat(ex.code().responseCode()).isEqualTo(CommonResponseCode.SCREENING_STARTED.name());
+                assertThat(ex.details()).singleElement()
+                    .satisfies(detail -> assertThat(detail.reason()).isEqualTo("BOOKING_CLOSED"));
+            });
+
+        Booking booking = bookingRepository.findById(bookingId).orElseThrow();
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
+        assertThat(booking.getCurrentPaymentId()).isNull();
+        verify(paymentClient, never()).request(any());
+    }
+
+    /** 마감 전이면 결제한다 — 6분 뒤 시작 */
+    @Test
+    void paymentIsAcceptedBeforeTheCutoff() {
+        Long bookingId = hold(101L);
+        startScreeningIn(360);
+        given(paymentClient.request(any())).willReturn(approved(bookingId));
+
+        assertThat(bookingPaymentService.pay(USER, bookingId, payRequest()).status())
+            .isEqualTo(BookingStatus.CONFIRMED);
+    }
+
+    /** 마감 여부를 모르면 결제를 부르지 않는다 — 503, 아무것도 바뀌지 않는다 */
+    @Test
+    void paymentIsUnavailableWhenCatalogIsDown() {
+        Long bookingId = hold(101L);
+        screeningCache.clear();
+        willThrow(new IllegalStateException("catalog down")).given(catalogClient).findScreening(SCREENING);
+
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, bookingId, payRequest()))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
+
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getCurrentPaymentId()).isNull();
+        verify(paymentClient, never()).request(any());
+    }
+
     // --- BKG-07 취소 ---
 
     @Test
@@ -300,6 +488,108 @@ class BookingPaymentFlowTest {
         assertThat(response.status()).isEqualTo(BookingStatus.CANCELED);
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
             .isEqualTo(BookingStatus.CANCELED);
+    }
+
+    /** 상영이 시작된 예매는 취소·환불하지 않는다 — 400 SCREENING_STARTED, 아무것도 바뀌지 않는다 (계약 BKG-07) */
+    @Test
+    void confirmedBookingCannotBeCanceledAfterScreeningStarted() {
+        Long bookingId = confirmedBooking(101L);
+        startScreening();
+
+        assertThatThrownBy(() -> bookingCancelService.cancel(USER, bookingId))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SCREENING_STARTED.name());
+
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.CONFIRMED);
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(bookingId)).containsExactly(101L);
+        verify(paymentClient, never()).cancel(anyString(), any());
+    }
+
+    /** 회차 정보를 못 받으면 상영 시작 여부를 알 수 없다 — 503, 취소·환불하지 않는다 */
+    @Test
+    void cancelIsUnavailableWhenCatalogIsDown() {
+        Long bookingId = confirmedBooking(101L);
+        screeningCache.clear();
+        willThrow(new IllegalStateException("catalog down")).given(catalogClient).findScreening(SCREENING);
+
+        assertThatThrownBy(() -> bookingCancelService.cancel(USER, bookingId))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
+
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.CONFIRMED);
+        verify(paymentClient, never()).cancel(anyString(), any());
+    }
+
+    /** 예매가 가리키는 회차를 Catalog가 404로 답해도 「예매 없음」이 아니라 503이다. 아무것도 바뀌지 않는다 */
+    @Test
+    void cancelIsUnavailableWhenScreeningIsMissingInCatalog() {
+        Long bookingId = confirmedBooking(101L);
+        screeningCache.clear();
+        willThrow(new ScreeningNotFoundException()).given(catalogClient).findScreening(SCREENING);
+
+        assertThatThrownBy(() -> bookingCancelService.cancel(USER, bookingId))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
+
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.CONFIRMED);
+        verify(paymentClient, never()).cancel(anyString(), any());
+    }
+
+    /** 시작 시각이 없는 회차 응답은 「시작 전」으로 보지 않는다 — 503, 취소·환불하지 않는다 */
+    @Test
+    void cancelIsUnavailableWhenStartTimeIsMissing() {
+        Long bookingId = confirmedBooking(101L);
+        screeningCache.clear();
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, null, null, "승부", "건대입구", "1관"));
+
+        assertThatThrownBy(() -> bookingCancelService.cancel(USER, bookingId))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
+        verify(paymentClient, never()).cancel(anyString(), any());
+    }
+
+    /**
+     * 상영 전에 취소했지만 환불 호출이 실패한 예매 — 상영이 시작된 뒤 다시 요청해도 결제가 아직
+     * APPROVED면 환불을 다시 시도한다(상영 시작 확인보다 멱등 경로가 먼저다)
+     */
+    @Test
+    void refundIsRetriedForCanceledBookingEvenAfterScreeningStarted() {
+        Long bookingId = confirmedBooking(101L);
+        willThrow(new IllegalStateException("payment down")).given(paymentClient).cancel(anyString(), any());
+        bookingCancelService.cancel(USER, bookingId);
+        startScreening();
+        String paymentId = bookingRepository.findById(bookingId).orElseThrow().getCurrentPaymentId();
+        given(paymentClient.find(paymentId)).willReturn(java.util.Optional.of(new PaymentResult(
+            paymentId, bookingId, 30_000, "APPROVED", "1112", null, null, Instant.now(), null)));
+        willReturn(new PaymentResult(paymentId, bookingId, 30_000, "CANCELED", "1112", null,
+            "BOOKING_CANCELED", Instant.now(), Instant.now())).given(paymentClient).cancel(anyString(), any());
+
+        var response = bookingCancelService.cancel(USER, bookingId);
+
+        assertThat(response.status()).isEqualTo(BookingStatus.CANCELED);
+        assertThat(response.payment().status()).isEqualTo("CANCELED");
+        verify(paymentClient, org.mockito.Mockito.times(2)).cancel(org.mockito.ArgumentMatchers.eq(paymentId), any());
+    }
+
+    /** 상영 전에 취소한 예매는 상영이 시작된 뒤 다시 요청해도 같은 결과(200)다 — 멱등 응답이 먼저다 */
+    @Test
+    void alreadyCanceledBookingStillAnswersAfterScreeningStarted() {
+        Long bookingId = confirmedBooking(101L);
+        given(paymentClient.cancel(anyString(), any())).willReturn(new PaymentResult(
+            UUID.randomUUID().toString(), bookingId, 30_000, "CANCELED", "1112", null,
+            "BOOKING_CANCELED", Instant.now(), Instant.now()));
+        bookingCancelService.cancel(USER, bookingId);
+        startScreening();
+
+        assertThat(bookingCancelService.cancel(USER, bookingId).status()).isEqualTo(BookingStatus.CANCELED);
     }
 
     @Test
@@ -369,6 +659,31 @@ class BookingPaymentFlowTest {
 
         assertThat(detail.status()).isEqualTo(BookingStatus.PAYMENT_FAILED);
         assertThat(detail.seatIds()).isEmpty();
+    }
+
+    /** 선점 → 승인 결제로 확정된 예매 */
+    private Long confirmedBooking(Long seatId) {
+        Long bookingId = hold(seatId);
+        given(paymentClient.request(any())).willReturn(approved(bookingId));
+        bookingPaymentService.pay(USER, bookingId, payRequest());
+        return bookingId;
+    }
+
+    /** 회차가 이미 시작된 것으로 바꾼다 (파드 캐시도 비운다) */
+    private void startScreening() {
+        screeningCache.clear();
+        Instant now = Instant.now();
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, now.minusSeconds(60), now.plusSeconds(6000), "승부", "건대입구", "1관"));
+    }
+
+    /** 회차 시작 시각을 지금부터 {@code seconds}초 뒤로 바꾼다 (파드 캐시도 비운다) */
+    private void startScreeningIn(long seconds) {
+        screeningCache.clear();
+        Instant now = Instant.now();
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, now.plusSeconds(seconds), now.plusSeconds(seconds + 6000),
+            "승부", "건대입구", "1관"));
     }
 
     /** 선점 만료 시각을 과거로 돌린다 (상태 전이는 3.2.5 만료 스캔 몫이다) */

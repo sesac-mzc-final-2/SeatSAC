@@ -37,6 +37,18 @@ public class RedisConfig {
      * 멱등 키를 내가 잡은 처리권일 때만 바꾼다. 반환 1 = 바꿨다, 0 = 남의 처리권이라 그대로 뒀다.
      * 단일 명령으로 안 되는 「값을 보고 쓰기」라서 Lua를 쓴다(`redis-usage.md` 8장).
      */
+    /**
+     * 회차 좌석 이벤트의 다음 번호. 키가 없으면 「현재 시각 ms × 1000」에서 시작한다 —
+     * Valkey가 비어도 번호가 뒤로 가지 않게(화면이 새 이벤트를 지난 것으로 버리지 않게).
+     */
+    @Bean
+    public RedisScript<Long> seatSeqScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("redis/seq-next.lua"));
+        script.setResultType(Long.class);
+        return script;
+    }
+
     @Bean
     public RedisScript<Long> idempotencyWriteScript() {
         DefaultRedisScript<Long> script = new DefaultRedisScript<>();

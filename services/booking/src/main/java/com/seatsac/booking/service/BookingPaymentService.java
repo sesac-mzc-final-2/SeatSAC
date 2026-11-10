@@ -4,6 +4,7 @@ import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.component.PaymentClient;
 import com.seatsac.booking.component.PaymentClient.PaymentRequest;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
+import com.seatsac.booking.component.ScreeningCache;
 import com.seatsac.booking.dto.request.BookingPayRequest;
 import com.seatsac.booking.dto.response.BookingPaymentResponse;
 import com.seatsac.booking.dto.response.PaymentView;
@@ -25,13 +26,18 @@ import org.springframework.stereotype.Service;
  * 이 클래스는 <b>앞단 검증과 결제 ID 발급·응답 변환</b>만 맡는다.
  *
  * <pre>
- * 1. 검증(본인·PENDING·선점 유효·결제 1회) + paymentId 발급 → 조건부 UPDATE로 붙임
+ * 1. 검증(본인·PENDING·선점 유효·결제 1회·예매 마감 전) + paymentId 발급 → 조건부 UPDATE로 붙임
  * 2. Payment 동기 호출 (응답을 못 받으면 1회 재호출 → 조회, 끝까지 모르면 503)
- * 3. 결과 반영 → 응답 (승인 200 CONFIRMED · 거절 200 PAYMENT_FAILED · 만료 409 + 환불)
+ * 3. 결과 반영 → 응답 (승인 200 CONFIRMED · 거절 200 PAYMENT_FAILED · 만료 409 + 환불 · 환불 미확인 503)
  * </pre>
  *
  * <p><b>예매당 결제 1회</b>(ADR-24)는 {@code current_payment_id}를 붙이는 조건부 UPDATE가 막는다 —
  * 두 번째 요청은 0행이라 409 {@code PAYMENT_ALREADY_REQUESTED}이고, 결과는 단건 조회로 본다.
+ *
+ * <p><b>예매 마감</b>(상영 시작 5분 전, {@link com.seatsac.booking.common.BookingPolicy#BOOKING_CUTOFF})이 지나면
+ * 결제를 부르기 전에 400 {@code SCREENING_STARTED}로 거절한다 — 돈이 나가지 않고, 선점은 TTL로 풀린다.
+ * 상영 시작 뒤에 승인된 확정 예매가 생기면 취소(BKG-07)가 막혀 환불할 수 없기 때문이다.
+ * 회차 정보를 못 받으면 503(결제 호출 전, 아무것도 바뀌지 않음).
  */
 @Slf4j
 @Service
@@ -43,6 +49,7 @@ public class BookingPaymentService {
     private final BookingStateService bookingState;
     private final BookingPaymentResultApplier resultApplier;
     private final PaymentClient paymentClient;
+    private final ScreeningCache screeningCache;
 
     /** 거절도 200이고 {@code status}로 구분한다 */
     public BookingPaymentResponse pay(String userId, Long bookingId, BookingPayRequest request) {
@@ -50,6 +57,7 @@ public class BookingPaymentService {
         Booking booking = bookingReader.findById(bookingId)
             .orElseThrow(BookingErrorCode.BOOKING_NOT_FOUND::exception);
         validate(booking, userId, now);
+        screeningCache.requireOpen(screeningCache.screeningOfBooking(bookingId, booking.getScreeningId()));
 
         String paymentId = UUID.randomUUID().toString();
         if (!bookingState.attachPayment(bookingId, paymentId, now)) {
@@ -73,6 +81,10 @@ public class BookingPaymentService {
                 ErrorDetail.of("status", BookingStatus.EXPIRED.name(),
                     BookingErrorCode.HOLD_EXPIRED.name()),
                 ErrorDetail.of("refunded", true));
+            // 만료라 환불을 시도했지만 확인하지 못했다 — 예매는 PENDING, 돈은 잡혀 있을 수 있다.
+            // 「만료·환불됨」(409 refunded=true)으로 답하면 거짓이다. 결과 미확인(503)으로 답하고
+            // 화면이 단건 조회로 다시 확인하게 한다 — 그 조회가 환불을 다시 시도한다
+            case REFUND_PENDING -> throw BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception();
             // 거절을 단건 조회 폴링이 먼저 반영했을 수 있다. 그때는 이 요청의 결과와 같으므로
             // 409가 아니라 200 PAYMENT_FAILED다(같은 요청에 같은 답). 그 밖의 경합은 409
             case ALREADY_SETTLED -> {

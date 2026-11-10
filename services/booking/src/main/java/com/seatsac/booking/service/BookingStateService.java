@@ -34,7 +34,7 @@ public class BookingStateService {
      * 유일 제약 (screening_id, seat_id) 위반은 다른 사용자가 먼저 잡은 것이므로 409 SEAT_UNAVAILABLE로 바꾼다.
      * 부르는 쪽은 이 예외를 받으면 {@code release.lua}로 Valkey 키를 정리하고 이벤트를 발행하지 않는다.
      *
-     * @param now 흐름에서 Clock으로 한 번 구한 값. {@code expiresAt = now + HOLD_TTL}
+     * @param now 흐름에서 Clock으로 한 번 구한 값. {@code expiresAt = now + 선점 TTL}
      */
     @Transactional
     public Booking createPending(PendingBooking command, Instant now) {

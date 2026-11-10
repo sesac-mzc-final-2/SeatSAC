@@ -6,6 +6,10 @@ import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout;
 import com.seatsac.booking.component.CatalogClient.Screening;
+import com.seatsac.common.core.error.BusinessException;
+import com.seatsac.common.core.error.CommonResponseCode;
+import com.seatsac.common.core.error.ErrorDetail;
+import java.time.Clock;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,11 +31,13 @@ import org.springframework.stereotype.Component;
 public class ScreeningCache {
 
     private final CatalogClient catalog;
+    private final Clock clock;
     private final Cache<Long, Screening> screenings;
     private final Cache<LayoutKey, SeatLayout> layouts;
 
-    public ScreeningCache(CatalogClient catalog) {
+    public ScreeningCache(CatalogClient catalog, Clock clock) {
         this.catalog = catalog;
+        this.clock = clock;
         this.screenings = Caffeine.newBuilder()
             .maximumSize(BookingPolicy.SCREENING_CACHE_SIZE)
             .expireAfterWrite(BookingPolicy.SCREENING_CACHE_TTL)
@@ -42,9 +48,54 @@ public class ScreeningCache {
             .build();
     }
 
-    /** 없으면 Catalog에서 받아 캐시한다. 404는 {@code SCREENING_NOT_FOUND}, 그 밖 실패는 503 */
+    /**
+     * 없으면 Catalog에서 받아 캐시한다. 404는 {@code SCREENING_NOT_FOUND}, 그 밖 실패는 503.
+     * 시작 시각이 없는 응답도 503이다(캐시하지 않는다) — 선점·결제·취소가 모두 시작 시각으로 판정하는데,
+     * 모르는 채로 「시작 전」으로 보면 마감·환불 조건을 건너뛴다.
+     */
     public Screening screening(Long screeningId) {
-        return load(() -> screenings.get(screeningId, catalog::findScreening));
+        return load(() -> screenings.get(screeningId, id -> {
+            Screening screening = catalog.findScreening(id);
+            if (screening != null && screening.startsAt() == null) {
+                log.warn("회차 시작 시각 없음 screeningId={}", id);
+                throw BookingErrorCode.CATALOG_UNAVAILABLE.exception();
+            }
+            return screening;
+        }));
+    }
+
+    /**
+     * 선점·결제용 회차 — 예매 마감(상영 시작 5분 전, {@link BookingPolicy#BOOKING_CUTOFF})이면
+     * 400 {@code SCREENING_STARTED}. 시각은 회차를 읽은 <b>뒤</b>에 구한다(Catalog 조회가 길어져도
+     * 판정이 늦어지지 않게).
+     */
+    public Screening openForBooking(Long screeningId) {
+        return requireOpen(screening(screeningId));
+    }
+
+    /** {@link #openForBooking}의 판정만 — 이미 읽은 회차에 쓴다 */
+    public Screening requireOpen(Screening screening) {
+        if (screening.isClosedForBooking(clock.instant())) {
+            throw BookingErrorCode.BOOKING_CLOSED.exception(ErrorDetail.of("screeningId",
+                screening.screeningId(), BookingErrorCode.BOOKING_CLOSED.name()));
+        }
+        return screening;
+    }
+
+    /**
+     * <b>이미 있는 예매</b>의 회차(결제·취소). Catalog가 404로 답해도 503이다 — 예매가 가리키는 회차가
+     * 없다는 것은 시드 재적재 같은 운영 문제이고, 404로 답하면 화면이 「예매를 찾을 수 없음」으로 안내한다.
+     */
+    public Screening screeningOfBooking(Long bookingId, Long screeningId) {
+        try {
+            return screening(screeningId);
+        } catch (BusinessException e) {
+            if (e.code().responseCode().equals(CommonResponseCode.NOT_FOUND.name())) {
+                log.warn("예매의 회차를 Catalog에서 찾지 못함 bookingId={} screeningId={}", bookingId, screeningId);
+                throw BookingErrorCode.CATALOG_UNAVAILABLE.exception();
+            }
+            throw e;
+        }
     }
 
     /** (상영관, 배치 버전) 키. 좌석 ID·번호·활성만 추려 담는다 */

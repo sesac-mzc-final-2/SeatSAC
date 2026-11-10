@@ -1,0 +1,135 @@
+.panel {
+  position: sticky;
+  top: 24px;
+  padding: 24px;
+}
+
+.movie {
+  display: flex;
+  gap: 13px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.poster {
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.movie h3 {
+  margin-top: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.movie span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.movie p {
+  margin-top: 8px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.selection {
+  margin: 22px 0;
+}
+
+.selection h3 {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.selection h3 span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.selection > p {
+  margin-top: 12px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 1px solid var(--color-primary);
+  border-radius: 5px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 15px 0 20px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 12px;
+}
+
+.breakdown > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.breakdown dt {
+  color: var(--color-muted);
+}
+
+.total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 22px 0;
+  font-size: 13px;
+}
+
+.total strong {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.disclaimer {
+  margin-top: 13px;
+  color: var(--color-dim);
+  font-size: 11px;
+  line-height: 1.8;
+  text-align: center;
+}
+
+.disclaimer svg {
+  display: inline;
+  margin-right: 3px;
+  vertical-align: -2px;
+}
+
+@media (max-width: 800px) {
+  .panel {
+    position: static;
+  }
+}

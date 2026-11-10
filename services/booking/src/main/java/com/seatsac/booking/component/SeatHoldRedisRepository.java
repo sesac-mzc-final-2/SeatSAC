@@ -1,6 +1,5 @@
 package com.seatsac.booking.component;
 
-import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.common.RedisKeys;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -9,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.Set;
+import com.seatsac.booking.config.SeatHoldProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -30,6 +30,7 @@ public class SeatHoldRedisRepository implements SeatHoldStrategy {
     @SuppressWarnings("rawtypes")
     private final RedisScript<List> holdScript;
     private final RedisScript<Long> releaseScript;
+    private final SeatHoldProperties seatHoldProperties;
 
     @Override
     @SuppressWarnings("unchecked")
@@ -40,7 +41,7 @@ public class SeatHoldRedisRepository implements SeatHoldStrategy {
         // ARGV: holdId, TTL초, 만료 ms, 장부 멤버, 좌석 ID...(KEYS[3..]과 같은 순서)
         List<String> args = new ArrayList<>(List.of(
             holdId,
-            String.valueOf(BookingPolicy.HOLD_TTL.toSeconds()),
+            String.valueOf(seatHoldProperties.holdTtl().toSeconds()),
             String.valueOf(expiresAt.toEpochMilli()),
             RedisKeys.holdExpiryMember(screeningId, holdId)));
         seatIds.forEach(seatId -> args.add(String.valueOf(seatId)));

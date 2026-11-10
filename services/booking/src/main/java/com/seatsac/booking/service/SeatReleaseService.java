@@ -24,7 +24,7 @@ import org.springframework.stereotype.Service;
  * 1. 본인 예매 확인 (user_id = X-User-Id)
  * 2. 결제를 요청했으면 409 PAYMENT_IN_PROGRESS
  * 3. tx  조건부 UPDATE CANCELED + booking_seat 삭제 → 커밋. 0행이면 현재 상태로 409
- * 4. 커밋 후  release.lua → INCR seat-seq → PUBLISH RELEASED
+ * 4. 커밋 후  release.lua → 다음 seq(seq-next.lua) → PUBLISH RELEASED
  * </pre>
  *
  * 조건부 UPDATE라 같은 요청이 여러 번 와도 결과가 같다(멱등 키는 선택).
@@ -63,7 +63,7 @@ public class SeatReleaseService {
         }
 
         // 커밋 후: Valkey 정리 → 발행. 이미 CANCELED로 커밋됐으니 정리 실패로 500을 내지 않는다
-        // (좌석 키는 TTL 300초로, 장부 멤버는 만료 스캔이 치운다)
+        // (좌석 키는 선점 TTL(설정)로, 장부 멤버는 만료 스캔이 치운다)
         try {
             seatHold.release(booking.getScreeningId(), userId, booking.getHoldId(), seatIds);
         } catch (DataAccessException e) {

@@ -3,7 +3,7 @@
 // 돌리는 방법 — 이 스크립트를 띄워 둔 상태에서 booking(또는 gateway) 새 버전을 배포한다.
 // 전환 전후로 5xx·연결 오류가 0이어야 한다.
 //
-//   K6_TOKENS       서로 다른 테스트 계정 토큰 (VU 수만큼)
+//   K6_TOKENS_FILE  서로 다른 테스트 계정 토큰 파일 (VU 수만큼, 줄당 1개) — 또는 K6_TOKENS 쉼표 구분
 //   SCREENING_ID    좌석이 넉넉한 회차 (VU × 반복 × 1석 이상)
 //   SEAT_ID_FROM    쓸 좌석 ID 시작값 — VU마다 서로 다른 좌석을 잡아 좌석 경쟁을 피한다
 //                   (경쟁 테스트는 seat-hold-contention.js가 따로 한다)

@@ -1,7 +1,8 @@
 // 실시간 좌석 데모 ①: 같은 좌석 100명 동시 선점 → 성공 정확히 1명, 선점 p95 300ms 이하
 //
 // 필요한 것
-//   K6_TOKENS     서로 다른 Cognito 테스트 계정 토큰 100개 (쉼표 구분)
+//   K6_TOKENS_FILE 서로 다른 Cognito 테스트 계정 토큰 100개 파일(줄당 1개, 절대 경로) — tools/loadtest_users.py tokens --out
+//                 (토큰 몇 개면 K6_TOKENS 쉼표 구분도 된다)
 //                 — 회차당 선점 1건 제한 때문에 토큰이 겹치면 좌석 경쟁이 아니라
 //                   사용자 제한(ACTIVE_HOLD_EXISTS)을 재게 된다
 //   SCREENING_ID  아직 아무도 잡지 않은 회차
@@ -71,6 +72,15 @@ export default function (data) {
 
 export function handleSummary(data) {
   const count = (name) => (data.metrics[name] ? data.metrics[name].values.count : 0);
+  // 기본 요약을 대신하므로 리포트에 쓸 지연·임계값 결과도 여기서 찍는다(4.2.1 리포트)
+  const latency = data.metrics.hold_latency ? data.metrics.hold_latency.values : {};
+  const ms = (v) => (v === undefined ? "-" : `${v.toFixed(1)}ms`);
+  const verdicts = Object.entries(data.metrics)
+    .filter(([, m]) => m.thresholds)
+    .map(([name, m]) => {
+      const ok = Object.values(m.thresholds).every((t) => t.ok);
+      return `  ${ok ? "✓" : "✗"} ${name}: ${Object.keys(m.thresholds).join(", ")}`;
+    });
   const lines = [
     "",
     "같은 좌석 동시 선점 결과",
@@ -78,6 +88,11 @@ export function handleSummary(data) {
     `  좌석 선점됨(409 HELD) ${count("hold_seat_taken")}`,
     `  사용자 제한(409 기타)  ${count("hold_active_hold")}   ← 0이어야 한다(토큰 부족 신호)`,
     `  그 밖                ${count("hold_other")}   ← 0이어야 한다`,
+    "",
+    `선점 응답 시간  p95 ${ms(latency["p(95)"])} · 중앙값 ${ms(latency.med)} · 최대 ${ms(latency.max)}   ← p95 300ms 이하`,
+    "",
+    "임계값",
+    ...verdicts,
     "",
   ];
   return { stdout: lines.join("\n") };

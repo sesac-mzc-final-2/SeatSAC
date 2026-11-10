@@ -1,0 +1,18 @@
+{
+  "summary": "REJECTED — 생성된 SQL이 허용 테이블 밖(snapshot_meta)을 읽어 검증기가 거부, 재요청 1회 뒤에도 실패. 200이며 결과 표 없음",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "그 질문은 지금 데이터로 답하기 어렵습니다. 영화·극장·회차에 대해 물어봐 주세요.",
+    "path": "REJECTED",
+    "columns": null,
+    "rows": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": "SELECT table_name, refreshed_at FROM snapshot_meta",
+    "presetId": null,
+    "asOf": "2026-11-17T19:42:00+09:00",
+    "llm": { "calls": 2, "inputTokens": 921, "outputTokens": 164, "cacheReadTokens": 7620, "cacheWriteTokens": 0 },
+    "latencyMs": 4120,
+    "rejection": { "reason": "FORBIDDEN_OBJECT", "message": "허용되지 않은 테이블을 조회하는 SQL입니다.", "object": "snapshot_meta" }
+  }
+}

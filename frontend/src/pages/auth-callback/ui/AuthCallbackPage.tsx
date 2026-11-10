@@ -1,34 +1,59 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useSession } from "@/entities/session";
+import { myProfileQuery } from "@/entities/user";
+import { isApiError } from "@/shared/api";
 import { routes } from "@/shared/config";
 import { useDocumentTitle } from "@/shared/lib";
-import { Button, ButtonLink, EmptyState, Icon, LoadingBlock } from "@/shared/ui";
+import { Button, ButtonLink, EmptyState, ErrorState, Icon, LoadingBlock } from "@/shared/ui";
+import styles from "./AuthCallbackPage.module.css";
+
+const PROFILE_MESSAGES: Record<string, string> = {
+  IDENTITY_UNAVAILABLE: "회원 정보를 확인하는 서비스가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.",
+  TOKEN_REJECTED: "로그인 정보를 확인하지 못했어요. 다시 로그인해 주세요.",
+  UNAUTHORIZED: "로그인 정보를 확인하지 못했어요. 다시 로그인해 주세요.",
+};
 
 /**
- * W7 `/callback` — Cognito 코드 교환은 인증 프로바이더가 처리한다. 여기서는 결과를 보고
- * 저장해 둔 경로로 돌려보내거나 실패 안내만 한다. (프로필 생성 `GET /users/me` 호출은 3.3.6)
+ * W7 `/callback` — Cognito 코드 교환은 인증 프로바이더가 처리한다. 토큰을 받으면 `GET /users/me` 로
+ * 프로필을 만들고(첫 로그인) 저장해 둔 경로로 돌려보낸다. 프로필 호출이 실패하면 다시 시도하거나, 돌아갈 곳이
+ * 프로필과 무관한 화면이면 그냥 계속할 수 있다(프로필은 마이페이지에서 다시 만들어진다).
  */
 export function AuthCallbackPage() {
   useDocumentTitle("로그인");
   const session = useSession();
   const navigate = useNavigate();
+  const returnTo = session.returnTo ?? routes.home();
+  // 마이페이지는 프로필이 있어야 그려진다 → 프로필 실패 뒤 「그냥 계속하기」는 같은 오류로 이어지므로 보여 주지 않는다
+  const returnNeedsProfile = returnTo === routes.myPage() || returnTo.startsWith(`${routes.myPage()}?`);
+
+  const authenticated = session.status === "authenticated";
+  const profile = useQuery({ ...myProfileQuery(), enabled: authenticated, retry: false });
+  // 방금 받은 토큰이 거절된 401 은 다시 요청해도 같다 → 토큰을 폐기하고 Cognito 세션까지 끝낸 뒤 다시 로그인
+  const rejected = isApiError(profile.error, 401);
 
   useEffect(() => {
-    if (session.status === "authenticated") void navigate(session.returnTo ?? routes.home(), { replace: true });
+    if (authenticated && profile.isSuccess) void navigate(returnTo, { replace: true });
     else if (session.status === "unavailable") void navigate(routes.home(), { replace: true });
-  }, [session.status, session.returnTo, navigate]);
+  }, [authenticated, profile.isSuccess, session.status, returnTo, navigate]);
 
   if (session.error) {
+    // 401 뒤 조용한 갱신(signinSilent)까지 실패하면 session.error 가 먼저 선다. 이때 signIn 으로 보내면 Cognito 세션으로
+    // 같은 토큰을 다시 받아 반복되므로, 토큰이 거절된 경우는 signOut(폐기 + Hosted UI 로그아웃)으로 보낸다
     return (
       <EmptyState
         as="h1"
         icon="alert-circle"
         title="로그인을 완료하지 못했어요"
-        description="로그인 창을 닫았거나 세션이 만료되었을 수 있습니다. 다시 시도해 주세요."
+        description={
+          rejected
+            ? "로그인 정보를 확인하지 못했어요. 다시 로그인해 주세요."
+            : "로그인 창을 닫았거나 세션이 만료되었을 수 있습니다. 다시 시도해 주세요."
+        }
         action={
           <>
-            <Button variant="primary" onClick={() => session.signIn(session.returnTo ?? routes.home())}>
+            <Button variant="primary" onClick={() => (rejected ? session.signOut() : session.signIn(returnTo))}>
               <Icon name="log-in" /> 다시 로그인
             </Button>
             <ButtonLink to={routes.home()}>홈으로</ButtonLink>
@@ -54,5 +79,28 @@ export function AuthCallbackPage() {
     );
   }
 
-  return <LoadingBlock label="로그인 처리 중이에요" />;
+  if (authenticated && profile.isError) {
+    return (
+      <ErrorState
+        as="h1"
+        error={profile.error}
+        title="회원 정보를 준비하지 못했어요"
+        messages={PROFILE_MESSAGES}
+        onRetry={rejected ? undefined : () => profile.refetch()}
+        action={
+          rejected ? (
+            <Button variant="primary" onClick={() => session.signOut()}>
+              <Icon name="log-in" /> 다시 로그인
+            </Button>
+          ) : returnNeedsProfile ? undefined : (
+            <Link to={returnTo} replace className={styles.skip}>
+              그냥 계속하기 <Icon name="arrow-right" size={13} />
+            </Link>
+          )
+        }
+      />
+    );
+  }
+
+  return <LoadingBlock label={authenticated ? "회원 정보를 준비하는 중이에요" : "로그인 처리 중이에요"} />;
 }

@@ -1,0 +1,108 @@
+.result {
+  max-width: 650px;
+  margin: 0 auto;
+  padding: 20px 0 40px;
+  text-align: center;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 75px;
+  height: 75px;
+  margin: 8px auto 28px;
+  border: 1px solid #454d5b;
+  border-radius: 50%;
+  background: #232730;
+  color: #dce1e9;
+}
+
+.result[data-tone="ok"] .icon {
+  background: #252a31;
+}
+
+.result[data-tone="fail"] .icon {
+  color: var(--color-primary);
+}
+
+.title {
+  font-size: 29px;
+  font-weight: 650;
+  letter-spacing: -1px;
+  line-height: 1.5;
+}
+
+.description {
+  max-width: 490px;
+  margin: 13px auto 24px;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.8;
+  word-break: keep-all;
+}
+
+.number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  margin-bottom: 25px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.number strong {
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 1px;
+}
+
+.summary {
+  max-width: 430px;
+  margin: 28px auto;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 13px;
+  max-width: 430px;
+  margin: 0 auto 15px;
+}
+
+.textLink {
+  font-size: 13px;
+}
+
+.micro {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 540px) {
+  .result {
+    padding-top: 12px;
+  }
+
+  .icon {
+    width: 66px;
+    height: 66px;
+    margin-bottom: 24px;
+  }
+
+  .title {
+    font-size: 23px;
+  }
+}

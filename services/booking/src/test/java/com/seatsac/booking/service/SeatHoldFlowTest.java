@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 
+import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.common.ScreeningNotFoundException;
@@ -11,6 +12,7 @@ import com.seatsac.booking.common.RedisKeys;
 import com.seatsac.booking.component.CatalogClient;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout.LayoutSeat;
+import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.component.SeatHoldStrategy;
 import com.seatsac.booking.dto.request.SeatHoldRequest;
 import com.seatsac.booking.dto.response.SeatHoldResponse;
@@ -23,6 +25,8 @@ import com.seatsac.common.core.error.BusinessException;
 import com.seatsac.common.core.error.CommonResponseCode;
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -57,6 +61,9 @@ class SeatHoldFlowTest {
     CatalogClient catalogClient;
 
     @Autowired
+    SeatHoldProperties seatHoldProperties;
+
+    @Autowired
     com.seatsac.booking.component.ScreeningCache screeningCache;
     @Autowired
     SeatHoldService seatHoldService;
@@ -74,6 +81,8 @@ class SeatHoldFlowTest {
     StringRedisTemplate redis;
     @Autowired
     io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry circuitBreakers;
+    @Autowired
+    MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
@@ -99,7 +108,7 @@ class SeatHoldFlowTest {
         assertThat(response.status()).isEqualTo(BookingStatus.PENDING);
         assertThat(response.seatLabels()).containsExactly("J7", "J8");
         assertThat(response.amount()).isEqualTo(30_000);
-        assertThat(response.expiresAt().toInstant()).isEqualTo(NOW.plus(BookingPolicy.HOLD_TTL));
+        assertThat(response.expiresAt().toInstant()).isEqualTo(NOW.plus(seatHoldProperties.holdTtl()));
 
         Booking saved = bookingRepository.findById(response.bookingId()).orElseThrow();
         assertThat(saved.getStatus()).isEqualTo(BookingStatus.PENDING);
@@ -111,8 +120,8 @@ class SeatHoldFlowTest {
         assertThat(redis.opsForValue().get(RedisKeys.userHold(SCREENING, USER))).isEqualTo(saved.getHoldId());
         assertThat(redis.opsForZSet().score(RedisKeys.holdExpiry(),
             RedisKeys.holdExpiryMember(SCREENING, saved.getHoldId()))).isNotNull();
-        // 커밋 후 발행: seq가 올라갔다
-        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo("1");
+        // 커밋 후 발행: seq가 올라갔다 — 회차의 첫 이벤트라 「시각 ms × 1000」에서 시작해 +1
+        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo(seqAfter(1));
     }
 
     @Test
@@ -133,6 +142,34 @@ class SeatHoldFlowTest {
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.SCREENING_STARTED.name());
+    }
+
+    /** 예매 마감: 상영 시작 5분 전부터 선점을 받지 않는다 — 경계(정확히 5분 전)는 마감 */
+    @Test
+    void holdIsClosedFromFiveMinutesBeforeStart() {
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, NOW.plus(BookingPolicy.BOOKING_CUTOFF), NOW.plusSeconds(7000),
+            "승부", "건대입구", "1관"));
+
+        assertThatThrownBy(() -> seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))))
+            .isInstanceOf(BusinessException.class)
+            .satisfies(e -> {
+                BusinessException ex = (BusinessException) e;
+                assertThat(ex.code().responseCode()).isEqualTo(CommonResponseCode.SCREENING_STARTED.name());
+                assertThat(ex.details()).singleElement()
+                    .satisfies(detail -> assertThat(detail.reason()).isEqualTo("BOOKING_CLOSED"));
+            });
+        assertThat(bookingRepository.count()).isZero();
+    }
+
+    @Test
+    void holdIsOpenUntilJustBeforeTheCutoff() {
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, NOW.plus(BookingPolicy.BOOKING_CUTOFF).plusSeconds(1), NOW.plusSeconds(7000),
+            "승부", "건대입구", "1관"));
+
+        assertThat(seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))).status())
+            .isEqualTo(BookingStatus.PENDING);
     }
 
     @Test
@@ -174,7 +211,7 @@ class SeatHoldFlowTest {
     void staleOrphanUserHoldIsCleanedAndHoldSucceeds() {
         String orphanHoldId = UUID.randomUUID().toString();
         seatHold.hold(SCREENING, USER, orphanHoldId, List.of(103L),
-            NOW.plus(BookingPolicy.HOLD_TTL).minus(BookingPolicy.HOLD_COMMIT_GRACE).minusSeconds(1));
+            NOW.plus(seatHoldProperties.holdTtl()).minus(BookingPolicy.HOLD_COMMIT_GRACE).minusSeconds(1));
         assertThat(bookingRepository.findByHoldId(orphanHoldId)).isEmpty();
 
         SeatHoldResponse response = seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L)));
@@ -194,7 +231,7 @@ class SeatHoldFlowTest {
     @Test
     void secondRequestWhileFirstIsStillCommittingIsRejected() {
         String committingHoldId = UUID.randomUUID().toString();
-        seatHold.hold(SCREENING, USER, committingHoldId, List.of(103L), NOW.plus(BookingPolicy.HOLD_TTL));
+        seatHold.hold(SCREENING, USER, committingHoldId, List.of(103L), NOW.plus(seatHoldProperties.holdTtl()));
         assertThat(bookingRepository.findByHoldId(committingHoldId)).isEmpty();   // 아직 커밋 전
 
         assertThatThrownBy(() -> seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))))
@@ -225,6 +262,65 @@ class SeatHoldFlowTest {
             });
     }
 
+    /**
+     * 지표 {@code booking_seat_hold_total}(런타임 계약 5장) — 데모 「성공 1 · 충돌 99」 패널과 신호등이
+     * 이 라벨에 의존한다. 4xx 거절은 선점 시도가 아니라 세지 않는다(신호등이 입력 오류로 빨개지면 안 된다).
+     * 컨텍스트가 테스트 사이에 공유되므로 절대값이 아니라 증분으로 본다.
+     */
+    @Test
+    void holdResultsAreCountedByLabelAndClientRejectionsAreNot() {
+        double success = holdCount("success");
+        double conflict = holdCount("conflict");
+        double activeHold = holdCount("active_hold");
+        double error = holdCount("error");
+
+        // success — 커밋 1건
+        seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L)));
+        assertThat(holdCount("success")).isEqualTo(success + 1);
+
+        // active_hold — 같은 사용자의 두 번째 선점
+        assertThatThrownBy(() -> seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(102L))))
+            .isInstanceOf(BusinessException.class);
+        assertThat(holdCount("active_hold")).isEqualTo(activeHold + 1);
+
+        // conflict — 다른 사용자가 이미 잡힌 좌석을 요청
+        assertThatThrownBy(() -> seatHoldService.hold("22222222-2222-4222-8222-222222222222",
+            new SeatHoldRequest(SCREENING, List.of(101L))))
+            .isInstanceOf(BusinessException.class);
+        assertThat(holdCount("conflict")).isEqualTo(conflict + 1);
+
+        // 세지 않는 4xx — 비활성 좌석(400)·시작된 회차(400)
+        assertThatThrownBy(() -> seatHoldService.hold("33333333-3333-4333-8333-333333333333",
+            new SeatHoldRequest(SCREENING, List.of(104L))))
+            .isInstanceOf(BusinessException.class);
+        given(catalogClient.findScreening(SCREENING)).willReturn(new CatalogClient.Screening(
+            SCREENING, 10_004L, 1, NOW.minusSeconds(10), NOW.plusSeconds(100), "승부", "건대입구", "1관"));
+        screeningCache.clear();
+        assertThatThrownBy(() -> seatHoldService.hold("33333333-3333-4333-8333-333333333333",
+            new SeatHoldRequest(SCREENING, List.of(103L))))
+            .isInstanceOf(BusinessException.class);
+        assertThat(holdCount("error")).isEqualTo(error);
+
+        // error — Catalog 장애(503 CATALOG_UNAVAILABLE)
+        given(catalogClient.findScreening(SCREENING)).willThrow(new IllegalStateException("catalog down"));
+        screeningCache.clear();
+        assertThatThrownBy(() -> seatHoldService.hold("33333333-3333-4333-8333-333333333333",
+            new SeatHoldRequest(SCREENING, List.of(103L))))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
+        assertThat(holdCount("error")).isEqualTo(error + 1);
+
+        assertThat(holdCount("success")).isEqualTo(success + 1);
+        assertThat(holdCount("conflict")).isEqualTo(conflict + 1);
+        assertThat(holdCount("active_hold")).isEqualTo(activeHold + 1);
+    }
+
+    private double holdCount(String result) {
+        Counter counter = meterRegistry.find("booking_seat_hold_total").tag("result", result).counter();
+        return counter == null ? 0 : counter.count();
+    }
+
     @Test
     void releaseCancelsBookingClearsValkeyAndPublishes() {
         SeatHoldResponse held = seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L, 102L)));
@@ -239,7 +335,7 @@ class SeatHoldFlowTest {
         assertThat(redis.hasKey(RedisKeys.userHold(SCREENING, USER))).isFalse();
         assertThat(redis.opsForZSet().score(RedisKeys.holdExpiry(),
             RedisKeys.holdExpiryMember(SCREENING, booking.getHoldId()))).isNull();
-        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo("2");   // HELD, RELEASED
+        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo(seqAfter(2));   // HELD, RELEASED
     }
 
     @Test
@@ -261,11 +357,16 @@ class SeatHoldFlowTest {
 
         assertThat(snapshot.screeningId()).isEqualTo(SCREENING);
         assertThat(snapshot.layoutVersion()).isEqualTo(1);
-        assertThat(snapshot.seq()).isEqualTo(1L);
+        assertThat(snapshot.seq()).isEqualTo(Long.parseLong(seqAfter(1)));
         // 비활성(104)은 배치에서 빠지고, 선점한 101만 HELD
         assertThat(snapshot.seats()).extracting(s -> s.seatId()).containsExactly(101L, 102L, 103L);
         assertThat(snapshot.seats()).extracting(s -> s.status())
             .containsExactly(SeatStatus.HELD, SeatStatus.AVAILABLE, SeatStatus.AVAILABLE);
+    }
+
+    /** 이 회차에서 이벤트가 n번 난 뒤의 seq — 첫 이벤트는 고정 시계 NOW 기준 시작값 + 1 */
+    private static String seqAfter(long events) {
+        return String.valueOf(SeatEventPublisher.startValue(NOW) + events);
     }
 
     @TestConfiguration(proxyBeanMethods = false)

@@ -7,6 +7,7 @@ from seatsac_ai.sql.validator import (
     NOT_SELECT,
     PARSE_ERROR,
     SqlRejected,
+    filters_started,
     validate,
 )
 
@@ -106,3 +107,18 @@ def test_sql_template_hides_values_for_logs():
 
     out = sql_template("SELECT title FROM movie WHERE title = '내 전화 010-1234' LIMIT 3")
     assert out == "SELECT title FROM movie WHERE title = ? LIMIT ?"
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("SELECT * FROM screening s WHERE s.starts_at > '2026-11-17 19:40'", True),
+        ("SELECT * FROM screening WHERE starts_at >= '2026-11-17 20:00'", True),
+        ("SELECT * FROM screening s WHERE '2026-11-17 19:40' < s.starts_at", True),
+        ("SELECT * FROM screening WHERE business_date = '2026-11-17'", False),
+        ("SELECT * FROM screening s WHERE s.starts_at < '2026-11-17 23:00'", False),
+        ("SELECT count(*) FROM screening", False),
+    ],
+)
+def test_filters_started(sql, expected):
+    assert filters_started(sql) is expected

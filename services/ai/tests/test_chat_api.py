@@ -59,3 +59,14 @@ def test_staging_without_valkey_refuses_to_call_claude():
 def test_readiness_includes_valkey():
     r = make_client().get("/actuator/health/readiness")
     assert r.json()["components"]["valkey"] == "UP"
+
+
+def test_snapshot_not_ready_does_not_use_up_the_quota():
+    """한도는 Claude 비용을 지키는 장치라, Claude를 부르지 않는 503은 분당 10회에서 빼지 않는다."""
+    client = make_client(tool("out_of_scope", reason="x"))
+    chat = client.app.state.chat
+    chat.ready = lambda: False  # 파드 재시작 직후처럼
+    codes = [ask(client).status_code for _ in range(11)]
+    assert codes == [503] * 11
+    del chat.ready  # 적재가 끝나면
+    assert ask(client).status_code == 200  # 429가 아니다

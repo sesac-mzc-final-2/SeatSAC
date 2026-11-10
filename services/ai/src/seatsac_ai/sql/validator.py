@@ -92,6 +92,26 @@ def _validate(sql: str, max_rows: int) -> ValidatedSql:
     return ValidatedSql(sql=tree.sql(dialect="sqlite"), tables=tables, limit_capped=capped)
 
 
+def filters_started(sql: str) -> bool:
+    """`starts_at > …`(또는 `>=`, `… < starts_at`) 비교가 있는가. 이미 시작한 회차를 빼는 조건.
+
+    data-model 6-1: 회차를 읽는 모든 질의는 starts_at > 지금(KST). 값이 '지금'인지까지는 보지 않는다
+    (질문의 '20시 이후' 비교도 같은 모양이라). 조건이 아예 없는 SQL만 잡는다.
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read="sqlite")
+    except SqlglotError:
+        return False
+
+    def is_starts_at(node: exp.Expression) -> bool:
+        return isinstance(node, exp.Column) and node.name.lower() == "starts_at"
+
+    for cmp in tree.find_all(exp.GT, exp.GTE):
+        if is_starts_at(cmp.this):
+            return True
+    return any(is_starts_at(cmp.expression) for cmp in tree.find_all(exp.LT, exp.LTE))
+
+
 def sql_template(sql: str) -> str | None:
     """로그용: 값(문자열·숫자)을 ?로 바꾼 SQL. 질문에 든 개인정보가 SQL 값으로 남지 않게 한다."""
     try:

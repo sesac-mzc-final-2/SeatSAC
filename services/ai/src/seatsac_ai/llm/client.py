@@ -70,6 +70,9 @@ class LlmClient(Protocol):
 class AnthropicClient:
     def __init__(self, api_key: str | None, model: str, max_tokens: int = 1024) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=0) if api_key else None
+        if self._client is None:
+            # 기동 때 한 번만 error. 요청마다는 warning(로그가 시끄럽지 않게)
+            log.error("ANTHROPIC_API_KEY가 없다 — Claude가 필요한 질문은 503 CIRCUIT_OPEN")
         self._model = model
         self._max_tokens = max_tokens
         self._failures = 0
@@ -77,7 +80,7 @@ class AnthropicClient:
 
     async def call(self, system, tools, messages, timeout) -> ToolCall:
         if self._client is None:
-            log.error("ANTHROPIC_API_KEY가 없어 Claude를 부를 수 없다")
+            log.warning("ANTHROPIC_API_KEY가 없어 Claude를 부를 수 없다")
             raise LlmUnavailable("CIRCUIT_OPEN")
         if time.monotonic() < self._open_until:
             raise LlmUnavailable("CIRCUIT_OPEN")

@@ -169,3 +169,54 @@ def test_snapshot_becoming_unready_mid_query_is_503():
     with pytest.raises(ApiError) as caught:
         ask(llm, store=FlakyStore())
     assert caught.value.code == "AI_SNAPSHOT_NOT_READY"
+
+
+def test_screening_sql_without_started_filter_is_retried():
+    """data-model 6-1: Claude가 '시작한 회차 제외'를 빼먹으면 사유를 붙여 다시 묻는다."""
+    no_filter = (
+        "SELECT m.title AS movie_title, s.starts_at FROM screening s "
+        "JOIN movie m ON m.movie_id = s.movie_id WHERE s.business_date = '2026-11-17'"
+    )
+    llm = ScriptedLlm(
+        tool("run_sql", sql=no_filter, explanation="오늘 회차"),
+        tool("run_sql", sql=AFTER_20, explanation="오늘 20시 이후 회차"),
+    )
+    body = ask(llm)
+    assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 2
+    feedback = llm.requests[1]["messages"][-1]["content"][0]["content"]
+    assert "starts_at > '2026-11-17 19:40'" in feedback
+
+
+def test_screening_sql_without_started_filter_is_rejected_when_calls_run_out():
+    no_filter = "SELECT count(*) FROM screening WHERE business_date = '2026-11-17'"
+    bad = tool("run_sql", sql=no_filter, explanation="x")
+    body = ask(ScriptedLlm(bad, bad, bad))
+    assert body["path"] == "REJECTED" and body["rejection"]["reason"] == "PARSE_ERROR"
+
+
+def test_sql_without_screening_does_not_need_started_filter():
+    body = ask(ScriptedLlm(tool("run_sql", sql="SELECT title FROM movie", explanation="영화")))
+    assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 1
+
+
+def test_long_explanation_is_cut_to_80_chars():
+    body = ask(ScriptedLlm(tool("run_sql", sql=AFTER_20, explanation="가" * 200)))
+    assert body["answer"].startswith("가" * 80 + ":")
+    assert not body["answer"].startswith("가" * 81)
+
+
+def test_llm_failure_after_choosing_a_preset_is_counted_as_preset():
+    from prometheus_client import REGISTRY
+
+    def errors(path):
+        return REGISTRY.get_sample_value("ai_chat_total", {"path": path, "result": "error"}) or 0
+
+    before_preset, before_nl2sql = errors("preset"), errors("nl2sql")
+    llm = ScriptedLlm(
+        tool("run_preset", presetId="theater_schedule", params={"date": "2026-11-18"}),  # 빈칸 부족
+        LlmUnavailable("OVERLOADED"),  # 재요청에서 실패
+    )
+    with pytest.raises(ApiError):
+        ask(llm)
+    assert errors("preset") == before_preset + 1
+    assert errors("nl2sql") == before_nl2sql

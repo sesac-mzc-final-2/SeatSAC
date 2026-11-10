@@ -35,8 +35,10 @@ async def chat(
     if limiter is None and state.settings.app_env == "staging":
         # staging 에서 한도를 확인할 수 없으면 Claude를 부르지 않는다(비용 보호)
         raise llm_unavailable("QUOTA_STORE_UNAVAILABLE")
+    # 스냅샷 준비를 한도보다 먼저 본다. 한도는 Claude 비용을 지키는 장치라,
+    # Claude를 부르지 않고 끝나는 503(AI_SNAPSHOT_NOT_READY)은 분당·하루 횟수에서 빼지 않는다.
+    if state.chat is None or not state.chat.ready():
+        raise snapshot_not_ready()
     async with limiter.acquire(user_id) if limiter else nullcontext():
-        if state.chat is None:
-            raise snapshot_not_ready()
         result = await state.chat.answer(body.message)
     return {"sessionId": str(uuid4()), **result}

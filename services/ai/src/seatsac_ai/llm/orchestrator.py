@@ -39,7 +39,13 @@ from seatsac_ai.sql.executor import (
     SqlExecutionError,
     execute_async,
 )
-from seatsac_ai.sql.validator import SqlRejected, sql_template, validate
+from seatsac_ai.sql.validator import (
+    PARSE_ERROR,
+    SqlRejected,
+    filters_started,
+    sql_template,
+    validate,
+)
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +93,10 @@ class ChatService:
         self._presets = {p.preset_id: p for p in presets()}
         self._tools = tool_definitions()
 
+    def ready(self) -> bool:
+        """스냅샷 첫 적재가 끝났다. api/chat.py 가 사용 한도를 깎기 전에 먼저 본다."""
+        return self._store.is_ready()
+
     async def answer(self, question: str, now: datetime | None = None) -> dict[str, Any]:
         """계약 ChatResponse 에서 sessionId 를 뺀 나머지를 돌려준다."""
         started = time.monotonic()
@@ -105,6 +115,9 @@ class ChatService:
         last_rejection: dict[str, Any] | None = None
         last_sql: str | None = None
         body: dict[str, Any] | None = None
+        # Claude 실패 지표의 path: 직전에 고른 도구를 따른다.
+        # 첫 호출(도구를 고르기 전) 실패는 nl2sql로 센다 — 경로를 정하기 전이라 나눌 수 없다.
+        failed_path = "nl2sql"
 
         try:
             while calls < self._s.llm_max_calls_per_query:
@@ -114,6 +127,7 @@ class ChatService:
                 call = await self._llm.call(system, self._tools, messages, timeout)
                 calls += 1
                 usage.add(call.usage)
+                failed_path = "preset" if call.name == RUN_PRESET else "nl2sql"
                 try:
                     body = await self._run_tool(call, system_params, deadline)
                     break
@@ -125,7 +139,7 @@ class ChatService:
                         break
                     messages += _feedback(call, retry.message)
         except LlmUnavailable as exc:
-            AI_CHAT.labels("nl2sql", "error").inc()
+            AI_CHAT.labels(failed_path, "error").inc()
             raise llm_unavailable(exc.reason) from exc  # type: ignore[arg-type]
         except SnapshotNotReady as exc:
             # 질의 도중 스냅샷이 아직 준비 안 됨(기동 직후 교체 순간). 계약의 503으로
@@ -157,20 +171,33 @@ class ChatService:
             return self._result_body("PRESET", _answer(preset.title, result), result, None, preset)
         if call.name == RUN_SQL:
             sql = str(call.input.get("sql", ""))
-            explanation = str(call.input.get("explanation") or "조회 결과").strip()
-            ran_sql, result = await self._execute(sql, system_params, deadline)
+            # maxLength 80은 도구 스키마의 힌트일 뿐 API가 강제하지 않는다
+            explanation = str(call.input.get("explanation") or "조회 결과").strip()[:80]
+            ran_sql, result = await self._execute(
+                sql, system_params, deadline, now=system_params["now"]
+            )
             return self._result_body("NL2SQL", _answer(explanation, result), result, ran_sql, None)
         raise _Retry(f"알 수 없는 도구 {call.name}")
 
     async def _execute(
-        self, sql: str, params: dict[str, Any], deadline: float
+        self, sql: str, params: dict[str, Any], deadline: float, now: str | None = None
     ) -> tuple[str, QueryResult]:
-        """검증 → 실행. (실제로 실행한 SQL, 결과)"""
+        """검증 → 실행. (실제로 실행한 SQL, 결과)
+
+        now 를 주면(Claude가 쓴 SQL) screening 을 읽을 때 시작한 회차를 빼는 조건이 있는지도 본다
+        (data-model 6-1). 프리셋은 SQL에 :now 가 이미 들어 있어 보지 않는다.
+        """
         try:
             validated = validate(sql, self._s.max_rows)
         except SqlRejected as r:
             rejection = {"reason": r.reason, "object": r.object}
             raise _Retry(f"SQL이 거부되었다({r.reason}): {r.message}", rejection) from r
+        if now is not None and "screening" in validated.tables and not filters_started(sql):
+            raise _Retry(
+                f"screening 을 조회할 때는 s.starts_at > '{now}' 조건을 붙인다"
+                "(이미 시작한 회차 제외)",
+                {"reason": PARSE_ERROR},
+            )
         timeout = min(self._s.sql_timeout_seconds, deadline - time.monotonic())
         if timeout <= 0:
             raise LlmUnavailable("TIMEOUT")

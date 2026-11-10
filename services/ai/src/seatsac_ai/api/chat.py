@@ -2,8 +2,9 @@
 
 ① 사용 한도(동시 1·분당 10·하루 100)로 감싼 뒤 오케스트레이터(llm/orchestrator.py)에 넘긴다.
 
-sessionId: 후속 질문 문맥(ai:session:{userId}:{sessionId})은 3.4.5에서 ai Valkey와 함께 만든다.
-그 전에는 매번 새로 발급한다 — 계약의 "모르는 sessionId면 새 세션으로 시작(오류 아님)"과 같다.
+sessionId: 후속 질문 문맥(ai:session:{userId}:{sessionId}, 30분)은
+오케스트레이터가 ai Valkey에 둔다.
+모르는·남의·만료된 sessionId면 새로 발급한다(오류 아님). Valkey가 없으면(local) 매번 새로 발급.
 """
 
 from __future__ import annotations
@@ -40,5 +41,10 @@ async def chat(
     if state.chat is None or not state.chat.ready():
         raise snapshot_not_ready()
     async with limiter.acquire(user_id) if limiter else nullcontext():
-        result = await state.chat.answer(body.message)
-    return {"sessionId": str(uuid4()), **result}
+        result = await state.chat.answer(
+            body.message,
+            user_id=user_id,
+            session_id=str(body.sessionId) if body.sessionId else None,
+        )
+    session_id = result.pop("sessionId", None) or str(uuid4())
+    return {"sessionId": session_id, **result}

@@ -1,10 +1,14 @@
 """질문 하나를 처리하는 순서 (WBS 3.4.3 · 기능명세서 v4 15-2).
 
-지금 들어 있는 단계: ⑥ Claude 1회 호출(프리셋/SQL/범위 밖) → ⑦ 실행 → ⑨ 답·로그·지표
-나중에 끼워 넣을 단계(같은 함수 앞쪽):
-  ② 개인 질문("내 예매")  → 3.4.10
-  ③④ 정확 일치·의미 캐시 → 3.4.5 (⑧ 캐시 저장도 같이)
+  ③ 슬롯 추출 → ④ 정확 일치 캐시 → ⑤ 의미 캐시 → (못 찾으면) ⑥ Claude(프리셋/SQL/범위 밖)
+  → ⑦ 실행 → ⑧ 성공한 PRESET·NL2SQL 캐시 저장 → ⑨ 답·로그·지표·세션
+나중에 끼워 넣을 단계: ② 개인 질문("내 예매") → 3.4.10
 ① 사용 한도는 이 함수 밖(api/chat.py)에서 QuotaLimiter 로 감싼다.
+캐시(ai Valkey)가 없으면(local) ③~⑤·⑧·세션을 건너뛰고 늘 Claude로 답한다.
+
+후속 질문("그중 건대입구만")은 직전 질문·SQL(세션)을 Claude에게 같이 주고,
+캐시를 보지도 저장하지도 않는다
+— 같은 글자라도 직전 질문에 따라 뜻이 달라서.
 
 재요청 규칙: Claude 호출은 질문당 최대 3회(설정 APP_AI_LLM_MAX_CALLS_PER_QUERY).
 검증 거부·SQL 오류·프리셋 빈칸 오류가 나면 사유를 붙여 다시 묻는다. 남은 호출이 없으면 REJECTED.
@@ -13,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -20,11 +25,15 @@ import re
 import secrets
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from seatsac_ai.cache import template as tpl
+from seatsac_ai.cache.slots import Extracted, extract, is_followup, meaning_signature
+from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.common.errors import llm_unavailable, snapshot_not_ready
-from seatsac_ai.common.metrics import AI_CHAT, AI_TOKENS
+from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
 from seatsac_ai.llm.client import LlmClient, LlmUnavailable, ToolCall, Usage
@@ -78,6 +87,18 @@ class _Retry(Exception):
         self.rejection = rejection
 
 
+@dataclass(frozen=True)
+class _Made:
+    """Claude 경로가 실제로 실행한 것. ⑧ 캐시 저장에 쓴다."""
+
+    origin: str  # PRESET · NL2SQL
+    sql: str  # NL2SQL: Claude가 쓴 SQL(LIMIT 붙이기 전) · PRESET: 프리셋 SQL
+    preset: Preset | None
+    params: dict[str, Any]  # PRESET 빈칸 값
+    subject: str  # 답 문장 앞부분
+    result: QueryResult
+
+
 class ChatService:
     def __init__(
         self,
@@ -85,8 +106,10 @@ class ChatService:
         llm: LlmClient,
         settings: Settings,
         clock: Callable[[], datetime] = lambda: datetime.now(KST),
+        cache: ChatCache | None = None,
     ) -> None:
         self._store = store
+        self._cache = cache
         self._clock = clock  # 테스트가 "지금"을 고정할 때만 바꾼다
         self._llm = llm
         self._s = settings
@@ -97,57 +120,50 @@ class ChatService:
         """스냅샷 첫 적재가 끝났다. api/chat.py 가 사용 한도를 깎기 전에 먼저 본다."""
         return self._store.is_ready()
 
-    async def answer(self, question: str, now: datetime | None = None) -> dict[str, Any]:
-        """계약 ChatResponse 에서 sessionId 를 뺀 나머지를 돌려준다."""
+    async def answer(
+        self,
+        question: str,
+        now: datetime | None = None,
+        *,
+        user_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """계약 ChatResponse. 캐시가 있으면 sessionId 도 채운다(없으면 api/chat.py 가 새로 발급)."""
         started = time.monotonic()
         deadline = started + self._s.request_deadline_seconds
         if not self._store.is_ready():
             raise snapshot_not_ready()
         now = (now or self._clock()).astimezone(KST)
-        system_params = {"today": f"{now:%Y-%m-%d}", "now": f"{now:%Y-%m-%d %H:%M}"}
+        system_params = tpl.system_params(now.date(), f"{now:%Y-%m-%d %H:%M}")
+
+        cache = self._cache
+        sid, previous = session_id, None
+        if cache is not None and user_id is not None:
+            sid, previous = await cache.load_session(user_id, session_id)
+        follow_up = previous is not None and is_followup(question)
 
         usage = Usage()
         calls = 0
-        system = prompt.system_blocks(self._s.prompt_cache_enabled)
-        messages: list[dict[str, Any]] = [
-            {"role": "user", "content": prompt.user_text(question, now)}
-        ]
-        last_rejection: dict[str, Any] | None = None
-        last_sql: str | None = None
         body: dict[str, Any] | None = None
-        # Claude 실패 지표의 path: 직전에 고른 도구를 따른다.
-        # 첫 호출(도구를 고르기 전) 실패는 nl2sql로 센다 — 경로를 정하기 전이라 나눌 수 없다.
-        failed_path = "nl2sql"
-
+        ext: Extracted | None = None
+        vector: list[float] | None = None
         try:
-            while calls < self._s.llm_max_calls_per_query:
-                timeout = min(self._s.llm_timeout_seconds, deadline - time.monotonic())
-                if timeout <= 0:
-                    raise LlmUnavailable("TIMEOUT")
-                call = await self._llm.call(system, self._tools, messages, timeout)
-                calls += 1
-                usage.add(call.usage)
-                failed_path = "preset" if call.name == RUN_PRESET else "nl2sql"
-                try:
-                    body = await self._run_tool(call, system_params, deadline)
-                    break
-                except _Retry as retry:
-                    last_rejection = retry.rejection or last_rejection
-                    if call.name == RUN_SQL:
-                        last_sql = str(call.input.get("sql", ""))
-                    if (retry.rejection or {}).get("final"):
-                        break
-                    messages += _feedback(call, retry.message)
-        except LlmUnavailable as exc:
-            AI_CHAT.labels(failed_path, "error").inc()
-            raise llm_unavailable(exc.reason) from exc  # type: ignore[arg-type]
+            # ③④⑤ 캐시
+            if cache is not None and not follow_up:
+                ext = self._extract(question, now)
+                if ext.cacheable:
+                    body, vector = await self._from_cache(cache, ext, system_params, deadline)
+            # ⑥⑦ Claude
+            if body is None:
+                body, made, calls = await self._ask_claude(
+                    question, now, system_params, deadline, usage, previous if follow_up else None
+                )
+                # ⑧ 저장 (후속 질문은 직전 문맥에 기대므로 저장하지 않는다)
+                if made is not None and cache is not None and ext is not None and ext.cacheable:
+                    await self._save(cache, ext, made, system_params, deadline, vector)
         except SnapshotNotReady as exc:
             # 질의 도중 스냅샷이 아직 준비 안 됨(기동 직후 교체 순간). 계약의 503으로
             raise snapshot_not_ready() from exc
-
-        if body is None:  # 재요청을 다 쓰고도 실패
-            reason = (last_rejection or {}).get("reason", "PARSE_ERROR")
-            body = _rejected(reason, (last_rejection or {}).get("object"), last_sql, self._as_of())
 
         body["llm"] = {
             "calls": calls,
@@ -158,17 +174,149 @@ class ChatService:
         }
         body["latencyMs"] = int((time.monotonic() - started) * 1000)
         self._record(question, body, usage)
+        if cache is not None and user_id is not None and sid is not None:
+            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE"):
+                await cache.save_session(
+                    user_id, sid, {"question": question, "sql": body["sql"], "path": body["path"]}
+                )
+            body["sessionId"] = sid
         return body
+
+    async def _ask_claude(
+        self, question, now, system_params, deadline, usage, previous
+    ) -> tuple[dict[str, Any], _Made | None, int]:
+        calls = 0
+        system = prompt.system_blocks(self._s.prompt_cache_enabled)
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": prompt.user_text(question, now, previous)}
+        ]
+        last_rejection: dict[str, Any] | None = None
+        last_sql: str | None = None
+        # Claude 실패 지표의 path: 직전에 고른 도구를 따른다.
+        # 첫 호출(도구를 고르기 전) 실패는 nl2sql로 센다 — 경로를 정하기 전이라 나눌 수 없다.
+        failed_path = "nl2sql"
+        try:
+            while calls < self._s.llm_max_calls_per_query:
+                timeout = min(self._s.llm_timeout_seconds, deadline - time.monotonic())
+                if timeout <= 0:
+                    raise LlmUnavailable("TIMEOUT")
+                call = await self._llm.call(system, self._tools, messages, timeout)
+                calls += 1
+                usage.add(call.usage)
+                failed_path = "preset" if call.name == RUN_PRESET else "nl2sql"
+                try:
+                    body, made = await self._run_tool(call, system_params, deadline)
+                    return body, made, calls
+                except _Retry as retry:
+                    last_rejection = retry.rejection or last_rejection
+                    if call.name == RUN_SQL:
+                        last_sql = str(call.input.get("sql", ""))
+                    if (retry.rejection or {}).get("final"):
+                        break
+                    messages += _feedback(call, retry.message)
+        except LlmUnavailable as exc:
+            AI_CHAT.labels(failed_path, "error").inc()
+            raise llm_unavailable(exc.reason) from exc  # type: ignore[arg-type]
+        # 재요청을 다 쓰고도 실패
+        reason = (last_rejection or {}).get("reason", "PARSE_ERROR")
+        rejected = _rejected(reason, (last_rejection or {}).get("object"), last_sql, self._as_of())
+        return rejected, None, calls
+
+    # --- 캐시 -----------------------------------------------------------------
+
+    def _extract(self, question: str, now: datetime) -> Extracted:
+        with self._store.reader() as conn:
+            theaters = [r[0] for r in conn.execute("SELECT name FROM theater")]
+            movies = [r[0] for r in conn.execute("SELECT title FROM movie")]
+        return extract(question, now, theaters, movies)
+
+    async def _embed(self, cache: ChatCache, text: str) -> list[float] | None:
+        if not (cache.semantic_ready and self._s.semantic_cache_enabled and cache.embedder):
+            return None
+        try:
+            return await asyncio.to_thread(cache.embedder.embed, text)
+        except Exception as exc:  # 모델 파일 문제 등 — 의미 캐시만 건너뛴다
+            log.warning("임베딩 실패(의미 캐시 건너뜀): %s", exc)
+            return None
+
+    async def _from_cache(
+        self, cache: ChatCache, ext: Extracted, system_params, deadline
+    ) -> tuple[dict[str, Any] | None, list[float] | None]:
+        entry = await cache.get_exact(ext.key_text)
+        AI_CACHE_REQUESTS.labels("exact", "hit" if entry else "miss").inc()
+        path = "CACHE_EXACT"
+        vector = None
+        if entry is None or entry.kinds != ext.kinds:
+            entry = None
+            vector = await self._embed(cache, ext.template)
+            if vector is not None:
+                found = await cache.nearest(vector, ext.kinds)
+                if found is not None and _semantic_match(found[0], found[1], ext, cache.threshold):
+                    entry = found[0]
+                AI_CACHE_REQUESTS.labels("semantic", "hit" if entry else "miss").inc()
+                path = "CACHE_SEMANTIC"
+        if entry is None:
+            return None, vector
+        params = system_params | ext.values()
+        try:
+            ran_sql, result = await self._execute(entry.sql, params, deadline)
+        except _Retry as retry:  # 스냅샷 모양이 바뀌었거나 너무 오래 걸림 — Claude로
+            log.warning("캐시 SQL 실행 실패(Claude로 처리): %s", retry.message)
+            return None, vector
+        subject = _fill_subject(entry.subject, ext)
+        body = self._result_body(
+            path, _answer(subject, result), result, tpl.render(ran_sql, params), entry.preset_id
+        )
+        return body, vector
+
+    async def _save(self, cache, ext: Extracted, made: _Made, system_params, deadline, vector):
+        today = datetime.fromisoformat(system_params["today"]).date()
+        try:
+            if made.preset is not None:
+                template = tpl.preset_template(made.preset.sql, made.params, ext, today)
+            else:
+                template = tpl.make_template(made.sql, ext, today, system_params["now"])
+        except tpl.TemplateError as exc:
+            log.info("캐시하지 않음(템플릿 불가): %s", exc)
+            return
+        # 같은 값으로 템플릿을 다시 실행해 결과가 같을 때만 저장한다(템플릿 실수 = 오적중을 막는다)
+        try:
+            _, again = await self._execute(template.sql, system_params | ext.values(), deadline)
+        except (_Retry, LlmUnavailable) as exc:
+            log.info("캐시하지 않음(템플릿 실행 실패): %s", exc)
+            return
+        if again.rows != made.result.rows:
+            log.info("캐시하지 않음(템플릿 결과가 원래 결과와 다름)")
+            return
+        entry = CacheEntry(
+            origin=made.origin,
+            preset_id=made.preset.preset_id if made.preset else None,
+            sql=template.sql,
+            subject=_subject_template(made.subject, ext),
+            kinds=ext.kinds,
+            relative_words=tuple(sorted(ext.relative_words)),
+            anchors=template.anchors,
+            template=ext.template,
+            meaning=meaning_signature(ext.question),
+        )
+        if vector is None:
+            vector = await self._embed(cache, ext.template)
+        await cache.put(ext.key_text, entry, vector)
 
     # --- 도구별 처리 ---------------------------------------------------------
 
-    async def _run_tool(self, call: ToolCall, system_params, deadline) -> dict[str, Any]:
+    async def _run_tool(
+        self, call: ToolCall, system_params, deadline
+    ) -> tuple[dict[str, Any], _Made | None]:
         if call.name == OUT_OF_SCOPE:
-            return _empty("OUT_OF_SCOPE", OUT_OF_SCOPE_ANSWER, self._as_of())
+            return _empty("OUT_OF_SCOPE", OUT_OF_SCOPE_ANSWER, self._as_of()), None
         if call.name == RUN_PRESET:
             preset, slots = self._resolve_preset(call.input)
             _, result = await self._execute(preset.sql, system_params | slots, deadline)
-            return self._result_body("PRESET", _answer(preset.title, result), result, None, preset)
+            body = self._result_body(
+                "PRESET", _answer(preset.title, result), result, None, preset.preset_id
+            )
+            return body, _Made("PRESET", preset.sql, preset, slots, preset.title, result)
         if call.name == RUN_SQL:
             sql = str(call.input.get("sql", ""))
             # maxLength 80은 도구 스키마의 힌트일 뿐 API가 강제하지 않는다
@@ -176,7 +324,8 @@ class ChatService:
             ran_sql, result = await self._execute(
                 sql, system_params, deadline, now=system_params["now"]
             )
-            return self._result_body("NL2SQL", _answer(explanation, result), result, ran_sql, None)
+            body = self._result_body("NL2SQL", _answer(explanation, result), result, ran_sql, None)
+            return body, _Made("NL2SQL", sql, None, {}, explanation, result)
         raise _Retry(f"알 수 없는 도구 {call.name}")
 
     async def _execute(
@@ -251,7 +400,7 @@ class ChatService:
         as_of = self._store.as_of() or datetime.now(KST)
         return as_of.astimezone(KST).isoformat(timespec="seconds")
 
-    def _result_body(self, path, answer, result, sql, preset) -> dict[str, Any]:
+    def _result_body(self, path, answer, result, sql, preset_id) -> dict[str, Any]:
         as_of = self._as_of()
         return {
             "answer": f"{answer} ({_clock(as_of)} 기준)",
@@ -261,7 +410,7 @@ class ChatService:
             "rowCount": result.row_count,
             "truncated": result.truncated,
             "sql": sql,
-            "presetId": preset.preset_id if preset else None,
+            "presetId": preset_id,
             "asOf": as_of,
             "rejection": None,
         }
@@ -314,6 +463,42 @@ def _feedback(call: ToolCall, message: str) -> list[dict[str, Any]]:
             ],
         },
     ]
+
+
+def _semantic_match(entry: CacheEntry, similarity: float, ext: Extracted, threshold: float) -> bool:
+    """의미 캐시 적중 조건: 유사도 ≥ 기준 그리고 슬롯 종류 같음(계약 ⑤) + 오적중 막기 2가지.
+
+    - "오늘·내일" 같은 상대 날짜 말이 같다 (오늘 질문의 :today SQL을 내일 질문에 쓰지 않게)
+    - SQL에 굳어 있는 말(리클라이너·15세 같은 값)이 새 질문에도 있다
+    - 뜻을 뒤집는 말 묶음(이후/이전·많은/적은·첫/마지막·제외)이 같다
+      — 임베딩은 "20시 이후"와 "20시 전에"를 0.93으로 본다(11/10 실측)
+    """
+    return (
+        similarity >= threshold
+        and entry.kinds == ext.kinds
+        and set(entry.relative_words) == set(ext.relative_words)
+        and tpl.anchors_present(entry.anchors, ext.question)
+        and tuple(entry.meaning) == meaning_signature(ext.question)
+    )
+
+
+def _subject_template(subject: str, ext: Extracted) -> str:
+    """답 문장 앞부분의 슬롯 값을 빈칸으로("오늘 20시 이후 회차" → "오늘 {time} 이후 회차")."""
+    text = subject
+    for kind, slot in ext.slots.items():
+        for form in sorted({str(slot.value), slot.raw}, key=len, reverse=True):
+            if form:
+                text = text.replace(form, "{" + kind + "}")
+    # 다른 모양으로 적힌 값("오후 8시")이 남았을 수 있으면 일반 문장으로
+    if {"time", "date", "n"} & set(ext.slots) and re.search(r"\d", text):
+        return "조회 결과"
+    return text
+
+
+def _fill_subject(subject: str, ext: Extracted) -> str:
+    for kind, slot in ext.slots.items():
+        subject = subject.replace("{" + kind + "}", slot.raw)
+    return subject
 
 
 def _answer(subject: str, result: QueryResult) -> str:

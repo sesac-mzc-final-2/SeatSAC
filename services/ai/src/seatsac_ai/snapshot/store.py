@@ -41,7 +41,8 @@ def _authorizer(action: int, *_args: Any) -> int:
 
 
 # 문자열·BLOB 하나의 최대 크기. printf('%.*c', 300000000, 'x') 같은 SQL 한 줄이
-# SQLite 명령 한 단계 안에서 수백 MB를 만들면 5초 중단(progress handler)이 끼어들 틈이 없어 파드가 OOM으로 죽는다(#91 리뷰).
+# SQLite 명령 한 단계 안에서 수백 MB를 만들면 5초 중단(progress handler)이 끼어들 틈이 없어
+# 파드가 OOM으로 죽는다(#91 리뷰).
 # 스냅샷 값은 짧고 결과는 500행이라 1MB면 충분하다.
 MAX_VALUE_BYTES = 1_000_000
 

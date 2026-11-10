@@ -118,8 +118,11 @@ def _check_functions(tree: exp.Expression) -> None:
 
 
 def _ctes_in_scope(table: exp.Table) -> set[str]:
-    """이 표 위치에서 보이는 WITH 이름만. 문장 전체에서 모으면 안쪽 서브쿼리의 WITH 이름으로
-    바깥의 sqlite_master 를 가릴 수 있다(#91 리뷰: FROM (WITH sqlite_master AS …), sqlite_master)."""
+    """이 표 위치에서 보이는 WITH 이름만.
+
+    문장 전체에서 모으면 안쪽 서브쿼리의 WITH 이름으로 바깥의 sqlite_master 를 가릴 수 있다
+    (#91 리뷰: FROM (WITH sqlite_master AS …), sqlite_master).
+    """
     names: set[str] = set()
     node = table.parent
     while node is not None:

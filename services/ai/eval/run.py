@@ -320,7 +320,7 @@ def summarize(report: Report, llm_kind: str, semantic: bool) -> str:
     lines += ["", "## 가정", "",
               "- 실제 서비스는 스냅샷이 1분·10분마다 바뀐다. 여기서는 한 시점으로 고정해 정답을 정했다.",
               "- 반복 시나리오의 '캐시 없을 때' 토큰은 A에서 같은 질문(다른 말투면 원래 질문)에 쓴 토큰이다.",
-              "- staging 데이터 제약: 잔여석이 모두 TOTAL(실제 값 아님), 장르·감독·러닝타임 없음 → 해당 질문 제외."]  # fmt: skip
+              "- staging 데이터 제약: 예매 0건이라 잔여석 = 전체 좌석, 장르·감독·러닝타임 없음 → 해당 질문 제외."]  # fmt: skip
     return "\n".join(lines) + "\n"
 
 

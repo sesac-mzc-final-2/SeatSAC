@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
@@ -14,6 +15,9 @@ from seatsac_ai.common.metrics import init_label_series
 from seatsac_ai.common.middleware import RequestContextMiddleware
 from seatsac_ai.common.readiness import ReadinessRegistry
 from seatsac_ai.config import Settings, get_settings
+from seatsac_ai.llm.client import AnthropicClient, LlmClient
+from seatsac_ai.llm.orchestrator import ChatService
+from seatsac_ai.quota.limiter import QuotaLimiter, connect_valkey
 from seatsac_ai.snapshot import Snapshot, build_snapshot
 
 log = logging.getLogger(__name__)
@@ -29,9 +33,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         if snapshot is not None:
             await snapshot.stop()
+        if app.state.valkey is not None:
+            await app.state.valkey.aclose()
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    llm: LlmClient | None = None,
+    valkey: Any | None = None,
+) -> FastAPI:
+    """llm·valkey 는 테스트가 가짜를 넣을 때만 준다. 없으면 설정으로 만든다."""
     settings = settings or get_settings()
     configure_logging(settings.app_env)
     init_label_series()
@@ -62,6 +74,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.readiness.register("snapshot", lambda: False)
     else:
         log.warning("PUBLIC_API_BASE_URL이 없어 스냅샷 적재를 시작하지 않는다(local)")
+
+    # 사용 한도(3.4.3) — ai Valkey. readiness 조건이기도 하다(계약 9장 "ai Valkey PING")
+    if valkey is None and settings.ai_valkey_host:
+        valkey = connect_valkey(
+            settings.ai_valkey_host, settings.ai_valkey_port, settings.ai_valkey_tls
+        )
+    app.state.valkey = valkey
+    app.state.limiter = None
+    if valkey is not None:
+        app.state.limiter = QuotaLimiter(valkey, settings.limit_per_minute, settings.limit_per_day)
+        app.state.readiness.register("valkey", valkey.ping)
+    elif settings.app_env == "staging":
+        log.error("AI_VALKEY_HOST가 없다 — 질문을 받지 않고 readiness DOWN으로 둔다")
+        app.state.readiness.register("valkey", lambda: False)
+    else:
+        log.warning("AI_VALKEY_HOST가 없어 사용 한도 없이 동작한다(local)")
+
+    # 질문 처리(3.4.2·3.4.3). 스냅샷이 없으면 /ai/chat 은 503 AI_SNAPSHOT_NOT_READY
+    app.state.chat = None
+    if app.state.snapshot is not None:
+        if llm is None:
+            key = settings.anthropic_api_key
+            llm = AnthropicClient(key.get_secret_value() if key else None, settings.ai_model)
+        app.state.chat = ChatService(app.state.snapshot.store, llm, settings)
 
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)

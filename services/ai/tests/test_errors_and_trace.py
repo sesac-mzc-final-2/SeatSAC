@@ -97,3 +97,22 @@ def test_presets_lists_twelve_buttons(client, user_headers):
     items = r.json()["items"]
     assert len(items) == 12
     assert set(items[0]) == {"presetId", "title", "example"}
+    # 스냅샷이 없으면 영화 예시는 계약 예시처럼 "영화 제목"
+    examples = {i["presetId"]: i["example"] for i in items}
+    assert examples["movie_theaters"] == "영화 제목 어디서 몇 시에 해?"
+    assert all("{movie}" not in e for e in examples.values())
+
+
+def test_presets_fill_movie_example_from_the_snapshot(client, user_headers):
+    from types import SimpleNamespace
+
+    from .sql_fixtures import MOVIES, loaded_store
+
+    client.app.state.snapshot = SimpleNamespace(store=loaded_store())
+    try:
+        items = client.get("/ai/presets", headers=user_headers).json()["items"]
+    finally:
+        client.app.state.snapshot = None
+    example = next(i["example"] for i in items if i["presetId"] == "movie_theaters")
+    titles = {m[1] for m in MOVIES} | {"영화 제목"}  # 픽스처 회차가 모두 지났으면 "영화 제목"
+    assert example in {f"{t} 어디서 몇 시에 해?" for t in titles}

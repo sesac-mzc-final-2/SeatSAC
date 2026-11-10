@@ -45,6 +45,8 @@ async def chat(
             body.message,
             user_id=user_id,
             session_id=str(body.sessionId) if body.sessionId else None,
+            # "내 예매"는 사용자 토큰 그대로 공개 API를 부른다(gateway가 Authorization 을 넘긴다)
+            authorization=request.headers.get("authorization"),
         )
     session_id = result.pop("sessionId", None) or str(uuid4())
     return {"sessionId": session_id, **result}

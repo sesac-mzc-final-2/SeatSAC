@@ -82,3 +82,19 @@ def test_write_is_blocked_even_if_validator_is_bypassed():
 def test_async_wrapper():
     result = asyncio.run(execute_async(loaded_store(), validate("SELECT title FROM movie")))
     assert result.row_count == 4
+
+
+def test_huge_string_cannot_be_built():
+    """#91 리뷰: printf 한 번으로 수백 MB 문자열 → OOM. 연결의 길이 상한(1MB)으로 막는다.
+    SQLite 버전에 따라 오류(SQL_ERROR) 또는 NULL 이 된다 — 둘 다 메모리를 크게 쓰지 않는다."""
+    store = loaded_store()
+    query = validate("SELECT length(printf('%.*c', 10000000, 'x')) AS n")
+    try:
+        result = execute(store, query)
+    except SqlExecutionError as exc:
+        assert exc.reason == SQL_ERROR
+    else:
+        assert result.rows == [[None]]
+    # 1MB 아래는 그대로 된다
+    small = validate("SELECT length(printf('%.*c', 1000, 'x')) AS n")
+    assert execute(store, small).rows == [[1000]]

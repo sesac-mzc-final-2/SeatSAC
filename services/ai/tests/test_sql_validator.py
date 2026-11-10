@@ -94,7 +94,7 @@ def test_lowers_big_limit():
 
 def test_parameter_limit_is_bounded():
     v = validate("SELECT title FROM movie LIMIT :n")
-    assert v.sql.endswith("LIMIT MIN(:n, 500)") and v.limit_capped
+    assert v.sql.endswith("LIMIT MAX(0, MIN(:n, 500))") and v.limit_capped  # 음수 → 0
 
 
 def test_reports_tables_read():
@@ -122,3 +122,23 @@ def test_sql_template_hides_values_for_logs():
 )
 def test_filters_started(sql, expected):
     assert filters_started(sql) is expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM (WITH sqlite_master AS (SELECT 1) SELECT 1), sqlite_master",
+        "SELECT * FROM (WITH snapshot_meta AS (SELECT 1) SELECT 1), snapshot_meta",
+        "SELECT (SELECT 1 FROM (WITH x AS (SELECT 1) SELECT 1)) FROM x",
+    ],
+)
+def test_with_name_is_only_visible_where_it_is_defined(sql):
+    """#91 리뷰: 안쪽 서브쿼리의 WITH 이름으로 바깥의 실제 표를 가릴 수 없다."""
+    with pytest.raises(SqlRejected) as caught:
+        validate(sql)
+    assert caught.value.reason == FORBIDDEN_OBJECT
+
+
+def test_with_name_still_works_in_its_own_query_and_in_later_ctes():
+    validate("WITH a AS (SELECT movie_id FROM movie), b AS (SELECT * FROM a) SELECT * FROM b")
+    validate("SELECT * FROM (WITH a AS (SELECT title FROM movie) SELECT * FROM a)")

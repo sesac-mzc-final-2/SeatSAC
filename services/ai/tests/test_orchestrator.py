@@ -220,3 +220,20 @@ def test_llm_failure_after_choosing_a_preset_is_counted_as_preset():
         ask(llm)
     assert errors("preset") == before_preset + 1
     assert errors("nl2sql") == before_nl2sql
+
+
+def test_tokens_already_spent_are_counted_even_if_a_later_call_fails():
+    from prometheus_client import REGISTRY
+
+    def tokens(kind, path):
+        labels = {"kind": kind, "path": path}
+        return REGISTRY.get_sample_value("ai_tokens_total", labels) or 0
+
+    before = tokens("input", "preset")
+    llm = ScriptedLlm(
+        tool("run_preset", presetId="theater_schedule", params={"date": "2026-11-18"}),  # 빈칸 부족
+        LlmUnavailable("OVERLOADED"),
+    )
+    with pytest.raises(ApiError):
+        ask(llm)
+    assert tokens("input", "preset") == before + 400  # 첫 호출(성공)의 input 토큰

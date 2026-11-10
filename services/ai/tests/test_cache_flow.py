@@ -242,3 +242,25 @@ def test_opposite_meaning_is_not_a_semantic_hit():
     service, _ = make(llm, embedder)
     ask(service, "오늘 20시 이후에 시작하는 영화 알려줘")
     assert ask(service, "오늘 21시 전에 시작하는 영화 알려줘")["path"] == "OUT_OF_SCOPE"
+
+
+def test_cache_metrics_count_hits_and_misses_per_layer():
+    from prometheus_client import REGISTRY
+
+    def count(layer, result):
+        labels = {"layer": layer, "result": result}
+        return REGISTRY.get_sample_value("ai_cache_requests_total", labels) or 0
+
+    def tokens():
+        labels = {"kind": "input", "path": "cache_exact"}
+        return REGISTRY.get_sample_value("ai_tokens_total", labels) or 0
+
+    before = {k: count(*k) for k in [("exact", "hit"), ("exact", "miss"), ("semantic", "miss")]}
+    before_tokens = tokens()
+    service, _ = make(ScriptedLlm(preset_after("20:00")))
+    ask(service, "오늘 20시 이후 영화 알려줘")  # exact miss → semantic miss → Claude
+    ask(service, "오늘 21시 이후 영화 알려줘")  # exact hit
+    assert count("exact", "miss") == before[("exact", "miss")] + 1
+    assert count("semantic", "miss") == before[("semantic", "miss")] + 1
+    assert count("exact", "hit") == before[("exact", "hit")] + 1
+    assert tokens() == before_tokens  # 캐시 답은 토큰 0

@@ -954,6 +954,7 @@ kubectl -n cinema-staging get jobs | grep -i preview-traffic                    
 | user | booking · catalog | 예매 내역 · 회차 요약·극장 검증 |
 | payment | (없음) | 호출하는 쪽이 아니다 |
 | 분석 Job `rollout-smoke` | booking · gateway (preview) | 3.1.6 |
+| 부하 테스트 Job `k6-loadtest` | gateway | 4.2.1 OPS-10 (6-H, 실행 중에만 있다) |
 | `monitoring` namespace | 전체 | Prometheus 수집 |
 
 ```bash
@@ -1236,6 +1237,124 @@ infra/scripts/cluster-scale.sh down ng-ai
 | 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 뒤 데모 주간은 머지 금지라 끌 수 없다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
 | 재생성 리허설 3.1.15 | `ng-ai` 0 · 플래그 off로 기록 | 소요 시간 비교 기준 유지 |
 | staging에서 ai 확인(M6 중) | 테스트가 돌지 않는 시간에만, 스크럼에서 시간 공유 | — |
+
+### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)
+
+코드: SeatSAC `tests/k6/`(시나리오 4개 · `run-in-cluster.sh` · `tools/loadtest_users.py`·`pick_targets.py`·`sse_lag.py`) · SeatSAC-gitops `base/gateway/networkpolicy.yaml`(`k6-loadtest` → gateway 허용). Terraform 변경 없음. 시나리오·읽는 법은 `tests/k6/README.md`
+
+| 완료 기준 (WBS 4.2.1) | 어떻게 잰다 | 합격 |
+| --- | --- | --- |
+| 같은 좌석 100명 동시 → 성공 정확히 1명 | `run-in-cluster.sh contention` | `hold_success == 1`, `hold_active_hold == 0` |
+| 선점 응답 p95 300ms 이하 | 같은 실행의 `hold_latency` | p95 < 300ms |
+| 사용자당 진행 중 선점 1건 | `run-in-cluster.sh user-hold` | 체크 5개 전부 ✓ |
+| 다른 화면 반영 1초 이내 | `tools/sse_lag.py`(CloudFront 경유, 화면과 같은 경로) + `deploy` 부하 | 이벤트 지연 p95 ≤ 1초, 하트비트 15초 간격 |
+| 만료 반영 2초 | Prometheus `booking_hold_expiry_lag_seconds` (contention 승자의 선점이 300초 뒤 만료) | p95 < 2초 |
+| (참고) 커넥션 풀 | `hikaricp_connections_pending{application="booking"}` | 0 — 0이 아니면 풀 5 → 10 검토(남궁일) |
+
+**GitOps 예외**: 이 테스트는 관리자(`cinema-admin`)가 `run-in-cluster.sh`로 **실행 중에만 있는** Job·ConfigMap(스크립트)·Secret(토큰)을 `cinema-staging`에 만들고 끝나면 지운다. 라벨 `app.kubernetes.io/name=k6-loadtest`로만 만들고 지우며, ArgoCD가 관리하는 리소스는 건드리지 않는다(추적 라벨이 없어 selfHeal·prune 대상이 아님). 스크립트는 Job을 먼저 만들고 ConfigMap·Secret은 처음부터 Job의 ownerReference를 달고 만든다 → 중간에 죽어도 Job TTL(15분) 뒤 같이 지워진다. 남았으면 `tests/k6/run-in-cluster.sh cleanup`
+
+#### 6-H-1. 준비 (실행 당일, 레포 루트)
+
+```bash
+export AWS_PROFILE=cinema-admin
+# 0) 조건: 평일 노드 켜짐 시간 · ng-ai 0 · 블루/그린 진행 중 아님 · 스크럼에 시간 공유(4.2.2·ai 확인과 겹치지 않게, 6-G-5)
+infra/scripts/cluster-scale.sh status ng-ai                         # desired 0
+kubectl -n cinema-staging get rollout                               # booking·gateway Healthy (Progressing·Paused면 기다린다)
+
+# 1) 노드 증설 — 부하 발생기가 측정 대상과 CPU를 다투지 않게 + HPA 증설 여유 (끝나면 6-H-4에서 되돌린다)
+infra/scripts/cluster-scale.sh up 2                                 # ng-a·ng-c 2대씩 = 4대 (ng-ai 제외)
+kubectl get nodes                                                   # 4대 Ready
+
+# 2) 계정·토큰 (계정은 한 번만 create. 토큰 Access 60분 — 돌리기 직전에 refresh)
+T=tests/k6/tools/loadtest_users.py
+python3 $T status                                                   # 계정 100 — 없으면 tests/k6/README.md 1)부터
+python3 $T refresh && python3 $T tokens --min-valid-minutes 40 --out ~/.seatsac/k6-tokens.txt
+export K6_TOKENS_FILE=~/.seatsac/k6-tokens.txt
+
+# 3) 대상 회차·좌석 (공개 조회 API만, 시작 60분 이상 남은 회차 · 시나리오마다 다른 회차)
+API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api"
+eval "$(python3 tests/k6/tools/pick_targets.py --base-url "$API")"  # 고른 회차 설명은 화면(stderr)에 나온다
+env | grep -E '^(CONTENTION|USERHOLD|DEPLOY|BROWSE)_|^THEATER_'      # 리포트에 적는다
+```
+
+- `pick_targets.py`가 회차를 못 찾으면 `--date`로 다음 날을 고른다(예매 마감 = 상영 시작 5분 전)
+- 토큰 파일·`~/.seatsac/`은 레포 밖이다. 커밋·PR·노션에 붙이지 않는다
+
+#### 6-H-2. 실행 (이 순서로)
+
+```bash
+R=tests/k6/run-in-cluster.sh       # 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
+
+# ① 사용자당 선점 1건 (토큰 1개, 30초)
+$R user-hold -e SCREENING_ID=$USERHOLD_SCREENING_ID -e SEAT_IDS=$USERHOLD_SEAT_IDS
+
+# ② 같은 좌석 100명 (1분 안에 끝난다) — 다른 터미널에서 SSE를 같이 연다(이벤트 HELD 1건, 300초 뒤 EXPIRED 1건)
+python3 tests/k6/tools/sse_lag.py --duration 360 --url "$API/screenings/$CONTENTION_SCREENING_ID/seats/stream"   # 터미널 B
+$R contention -e SCREENING_ID=$CONTENTION_SCREENING_ID -e SEAT_ID=$CONTENTION_SEAT_ID                         # 터미널 A
+#    → 「성공 1 · 사용자 제한 0 · p95 …ms」 확인. 300초 뒤 터미널 B에 EXPIRED → 만료 반영(6-H-3)
+
+# ③ 조회 캐시 (토큰 없음, 약 2분)
+$R browse -e SCREENING_IDS=$BROWSE_SCREENING_IDS -e THEATER_ID=$THEATER_ID -e THEATER_DATE=$THEATER_DATE
+
+# ④ 부하 중 SSE 반영 — 배포 없이 deploy 시나리오를 2분(선점·결제·취소가 계속 돌아 이벤트가 많다)
+python3 tests/k6/tools/sse_lag.py --duration 150 --url "$API/screenings/$DEPLOY_SCREENING_ID/seats/stream"      # 터미널 B
+$R deploy -e SCREENING_ID=$DEPLOY_SCREENING_ID -e SEAT_ID_FROM=$DEPLOY_SEAT_ID_FROM -e DURATION=2m              # 터미널 A
+kubectl -n cinema-staging get hpa booking -w                                                                    # 터미널 C — 증설되면 리포트에
+```
+
+- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 `pick_targets.py`로 새로 고른다), user-hold는 바로 다시 된다(스스로 해제)
+- 같은 시각에 k6 Job은 하나만 돈다(스크립트가 막는다 — 결과가 섞인다)
+- 블루/그린 중 무중단 확인(`deploy` + 실제 배포)은 4.2.2(6-D)
+
+#### 6-H-3. Prometheus로 확인
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:9090    # http://localhost:9090/graph
+```
+
+| 확인 | 쿼리 | 합격 |
+| --- | --- | --- |
+| 만료 반영 | `histogram_quantile(0.95, sum by (le) (increase(booking_hold_expiry_lag_seconds_bucket[15m])))` | < 2 — **파드 기동 후 10분 안의 첫 스윕은 제외**(노드 0대 구간 뒤 밀린 만료가 한 번 크게 찍힌다, 런타임 계약 5장) |
+| 선점 결과 | `sum by (result) (increase(booking_seat_hold_total[10m]))` | contention 직후 success 1 · conflict 99 근처 |
+| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_pending{application="booking"}[15m])` | 0 |
+| 5xx | `sum(increase(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[15m])) by (application)` | 0 (ai 제외) |
+| CPU | `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cinema-staging",container!=""}[1m]))` | 리포트에 최대값 |
+
+#### 6-H-4. 정리
+
+```bash
+tests/k6/run-in-cluster.sh cleanup                                  # 남은 Job·ConfigMap·Secret 없음 확인
+kubectl -n cinema-staging get job,configmap,secret -l app.kubernetes.io/name=k6-loadtest   # No resources
+infra/scripts/cluster-scale.sh up 1                                 # 노드그룹당 1대로 되돌림
+rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파일(계정은 11/20까지 둔다 — 7-6-3)
+```
+
+#### 6-H-5. 리포트 (WBS 4.2.1 산출물)
+
+실행마다 `~/.seatsac/k6-results/{실행 ID}.log` 머리말에 실행 시각·git SHA·노드 수·서비스 이미지가 남는다. 리포트에는 아래만 옮긴다(토큰·계정·계정 ID·IP 없음).
+
+| 항목 | 값 |
+| --- | --- |
+| 일시 · git SHA · 이미지(booking·gateway) · 노드 수 | |
+| 대상 회차(시나리오별) · 좌석 | |
+| contention: 성공 수 · 409 HELD · 사용자 제한 · p95/중앙값/최대 | |
+| user-hold: 체크 5개 | |
+| browse: 영화·상영시간·좌석 현황 p95 · 실패율 | |
+| SSE: 이벤트 수 · 지연 p50/p95/최대 · 하트비트 간격 | |
+| 만료 반영 p95 · 커넥션 풀 대기 최대 · booking HPA 레플리카 최대 · 5xx | |
+| 판정 · 남은 문제 | |
+
+#### 6-H-6. 막힐 때
+
+| 증상 | 원인 · 조치 |
+| --- | --- |
+| 요청이 전부 타임아웃(`status 0`, `server_errors`) | gateway NetworkPolicy에 `k6-loadtest` 허용이 없다 → gitops `base/gateway/networkpolicy.yaml` 확인(6-E 표) |
+| 401 | 토큰 만료 — `loadtest_users.py refresh` → `tokens --out` 다시 |
+| `hold_active_hold > 0` | 토큰이 VU보다 적거나 같은 사용자가 그 회차에 선점을 남겼다 → 300초 기다리거나 다른 회차(`pick_targets.py`) |
+| 400 `SCREENING_STARTED`(`BOOKING_CLOSED`) | 회차 시작 5분 전부터 마감 → `pick_targets.py`로 다시 고른다 |
+| 파드 Pending(180초) | 노드 부족 — `cluster-scale.sh up 2`. 이벤트는 스크립트가 출력한다 |
+| ai 파드 때문에 멈춤 | `cluster-scale.sh down ng-ai`(6-G-5). 정말 필요할 때만 `ALLOW_AI=1` |
+| p95만 넘는다 | 리포트에 그대로 적는다. booking CPU·`hikaricp_connections_pending`·노드 배치(k6 파드가 booking과 같은 노드인지 — 로그 머리말)를 같이 본다 |
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 

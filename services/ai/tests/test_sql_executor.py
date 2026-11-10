@@ -98,3 +98,11 @@ def test_huge_string_cannot_be_built():
     # 1MB 아래는 그대로 된다
     small = validate("SELECT length(printf('%.*c', 1000, 'x')) AS n")
     assert execute(store, small).rows == [[1000]]
+
+
+@pytest.mark.parametrize("sql", ["SELECT x'ff' AS b", "SELECT CAST(title AS BLOB) AS b FROM movie"])
+def test_blob_result_is_sql_error(sql):
+    """#91 리뷰: bytes 값은 응답 JSON 변환에서 500이 난다 → SQL_ERROR로 재요청 경로를 탄다."""
+    with pytest.raises(SqlExecutionError) as caught:
+        execute(loaded_store(), validate(sql))
+    assert caught.value.reason == SQL_ERROR and "BLOB" in caught.value.message

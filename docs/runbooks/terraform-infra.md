@@ -1251,7 +1251,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 | 만료 반영 2초 | Prometheus `booking_hold_expiry_lag_seconds` (contention 승자의 선점이 300초 뒤 만료) | p95 < 2초 |
 | (참고) 커넥션 풀 | `hikaricp_connections_pending{application="booking"}` | 0 — 0이 아니면 풀 5 → 10 검토(남궁일) |
 
-**GitOps 예외**: 이 테스트는 관리자(`cinema-admin`)가 `run-in-cluster.sh`로 **실행 중에만 있는** Job·ConfigMap(스크립트)·Secret(토큰)을 `cinema-staging`에 만들고 끝나면 지운다. 라벨 `app.kubernetes.io/name=k6-loadtest`로만 만들고 지우며, ArgoCD가 관리하는 리소스는 건드리지 않는다(추적 라벨이 없어 selfHeal·prune 대상이 아님). 스크립트가 중간에 죽어도 ConfigMap·Secret은 Job의 ownerReference로 묶여 Job TTL(15분) 뒤 같이 지워진다. 남았으면 `tests/k6/run-in-cluster.sh cleanup`
+**GitOps 예외**: 이 테스트는 관리자(`cinema-admin`)가 `run-in-cluster.sh`로 **실행 중에만 있는** Job·ConfigMap(스크립트)·Secret(토큰)을 `cinema-staging`에 만들고 끝나면 지운다. 라벨 `app.kubernetes.io/name=k6-loadtest`로만 만들고 지우며, ArgoCD가 관리하는 리소스는 건드리지 않는다(추적 라벨이 없어 selfHeal·prune 대상이 아님). 스크립트는 Job을 먼저 만들고 ConfigMap·Secret은 처음부터 Job의 ownerReference를 달고 만든다 → 중간에 죽어도 Job TTL(15분) 뒤 같이 지워진다. 남았으면 `tests/k6/run-in-cluster.sh cleanup`
 
 #### 6-H-1. 준비 (실행 당일, 레포 루트)
 

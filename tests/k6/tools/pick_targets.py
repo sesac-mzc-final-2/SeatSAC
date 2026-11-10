@@ -164,7 +164,7 @@ def pick(api: Api, date: str, theater_id: int | None, now: datetime, lead: timed
         f"contention {contention.screening_id}  {contention.label}  (좌석 {seat}, 활성 {len(contention.seats)}석 전부 빈 상태)",
         f"user-hold  {userhold.screening_id}  {userhold.label}  (좌석 {picked['USERHOLD_SEAT_IDS']})",
         f"browse     {picked['BROWSE_SCREENING_IDS']}  (극장 {picked['THEATER_ID']}, {date})",
-        f"가장 이른 시작 {min(c.starts_at for c in (deploy, contention, userhold)).astimezone(KST):%H:%M} KST — 그 5분 전부터는 선점이 400(BOOKING_CLOSED)이다",
+        f"가장 이른 시작 {min(c.starts_at for c in (deploy, contention, userhold)).astimezone(KST):%H:%M} KST — 그 5분 전부터는 선점이 400 SCREENING_STARTED(BOOKING_CLOSED)이다",
     ]
     return {"env": picked, "notes": notes}
 

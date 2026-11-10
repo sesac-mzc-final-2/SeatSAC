@@ -12,7 +12,7 @@
 #
 #   GitOps 예외(런북 6-H): 이 스크립트가 만드는 것은 실행 중에만 있는 Job·ConfigMap(스크립트)·Secret(토큰) 셋뿐이다.
 #   ArgoCD가 관리하는 리소스는 건드리지 않고, 라벨 app.kubernetes.io/name=k6-loadtest로만 만들고 지운다.
-#   스크립트가 중간에 죽어도 ConfigMap·Secret은 Job의 ownerReference로 묶여 Job TTL(15분) 뒤 같이 지워진다
+#   ConfigMap·Secret은 Job을 먼저 만든 뒤 ownerReference를 달고 만든다 → 스크립트가 어느 순간에 죽어도 Job TTL(15분) 뒤 같이 지워진다
 #
 #   환경변수: NS(기본 cinema-staging) · K6_IMAGE(기본 grafana/k6:1.7.1 — analysis/와 같은 버전)
 #             K6_RESULTS_DIR(기본 ~/.seatsac/k6-results — 로그 저장, 레포 밖) · KEEP=1(끝나도 Job·ConfigMap 남김, Secret은 항상 지움)
@@ -132,7 +132,8 @@ for verb_res in create:jobs create:configmaps create:secrets delete:secrets; do
   [ "$(kubectl -n "$NS" auth can-i "${verb_res%%:*}" "${verb_res#*:}" 2>/dev/null)" = "yes" ] \
     || die "권한 없음: ${verb_res%%:*} ${verb_res#*:} (cinema-admin으로 실행)"
 done
-gw=$(kubectl -n "$NS" get endpoints gateway -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | wc -w | tr -d ' ')
+gw=$(kubectl -n "$NS" get endpointslices -l kubernetes.io/service-name=gateway \
+  -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{" "}{end}' 2>/dev/null | wc -w | tr -d ' ')
 [ "$gw" -gt 0 ] || die "gateway Ready 엔드포인트가 없다"
 running=$(kubectl -n "$NS" get jobs -l "app.kubernetes.io/name=$LABEL_NAME" -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{" "}{end}')
 [ -z "$running" ] || die "이미 도는 k6 Job이 있다: $running — 결과가 섞인다. 끝나길 기다리거나 run-in-cluster.sh cleanup"
@@ -169,22 +170,24 @@ trap 'exit 130' INT TERM
 } | tee "$LOG"
 
 # ---- 리소스 만들기 ------------------------------------------------------
-with_labels() { jq -c --argjson labels "$LABELS" '.metadata.labels = $labels'; }   # 만들 때부터 라벨 → cleanup이 라벨로 찾는다
+# Job을 먼저 만들고 ConfigMap·Secret은 처음부터 ownerReference를 달고 만든다 → 어느 순간에 죽어도 Job TTL로 같이 지워진다.
+# 파드는 ConfigMap·Secret이 생길 때까지 ContainerCreating으로 기다린다(못 생기면 activeDeadlineSeconds 뒤 Job 실패 → TTL)
+job_manifest | kubectl -n "$NS" create -f - >/dev/null
+UID_=$(kubectl -n "$NS" get job "$RUN" -o jsonpath='{.metadata.uid}')
+# 만들 때부터 라벨(cleanup이 라벨로 찾는다)과 Job ownerReference를 단다
+with_meta() {
+  jq -c --argjson labels "$LABELS" --arg n "$RUN" --arg u "$UID_" \
+    '.metadata.labels = $labels | .metadata.ownerReferences = [{apiVersion:"batch/v1",kind:"Job",name:$n,uid:$u}]'
+}
 cm_args=()
 for f in "${SCRIPT_FILES[@]}"; do cm_args+=(--from-file="$f=$HERE/$f"); done
 kubectl -n "$NS" create configmap "$RUN" "${cm_args[@]}" --from-file="common.js=$HERE/lib/common.js" --dry-run=client -o json \
-  | with_labels | kubectl -n "$NS" create -f - >/dev/null
+  | with_meta | kubectl -n "$NS" create -f - >/dev/null
 if [ -n "$TOKENS_FILE" ]; then
   # 토큰은 파이프로만 지나간다(화면·파일에 남기지 않는다)
   kubectl -n "$NS" create secret generic "$RUN" --from-file="tokens.txt=$TOKENS_FILE" --dry-run=client -o json \
-    | with_labels | kubectl -n "$NS" create -f - >/dev/null
+    | with_meta | kubectl -n "$NS" create -f - >/dev/null
 fi
-
-job_manifest | kubectl -n "$NS" create -f - >/dev/null
-UID_=$(kubectl -n "$NS" get job "$RUN" -o jsonpath='{.metadata.uid}')
-OWNER=$(jq -cn --arg n "$RUN" --arg u "$UID_" '{metadata:{ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:$n,uid:$u}]}}')
-kubectl -n "$NS" patch configmap "$RUN" --type merge -p "$OWNER" >/dev/null
-[ -z "$TOKENS_FILE" ] || kubectl -n "$NS" patch secret "$RUN" --type merge -p "$OWNER" >/dev/null
 echo "▶ Job $RUN 생성 — 파드 기다리는 중 (이미지 pull·스케줄)" >&2
 
 # ---- 파드가 뜰 때까지 (최대 180초) → 로그 따라가기 ------------------------

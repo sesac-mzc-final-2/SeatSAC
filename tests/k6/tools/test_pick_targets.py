@@ -173,6 +173,13 @@ class SseLagTest(unittest.TestCase):
         got = list(sse_lag.parse_stream(lines, clock=lambda: next(times)))
         self.assertEqual([(k, t) for k, _, t in got], [("ping", 100.0), ("ping", 115.0)])   # 깨진 data는 버린다
 
+    def test_연결_주석은_하트비트로_세지_않는다(self):
+        # booking은 연결 직후 `: connected`를 보내고 하트비트 `: ping`은 모든 연결에 같은 15초 주기로 보낸다
+        lines = [": connected\n", ": ping\n", ": ping\n"]
+        times = iter([100.0, 103.0, 118.0])
+        got = list(sse_lag.parse_stream(lines, clock=lambda: next(times)))
+        self.assertEqual([(k, t) for k, _, t in got], [("ping", 103.0), ("ping", 118.0)])   # 간격 15초 하나만
+
     def test_percentile(self):
         self.assertEqual(sse_lag.percentile([0.1, 0.2, 0.3, 0.4, 2.0], 95), 2.0)
         self.assertEqual(sse_lag.percentile([0.1] * 20 + [5.0], 95), 0.1)

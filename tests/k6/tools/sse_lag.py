@@ -47,7 +47,9 @@ def parse_stream(lines: Iterable[str], clock=time.time) -> Iterator[tuple[str, o
                 data = []
             continue
         if line.startswith(":"):
-            yield "ping", None, now
+            # 하트비트는 `: ping`만 센다. 연결 직후 `: connected`(booking SeatStreamService)는 간격 계산에서 뺀다
+            if line[1:].strip() == "ping":
+                yield "ping", None, now
         elif line.startswith("data:"):
             data.append(line[5:].lstrip())
 

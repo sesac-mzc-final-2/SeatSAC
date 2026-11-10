@@ -42,8 +42,10 @@ def test_movie_row_detail_and_summary():
     assert detail["genres"] == "드라마,액션"
     assert tuple(detail) == schema.MOVIE_COLUMNS
     assert "poster" not in "".join(detail)
+    assert detail["runtime_minutes"] == 112  # 실제 러닝타임(상세에만 있음)
     summary = mapper.movie_row(movie_summary())
     assert summary["synopsis"] is None and summary["genres"] is None
+    assert summary["runtime_minutes"] is None
 
 
 def test_theater_row():

@@ -55,3 +55,21 @@ def test_passes_validator_and_returns_expected_rows(preset):
     result = execute(loaded_store(), validate(preset.sql), SYSTEM | slots)
     assert result.row_count == expected
 
+
+
+def test_started_screening_is_excluded_even_if_time_is_earlier():
+    """시작한 회차(18:00, 지금 19:40)는 '17시 이후'로 물어도 나오지 않는다(:now 조건)."""
+    preset = next(p for p in presets() if p.preset_id == "today_after_time")
+    result = execute(loaded_store(), validate(preset.sql), SYSTEM | {"time": "17:00"})
+    col = result.columns.index({"name": "starts_at", "type": "text"})
+    starts = [row[col] for row in result.rows]
+    assert "2026-11-17 18:00" not in starts and result.row_count == 5  # 19:50부터 5건
+
+
+def test_movie_examples_have_no_fixed_titles():
+    """버튼 예시에 실제 편성에 없을 수 있는 고정 영화 제목을 쓰지 않는다(#92 리뷰)."""
+    fixture_titles = {"별의 항해", "한강의 밤", "고양이 탐정", "철의 심장"}
+    for p in presets():
+        assert not any(t in p.example for t in fixture_titles), p.preset_id
+        if "movie" in p.params:
+            assert "{movie}" in p.example

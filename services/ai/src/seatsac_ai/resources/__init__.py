@@ -38,6 +38,14 @@ class Preset:
     sql: str
 
 
+MOVIE_PLACEHOLDER = "영화 제목"  # 계약 ai.openapi.yaml GET /ai/presets 예시와 같은 자리 표시
+
+
+def fill_example(example: str, movie: str | None) -> str:
+    """버튼 예시의 {movie} 를 실제 상영 중인 영화 제목으로(없으면 '영화 제목')."""
+    return example.replace("{movie}", movie or MOVIE_PLACEHOLDER)
+
+
 @lru_cache
 def presets() -> tuple[Preset, ...]:
     raw = _load("presets.yaml")["presets"]

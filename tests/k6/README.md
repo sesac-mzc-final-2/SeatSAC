@@ -1,6 +1,6 @@
 # k6 부하 시나리오
 
-클러스터 안 **Job**으로 돌리고 gateway Service를 직접 부른다(`http://gateway:8080`) — 그래서 **`/api` 접두사가 없다**. Job·스케줄은 김종식(OPS-10), 시나리오·대상 데이터는 남궁일(인계 15번).
+클러스터 안 **Job**으로 돌리고 gateway Service를 직접 부른다(`http://gateway:8080/api`). ALB를 거치지 않아도 **`/api` 접두사는 붙인다** — gateway 라우트가 `Path=/api/...`로 받고 gateway가 직접 떼기 때문이다(StripPrefix=1). 빠지면 모든 요청이 gateway 404 `NOT_FOUND`다. Job·스케줄은 김종식(OPS-10), 시나리오·대상 데이터는 남궁일(인계 15번).
 
 | 시나리오 | 증명할 것 | 임계값 |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ $R cleanup    # 남은 k6 리소스 지우기
 
 ```bash
 # 같은 좌석 100명 (토큰 100개 필요)
-k6 run -e BASE_URL=http://gateway:8080 -e SCREENING_ID=5123 -e SEAT_ID=4060121 \
+k6 run -e BASE_URL=http://gateway:8080/api -e SCREENING_ID=5123 -e SEAT_ID=4060121 \
        -e K6_TOKENS_FILE="$K6_TOKENS_FILE" tests/k6/seat-hold-contention.js
 
 # 조회 (토큰 불필요)

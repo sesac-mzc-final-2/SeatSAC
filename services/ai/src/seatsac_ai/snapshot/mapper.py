@@ -64,6 +64,8 @@ def movie_row(data: Mapping[str, Any]) -> dict[str, Any]:
         "title_en": data.get("titleEn"),
         "view_grade": data.get("viewGrade"),
         "slot_minutes": data.get("slotMinutes"),
+        # 실제 러닝타임(TMDB). 상세에만 있고 없을 수 있다 → 그때는 slot_minutes로 대신 답한다
+        "runtime_minutes": data.get("runtimeMinutes"),
         "release_date": data.get("releaseDate"),
         "director": data.get("director"),
         "genres": _join(data.get("genres")),

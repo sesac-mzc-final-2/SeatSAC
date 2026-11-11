@@ -1349,6 +1349,7 @@ rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파
 | 증상 | 원인 · 조치 |
 | --- | --- |
 | 요청이 전부 타임아웃(`status 0`, `server_errors`) | gateway NetworkPolicy에 `k6-loadtest` 허용이 없다 → gitops `base/gateway/networkpolicy.yaml` 확인(6-E 표) |
+| 요청이 전부 404 `NOT_FOUND` | `BASE_URL`에 `/api`가 빠졌다 — gateway 라우트가 `/api/...`로 받고 gateway가 직접 뗀다(StripPrefix=1). `-e BASE_URL=`을 따로 넘기지 않는다(기본값 `http://gateway:8080/api`) |
 | 401 | 토큰 만료 — `loadtest_users.py refresh` → `tokens --out` 다시 |
 | `hold_active_hold > 0` | 토큰이 VU보다 적거나 같은 사용자가 그 회차에 선점을 남겼다 → 300초 기다리거나 다른 회차(`pick_targets.py`) |
 | 400 `SCREENING_STARTED`(`BOOKING_CLOSED`) | 회차 시작 5분 전부터 마감 → `pick_targets.py`로 다시 고른다 |

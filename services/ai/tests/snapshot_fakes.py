@@ -19,6 +19,7 @@ def movie_detail(movie_id: int = 1, title: str = "영화1") -> dict:
         "genres": ["드라마", "액션"],
         "synopsis": "줄거리",
         "releaseDate": "2026-01-01",
+        "runtimeMinutes": 112,
         "posterUrl": "https://x/poster.jpg",
     }
 

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, type FormEvent, type KeyboardEvent } from "react";
 import type { ChatPreset } from "@/entities/ai-chat";
 import { Button, Chip, Icon } from "@/shared/ui";
 import { MAX_MESSAGE_LENGTH, useAiChat } from "../model/use-ai-chat";
@@ -9,6 +9,9 @@ import styles from "./ChatPanel.module.css";
 interface Props {
   /** 대화 상태는 Dock 이 들고 있다 — 창을 닫았다 열어도 이어진다 */
   chat: ReturnType<typeof useAiChat>;
+  /** 작성 중인 질문도 Dock 이 들고 있다 — Escape·닫기로 창을 닫아도 남는다 */
+  draft: string;
+  onDraftChange: (draft: string) => void;
   presets: ChatPreset[];
   /** 추천 질문 API 가 503 등으로 실패 — 챗봇을 비활성 안내로 */
   unavailable: boolean;
@@ -20,6 +23,8 @@ interface Props {
 /** 우하단 대화창 본문 (AI-01·AI-04). 열려 있는 동안만 마운트된다 */
 export function ChatPanel({
   chat,
+  draft,
+  onDraftChange: setDraft,
   presets,
   unavailable,
   onRetryAvailability,
@@ -28,7 +33,6 @@ export function ChatPanel({
 }: Props) {
   const titleId = useId();
   const demo = useDemoMode();
-  const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const { entries, ask, restart, isPending, cooldownSeconds } = chat;

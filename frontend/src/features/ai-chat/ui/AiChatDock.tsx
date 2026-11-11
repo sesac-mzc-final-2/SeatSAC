@@ -20,6 +20,7 @@ export function AiChatDock() {
   const presets = useQuery({ ...chatPresetsQuery(), enabled: authenticated });
   const chat = useAiChat();
   const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
   const launcherRef = useRef<HTMLButtonElement>(null);
 
   if (!authenticated) return null;
@@ -38,6 +39,8 @@ export function AiChatDock() {
       {open && (
         <ChatPanel
           chat={chat}
+          draft={draft}
+          onDraftChange={setDraft}
           presets={presets.data?.items ?? []}
           unavailable={unavailable}
           onRetryAvailability={() => void presets.refetch()}

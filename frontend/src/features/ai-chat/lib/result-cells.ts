@@ -47,6 +47,8 @@ const BOOKING_STATUSES = new Set(["CONFIRMED", "PAYMENT_FAILED", "EXPIRED", "CAN
 /** 셀 표시. 시각은 스냅샷의 KST 문자열(`YYYY-MM-DD HH:MM`)이라 시간대 변환 없이 잘라서 보여 준다 */
 export function formatCell(column: Pick<ChatColumn, "name" | "type">, value: ChatCell): string {
   if (value === null) return "–";
+  // ID 는 숫자여도 수량이 아니라 천 단위 쉼표를 넣지 않는다 (예매 번호 9876 → "9876")
+  if (column.name === "id" || column.name.endsWith("_id")) return String(value);
   if (typeof value === "number") {
     if (column.name === "amount") return formatWon(value);
     if (column.name.endsWith("_ratio")) return `${Math.round(value * 1000) / 10}%`;

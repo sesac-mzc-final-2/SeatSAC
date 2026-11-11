@@ -16,16 +16,15 @@ function readStored(): boolean {
  */
 export function useDemoMode() {
   const [enabled, setEnabled] = useState(readStored);
+  // 저장은 상태 업데이터 밖(이벤트 처리)에서 한다 — 업데이터는 StrictMode 에서 두 번 돌 수 있어 순수해야 한다
   const toggle = useCallback(() => {
-    setEnabled((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
-      } catch {
-        // 저장이 막혀도 이번 화면에서는 동작한다
-      }
-      return next;
-    });
-  }, []);
+    const next = !enabled;
+    setEnabled(next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
+    } catch {
+      // 저장이 막혀도 이번 화면에서는 동작한다
+    }
+  }, [enabled]);
   return { enabled, toggle };
 }

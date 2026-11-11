@@ -16,8 +16,9 @@ export function ResultTable({ columns, rows, caption }: Props) {
         <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>
-            {columns.map((column) => (
-              <th key={column.name} scope="col" data-numeric={isNumericColumn(column) || undefined}>
+            {/* 열 이름은 SQL 별칭이라 겹칠 수 있다(별칭 없는 t.name, a.name) → key 에 위치를 섞는다 */}
+            {columns.map((column, columnIndex) => (
+              <th key={`${columnIndex}-${column.name}`} scope="col" data-numeric={isNumericColumn(column) || undefined}>
                 {columnLabel(column)}
               </th>
             ))}
@@ -27,7 +28,7 @@ export function ResultTable({ columns, rows, caption }: Props) {
           {rows.map((row, rowIndex) => (
             <tr key={rowIndex}>
               {columns.map((column, columnIndex) => (
-                <td key={column.name} data-numeric={isNumericColumn(column) || undefined}>
+                <td key={`${columnIndex}-${column.name}`} data-numeric={isNumericColumn(column) || undefined}>
                   {formatCell(column, row[columnIndex] ?? null)}
                 </td>
               ))}

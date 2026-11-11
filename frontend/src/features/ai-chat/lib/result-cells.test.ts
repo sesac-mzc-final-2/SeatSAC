@@ -18,6 +18,11 @@ describe("result-cells", () => {
     expect(formatCell({ name: "director", type: "text" }, null)).toBe("–");
   });
 
+  it("ID 열은 쉼표 없이 그대로", () => {
+    expect(formatCell({ name: "booking_id", type: "integer" }, 9876)).toBe("9876");
+    expect(formatCell({ name: "screening_id", type: "integer" }, 769004021)).toBe("769004021");
+  });
+
   it("예매 상태·상영관 종류 코드는 화면 문구로", () => {
     expect(formatCell({ name: "status", type: "text" }, "CONFIRMED")).toBe("예매 완료");
     expect(formatCell({ name: "screen_type", type: "text" }, "RECLINER")).toBe("리클라이너");

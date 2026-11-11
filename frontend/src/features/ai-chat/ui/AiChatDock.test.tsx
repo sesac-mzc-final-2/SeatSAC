@@ -102,6 +102,17 @@ describe("AiChatDock (3.3.7)", () => {
     expect(screen.getByText("SQL 보기")).toBeInTheDocument();
   });
 
+  it("Escape 로 창을 닫아도 작성 중인 질문은 남는다", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(json(200, presets));
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "내일 영등포");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "AI 상영 도우미 열기" }));
+    expect(screen.getByRole("textbox", { name: "질문" })).toHaveValue("내일 영등포");
+  });
+
   it("429 분 한도면 안내하고 입력을 잠시 막는다", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
       String(input) === "/api/ai/presets"

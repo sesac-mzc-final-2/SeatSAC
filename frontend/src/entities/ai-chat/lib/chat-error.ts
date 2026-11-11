@@ -10,6 +10,13 @@ export interface ChatErrorInfo {
 
 const reasonOf = (error: ApiError): string | undefined => error.details.find((d) => d.reason)?.reason;
 
+/** 429 `details[{ field: "quota", value: "10/min" | "100/day" }]` 의 숫자. 서버 설정(APP_AI_LIMIT_*)이 바뀌어도 문구가 맞게 */
+function quotaLimitOf(error: ApiError, fallback: number): number {
+  const value = error.details.find((d) => d.field === "quota")?.value;
+  const match = typeof value === "string" ? /^(\d+)\//.exec(value) : null;
+  return match ? Number(match[1]) : fallback;
+}
+
 /** 챗봇 오류 문구 (ai.openapi.yaml 409·429·503). `message` 는 개발용이라 쓰지 않고 code·reason 으로 고른다 */
 export function chatErrorInfo(error: unknown): ChatErrorInfo {
   if (!(error instanceof ApiError)) {
@@ -26,16 +33,17 @@ export function chatErrorInfo(error: unknown): ChatErrorInfo {
         cooldownSeconds: null,
       };
     case "AI_QUOTA_EXCEEDED": {
+      // 일 한도의 Retry-After 는 KST 자정까지(최대 86,400초)라 입력을 잠그지 않는다 — 문구로만 안내
       if (reason === "PER_DAY") {
         return {
-          message: "오늘 질문 한도(100회)를 모두 썼어요. 내일 다시 이용해 주세요.",
+          message: `오늘 질문 한도(${quotaLimitOf(error, 100)}회)를 모두 썼어요. 내일 다시 이용해 주세요.`,
           retryable: false,
-          cooldownSeconds: error.retryAfterSeconds,
+          cooldownSeconds: null,
         };
       }
       const seconds = error.retryAfterSeconds ?? 60;
       return {
-        message: `질문이 너무 잦아요(분당 10회). ${seconds}초 뒤에 다시 물어봐 주세요.`,
+        message: `질문이 너무 잦아요(분당 ${quotaLimitOf(error, 10)}회). ${seconds}초 뒤에 다시 물어봐 주세요.`,
         retryable: false,
         cooldownSeconds: seconds,
       };

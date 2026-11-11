@@ -18,10 +18,24 @@ describe("chatErrorInfo", () => {
     expect(info.cooldownSeconds).toBe(60);
   });
 
-  it("429 일 한도는 내일 안내", () => {
-    const info = chatErrorInfo(apiError(429, "AI_QUOTA_EXCEEDED", [{ field: "quota", reason: "PER_DAY" }], 3600));
+  it("429 일 한도는 내일 안내만, 입력은 잠그지 않는다(Retry-After 가 자정까지라 길다)", () => {
+    const info = chatErrorInfo(
+      apiError(429, "AI_QUOTA_EXCEEDED", [{ field: "quota", value: "100/day", reason: "PER_DAY" }], 52314),
+    );
     expect(info.message).toContain("내일");
     expect(info.retryable).toBe(false);
+    expect(info.cooldownSeconds).toBeNull();
+  });
+
+  it("한도 숫자는 details[].value 에서 읽는다", () => {
+    const perMinute = chatErrorInfo(
+      apiError(429, "AI_QUOTA_EXCEEDED", [{ field: "quota", value: "5/min", reason: "PER_MINUTE" }], 10),
+    );
+    expect(perMinute.message).toContain("분당 5회");
+    const perDay = chatErrorInfo(
+      apiError(429, "AI_QUOTA_EXCEEDED", [{ field: "quota", value: "50/day", reason: "PER_DAY" }]),
+    );
+    expect(perDay.message).toContain("50회");
   });
 
   it("503 AI_LLM_UNAVAILABLE 은 reason 으로 문구를 나눈다", () => {

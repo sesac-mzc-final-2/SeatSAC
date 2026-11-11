@@ -1440,7 +1440,7 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 | --- | --- | --- |
 | 만료 반영 | `histogram_quantile(0.95, sum by (le) (increase(booking_hold_expiry_lag_seconds_bucket[15m])))` | < 2 — **파드 기동 후 10분 안의 첫 스윕은 제외**(노드 0대 구간 뒤 밀린 만료가 한 번 크게 찍힌다, 런타임 계약 5장) |
 | 선점 결과 | `sum by (result) (increase(booking_seat_hold_total[10m]))` | contention 직후 success 1 · conflict 99 근처 |
-| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_acquire_seconds_max{application="booking"}[15m])` · 쿼리 1건 시간 `…usage_seconds_max` | acquire 0.1초 미만. `hikaricp_connections_pending`은 순간값이라 15초 수집 간격에서 1초짜리 경쟁을 놓친다 — `_max`(최근 최댓값)를 본다 |
+| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_acquire_seconds_max{application="booking"}[5m])` · 쿼리 1건 시간 `…usage_seconds_max` — **각 실행이 끝나고 2분 안에** 조회한다 | acquire 0.1초 미만. `hikaricp_connections_pending`은 순간값이라 15초 수집 간격에서 1초짜리 경쟁을 놓친다 — `_max`(최근 최댓값)를 본다. `_max`는 최근 약 2분(Micrometer 기본 `distributionStatisticExpiry`)만 유지하고, 범위를 넓히면 앞 실행 값이 섞인다 — 300초 뒤 다시 돌린 회차도 그 회차가 끝난 직후 5분 범위로 따로 잰다 |
 | 5xx | `sum(increase(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[15m])) by (application)` | 0 (ai 제외) |
 | CPU | `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cinema-staging",container!=""}[1m]))` | 리포트에 최대값 |
 

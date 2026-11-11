@@ -1,6 +1,6 @@
 # NL2SQL 평가 세트 (WBS 3.4.11 → 4.2.3 입력)
 #
-# 기준 데이터: eval/snapshot.json (2026-11-10 16:57 KST, staging 공개 API를 capture.py 로 고정)
+# 기준 데이터: 평가 스냅샷 (2026-11-10 16:57 KST, staging 공개 API를 capture.py 로 고정. 레포 밖에 둔다)
 #   오늘 = 2026-11-10(화). 극장 4곳(건대입구·영등포·월드타워·부산본점), 영화 22편, 회차 1,410개
 #   ⚠️ 이 시점 staging은 예매가 0건이라 모든 회차가 잔여석 = 전체 좌석이다. "매진 임박"은 정답 0행,
 #      "잔여석 많은 순"은 동점뿐이라 채점이 안 돼 잔여석 질문은 넣지 않았다.
@@ -215,13 +215,14 @@ questions:
     gold: SELECT name FROM theater WHERE region = '서울'
     key: name
   - id: q26
-    family: movie_saturday
-    question: 토요일에 오디세이 하는 극장
+    family: movie_today
+    question: 오늘 오디세이 하는 극장
     gold: |
       SELECT DISTINCT t.name AS theater FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id
-      WHERE s.business_date = '2026-11-14' AND m.title = '오디세이' AND s.starts_at > :now
+      WHERE s.business_date = :today AND m.title = '오디세이' AND s.starts_at > :now
     key: theater
+    note: q09(날짜 없음)와 극장 집합이 달라야 날짜를 빠뜨린 캐시 답이 틀림으로 잡힌다(오늘 2곳 vs 전체 4곳)
 
   # --- 범위 밖 ------------------------------------------------------------------
   - id: q27

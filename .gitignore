@@ -61,3 +61,6 @@ kubeconfig
 
 # Vite 의존성 사전 번들 캐시 (보통 node_modules/.vite, 프로젝트 루트에 생길 때도 있음)
 .vite/
+
+# ai 평가 스냅샷: 롯데 편성 시드에서 나온 회차 데이터라 레포에 두지 않는다(#97 리뷰, data-model 5장)
+services/ai/eval/snapshot*.json

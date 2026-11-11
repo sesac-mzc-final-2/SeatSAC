@@ -11,7 +11,8 @@
   C. 오적중: 캐시 답(CACHE_*) 중 틀린 비율 + 일부러 만든 함정 쌍("20시"→"21시", "이후"→"전에", 리클라이너→일반관 …)
 
 가정(보고서에도 적는다)
-  - 기준 데이터는 eval/snapshot.json 하나(시각 고정). 실제 서비스는 1분마다 스냅샷이 바뀐다
+  - 기준 데이터는 스냅샷 파일 하나(시각 고정, 기본 ~/.seatsac/ai-eval-snapshot.json — 레포 밖, capture.py 참고).
+    실제 서비스는 1분마다 스냅샷이 바뀐다
   - 토큰 = input + output. 프롬프트 캐싱(cache_read)은 따로 적고 절감률에 넣지 않는다
   - 반복 시나리오의 "캐시 없을 때" 토큰은 A에서 그 질문(다른 말투면 원래 질문)에 쓴 토큰
   - 의미 캐시 임베딩은 실제 모델(fastembed). --no-semantic 이면 정확 일치만
@@ -32,7 +33,7 @@ from typing import Any
 import fakeredis
 import yaml
 
-from eval.capture import load_store
+from eval.capture import DEFAULT_SNAPSHOT, MISSING_SNAPSHOT, load_store
 from seatsac_ai.cache import template as tpl
 from seatsac_ai.cache.store import ChatCache, MemoryIndex
 from seatsac_ai.common.errors import ApiError
@@ -50,6 +51,8 @@ TRAPS = [  # (먼저, 나중) — 나중 질문이 앞 질문의 캐시를 잘�
     ("q13", "q14"),  # 리클라이너 → 일반관
     ("q05", "q06"),  # 영등포 → 건대입구
     ("q01", "q05"),  # 오늘 → 내일 (전혀 다른 질문)
+    # 날짜 없음 → 오늘: 날짜 슬롯을 빠뜨린 캐시 답은 극장 4곳 vs 정답 2곳(#97 리뷰)
+    ("q09", "q26"),
 ]
 
 
@@ -226,8 +229,8 @@ def scenario(
     return out
 
 
-def run(llm_kind: str, semantic: bool, seed: int) -> Report:
-    store, now = load_store(HERE / "snapshot.json")
+def run(llm_kind: str, semantic: bool, seed: int, snapshot: Path = DEFAULT_SNAPSHOT) -> Report:
+    store, now = load_store(snapshot)
     params = tpl.system_params(now.date(), f"{now:%Y-%m-%d %H:%M}")
     questions, paraphrases = load_questions()
     by_id = {q.id: q for q in questions}
@@ -281,7 +284,7 @@ def summarize(report: Report, llm_kind: str, semantic: bool) -> str:
         "# NL2SQL 평가 결과",
         "",
         f"- 실행: {datetime.now():%Y-%m-%d %H:%M} · Claude: `{llm_kind}` · 의미 캐시: {'켬' if semantic else '끔'}",
-        "- 기준 데이터: `eval/snapshot.json` (시각 고정) · 토큰 = input+output(프롬프트 캐싱 cache_read 제외)",
+        "- 기준 데이터: 평가 스냅샷(시각 고정, 레포 밖) · 토큰 = input+output(프롬프트 캐싱 cache_read 제외)",
         "",
         "## A. 정확도 (캐시 없이)",
         "",
@@ -330,8 +333,12 @@ def main() -> None:
     parser.add_argument("--no-semantic", action="store_true")
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--out", type=Path, default=HERE / "out")
+    parser.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
     args = parser.parse_args()
-    report = run(args.llm, not args.no_semantic, args.seed)
+    snapshot = args.snapshot.expanduser()
+    if not snapshot.is_file():
+        sys.exit(MISSING_SNAPSHOT.format(path=snapshot))
+    report = run(args.llm, not args.no_semantic, args.seed, snapshot)
     args.out.mkdir(exist_ok=True)
     md = summarize(report, args.llm, not args.no_semantic)
     (args.out / f"report-{args.llm}.md").write_text(md)

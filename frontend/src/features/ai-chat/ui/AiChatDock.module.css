@@ -1,0 +1,58 @@
+.launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 140;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 20px 0 17px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 10px 28px #0007;
+  transition:
+    background-color var(--t-color),
+    transform var(--t-color);
+}
+.launcher:hover {
+  background: var(--color-primary-hover);
+}
+.launcher:active {
+  transform: translateY(1px);
+}
+.launcher[data-open] {
+  background: var(--color-card-hover);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+}
+.busy {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-live);
+  border: 2px solid var(--color-bg);
+}
+
+@media (max-width: 540px) {
+  .launcher {
+    right: 16px;
+    bottom: 16px;
+    width: 52px;
+    padding: 0;
+    justify-content: center;
+  }
+  .label {
+    display: none;
+  }
+  /* 아래에서 올라오는 창이 열리면 버튼은 창 머리글의 닫기로 대신한다 */
+  .launcher[data-open] {
+    display: none;
+  }
+}

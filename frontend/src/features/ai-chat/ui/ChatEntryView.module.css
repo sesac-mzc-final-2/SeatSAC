@@ -1,0 +1,128 @@
+.question {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--radius) var(--radius) 4px var(--radius);
+  background: var(--color-primary-soft);
+  border: 1px solid #ff5a4e40;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.answer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-self: stretch;
+  padding: 14px;
+  border-radius: 4px var(--radius) var(--radius) var(--radius);
+  border: 1px solid var(--color-border);
+  background: #ffffff05;
+}
+.text {
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.note {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-dim);
+  font-size: 12px;
+}
+.demo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border-strong);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.demoRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.free {
+  color: var(--color-live);
+  font-weight: 600;
+}
+.dim {
+  color: var(--color-dim);
+}
+.dim code {
+  color: var(--color-muted-strong);
+}
+.sql summary {
+  width: max-content;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.sql summary:hover {
+  color: var(--color-text);
+}
+.sql pre {
+  margin: 6px 0 0;
+  padding: 10px;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted-strong);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid #6a3a37;
+  background: #3a242280;
+  font-size: 13px;
+}
+.errorText {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  line-height: 1.55;
+}
+.errorText svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--color-danger);
+}
+.errorActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 12px;
+}
+.retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid #ffffff30;
+  border-radius: 6px;
+  font-size: 12px;
+  transition: background-color var(--t-color);
+}
+.retry:hover {
+  background: #ffffff10;
+}

@@ -21,14 +21,17 @@ export class ApiError extends Error {
   readonly code: string;
   readonly traceId: string | null;
   readonly details: ErrorDetail[];
+  /** 응답 헤더 `Retry-After`(초). 없거나 숫자가 아니면 null (ai 429 `AI_QUOTA_EXCEEDED`) */
+  readonly retryAfterSeconds: number | null;
 
-  constructor(status: number, body: Partial<ErrorBody> | null) {
+  constructor(status: number, body: Partial<ErrorBody> | null, retryAfterSeconds: number | null = null) {
     super(body?.message ?? `HTTP ${status}`);
     this.name = "ApiError";
     this.status = status;
     this.code = body?.code ?? (status >= 500 ? "INTERNAL_ERROR" : "UNKNOWN_ERROR");
     this.traceId = body?.traceId ?? null;
     this.details = body?.details ?? [];
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -82,6 +85,13 @@ export function buildUrl(path: string, query?: Record<string, QueryValue>): stri
   return `${env.apiBaseUrl}${path}${qs ? `?${qs}` : ""}`;
 }
 
+/** `Retry-After` 는 초(정수)만 받는다. HTTP 날짜 형식은 쓰지 않는다(계약 ai.openapi.yaml 429) */
+function parseRetryAfter(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value.trim())) return null;
+  const seconds = Number(value.trim());
+  return Number.isSafeInteger(seconds) ? seconds : null;
+}
+
 async function parseErrorBody(response: Response): Promise<Partial<ErrorBody> | null> {
   try {
     const json: unknown = await response.json();
@@ -128,7 +138,13 @@ export async function http<T>(path: string, options: RequestOptions = {}): Promi
     if (response.status === 401) onSessionExpired?.();
   }
 
-  if (!response.ok) throw new ApiError(response.status, await parseErrorBody(response));
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      await parseErrorBody(response),
+      parseRetryAfter(response.headers.get("Retry-After")),
+    );
+  }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }

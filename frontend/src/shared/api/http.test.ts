@@ -35,6 +35,22 @@ describe("http", () => {
     expect(apiError.details).toEqual([]);
   });
 
+  it("Retry-After(초)를 ApiError에 담고, 숫자가 아니면 null", async () => {
+    const body = { code: "AI_QUOTA_EXCEEDED", message: "x", traceId: "0123456789abcdef0123456789abcdef", details: [] };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(body), { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "42" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(body), {
+          status: 429,
+          headers: { "Content-Type": "application/json", "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" },
+        }),
+      );
+    expect(((await http("/ai/chat").catch((e: unknown) => e)) as ApiError).retryAfterSeconds).toBe(42);
+    expect(((await http("/ai/chat").catch((e: unknown) => e)) as ApiError).retryAfterSeconds).toBeNull();
+  });
+
   it("본문이 오류 형식이 아니면 상태 코드로 code를 정한다", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("Bad Gateway", { status: 502 }));
     const error = (await http("/movies").catch((e: unknown) => e)) as ApiError;

@@ -27,6 +27,10 @@ npm run build               # tsc -b && vite build → dist/
 `MOCK_FAIL_PATH=/api/screenings npm run dev:mock` 처럼 띄우면 그 경로가 항상 503(`MOCK_FAIL_STATUS` 로 500 도 가능)을 돌려줘
 상영시간표의 오류 블록·문의 코드·공통 토스트를 볼 수 있다. API 를 직접 부를 때는 `?fail=503` 을 붙여도 된다. 빌드에는 포함되지 않는다.
 
+AI 챗봇(3.3.7, `ai.openapi.yaml`)도 목이 응답한다: 추천 질문 5개, 같은 문장을 다시 물으면 `CACHE_EXACT`(토큰 0), "내 예매" → `MY_BOOKINGS`,
+"비율·매진" → `NL2SQL`, "테이블" → `REJECTED`, "날씨" → `OUT_OF_SCOPE`. 질문에 `#409`·`#429`·`#429day`·`#503`·`#timeout`·`#snapshot` 을 넣으면 그 오류로 답한다.
+`MOCK_AI=off` 는 `/api/ai/**` 404(gateway 플래그 off → 버튼 숨김), `MOCK_AI=down` 은 503(ai 파드 없음 → 창 안 비활성 안내).
+
 Node 는 **22.22 이상**(`engines`). 테스트 의존성 jsdom 30 이 그 아래를 지원하지 않으며, CI(`pr-check` `frontend` job)·`frontend-deploy` 는 Node 24 를 쓴다.
 
 환경 변수는 `.env.example` 참고 (전부 공개 값, `VITE_` 는 빌드에 포함된다). `VITE_COGNITO_*` 가 비어 있으면 로그인 버튼이
@@ -42,8 +46,8 @@ Node 는 **22.22 이상**(`engines`). 테스트 의존성 jsdom 30 이 그 아�
 | `app` | `providers` · `routes` · `styles` | 진입점, 토스트·쿼리·인증(Cognito) 프로바이더, 라우터, 전역 CSS 토큰 |
 | `pages` | `home`(W1) · `movie-detail`(W2) · `showtimes`(W3) · `my-page`(W8) · `credits`(W10) · `auth-callback`(W7) · `not-found` | 화면 한 장 = 슬라이스 하나 |
 | `widgets` | `page-layout`(헤더·푸터) · `home-hero` · `movie-catalog` · `showtime-board` · `booking-history`(USR-04) · `preferences-panel`(USR-05) | 여러 엔티티·기능을 합친 블록 |
-| `features` | `login`(헤더 로그인·`LoginGate`) · `showtimes-filter` · `enter-seat-select` · `booking-steps` · `cancel-booking`(BKG-07 확인 대화상자) · `edit-preferences`(극장 순위·시간대·장르 편집·저장) | 사용자 행동 |
-| `entities` | `movie` · `theater` · `screening` · `session` · `user`(프로필·예매 내역·선호, `user.openapi.yaml`) | 계약 타입, API 함수, 쿼리 옵션, 표시용 작은 UI(상태 배지·예매 카드·프로필) |
+| `features` | `ai-chat`(로그인 후 우하단 AI 챗봇, AI-01·AI-04) · `login`(헤더 로그인·`LoginGate`) · `showtimes-filter` · `enter-seat-select` · `booking-steps` · `cancel-booking`(BKG-07 확인 대화상자) · `edit-preferences`(극장 순위·시간대·장르 편집·저장) | 사용자 행동 |
+| `entities` | `ai-chat`(`ai.openapi.yaml` 타입·API·오류 문구) · `movie` · `theater` · `screening` · `session` · `user`(프로필·예매 내역·선호, `user.openapi.yaml`) | 계약 타입, API 함수, 쿼리 옵션, 표시용 작은 UI(상태 배지·예매 카드·프로필) |
 | `shared` | `api` · `config` · `lib` · `ui` | `/api` 클라이언트·오류(`error.v1`), 경로·환경, KST 날짜·금액, 버튼·배지·칩·탭·확인 대화상자·빈 상태·오류 블록(문의 코드)·토스트 |
 
 - 엔티티끼리는 import 하지 않는다. 꼭 필요하면 `entities/{슬라이스}/@x/{쓰는 슬라이스}.ts` 로만 연다 (`movie/@x/screening`).
@@ -59,4 +63,5 @@ Node 는 **22.22 이상**(`engines`). 테스트 의존성 jsdom 30 이 그 아�
 - 역할(USER·ADMIN)은 토큰을 파싱하지 않고 `GET /users/me`의 `role`로 받는다 (3.3.6). 콜백(W7)은 토큰을 받은 뒤 `GET /users/me` 로 프로필을 만들고 돌아갈 경로로 보낸다. 실패하면 다시 시도 또는 「그냥 계속하기」(프로필은 마이페이지에서 다시 만들어진다).
 - 마이페이지(W8) `/me?tab=preferences`: 예매 취소는 예매 완료 + 상영 시작 전 카드에만(`canCancelBooking`), 회차 정보가 없으면(`screening: null`) 한 줄 안내. 선호 극장은 최대 3곳(순서 = rank), 시간대는 하나(`preferredTimeSlot`), 장르는 저장만(D6).
 - 러닝타임은 상세의 `runtimeMinutes` 만 표시(null이면 숨김). `slotMinutes` 는 회차 간격이라 쓰지 않는다 (W-2).
+- AI 챗봇(3.3.7): 로그인하면 `GET /ai/presets` 를 먼저 불러 404(플래그 off)·그 밖의 4xx면 버튼을 숨기고, 503이면 버튼은 두고 창 안에서 비활성 안내. 답은 문장 + 결과 표 + 「HH:MM 기준」, 「데모 정보」를 켜면 처리 경로·Claude 호출 수·토큰·지연·SQL. 409·429(`Retry-After` 동안 입력 잠금)·503 은 `code`·`details[].reason` 으로 문구를 고른다. 대화는 메모리에만(새로고침하면 사라짐), `sessionId` 는 응답 값을 다음 질문에 그대로.
 - 상영예정 탭 없음 (W-1). 포스터 `null` → 제목 카드. 잔여석 `remainingSeatsSource=TOTAL` 이면 전체 좌석 수만 회색.

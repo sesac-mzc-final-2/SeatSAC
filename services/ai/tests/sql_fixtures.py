@@ -77,8 +77,8 @@ def _fill(conn):
     )
 
 
-def loaded_store() -> SnapshotStore:
-    store = SnapshotStore()
+def loaded_store(clock=None) -> SnapshotStore:
+    store = SnapshotStore(clock)
     store.update("other", ("movie", "theater", "screening"), _fill)
     store.update("today", ("screening",), lambda conn: None)
     return store

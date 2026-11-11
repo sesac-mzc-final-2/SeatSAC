@@ -111,3 +111,12 @@ def test_settings_reject_bad_duration(monkeypatch):
     monkeypatch.setenv("APP_AI_CACHE_TTL", "soon")
     with pytest.raises(ValueError):
         Settings(_env_file=None)
+
+
+def test_llm_call_histogram_covers_the_15s_timeout():
+    """#95 리뷰: 기본 버킷(…10·+Inf)이면 p95가 10초에서 잘린다."""
+    from seatsac_ai.common.metrics import LLM_CALL_BUCKETS
+    from seatsac_ai.config import Settings
+
+    timeout = Settings(_env_file=None).llm_timeout_seconds
+    assert timeout in LLM_CALL_BUCKETS and max(LLM_CALL_BUCKETS) > timeout

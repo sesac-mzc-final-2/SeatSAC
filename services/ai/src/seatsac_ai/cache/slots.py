@@ -194,7 +194,9 @@ def _time_value(m: re.Match[str]) -> str | None:
     if groups.get("half"):
         minute = 30
     ampm = groups.get("ampm")
-    if ampm in ("오후", "저녁", "밤") and h < 12:
+    if ampm == "밤" and h == 12:
+        h = 0  # 영화관에서 "밤 12시"는 자정(#94 리뷰). 날짜가 바뀌는 문제는 남는다
+    elif ampm in ("오후", "저녁", "밤") and h < 12:
         h += 12
     elif ampm == "낮" and h <= 5:
         h += 12

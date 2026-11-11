@@ -264,3 +264,92 @@ def test_cache_metrics_count_hits_and_misses_per_layer():
     assert count("semantic", "miss") == before[("semantic", "miss")] + 1
     assert count("exact", "hit") == before[("exact", "hit")] + 1
     assert tokens() == before_tokens  # 캐시 답은 토큰 0
+
+
+# --- #94 리뷰 -------------------------------------------------------------------
+
+
+def test_followup_wording_without_session_is_not_cached():
+    """세션이 없어도 "그중 …" 말투는 캐시를 보지도 저장하지도 않는다(문맥 없는 답을 남이 재사용)."""
+    llm = ScriptedLlm(preset_after("20:00"), preset_after("20:00"))
+    service, _ = make(llm)
+    first = ask(service, "그중 20시 이후만")
+    second = ask(service, "그중 20시 이후만")
+    assert first["path"] == second["path"] == "PRESET" and len(llm.requests) == 2
+
+
+def test_exact_entry_with_other_slot_kinds_counts_as_miss():
+    """슬롯 종류가 달라 버린 정확 일치는 지표에서도 적중이 아니다."""
+    from seatsac_ai.cache.store import exact_key
+    from seatsac_ai.common.metrics import AI_CACHE_REQUESTS
+
+    llm = ScriptedLlm(preset_after("20:00"), preset_after("20:00"))
+    service, cache = make(llm, APP_AI_SEMANTIC_CACHE_ENABLED=False)
+    ask(service, "오늘 20시 이후 영화 알려줘")
+    ext = service._extract("오늘 20시 이후 영화 알려줘", NOW)
+    raw = asyncio.run(cache._v.get(exact_key(ext.key_text)))
+    asyncio.run(cache._v.set(exact_key(ext.key_text), raw.replace('"time"', '"date"')))
+    hits = AI_CACHE_REQUESTS.labels("exact", "hit")._value.get()
+    body = ask(service, "오늘 20시 이후 영화 알려줘")
+    assert body["path"] == "PRESET"
+    assert AI_CACHE_REQUESTS.labels("exact", "hit")._value.get() == hits
+
+
+class FlakyIndex(MemoryIndex):
+    """처음 ensure()는 연결 오류, 그다음부터 정상."""
+
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+        self.ensures = 0
+
+    async def ensure(self):
+        self.ensures += 1
+        if self.ensures == 1:
+            raise self.error
+        await super().ensure()
+
+
+def _cache_with(index):
+    return ChatCache(
+        fakeredis.FakeAsyncRedis(decode_responses=True),
+        ttl=3600,
+        session_ttl=1800,
+        threshold=0.92,
+        embedder=FakeEmbedder(),
+        index=index,
+    )
+
+
+def test_semantic_index_is_retried_after_a_connection_error(monkeypatch):
+    """기동 순간의 연결 오류 한 번으로 파드 수명 내내 의미 캐시가 꺼지지 않는다."""
+    from seatsac_ai.cache import store
+
+    monkeypatch.setattr(store, "RETRY_SECONDS", 0)
+    cache = _cache_with(FlakyIndex(RedisConnectionError("not yet")))
+    asyncio.run(cache.start())
+    assert cache.semantic_ready is False
+    assert asyncio.run(cache.semantic_available()) is True
+
+
+def test_missing_search_module_turns_semantic_cache_off_for_good(monkeypatch):
+    from redis.exceptions import ResponseError
+
+    from seatsac_ai.cache import store
+
+    monkeypatch.setattr(store, "RETRY_SECONDS", 0)
+    index = FlakyIndex(ResponseError("unknown command 'FT.CREATE'"))
+    cache = _cache_with(index)
+    asyncio.run(cache.start())
+    assert asyncio.run(cache.semantic_available()) is False and index.ensures == 1
+
+
+def test_semantic_entry_is_written_with_ttl_in_one_transaction():
+    """HSET과 EXPIRE를 한 트랜잭션으로 — TTL 없는 ai:semcache:* 가 남지 않는다."""
+    from seatsac_ai.cache.store import SEMCACHE_PREFIX, ValkeySearchIndex
+
+    valkey = fakeredis.FakeAsyncRedis(decode_responses=False)
+    index = ValkeySearchIndex(valkey)
+    asyncio.run(index.add("doc1", [0.1] * 384, "time", "{}", 3600))
+    ttl = asyncio.run(valkey.ttl(SEMCACHE_PREFIX + "doc1"))
+    assert 0 < ttl <= 3600

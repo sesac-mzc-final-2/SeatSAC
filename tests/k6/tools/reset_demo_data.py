@@ -7,7 +7,10 @@
 
 하는 일
   1. 토큰마다 `GET /users/me/bookings?status=CONFIRMED`(전체 쪽)를 읽어 **아직 시작하지 않은 회차**의 확정 예매를 고른다
-  2. `--apply`면 `POST /bookings/{id}/cancel`로 취소한다(환불까지 — BKG-07). 시작한 회차는 취소할 수 없어(400) 건너뛴다
+  2. `--apply`면 `POST /bookings/{id}/cancel`로 취소한다(환불까지 — BKG-07). 시작한 회차는 취소할 수 없어(400) 건너뛴다.
+     booking은 환불이 실패해도 취소를 커밋하고 200을 돌려준다 → 응답의 `payment.status`가 CANCELED가 아니면
+     같은 예매에 cancel을 한 번 더 부른다(이미 취소된 예매의 cancel은 환불을 다시 시도하는 멱등 경로).
+     취소된 예매는 다음 실행의 CONFIRMED 목록에 나오지 않으므로 여기서 재시도하지 않으면 다시 잡을 수 없다
   3. `--screening-id` 회차의 좌석 상태 수를 센다(`GET /screenings/{id}/seats`) — 전부 AVAILABLE이면 깨끗하다
 
 하지 않는 일: 선점(PENDING)은 사용자 API로 목록을 볼 수 없다 → 300초 뒤 저절로 풀린다(런북 5.1.1 데이터 초기화 2단계).
@@ -106,6 +109,12 @@ def confirmed_bookings(api: Api, token: str, token_no: int) -> list[Booking]:
             return out
 
 
+def refund_status(cancel_result: dict) -> str | None:
+    """취소 응답(CancelResult)의 결제 상태. 환불이 끝났으면 CANCELED"""
+    payment = cancel_result.get("payment") or {}
+    return payment.get("status")
+
+
 def seat_summary(api: Api, screening_id: int) -> Counter:
     snap = api.request("GET", f"/screenings/{screening_id}/seats")
     return Counter(s["status"] for s in snap.get("seats", []))
@@ -138,10 +147,18 @@ def run(api: Api, tokens: list[str], screening_ids: list[int], apply: bool, now:
             print(f"· {verb}: {line}", file=out)
             continue
         try:
-            api.request("POST", f"/bookings/{b.booking_id}/cancel", token)
-            print(f"✅ {verb}: {line}", file=out)
+            refund = refund_status(api.request("POST", f"/bookings/{b.booking_id}/cancel", token))
+            if refund != "CANCELED":
+                # 취소는 됐지만 환불 응답이 없다(payment 호출 실패를 booking이 삼킴) → 멱등 재시도 한 번
+                refund = refund_status(api.request("POST", f"/bookings/{b.booking_id}/cancel", token))
+            if refund == "CANCELED":
+                print(f"✅ {verb}: {line}", file=out)
+            else:
+                failed += 1
+                print(f"⚠️  취소됐지만 환불 미확인(결제 {refund or '응답 없음'}): {line}"
+                      f" — 나중에 같은 예매에 cancel을 다시 부른다(런북 1-4)", file=out)
         except ApiError as e:
-            if e.status == 409:   # 이미 다른 경로로 취소됨 — 목표 상태라 실패로 세지 않는다
+            if e.status == 409:   # CONFIRMED가 아님(그 사이 만료·결제 실패 등) — 취소할 게 없어 실패로 세지 않는다
                 print(f"· 이미 처리됨({e.code}): {line}", file=out)
             else:
                 failed += 1

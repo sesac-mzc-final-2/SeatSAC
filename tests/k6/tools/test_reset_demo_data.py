@@ -34,6 +34,7 @@ def booking(bid: int, starts_kst: str | None, sid: int = 7) -> dict:
 class FakeApi(BaseHTTPRequestHandler):
     pages: dict = {}        # token → [page0 content, page1 content, …]
     cancel_status: dict = {}
+    refund: dict = {}       # bookingId → 호출마다 돌려줄 payment.status 목록(없으면 CANCELED)
     posts: list = []
     seats: dict = {}
 
@@ -64,7 +65,16 @@ class FakeApi(BaseHTTPRequestHandler):
         assert self.headers.get("Idempotency-Key")
         FakeApi.posts.append(bid)
         status = FakeApi.cancel_status.get(bid, 200)
-        self._send(status, {"code": "BOOKING_STATE_CONFLICT"} if status == 409 else {"status": "CANCELED"})
+        if status == 409:
+            return self._send(409, {"code": "BOOKING_STATE_CONFLICT"})
+        if status != 200:
+            return self._send(status, {"code": "SERVICE_UNAVAILABLE"})
+        queue = FakeApi.refund.get(bid)
+        pay = queue.pop(0) if queue else "CANCELED"
+        body = {"bookingId": bid, "status": "CANCELED", "canceledAt": "2026-11-16T14:00:00+09:00"}
+        if pay is not None:
+            body["payment"] = {"paymentId": "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "status": pay}
+        self._send(200, body)
 
     def log_message(self, *args):
         pass
@@ -85,6 +95,7 @@ class ResetDemoDataTest(unittest.TestCase):
     def setUp(self):
         FakeApi.posts = []
         FakeApi.cancel_status = {}
+        FakeApi.refund = {}
         FakeApi.pages = {
             "tok-a": [[booking(1, "2026-11-16T15:00:00+09:00"), booking(2, "2026-11-16T10:00:00+09:00")],
                       [booking(3, "2026-11-16T14:00:30+09:00"), booking(4, None)]],
@@ -129,6 +140,20 @@ class ResetDemoDataTest(unittest.TestCase):
         self.assertIn("토큰 #1: 예매 목록 실패 401 UNAUTHORIZED — 토큰 만료", out)
         self.assertIn("취소 실패 503", out)
         self.assertNotIn("tok-", out)
+
+    def test_환불이_안_된_취소는_한_번_더_부른다(self):
+        FakeApi.refund = {1: ["APPROVED", "CANCELED"]}   # 첫 호출은 환불 실패(booking이 삼키고 200), 두 번째에 환불
+        rc, out = self.run_tool(["tok-a"], apply=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(FakeApi.posts, [1, 1])
+        self.assertIn("✅ 취소: 토큰 #1 예매 1 ", out)
+
+    def test_재시도해도_환불이_안_되면_경고하고_종료_코드_1(self):
+        FakeApi.refund = {5: ["APPROVED", None]}         # 두 번째는 payment 정보 없음
+        rc, out = self.run_tool(["tok-b"], apply=True)
+        self.assertEqual(rc, 1)
+        self.assertEqual(FakeApi.posts, [5, 5])
+        self.assertIn("환불 미확인(결제 응답 없음)", out)
 
     def test_회차_좌석_상태를_센다(self):
         _, out = self.run_tool([], apply=False, screenings=[7, 8])

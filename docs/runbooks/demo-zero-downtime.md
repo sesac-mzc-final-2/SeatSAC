@@ -84,6 +84,8 @@ python3 $T refresh && python3 $T tokens --min-valid-minutes 20 --out ~/.seatsac/
 | --- | --- |
 | `토큰 #N: 예매 목록 실패 401` | 토큰 만료(Access 60분) → 0)의 `refresh`·`tokens --out` 다시 |
 | `토큰 #N: 예매 목록 실패 503 BOOKING_UNAVAILABLE` | user → booking 내부 호출 실패. booking 파드·서킷 확인 후 다시 |
-| `취소 실패 503 SERVICE_UNAVAILABLE`·`PAYMENT…` | payment 환불 호출 실패 — 다시 실행하면 남은 것만 취소한다(이미 취소된 것은 409로 건너뜀) |
+| `취소 실패 503 SERVICE_UNAVAILABLE` | booking → **catalog** 회차 조회 실패(#77 — 회차 404·시작 시각 없음 포함). 다시 실행하면 남은 확정 예매만 취소한다 |
+| `⚠️ 취소됐지만 환불 미확인` | 취소는 커밋됐는데 환불(payment) 호출이 실패했다 — booking은 이 실패를 삼키고 200을 돌려준다. 도구가 한 번 더 불렀는데도 그렇다는 뜻. 그 예매는 이미 CANCELED라 다음 실행 목록에 안 나오므로 **같은 bookingId에 cancel을 직접 다시** 부른다(이미 취소된 예매의 cancel은 결제가 APPROVED면 환불을 다시 시도하는 멱등 경로): `curl -s -X POST "$API/bookings/{bookingId}/cancel" -H "Authorization: Bearer <그 계정 토큰>"` → 응답 `payment.status`가 `CANCELED`. 테스트 계정·모의 결제라 데모 데이터에는 영향이 없다 |
+| `· 이미 처리됨(BOOKING_STATE_CONFLICT)` | 목록을 읽은 뒤 그 예매가 CONFIRMED가 아니게 됐다(만료·결제 실패 등). 할 일 없음 |
 | `HELD`가 300초 뒤에도 남음 | 만료 스캔이 안 돈다 — booking 로그·`booking_hold_expiry_lag_seconds` 확인(6-F). 데모 회차는 다른 것으로 바꾼다 |
 | 데모 회차가 시작 60분 안으로 들어옴 | 마감(시작 5분 전)에 걸린다 → `pick_targets.py`로 다시 고른다 |

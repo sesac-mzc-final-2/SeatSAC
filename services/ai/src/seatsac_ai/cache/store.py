@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import struct
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -54,6 +55,9 @@ class CacheEntry:
 
 class Embedder(Protocol):
     def embed(self, text: str) -> list[float]: ...
+
+
+RETRY_SECONDS = 30  # 기동 때 연결 오류로 의미 캐시 인덱스를 못 만들었을 때 재시도 간격
 
 
 class SemanticIndex(Protocol):
@@ -105,10 +109,11 @@ class ValkeySearchIndex:
 
     async def add(self, doc_id, vector, kinds, entry, ttl) -> None:
         key = SEMCACHE_PREFIX + doc_id
-        await self._v.hset(
-            key, mapping={"embedding": _pack(vector), "kinds": kinds, "entry": entry}
-        )
-        await self._v.expire(key, ttl)
+        # 한 트랜잭션으로 — 사이에서 끊기면 TTL 없는 키가 noeviction Valkey에 남는다(#94 리뷰)
+        async with self._v.pipeline(transaction=True) as pipe:
+            pipe.hset(key, mapping={"embedding": _pack(vector), "kinds": kinds, "entry": entry})
+            pipe.expire(key, ttl)
+            await pipe.execute()
 
     async def nearest(self, vector, kinds):
         query = f"(@kinds:{{{kinds}}})=>[KNN 1 @embedding $vec AS score]"
@@ -171,16 +176,33 @@ class ChatCache:
         self.embedder = embedder
         self._index = index
         self.semantic_ready = False
+        self._retry_at: float | None = None  # 연결 오류로 못 만들었으면 다시 시도할 시각
 
     async def start(self) -> None:
-        """의미 캐시 준비(인덱스 만들기). 실패하면 정확 일치 캐시만 쓴다(계약 9-1 B1)."""
+        """의미 캐시 준비(인덱스 만들기). 실패하면 정확 일치 캐시만 쓴다(계약 9-1 B1).
+
+        모듈 없음·문법 오류(ResponseError)는 파드 수명 동안 끈다. 기동 순간의 연결 오류는
+        일시적이라 RETRY_SECONDS 뒤 다음 검색·저장 때 다시 시도한다(#94 리뷰 — ai는 1대 고정).
+        """
         if self.embedder is None or self._index is None:
             return
         try:
             await self._index.ensure()
             self.semantic_ready = True
-        except Exception as exc:  # 모듈 없음·권한·연결 — 어떤 이유든 의미 캐시만 끈다
-            log.warning("의미 캐시 인덱스를 만들지 못해 정확 일치 캐시만 쓴다: %s", exc)
+            self._retry_at = None
+        except ResponseError as exc:
+            log.warning("의미 캐시 인덱스를 만들 수 없어 정확 일치 캐시만 쓴다: %s", exc)
+            self._retry_at = None
+        except Exception as exc:  # 연결·타임아웃 — 잠시 뒤 다시
+            log.warning("의미 캐시 인덱스 준비 실패(%ss 뒤 재시도): %s", RETRY_SECONDS, exc)
+            self._retry_at = time.monotonic() + RETRY_SECONDS
+
+    async def semantic_available(self) -> bool:
+        """의미 캐시를 쓸 수 있나. 연결 오류로 꺼졌으면 RETRY_SECONDS가 지난 뒤 다시 만들어 본다."""
+        if not self.semantic_ready and self._retry_at is not None:
+            if time.monotonic() >= self._retry_at:
+                await self.start()
+        return self.semantic_ready and self._index is not None
 
     # --- 정확 일치 -------------------------------------------------------------
     async def get_exact(self, key_text: str) -> CacheEntry | None:
@@ -195,7 +217,7 @@ class ChatCache:
     async def nearest(
         self, vector: Sequence[float], kinds: Sequence[str]
     ) -> tuple[CacheEntry, float] | None:
-        if not self.semantic_ready or self._index is None:
+        if not await self.semantic_available():
             return None
         try:
             found = await self._index.nearest(vector, kinds_tag(kinds))
@@ -211,7 +233,7 @@ class ChatCache:
         payload = entry.to_json()
         try:
             await self._v.set(exact_key(key_text), payload, ex=self._ttl)
-            if vector is not None and self.semantic_ready and self._index is not None:
+            if vector is not None and await self.semantic_available():
                 if await self._index.count() < SEMCACHE_MAX:
                     doc_id = hashlib.sha256(key_text.encode()).hexdigest()[:24]
                     await self._index.add(

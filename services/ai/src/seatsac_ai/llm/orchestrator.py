@@ -143,6 +143,8 @@ class ChatService:
         if cache is not None and user_id is not None:
             sid, previous = await cache.load_session(user_id, session_id)
         follow_up = previous is not None and is_followup(question)
+        # 문맥(세션)이 없어도 "그중 …" 말투는 캐시를 보지도 저장하지도 않는다(#94 리뷰)
+        skip_cache = is_followup(question)
 
         usage = Usage()
         calls = 0
@@ -151,7 +153,7 @@ class ChatService:
         vector: list[float] | None = None
         try:
             # ③④⑤ 캐시
-            if cache is not None and not follow_up:
+            if cache is not None and not skip_cache:
                 ext = self._extract(question, now)
                 if ext.cacheable:
                     body, vector = await self._from_cache(cache, ext, system_params, deadline)
@@ -239,7 +241,9 @@ class ChatService:
         return extract(question, now, theaters, movies)
 
     async def _embed(self, cache: ChatCache, text: str) -> list[float] | None:
-        if not (cache.semantic_ready and self._s.semantic_cache_enabled and cache.embedder):
+        if not (self._s.semantic_cache_enabled and cache.embedder):
+            return None
+        if not await cache.semantic_available():  # 기동 때 연결 오류였으면 여기서 다시 시도
             return None
         try:
             return await asyncio.to_thread(cache.embedder.embed, text)
@@ -251,11 +255,12 @@ class ChatService:
         self, cache: ChatCache, ext: Extracted, system_params, deadline
     ) -> tuple[dict[str, Any] | None, list[float] | None]:
         entry = await cache.get_exact(ext.key_text)
+        if entry is not None and entry.kinds != ext.kinds:
+            entry = None  # 슬롯 종류가 다르면 버린다 — 지표도 놓친 것으로 센다(#94 리뷰)
         AI_CACHE_REQUESTS.labels("exact", "hit" if entry else "miss").inc()
         path = "CACHE_EXACT"
         vector = None
-        if entry is None or entry.kinds != ext.kinds:
-            entry = None
+        if entry is None:
             vector = await self._embed(cache, ext.template)
             if vector is not None:
                 found = await cache.nearest(vector, ext.kinds)

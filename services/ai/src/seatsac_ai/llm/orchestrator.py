@@ -34,7 +34,7 @@ from seatsac_ai import bookings as my_bookings
 from seatsac_ai.cache import template as tpl
 from seatsac_ai.cache.slots import Extracted, extract, is_followup, meaning_signature
 from seatsac_ai.cache.store import CacheEntry, ChatCache
-from seatsac_ai.common.errors import llm_unavailable, snapshot_not_ready
+from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
@@ -187,7 +187,8 @@ class ChatService:
         body["latencyMs"] = int((time.monotonic() - started) * 1000)
         self._record(question, body, usage)
         if cache is not None and user_id is not None and sid is not None:
-            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE"):
+            # MY_BOOKINGS도 저장하지 않는다 — SQL 없는 문맥이라 후속 질문에 못 쓴다(#96 리뷰)
+            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS"):
                 await cache.save_session(
                     user_id, sid, {"question": question, "sql": body["sql"], "path": body["path"]}
                 )
@@ -246,19 +247,22 @@ class ChatService:
 
     async def _my_bookings(self, authorization: str | None, now: datetime) -> dict[str, Any]:
         try:
-            items = await self._bookings.fetch(authorization)  # type: ignore[union-attr]
-        except Exception:
-            AI_CHAT.labels("my_bookings", "error").inc()
+            page = await self._bookings.fetch(authorization)  # type: ignore[union-attr]
+        except ApiError as exc:
+            # 공개 API 장애(503)만 오류로 센다. 토큰 없음·만료(401)는 사용자 쪽 문제(#96 리뷰)
+            if exc.status >= 500:
+                AI_CHAT.labels("my_bookings", "error").inc()
             raise
-        rows = my_bookings.to_rows(items)
+        rows = my_bookings.to_rows(page.items)
+        more = f" 최근 {len(rows)}건만 확인했습니다(전체 {page.total}건)." if page.truncated else ""
         as_of = now.isoformat(timespec="seconds")
         return {
-            "answer": f"{my_bookings.answer_text(rows, now)} ({_clock(as_of)} 기준)",
+            "answer": f"{my_bookings.answer_text(rows, now)}{more} ({_clock(as_of)} 기준)",
             "path": "MY_BOOKINGS",
             "columns": my_bookings.COLUMNS,
             "rows": rows,
             "rowCount": len(rows),
-            "truncated": False,
+            "truncated": page.truncated,
             "sql": None,
             "presetId": None,
             "asOf": as_of,

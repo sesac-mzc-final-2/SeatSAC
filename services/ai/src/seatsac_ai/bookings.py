@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -23,9 +24,11 @@ from seatsac_ai.snapshot.mapper import KST
 _TIMEOUT = httpx.Timeout(3.0, connect=1.0)  # 내부 REST 3초와 같은 기준
 _PAGE_SIZE = 20
 
+# '내/나의/제/나' 앞에 한글이 붙으면 다른 낱말이다("이제 예매할 수 있는" — #96 리뷰).
+# 주어 없는 "예매한 영화"·"예매 확인"은 일반 질문("사람들이 많이 예매한 영화")과 겹쳐 뺀다.
 _PERSONAL = re.compile(
-    r"내\s*예매|나의\s*예매|제\s*예매|내가\s*(예매|예약)|예매\s*(내역|목록|확인|한\s*(거|것|영화))"
-    r"|내\s*(티켓|예약)|예약\s*(내역|확인)"
+    r"(?<![가-힣])(?:내|나의|제)\s*(?:예매|예약|티켓)|(?<![가-힣])나\s*예매|내가\s*(?:예매|예약)"
+    r"|예매\s*(?:내역|목록)|예약\s*내역"
 )
 
 COLUMNS = [
@@ -38,6 +41,16 @@ COLUMNS = [
     {"name": "seat_labels", "type": "text"},
     {"name": "amount", "type": "integer"},
 ]
+
+
+@dataclass(frozen=True)
+class BookingPage:
+    items: list[dict[str, Any]]
+    total: int  # totalElements — items 보다 많으면 잘린 것(truncated)
+
+    @property
+    def truncated(self) -> bool:
+        return self.total > len(self.items)
 
 
 def is_personal(question: str) -> bool:
@@ -54,7 +67,7 @@ class MyBookingsClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def fetch(self, authorization: str | None) -> list[dict[str, Any]]:
+    async def fetch(self, authorization: str | None) -> BookingPage:
         if not authorization:
             raise unauthorized("TOKEN_REQUIRED")
         try:
@@ -70,12 +83,15 @@ class MyBookingsClient:
         if response.status_code != 200:
             raise upstream_unavailable("user")
         try:
-            content = response.json().get("content")
+            page = response.json()
+            content = page.get("content")
+            total = page.get("totalElements")
         except (ValueError, AttributeError) as exc:
             raise upstream_unavailable("user") from exc
         if not isinstance(content, list):
             raise upstream_unavailable("user")
-        return content
+        # 첫 페이지(createdAt 최신순 20건)만 읽는다. 더 있으면 truncated 로 알린다(#96 리뷰)
+        return BookingPage(content, total if isinstance(total, int) else len(content))
 
 
 def to_rows(bookings: list[dict[str, Any]]) -> list[list[Any]]:

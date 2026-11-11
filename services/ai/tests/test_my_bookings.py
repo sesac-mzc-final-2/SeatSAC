@@ -47,14 +47,15 @@ def booking(bid, status, starts_at, seats=("J7", "J8"), screening=True):
     }
 
 
-def bookings_api(content=None, status=200, seen=None):
+def bookings_api(content=None, status=200, seen=None, total=None):
     def handler(request: httpx.Request) -> httpx.Response:
         if seen is not None:
             seen.append(request)
         if status != 200:
             return httpx.Response(status, json={"code": "X"})
         return httpx.Response(200, json={"content": content or [], "page": 0, "size": 20,
-                                         "totalElements": len(content or []),
+                                         "totalElements": total if total is not None
+                                         else len(content or []),
                                          "totalPages": 1})  # fmt: skip
 
     return MyBookingsClient(
@@ -152,7 +153,44 @@ def test_personal_answers_are_never_cached():
 @pytest.mark.parametrize(
     ("question", "expected"),
     [("내 예매 보여줘", True), ("예매 내역 확인", True), ("내가 예매한 영화 뭐였지", True),
-     ("내 티켓", True), ("오늘 예매 가능한 영화", False), ("건대입구 상영표", False)],
+     ("내 티켓", True), ("오늘 예매 가능한 영화", False), ("건대입구 상영표", False),
+     # #96 리뷰: 일반 질문을 개인 질문으로 오판하지 않는다
+     ("이제 예매할 수 있는 영화 뭐 있어?", False), ("사람들이 많이 예매한 영화", False),
+     ("예매 확인 없이 볼 수 있는 영화", False), ("이번 주 예약 확인 가능한 극장", False),
+     ("제 예매 좀 봐주세요", True), ("나의 예약", True)],
 )  # fmt: skip
 def test_personal_question_detection(question, expected):
     assert is_personal(question) is expected
+
+
+def test_more_than_one_page_is_marked_truncated():
+    """#96 리뷰: 첫 페이지(20건)만 읽으므로 totalElements 가 더 크면 truncated 와 안내 문장."""
+    items = [booking(i, "CONFIRMED", "2026-11-20 10:00") for i in range(20)]
+    body = ask(make(bookings_api(items, total=25)))
+    assert body["truncated"] is True and body["rowCount"] == 20
+    assert "전체 25건" in body["answer"]
+    assert ask(make(bookings_api(items)))["truncated"] is False
+
+
+def test_my_bookings_is_not_kept_as_session_context():
+    """#96 리뷰: SQL 없는 MY_BOOKINGS 는 세션에 남기지 않는다(후속 질문 문맥으로 못 쓴다)."""
+    cache = ChatCache(fakeredis.FakeAsyncRedis(decode_responses=True), ttl=3600, session_ttl=1800,
+                      threshold=0.92, index=MemoryIndex())  # fmt: skip
+    service = make(bookings_api([]), cache=cache)
+    body = ask(service)
+    keys = asyncio.run(cache._v.keys("ai:session:*"))
+    assert body["path"] == "MY_BOOKINGS" and keys == []
+
+
+def test_expired_token_is_not_counted_as_an_error():
+    """#96 리뷰: 401(사용자 토큰 문제)은 ai_chat_total{my_bookings,error}로 세지 않는다."""
+    from seatsac_ai.common.metrics import AI_CHAT
+
+    errors = AI_CHAT.labels("my_bookings", "error")
+    before = errors._value.get()
+    with pytest.raises(ApiError):
+        ask(make(bookings_api(status=401)))
+    assert errors._value.get() == before
+    with pytest.raises(ApiError):
+        ask(make(bookings_api(status=500)))
+    assert errors._value.get() == before + 1

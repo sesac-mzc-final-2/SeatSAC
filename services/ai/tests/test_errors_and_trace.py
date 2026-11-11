@@ -1,5 +1,7 @@
 import re
 
+import pytest
+
 from seatsac_ai.common.errors import ErrorCode, quota_exceeded
 from seatsac_ai.common.trace import TRACE_ID_PATTERN
 
@@ -37,6 +39,23 @@ def test_validation_error_is_400_without_echoing_input(client, user_headers):
 def test_empty_message_is_400(client, user_headers):
     r = client.post("/ai/chat", json={"message": ""}, headers=user_headers)
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("body", "field", "reason"),
+    [
+        ({"message": "   "}, "message", "LENGTH"),  # 공백만 — 한도·Claude 전에 막는다
+        ({"message": ""}, "message", "LENGTH"),
+        ({"message": "x" * 301}, "message", "LENGTH"),
+        ({}, "message", "LENGTH"),  # message 없음
+        ({"message": "a", "sessionId": "zz"}, "sessionId", "FORMAT"),
+    ],
+)
+def test_chat_400_reasons_follow_the_contract(client, user_headers, body, field, reason):
+    """#93 리뷰: 계약의 details[].reason 은 LENGTH·FORMAT(pydantic 오류 종류가 아니다)."""
+    r = client.post("/ai/chat", json=body, headers=user_headers)
+    assert r.status_code == 400
+    assert r.json()["details"] == [{"field": field, "reason": reason}]
 
 
 def test_missing_user_header_is_401_token_required(client):

@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from seatsac_ai.api.deps import current_user_id
 from seatsac_ai.common.errors import llm_unavailable, snapshot_not_ready
@@ -24,6 +24,14 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=300)
     sessionId: UUID | None = None
+
+    @field_validator("message")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        # 계약: 공백만인 질문도 400(LENGTH). 한도·Claude 호출 전에 막는다(#93 리뷰)
+        if not v.strip():
+            raise ValueError("blank")
+        return v
 
 
 @router.post("/chat")

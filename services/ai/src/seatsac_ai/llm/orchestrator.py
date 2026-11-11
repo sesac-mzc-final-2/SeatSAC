@@ -63,6 +63,8 @@ _REJECTION_MESSAGE = {
     "SQL_ERROR": "SQL 실행에 실패했습니다.",
     "TIMEOUT": "조회가 너무 오래 걸려 중단했습니다.",
 }
+# 사유는 계약대로 PARSE_ERROR지만 SQL은 해석했다. 화면 안내만 실제 원인으로(#93 리뷰)
+_MISSING_STARTED_FILTER = "이미 시작한 회차를 빼는 조건이 없어 답하지 않았습니다."
 _SLOT_FORMAT = {
     "time": re.compile(r"^([01]\d|2[0-3]):[0-5]\d$"),
     "date": re.compile(r"^\d{4}-\d{2}-\d{2}$"),
@@ -146,8 +148,14 @@ class ChatService:
             raise snapshot_not_ready() from exc
 
         if body is None:  # 재요청을 다 쓰고도 실패
-            reason = (last_rejection or {}).get("reason", "PARSE_ERROR")
-            body = _rejected(reason, (last_rejection or {}).get("object"), last_sql, self._as_of())
+            last = last_rejection or {}
+            body = _rejected(
+                last.get("reason", "PARSE_ERROR"),
+                last.get("object"),
+                last_sql,
+                self._as_of(),
+                message=last.get("message"),
+            )
 
         body["llm"] = {
             "calls": calls,
@@ -196,7 +204,7 @@ class ChatService:
             raise _Retry(
                 f"screening 을 조회할 때는 s.starts_at > '{now}' 조건을 붙인다"
                 "(이미 시작한 회차 제외)",
-                {"reason": PARSE_ERROR},
+                {"reason": PARSE_ERROR, "message": _MISSING_STARTED_FILTER},
             )
         timeout = min(self._s.sql_timeout_seconds, deadline - time.monotonic())
         if timeout <= 0:
@@ -286,8 +294,11 @@ class ChatService:
                     "presetId": body["presetId"],
                     "latencyMs": body["latencyMs"],
                     "llmCalls": body["llm"]["calls"],
-                    "tokens": {"input": usage.input, "output": usage.output,
-                               "cacheRead": usage.cache_read},
+                    "tokens": {
+                        "input": usage.input,
+                        "output": usage.output,
+                        "cacheRead": usage.cache_read,
+                    },
                     "questionLength": len(question),
                     "questionHash": digest,
                     "sqlTemplate": sql_template(body["sql"]) if body["sql"] else None,
@@ -296,7 +307,6 @@ class ChatService:
                 }
             },
         )
-
 
 
 def _feedback(call: ToolCall, message: str) -> list[dict[str, Any]]:
@@ -343,12 +353,14 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
     }
 
 
-def _rejected(reason: str, obj: str | None, sql: str | None, as_of: str) -> dict[str, Any]:
+def _rejected(
+    reason: str, obj: str | None, sql: str | None, as_of: str, *, message: str | None = None
+) -> dict[str, Any]:
     body = _empty("REJECTED", REJECTED_ANSWER, as_of)
     body["sql"] = sql
     body["rejection"] = {
         "reason": reason,
-        "message": _REJECTION_MESSAGE.get(reason, "SQL을 실행할 수 없습니다."),
+        "message": message or _REJECTION_MESSAGE.get(reason, "SQL을 실행할 수 없습니다."),
         "object": obj,
     }
     return body

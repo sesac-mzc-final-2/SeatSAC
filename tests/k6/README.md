@@ -71,6 +71,8 @@ eval "$(python3 tests/k6/tools/pick_targets.py --base-url "https://{배포ID}.cl
 
 `deploy`는 확정한 예매를 **바로 취소해 좌석을 반납**하므로 한 번 돌리는 동안에는 좌석이 계속 돌아간다(그렇게 하지 않으면 `SEATS_PER_VU`번 반복한 뒤 선점이 전부 409가 되고 결제 경로가 돌지 않는다). 다만 중간에 끊으면 확정된 예매가 남을 수 있으니 다시 돌리기 전에 `hold_conflict_rate`를 보고, 높으면 `SEAT_ID_FROM`을 옮긴다.
 
+남은 확정 예매를 치우거나 회차가 깨끗한지 보려면 `tools/reset_demo_data.py`(공개 API로 시작 전 확정 예매 취소 · 회차 좌석 상태 수, 기본은 미리보기)를 쓴다 — 절차는 `docs/runbooks/demo-zero-downtime.md` 1장.
+
 ## 클러스터에서 돌리기 (4.2.1 — 런북 6-H)
 
 관리자(`cinema-admin`)가 레포 루트에서 돌린다. 결과 로그는 `~/.seatsac/k6-results/{실행 ID}.log`(레포 밖).

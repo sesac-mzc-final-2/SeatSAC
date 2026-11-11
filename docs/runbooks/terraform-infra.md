@@ -1250,6 +1250,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 
 ```bash
 export AWS_PROFILE=cinema-admin
+infra/scripts/cluster-scale.sh status ng-ai     # desired를 적어 둔다 — 이미 1이면 다른 확인이 쓰는 중이니 마지막 down을 하지 않는다
 infra/scripts/cluster-scale.sh up ng-ai
 kubectl -n cinema-staging rollout status deployment/ai --timeout=10m
 kubectl -n cinema-staging exec -i deploy/ai -- python - <<'PY'
@@ -1295,44 +1296,61 @@ def vec(i):
 print("PING", cmd("PING"))
 try: print([l for l in cmd("INFO", "server").splitlines() if l.startswith(("valkey_version", "redis_version"))])
 except RuntimeError as exc: print("INFO 실패(확인과 무관):", exc)
-try: cmd("FT.DROPINDEX", IDX)          # 지난번 확인이 중간에 끊겼을 때
+try:                                   # 지난번 확인이 중간에 끊겼을 때 남은 것
+    for i in range(3):
+        cmd("DEL", f"{PFX}{i}")
+    cmd("FT.DROPINDEX", IDX)
 except (RuntimeError, OSError): pass
-ok = False
+result, unsupported = "unknown", False
 try:
     # #94 cache/store.py ValkeySearchIndex.ensure()와 같은 모양
-    print("FT.CREATE", cmd("FT.CREATE", IDX, "ON", "HASH", "PREFIX", "1", PFX,
-                           "SCHEMA", "kinds", "TAG",
-                           "embedding", "VECTOR", "HNSW", "6",
-                           "TYPE", "FLOAT32", "DIM", DIM, "DISTANCE_METRIC", "COSINE"))
+    try:
+        print("FT.CREATE", cmd("FT.CREATE", IDX, "ON", "HASH", "PREFIX", "1", PFX,
+                               "SCHEMA", "kinds", "TAG",
+                               "embedding", "VECTOR", "HNSW", "6",
+                               "TYPE", "FLOAT32", "DIM", DIM, "DISTANCE_METRIC", "COSINE"))
+    except RuntimeError as exc:
+        unsupported = "unknown command" in str(exc).lower()   # 명령 자체가 없다 = 미지원 확정
+        raise
     for i, kinds in ((0, "time"), (1, "time"), (2, "date")):
         key = f"{PFX}{i}"
+        # HSET·EXPIRE를 한 트랜잭션으로 — 사이에 끊겨도 TTL 없는 ai:* 키가 남지 않는다(noeviction)
+        cmd("MULTI")
         cmd("HSET", key, "embedding", vec(i), "kinds", kinds, "entry", f"e{i}")
         cmd("EXPIRE", key, 120)
+        cmd("EXEC")
     time.sleep(1)                      # 인덱스 반영 대기
     # #94 nearest()와 같은 모양: 슬롯 종류 TAG로 거른 뒤 KNN 1
     reply = cmd("FT.SEARCH", IDX, "(@kinds:{time})=>[KNN 1 @embedding $vec AS score]",
                 "PARAMS", "2", "vec", vec(1), "RETURN", "2", "score", "entry", "DIALECT", "2")
     print("FT.SEARCH", reply)          # 기대: [1, 'ai:semcheck:1', ['score', '0', 'entry', 'e1']] (필드 순서는 다를 수 있다)
-    ok = bool(reply) and reply[0] == 1 and "e1" in reply[2]
+    result = "ok" if bool(reply) and reply[0] == 1 and "e1" in reply[2] else "unknown"
 except (RuntimeError, OSError) as exc:
     print("오류:", exc)
+    if unsupported:
+        result = "unsupported"
 finally:
-    try:                               # 연결이 끊겼으면 키는 TTL 120초로 사라지고, 인덱스는 다음 실행 첫머리에서 지운다
+    try:                               # 연결이 끊겼으면 키는 TTL 120초로 사라지고, 남은 것은 다음 실행 첫머리에서 지운다
         for i in range(3):
             cmd("DEL", f"{PFX}{i}")
         cmd("FT.DROPINDEX", IDX)
     except (RuntimeError, OSError):
         pass
-print("✅ 벡터 검색 동작 — 의미 캐시 사용 가능" if ok else "❌ 벡터 검색 불가 — 정확 일치 캐시만(B1)")
+print({
+    "ok": "✅ 벡터 검색 동작 — 의미 캐시 사용 가능",
+    "unsupported": "❌ 벡터 검색 미지원(FT.CREATE 없음) — 정확 일치 캐시만(B1)",
+    "unknown": "⚠️ 판정 못 함(연결·OOM·0건 등) — 위 출력을 보고 아래 표대로 다시 확인",
+}[result])
 PY
+# 처음 status에서 desired가 0이었고, 스크럼에 공유된 다른 ai 확인이 지금 없을 때만 끈다
 infra/scripts/cluster-scale.sh down ng-ai
 ```
 
 | 결과 | 뜻 · 다음 일 |
 | --- | --- |
 | `✅` (`FT.SEARCH`가 1건, `e1`) | 의미 캐시 사용 가능. #94 PR에 결과 한 줄(Valkey 버전·시각) 남기기 |
-| `ERR unknown command 'FT.CREATE'` | 이 클러스터에 valkey-search가 없다 → 앱은 정확 일치 캐시만 쓴다. 2차 데모 시나리오에서 「의미 캐시 적중」을 빼거나, ai Valkey 엔진·노드 종류 변경을 검토(Terraform — M6 금지, rc2 뒤 결정). 김서현에게 공유 |
-| `FT.CREATE` OK인데 `FT.SEARCH` 0건 | 인덱스 반영이 늦었을 수 있다 → 스크립트를 한 번 더. 그래도 0건이면 질의 문법(TAG·KNN) 차이 → 출력 그대로 #94에 남기기 |
+| `❌ 미지원` (`ERR unknown command 'FT.CREATE'`) | 이 클러스터에 valkey-search가 없다 → 앱은 정확 일치 캐시만 쓴다. 2차 데모 시나리오에서 「의미 캐시 적중」을 빼거나, ai Valkey 엔진·노드 종류 변경을 검토(Terraform — M6 금지, rc2 뒤 결정). 김서현에게 공유 |
+| `⚠️ 판정 못 함` — `FT.CREATE` OK인데 `FT.SEARCH` 0건 | 인덱스 반영이 늦었을 수 있다 → 스크립트를 한 번 더. 그래도 0건이면 질의 문법(TAG·KNN) 차이 → 출력 그대로 #94에 남기기 |
 | `KeyError: 'AI_VALKEY_HOST'` | ai 파드에 `cinema-infra-endpoints`가 안 들어갔다 → 6-G-1 3단계 |
 | 연결 시간 초과 | ai Valkey 보안그룹(노드 SG → 6379)에 `ng-ai` 노드가 빠졌다 → `ai_valkey.tf` 인바운드 확인 |
 | `OOM command not allowed` | ai Valkey 메모리가 찼다(`noeviction`) → 메모리 경보·`INFO memory` 확인 |

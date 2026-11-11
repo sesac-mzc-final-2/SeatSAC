@@ -29,6 +29,9 @@
   color: var(--color-text);
   border: 1px solid var(--color-border-strong);
 }
+.spacer {
+  display: none;
+}
 .busy {
   position: absolute;
   top: 2px;
@@ -50,6 +53,11 @@
   }
   .label {
     display: none;
+  }
+  /* 버튼(52px) + 아래 간격(16px) */
+  .spacer {
+    display: block;
+    height: 68px;
   }
   /* 아래에서 올라오는 창이 열리면 버튼은 창 머리글의 닫기로 대신한다 */
   .launcher[data-open] {

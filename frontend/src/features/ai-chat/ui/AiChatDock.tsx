@@ -60,6 +60,8 @@ export function AiChatDock() {
         </span>
         {chat.isPending && !open && <span className={styles.busy} aria-hidden="true" />}
       </button>
+      {/* 휴대폰에서 페이지 맨 아래(푸터·마지막 버튼)가 떠 있는 버튼에 가리지 않게 그만큼 자리를 둔다 */}
+      <div className={styles.spacer} aria-hidden="true" />
     </>
   );
 }

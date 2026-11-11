@@ -1324,7 +1324,11 @@ try:
     reply = cmd("FT.SEARCH", IDX, "(@kinds:{time})=>[KNN 1 @embedding $vec AS score]",
                 "PARAMS", "2", "vec", vec(1), "RETURN", "2", "score", "entry", "DIALECT", "2")
     print("FT.SEARCH", reply)          # 기대: [1, 'ai:semcheck:1', ['score', '0', 'entry', 'e1']] (필드 순서는 다를 수 있다)
-    result = "ok" if bool(reply) and reply[0] == 1 and "e1" in reply[2] else "unknown"
+    # 1건 · 그 문서가 e1 · score(COSINE 거리)가 0에 가까움 — 같은 벡터를 넣었으므로 거리 0이어야 한다
+    fields = dict(zip(reply[2][::2], reply[2][1::2])) if reply and reply[0] == 1 and len(reply) > 2 else {}
+    try: score = float(fields.get("score", "nan"))
+    except (TypeError, ValueError): score = float("nan")
+    result = "ok" if fields.get("entry") == "e1" and abs(score) < 1e-3 else "unknown"
 except (RuntimeError, OSError) as exc:
     print("오류:", exc)
     if unsupported:
@@ -1351,9 +1355,9 @@ PY
 
 | 결과 | 뜻 · 다음 일 |
 | --- | --- |
-| `✅` (`FT.SEARCH`가 1건, `e1`) | 의미 캐시 사용 가능. #94 PR에 결과 한 줄(Valkey 버전·시각) 남기기 |
+| `✅` (`FT.SEARCH`가 1건, `entry e1`, `score` ≈ 0) | 의미 캐시 사용 가능. #94 PR에 결과 한 줄(Valkey 버전·시각) 남기기 |
 | `❌ 미지원` (`ERR unknown command 'FT.CREATE'`) | 이 클러스터에 valkey-search가 없다 → 앱은 정확 일치 캐시만 쓴다. 2차 데모 시나리오에서 「의미 캐시 적중」을 빼거나, ai Valkey 엔진·노드 종류 변경을 검토(Terraform — M6 금지, rc2 뒤 결정). 김서현에게 공유 |
-| `⚠️ 판정 못 함` — `FT.CREATE` OK인데 `FT.SEARCH` 0건 | 인덱스 반영이 늦었을 수 있다 → 스크립트를 한 번 더. 그래도 0건이면 질의 문법(TAG·KNN) 차이 → 출력 그대로 #94에 남기기 |
+| `⚠️ 판정 못 함` — `FT.CREATE` OK인데 `FT.SEARCH` 0건이거나 `score`가 0이 아님 | 인덱스 반영이 늦었을 수 있다 → 스크립트를 한 번 더. 그래도 0건이면 질의 문법(TAG·KNN) 차이 → 출력 그대로 #94에 남기기 |
 | `KeyError: 'AI_VALKEY_HOST'` | ai 파드에 `cinema-infra-endpoints`가 안 들어갔다 → 6-G-1 3단계 |
 | 연결 시간 초과 | ai Valkey 보안그룹(노드 SG → 6379)에 `ng-ai` 노드가 빠졌다 → `ai_valkey.tf` 인바운드 확인 |
 | `OOM command not allowed` | ai Valkey 메모리가 찼다(`noeviction`) → 메모리 경보·`INFO memory` 확인 |

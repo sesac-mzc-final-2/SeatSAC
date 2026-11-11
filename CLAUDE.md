@@ -720,7 +720,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 | 테이블 | 컬럼 | 출처(공개 API) | 갱신 |
 | --- | --- | --- | --- |
-| `movie` | `movie_id` PK, `title`, `title_en`, `view_grade`, `slot_minutes`, `release_date`, `director`, `genres`(쉼표), `synopsis` | `GET /movies?status=NOW_SHOWING`을 `page=0`부터 `totalPages - 1`까지 모두 조회한 뒤 목록의 각 영화에 `GET /movies/{id}` 호출 | 10분 |
+| `movie` | `movie_id` PK, `title`, `title_en`, `view_grade`, `slot_minutes`, `runtime_minutes`, `release_date`, `director`, `genres`(쉼표), `synopsis` | `GET /movies?status=NOW_SHOWING`을 `page=0`부터 `totalPages - 1`까지 모두 조회한 뒤 목록의 각 영화에 `GET /movies/{id}` 호출 | 10분 |
 | `theater` | `theater_id` PK, `name`, `region`, `has_layout` | `GET /theaters?hasLayout=true` | 10분 |
 | `screening` | `screening_id` PK, `movie_id`, `theater_id`, `auditorium_id`, `auditorium_name`, `screen_type`, `business_date`(`YYYY-MM-DD`), `starts_at`·`ends_at`(KST `YYYY-MM-DD HH:MM`), `start_hour`(0~23), `film_format`, `total_seats`, `remaining_seats`, `remaining_seats_source`, `fetched_at` | `GET /screenings?date&theaterId` (극장 4곳 × 오늘~+6일) | **오늘 1분**, 나머지 10분 |
 | `snapshot_meta` | `table_name`, `scope`, `refreshed_at` | — | 적재마다 |

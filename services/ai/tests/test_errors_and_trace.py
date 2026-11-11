@@ -103,16 +103,34 @@ def test_presets_lists_twelve_buttons(client, user_headers):
     assert all("{movie}" not in e for e in examples.values())
 
 
-def test_presets_fill_movie_example_from_the_snapshot(client, user_headers):
+def _presets_with_snapshot(client, user_headers, now: str) -> dict[str, str]:
+    from datetime import datetime
     from types import SimpleNamespace
 
-    from .sql_fixtures import MOVIES, loaded_store
+    from seatsac_ai.snapshot.mapper import KST
 
-    client.app.state.snapshot = SimpleNamespace(store=loaded_store())
+    from .sql_fixtures import loaded_store
+
+    fixed = datetime.strptime(now, "%Y-%m-%d %H:%M").replace(tzinfo=KST)
+    client.app.state.snapshot = SimpleNamespace(store=loaded_store(clock=lambda: fixed))
     try:
         items = client.get("/ai/presets", headers=user_headers).json()["items"]
     finally:
         client.app.state.snapshot = None
-    example = next(i["example"] for i in items if i["presetId"] == "movie_theaters")
-    titles = {m[1] for m in MOVIES} | {"영화 제목"}  # 픽스처 회차가 모두 지났으면 "영화 제목"
-    assert example in {f"{t} 어디서 몇 시에 해?" for t in titles}
+    return {i["presetId"]: i["example"] for i in items}
+
+
+def test_presets_fill_movie_example_from_the_snapshot(client, user_headers):
+    """#92 리뷰: 실제 시계가 아니라 스토어 시계로 — NOW(11/17 19:40) 기준 정확한 영화."""
+    from .sql_fixtures import NOW
+
+    examples = _presets_with_snapshot(client, user_headers, NOW)
+    assert len(examples) == 12
+    assert examples["movie_theaters"] == "철의 심장 어디서 몇 시에 해?"  # 이후 회차 3건으로 최다
+
+
+def test_presets_drop_movie_buttons_when_no_screening_is_left(client, user_headers):
+    """스냅샷은 준비됐는데 이후 회차가 없으면 '영화 제목' 버튼을 내보내지 않는다(#92 리뷰)."""
+    examples = _presets_with_snapshot(client, user_headers, "2027-01-01 00:00")
+    assert len(examples) == 9
+    assert {"movie_theaters", "movie_next_screening", "movie_runtime"}.isdisjoint(examples)

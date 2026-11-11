@@ -90,6 +90,11 @@ def test_showing_movie_falls_back_when_the_query_is_interrupted():
         def is_ready(self):
             return True
 
+        def now(self):
+            from datetime import datetime
+
+            return datetime(2026, 11, 17, 19, 40)
+
         @contextmanager
         def reader(self):
             yield Conn()
@@ -97,4 +102,4 @@ def test_showing_movie_falls_back_when_the_query_is_interrupted():
     request = SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(snapshot=SimpleNamespace(store=Store())))
     )
-    assert showing_movie(request) is None
+    assert showing_movie(request).ready is False

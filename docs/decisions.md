@@ -29,7 +29,7 @@
 | 57 | DB 마이그레이션은 ArgoCD **Flyway 훅 Job**(`{svc}_migrator`, Sync 단계 wave -1 — ConfigMap 다음·앱 전, 실패 시 sync 중단), 앱은 Flyway 끔. 스키마·계정·Secret은 Terraform(`envs/staging-k8s`)이 클러스터 안 Job으로 생성(3.1.12) | 처음 "PreSync"였으나 첫 배포 때 ConfigMap보다 먼저 돌아 Sync wave -1로 변경(10/23) |
 | 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함, ⚠️AI 재도입 후에도 유지 — 84) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)` · `pg_provider`는 `MOCK`만 | |
 | 4 | 좌석 이벤트: Valkey Pub/Sub `seat-events:{회차}` → SSE, 놓치면 BKG-01 스냅샷 | 유실 허용 |
-| 5 | 선점: Valkey `SET NX EX 300`(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
+| 5 | 선점: Valkey `SET NX EX {선점 TTL}`(`APP_SEAT_HOLD_TTL_SECONDS`, 기본 300초, 30~600)(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
 | 11 | 한 번에 최대 4석 | |
 | 19 | 멱등: `Idempotency-Key` + Valkey `idem:{userId}:{키}` 24시간 + 유일 제약(`booking_seat`, `current_payment_id`) | |
 | 22 | 내부 브로커 없음: Pub/Sub + keyspace 알림 + sorted set | 만료 반영 2초 초과 시 재검토 |
@@ -72,5 +72,5 @@
 | 63 | 화면 토큰 저장은 **메모리**(`InMemoryWebStorage`), localStorage 금지. 새로고침은 Cognito 세션으로 재발급 | |
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |
-| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** ai 코드 동결(이후 `fix/`만), M6 테스트 뒤 플래그 켜기 · **데모 주간** ai `fix/`도 금지(64 그대로) | 64 보완 |
+| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), **테스트 준비 예외(11/10 일정 변경)** `tests/k6/**`·`docs/**`·gitops `base/*/networkpolicy.yaml` 테스트 Job 허용 규칙 추가는 M6에도 머지(조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 테스트 실행 중이 아닐 때), 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** ai 코드 동결(이후 `fix/`만), M6 테스트 뒤 플래그 켜기 · **데모 주간** ai `fix/`도 금지(64 그대로) | 64 보완 |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |

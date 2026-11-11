@@ -122,7 +122,12 @@ def llm_unavailable(
         503,
         ErrorCode.AI_LLM_UNAVAILABLE,
         "LLM provider unavailable",
-        [ErrorDetail(field="provider", value="anthropic", reason=reason)],
+        [
+            # 계약: 한도 저장소 장애는 quotaStore/ai-valkey — Claude 문제가 아니다(#93 리뷰)
+            ErrorDetail(field="quotaStore", value="ai-valkey", reason=reason)
+            if reason == "QUOTA_STORE_UNAVAILABLE"
+            else ErrorDetail(field="provider", value="anthropic", reason=reason)
+        ],
     )
 
 
@@ -149,6 +154,10 @@ _HTTP_STATUS_CODE = {
 }
 
 
+# 계약(ai.openapi.yaml POST /ai/chat 400)의 필드별 사유. 그 밖은 pydantic 오류 종류를 그대로 쓴다
+_FIELD_REASON = {"message": "LENGTH", "sessionId": "FORMAT"}
+
+
 def _validation_details(exc: RequestValidationError) -> list[ErrorDetail]:
     """Java GlobalExceptionHandler와 같게: 필드 이름 + 사유만. 사용자 입력값은 담지 않는다."""
     details = []
@@ -160,7 +169,8 @@ def _validation_details(exc: RequestValidationError) -> list[ErrorDetail]:
         path = ".".join(str(p) for p in err["loc"] if p not in ("body", "query", "path", "header"))
         if not path and err["type"] == "missing":
             return [ErrorDetail(reason="MALFORMED_BODY")]  # 본문 자체가 없음
-        details.append(ErrorDetail(field=path or None, reason=str(err["type"]).upper()))
+        reason = _FIELD_REASON.get(path) or str(err["type"]).upper()
+        details.append(ErrorDetail(field=path or None, reason=reason))
     return details
 
 

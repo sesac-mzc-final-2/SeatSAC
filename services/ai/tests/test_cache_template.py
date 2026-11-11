@@ -91,3 +91,26 @@ def test_render_fills_values_for_display():
 
 def test_system_params_cover_three_days_ahead():
     assert system_params(TODAY, NOW_TEXT)["d3"] == "2026-11-20"
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "s.starts_at > '2026-11-17 19:40:00'",  # 초가 붙은 '지금'
+        "s.starts_at > '2026-11-17T19:40'",  # T로 이은 '지금'
+        "s.business_date LIKE '2026-11-17%'",  # 날짜 + %
+        "substr(s.starts_at, 12, 5) > '19:40'",  # '지금'을 시각만으로
+    ],
+)
+def test_frozen_date_or_now_in_other_forms_is_not_cacheable(literal):
+    """#94 리뷰: 위 두 형식이 아닌 날짜·'지금'을 굳혀 캐시하면 TTL 안에 지난 값으로 실행된다."""
+    sql = f"SELECT title FROM screening s WHERE {literal}"
+    with pytest.raises(TemplateError):
+        make_template(sql, ex("오늘 남은 영화"), TODAY, NOW_TEXT)
+
+
+def test_time_slot_equal_to_now_is_still_the_slot():
+    """질문의 시각이 마침 지금과 같으면(19:40 이후) 슬롯으로 본다."""
+    sql = "SELECT title FROM screening s WHERE substr(s.starts_at, 12, 5) >= '19:40'"
+    t = make_template(sql, ex("19시 40분 이후 영화"), TODAY, NOW_TEXT)
+    assert ":time" in t.sql

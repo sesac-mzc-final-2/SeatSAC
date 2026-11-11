@@ -192,6 +192,8 @@ def test_screening_sql_without_started_filter_is_rejected_when_calls_run_out():
     bad = tool("run_sql", sql=no_filter, explanation="x")
     body = ask(ScriptedLlm(bad, bad, bad))
     assert body["path"] == "REJECTED" and body["rejection"]["reason"] == "PARSE_ERROR"
+    # 사유는 계약대로 PARSE_ERROR, 안내 문장은 실제 원인(#93 리뷰)
+    assert body["rejection"]["message"] == "이미 시작한 회차를 빼는 조건이 없어 답하지 않았습니다."
 
 
 def test_sql_without_screening_does_not_need_started_filter():

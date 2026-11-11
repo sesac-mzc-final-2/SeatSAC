@@ -13,6 +13,7 @@
   - 날짜: 슬롯 date와 같으면    → :date
           오늘+k일(질문에 "오늘·내일·모레"가 있거나 k=0) → :today · :d1 · :d2 · :d3
           그 밖의 날짜          → 템플릿 실패(캐시 안 함)
+  - 위 두 형식이 아닌 날짜가 든 문자열('…:00'·'…T…'·'2026-11-17%')·지금 시각 'HH:MM' → 템플릿 실패
                                    — "이번 주말"처럼 뜻을 모르는 날짜를 굳혀 두지 않게
   - 'YYYY-MM-DD HH:MM'         → (날짜 || ' ' || 시각) 으로 나눠 위 규칙
   - 슬롯 time·theater·movie와 같은 값 → :time · :theater · :movie ('%건대%' 처럼 일부여도)
@@ -38,6 +39,7 @@ from seatsac_ai.cache.slots import Extracted
 
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATETIME = re.compile(r"^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$")
+_HAS_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _HANGUL = re.compile(r"[가-힣]")
 MAX_OFFSET = 3  # :d1 ~ :d3 (오늘 = :today)
 
@@ -114,6 +116,13 @@ def make_template(sql: str, ext: Extracted, today: date, now_text: str) -> SqlTe
                     expression=time_expr(dt.group(2)),
                 )
                 return exp.Paren(this=joined)
+            if _HAS_DATE.search(text):
+                # '…23:40:00'·'…T23:40'·'2026-11-17%'처럼 위 두 형식이 아닌 날짜는 출처를 설명할 수
+                # 없다. 굳혀 두면 TTL 안에 '지금'·'오늘'이 지난 값으로 실행된다(#94 리뷰)
+                raise TemplateError(f"설명할 수 없는 날짜 형식 {text}")
+            if text == now_text[11:] and values.get("time") != text:
+                # substr(starts_at, 12, 5) > '23:40' 처럼 '지금'을 시각만으로 비교한 경우
+                raise TemplateError(f"지금 시각을 굳힌 값 {text}")
             for kind in ("time", "theater", "movie"):
                 slot = ext.slots.get(kind)
                 if slot is None:

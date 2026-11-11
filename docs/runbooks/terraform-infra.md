@@ -1373,7 +1373,7 @@ PY
 | 사용자당 진행 중 선점 1건 | `run-in-cluster.sh user-hold` | 체크 5개 전부 ✓ |
 | 다른 화면 반영 1초 이내 | `tools/sse_lag.py`(CloudFront 경유, 화면과 같은 경로) + `deploy` 부하 | 이벤트 지연 p95 ≤ 1초, 하트비트 15초 간격 |
 | 만료 반영 2초 | Prometheus `booking_hold_expiry_lag_seconds` (contention 승자의 선점이 300초 뒤 만료) | p95 < 2초 |
-| (참고) 커넥션 풀 | `hikaricp_connections_pending{application="booking"}` | 0 — 0이 아니면 풀 5 → 10 검토(남궁일) |
+| (참고) 커넥션 풀 | `hikaricp_connections_acquire_seconds_max{application="booking"}` (커넥션 얻기까지 기다린 최대 시간) | 0.1초 미만 — 크면 풀 대기가 지연의 원인(11/11: 풀 5에서 0.547초 → booking 15) |
 
 **GitOps 예외**: 이 테스트는 관리자(`cinema-admin`)가 `run-in-cluster.sh`로 **실행 중에만 있는** Job·ConfigMap(스크립트)·Secret(토큰)을 `cinema-staging`에 만들고 끝나면 지운다. 라벨 `app.kubernetes.io/name=k6-loadtest`로만 만들고 지우며, ArgoCD가 관리하는 리소스는 건드리지 않는다(추적 라벨이 없어 selfHeal·prune 대상이 아님). 스크립트는 Job을 먼저 만들고 ConfigMap·Secret은 처음부터 Job의 ownerReference를 달고 만든다 → 중간에 죽어도 Job TTL(15분) 뒤 같이 지워진다. 남았으면 `tests/k6/run-in-cluster.sh cleanup`
 
@@ -1440,7 +1440,7 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 | --- | --- | --- |
 | 만료 반영 | `histogram_quantile(0.95, sum by (le) (increase(booking_hold_expiry_lag_seconds_bucket[15m])))` | < 2 — **파드 기동 후 10분 안의 첫 스윕은 제외**(노드 0대 구간 뒤 밀린 만료가 한 번 크게 찍힌다, 런타임 계약 5장) |
 | 선점 결과 | `sum by (result) (increase(booking_seat_hold_total[10m]))` | contention 직후 success 1 · conflict 99 근처 |
-| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_pending{application="booking"}[15m])` | 0 |
+| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_acquire_seconds_max{application="booking"}[15m])` · 쿼리 1건 시간 `…usage_seconds_max` | acquire 0.1초 미만. `hikaricp_connections_pending`은 순간값이라 15초 수집 간격에서 1초짜리 경쟁을 놓친다 — `_max`(최근 최댓값)를 본다 |
 | 5xx | `sum(increase(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[15m])) by (application)` | 0 (ai 제외) |
 | CPU | `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cinema-staging",container!=""}[1m]))` | 리포트에 최대값 |
 

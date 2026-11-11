@@ -113,6 +113,7 @@ def seat_summary(api: Api, screening_id: int) -> Counter:
 
 def run(api: Api, tokens: list[str], screening_ids: list[int], apply: bool, now: datetime, out=sys.stdout) -> int:
     failed = 0
+    skipped = 0
     targets: list[tuple[Booking, str]] = []
     for no, token in enumerate(tokens, start=1):
         try:
@@ -126,7 +127,7 @@ def run(api: Api, tokens: list[str], screening_ids: list[int], apply: bool, now:
             if b.starts_at is None:
                 print(f"⚠️  토큰 #{no} 예매 {b.booking_id}: 회차 정보 없음(catalog 실패) — 건너뜀", file=out)
             elif b.starts_at <= now + START_MARGIN:
-                pass   # 이미 시작했거나 곧 시작 — 취소 불가(400), 지난 회차는 데모에 쓰지 않으므로 그대로 둔다
+                skipped += 1   # 이미 시작했거나 곧 시작 — 취소 불가(400), 지난 회차는 데모에 쓰지 않으므로 그대로 둔다
             else:
                 targets.append((b, token))
 
@@ -145,7 +146,8 @@ def run(api: Api, tokens: list[str], screening_ids: list[int], apply: bool, now:
             else:
                 failed += 1
                 print(f"❌ 취소 실패 {e.status} {e.code}: {line}", file=out)
-    print(f"확정 예매(시작 전) {len(targets)}건 {verb}" + ("" if apply else " — 실제로 취소하려면 --apply"), file=out)
+    print(f"확정 예매(시작 전) {len(targets)}건 {verb} · 건너뜀 {skipped}건(시작했거나 1분 안에 시작)"
+          + ("" if apply else " — 실제로 취소하려면 --apply"), file=out)
 
     for sid in screening_ids:
         try:

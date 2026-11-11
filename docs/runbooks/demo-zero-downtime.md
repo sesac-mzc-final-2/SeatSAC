@@ -29,7 +29,7 @@
 | 데모 당일 T-30분 | 1-3의 3·4(확인만). 정리할 게 나오면 1·2 |
 | 데모 뒤 | 1-3 전부 + k6 리소스 정리(6-H-4) |
 
-블루/그린 전환 중(`kubectl -n cinema-staging get rollout`이 Progressing·Paused)에는 하지 않는다 — 취소 요청이 preview·active로 나뉘어 결과 확인이 헷갈린다.
+블루/그린 전환 중(`kubectl -n cinema-staging get rollout`이 Progressing·Paused)에는 하지 않는다 — 요청은 active로만 가서 섞이지는 않지만, 전환 순간 일부가 503으로 실패할 수 있고 무중단 데모의 5xx 그래프에 섞인다. 끝난 뒤 실행한다(실패한 것은 다시 실행하면 남은 것만 취소된다).
 
 ### 1-3. 절차 (레포 루트, 노드 켜짐 시간)
 
@@ -44,7 +44,8 @@ python3 $T refresh && python3 $T tokens --min-valid-minutes 20 --out ~/.seatsac/
 
 1. **선점(PENDING)** — 사용자 API로는 목록을 볼 수 없다(`/users/me/bookings`는 PENDING 제외). 아는 bookingId는 해제하고, 나머지는 **300초 기다린다**(선점 TTL, 만료 스캔이 풀어 준다)
    ```bash
-   curl -s -X DELETE "$API/bookings/{bookingId}/hold" -H "Authorization: Bearer $(sed -n 1p ~/.seatsac/demo-tokens.txt)"   # 데모 대본에 적어 둔 bookingId
+   curl -s -X DELETE "$API/bookings/{bookingId}/hold" -H "Authorization: Bearer <그 선점을 잡은 계정의 토큰>"   # 데모 대본에 적어 둔 bookingId
+   #   선점 주인의 토큰이어야 한다(남이 잡은 선점은 403) — 5.1.2 장면 3은 A, 장면 4 만료용은 B
    ```
 2. **확정 예매(CONFIRMED)** — 시작 전 회차의 확정 예매를 취소(환불까지, BKG-07)한다. 먼저 미리보기로 무엇이 취소될지 보고, 맞으면 `--apply`
    ```bash

@@ -109,6 +109,7 @@ class ResetDemoDataTest(unittest.TestCase):
         self.assertNotIn("예매 3 ", out)   # 1분 안에 시작 — 여유 밖
         self.assertIn("예매 4: 회차 정보 없음", out)
         self.assertIn("2건 취소할 예정", out)
+        self.assertIn("건너뜀 2건", out)   # 예매 2(시작함)·3(1분 안)
 
     def test_apply는_두_쪽_모두_읽고_시작_전_예매만_취소한다(self):
         rc, _ = self.run_tool(["tok-a", "tok-b"], apply=True)

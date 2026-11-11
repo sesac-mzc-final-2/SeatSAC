@@ -100,8 +100,8 @@
 | 키 | 소유 | TTL | 값·비고 |
 | --- | --- | --- | --- |
 | `catalog:movies:*`, `catalog:movie:{id}`, `catalog:theaters:*`, `catalog:screenings:{date}:{theaterId}:{movieId\|all}`, `catalog:layout:{auditoriumId}:{version}` | catalog | 10분 | 변경 시 삭제. 잔여 좌석은 캐시 금지 |
-| `seat:{screeningId}:{seatId}` | booking | 300초 | holdId(UUID) |
-| `user-hold:{screeningId}:{userId}` | booking | 300초 | 회차당 진행 중 선점 1건 |
+| `seat:{screeningId}:{seatId}` | booking | 선점 TTL (`APP_SEAT_HOLD_TTL_SECONDS`, 기본 300초) | holdId(UUID) |
+| `user-hold:{screeningId}:{userId}` | booking | 선점 TTL (기본 300초) | 회차당 진행 중 선점 1건 |
 | `seat-seq:{screeningId}` | booking | 없음 | 회차별 이벤트 일련번호. 이벤트마다 +1, **키가 없으면 현재 시각 ms × 1000부터** 시작(`seq-next.lua`) — Valkey 재시작으로 키가 사라져도 번호가 뒤로 가지 않아 열린 화면이 빈틈으로 보고 다시 받는다 |
 | `hold-expiry` (sorted set) | booking | 없음 | 멤버 `{screeningId}:{holdId}`, 점수 = 만료 시각 |
 | ⚠️ `idem:{userId}:{Idempotency-Key}` | booking | 24시간 | 요청 해시 + 처리 상태 + 첫 응답 (03a `idem:{키}` 대체) |
@@ -417,7 +417,7 @@
 | --- | --- | --- |
 | gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 404, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
-| booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`, `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 큐와 3.1.8 알림 Lambda 연결 뒤 `true`(런북 6-B-3) — 큐만 있고 받는 쪽이 없으면 메시지가 DLQ로도 못 가고 7일 뒤 사라진다` | `SPRING_DATASOURCE_PASSWORD` |
+| booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`(30~600, 벗어나면 기동 실패. 멱등 처리 중 키도 같은 값. 바꾸면 이전 TTL 동안 고아 판정이 어긋나므로 데모 준비 때 한 번만), `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 큐와 3.1.8 알림 Lambda 연결 뒤 `true`(런북 6-B-3) — 큐만 있고 받는 쪽이 없으면 메시지가 DLQ로도 못 가고 7일 뒤 사라진다` | `SPRING_DATASOURCE_PASSWORD` |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL`, `APP_COGNITO_ENDPOINT`(선택, 기본 `https://cognito-idp.{AWS_REGION}.amazonaws.com`, `AWS_REGION`이 없으면 `ap-northeast-2` — 프로필 첫 생성 때 `GetUser`) | `SPRING_DATASOURCE_PASSWORD` |
 | payment | `APP_PAYMENT_MOCK_DELAY_CARD=9999`, `APP_PAYMENT_MOCK_DELAY=5s` | `SPRING_DATASOURCE_PASSWORD` |
 | ⚠️AI ai | 9장 표 (`APP_AI_*`) | `ANTHROPIC_API_KEY` (Secret 이름 `ai-secrets`) |
@@ -509,7 +509,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 | 규칙 | 내용 |
 | --- | --- |
-| NetworkPolicy | 앱 namespace **ingress 기본 거부**(`default-deny-ingress`) + 허용: ALB(**public 서브넷 CIDR 2개**, VPC CIDR 전체가 아님 — 같은 VPC의 파드가 gateway에 붙지 못하게) → gateway, gateway → catalog·booking·user, catalog → booking, booking → catalog·payment, user → booking·catalog, 분석 트래픽 Job(`app.kubernetes.io/name: rollout-smoke`) → booking·gateway(3.1.6), `monitoring` → 전체(8080). egress는 막지 않음. L4(포트)까지라 허용된 호출자는 `/internal/**`도 부를 수 있다(외부 `/api/internal/**`는 gateway가 404). kubelet 프로브·port-forward·exec는 대상 아님. 확인 `infra/scripts/np-check.sh`(런북 6-E) |
+| NetworkPolicy | 앱 namespace **ingress 기본 거부**(`default-deny-ingress`) + 허용: ALB(**public 서브넷 CIDR 2개**, VPC CIDR 전체가 아님 — 같은 VPC의 파드가 gateway에 붙지 못하게) → gateway, gateway → catalog·booking·user, catalog → booking, booking → catalog·payment, user → booking·catalog, 분석 트래픽 Job(`app.kubernetes.io/name: rollout-smoke`) → booking·gateway(3.1.6), 부하 테스트 Job(`app.kubernetes.io/name: k6-loadtest`) → gateway(4.2.1, 실행 중에만 — 런북 6-H), `monitoring` → 전체(8080). egress는 막지 않음. L4(포트)까지라 허용된 호출자는 `/internal/**`도 부를 수 있다(외부 `/api/internal/**`는 gateway가 404). kubelet 프로브·port-forward·exec는 대상 아님. 확인 `infra/scripts/np-check.sh`(런북 6-E) |
 | 전제 | EKS VPC CNI `enableNetworkPolicy=true` (3.1.2) |
 | 보안그룹 | RDS 3306·Valkey 6379는 노드 보안그룹에서만. ALB는 CloudFront 관리형 접두사 목록만 |
 | 외부 호출 | booking → SQS, user → Cognito `GetUser`, gateway → Cognito JWKS: NAT 경유 HTTPS. ⚠️AI ai → Claude API(`api.anthropic.com`), ai → **CloudFront `PUBLIC_API_BASE_URL`**(공개 API — 스냅샷·내 예매): NAT 경유 HTTPS. ai는 클러스터 안에서 gateway를 직접 부르지 않는다(gateway NetworkPolicy는 public 서브넷만 허용, 기존 정책은 수정하지 않음) |
@@ -772,7 +772,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 57 | DB 마이그레이션은 ArgoCD **Flyway 훅 Job**(`{svc}_migrator`, Sync 단계 wave -1 — ConfigMap 다음·앱 전, 실패 시 sync 중단), 앱은 Flyway 끔. 스키마·계정·Secret은 Terraform(`envs/staging-k8s`)이 클러스터 안 Job으로 생성(3.1.12) | 처음 "PreSync"였으나 첫 배포 때 ConfigMap보다 먼저 돌아 Sync wave -1로 변경(10/23) |
 | 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함, ⚠️AI 재도입 후에도 유지 — 84) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)` · `pg_provider`는 `MOCK`만 | |
 | 4 | 좌석 이벤트: Valkey Pub/Sub `seat-events:{회차}` → SSE, 놓치면 BKG-01 스냅샷 | 유실 허용 |
-| 5 | 선점: Valkey `SET NX EX 300`(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
+| 5 | 선점: Valkey `SET NX EX {선점 TTL}`(`APP_SEAT_HOLD_TTL_SECONDS`, 기본 300초, 30~600)(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
 | 11 | 한 번에 최대 4석 | |
 | 19 | 멱등: `Idempotency-Key` + Valkey `idem:{userId}:{키}` 24시간 + 유일 제약(`booking_seat`, `current_payment_id`) | |
 | 22 | 내부 브로커 없음: Pub/Sub + keyspace 알림 + sorted set | 만료 반영 2초 초과 시 재검토 |
@@ -815,7 +815,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 63 | 화면 토큰 저장은 **메모리**(`InMemoryWebStorage`), localStorage 금지. 새로고침은 Cognito 세션으로 재발급 | |
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |
-| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** ai 코드 동결(이후 `fix/`만), M6 테스트 뒤 플래그 켜기 · **데모 주간** ai `fix/`도 금지(64 그대로) | 64 보완 |
+| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), **테스트 준비 예외(11/10 일정 변경)** `tests/k6/**`·`docs/**`·gitops `base/*/networkpolicy.yaml` 테스트 Job 허용 규칙 추가는 M6에도 머지(조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 테스트 실행 중이 아닐 때), 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** ai 코드 동결(이후 `fix/`만), M6 테스트 뒤 플래그 켜기 · **데모 주간** ai `fix/`도 금지(64 그대로) | 64 보완 |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
 
 
@@ -879,7 +879,7 @@ SeatSAC-gitops/
 | 커밋 메시지 | Conventional Commits + 기능 ID 또는 WBS ID: `feat(booking): BKG-02 좌석 선점 Lua 스크립트`, `infra(terraform): 3.1.3 RDS·Valkey` |
 | 릴리스 태그 | `rc1` 11/6(M5), `rc2` 11/13(M6), `v1.0.0` 11/19(리허설 전) |
 | 동결 | 11/13 이후 `fix/`만, 승인 2명 + 김종식 확인. **11/16~20 데모 주간은 승인된 fix 외 머지 금지** |
-| ⚠️AI 일정·머지 (ADR-87) | **rc1(11/6)**: gateway `/api/ai/**` 라우트(플래그 off)·gateway 분석 쿼리 `/ai` 제외 머지 완료. ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)**: AI 기능은 계속 머지할 수 있다 — 허용 경로는 `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai/**`·`overlays/staging/ai/**`만. gateway·booking·`libs/`·Terraform 변경은 이 기간 금지(부하·전환 테스트 환경 보호). 테스트(4.2.1·4.2.2)는 `ng-ai` desired 0·플래그 off. ai 검증은 로컬 Compose + **개발 전용 Claude API 키**(`.env`), staging 확인은 테스트가 돌지 않는 시간에 `kubectl port-forward svc/ai`(스크럼에서 시간 공유) · **rc2(11/13)**: ai 코드도 동결, 이후 ai는 `fix/`만. M6 테스트가 끝난 뒤 gateway `APP_AI_ENABLED=true` gitops PR 1회 · **데모 주간(11/16~20)**: ai `fix/`도 머지 금지(ADR-64 그대로). 11/17 AI 데모는 `ng-ai` 수동 기동(머지 아님) |
+| ⚠️AI 일정·머지 (ADR-87) | **rc1(11/6)**: gateway `/api/ai/**` 라우트(플래그 off)·gateway 분석 쿼리 `/ai` 제외 머지 완료. ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)**: AI 기능은 계속 머지할 수 있다 — 허용 경로는 `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai/**`·`overlays/staging/ai/**`만. gateway·booking·`libs/`·Terraform 변경은 이 기간 금지(부하·전환 테스트 환경 보호). **테스트 준비 예외(11/10 일정 변경)**: 4.2.1 부하 테스트 준비가 M6로 밀려 테스트 도구·문서는 M6에도 머지할 수 있다 — `tests/k6/**`, `docs/**`(런북·문서, `CLAUDE.md` 재생성 포함), gitops `base/*/networkpolicy.yaml`의 **테스트 Job 라벨 허용 규칙 추가만**(예: `k6-loadtest` → gateway. Rollout·Deployment 템플릿은 그대로라 블루/그린·재시작이 없다). 조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 4.2.1·4.2.2 테스트가 돌지 않는 시간에 머지. 서비스 코드·Terraform 금지는 그대로. 테스트(4.2.1·4.2.2)는 `ng-ai` desired 0·플래그 off. ai 검증은 로컬 Compose + **개발 전용 Claude API 키**(`.env`), staging 확인은 테스트가 돌지 않는 시간에 `kubectl port-forward svc/ai`(스크럼에서 시간 공유) · **rc2(11/13)**: ai 코드도 동결, 이후 ai는 `fix/`만. M6 테스트가 끝난 뒤 gateway `APP_AI_ENABLED=true` gitops PR 1회 · **데모 주간(11/16~20)**: ai `fix/`도 머지 금지(ADR-64 그대로). 11/17 AI 데모는 `ng-ai` 수동 기동(머지 아님) |
 
 ### 3. PR
 

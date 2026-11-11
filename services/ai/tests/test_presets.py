@@ -56,7 +56,6 @@ def test_passes_validator_and_returns_expected_rows(preset):
     assert result.row_count == expected
 
 
-
 def test_started_screening_is_excluded_even_if_time_is_earlier():
     """시작한 회차(18:00, 지금 19:40)는 '17시 이후'로 물어도 나오지 않는다(:now 조건)."""
     preset = next(p for p in presets() if p.preset_id == "today_after_time")
@@ -73,3 +72,34 @@ def test_movie_examples_have_no_fixed_titles():
         assert not any(t in p.example for t in fixture_titles), p.preset_id
         if "movie" in p.params:
             assert "{movie}" in p.example
+
+
+def test_showing_movie_falls_back_when_the_query_is_interrupted():
+    """실행기의 5초 중단이 같은 연결의 이 질의를 끊어도 500이 아니라 None("영화 제목")이다."""
+    import sqlite3
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from seatsac_ai.api.presets import showing_movie
+
+    class Conn:
+        def execute(self, *_):
+            raise sqlite3.OperationalError("interrupted")
+
+    class Store:
+        def is_ready(self):
+            return True
+
+        def now(self):
+            from datetime import datetime
+
+            return datetime(2026, 11, 17, 19, 40)
+
+        @contextmanager
+        def reader(self):
+            yield Conn()
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(snapshot=SimpleNamespace(store=Store())))
+    )
+    assert showing_movie(request).ready is False

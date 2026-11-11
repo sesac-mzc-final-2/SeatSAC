@@ -11,6 +11,7 @@ REJECTED 로 끝난다(#92 리뷰). 스냅샷 준비 전이면 "영화 제목"�
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from typing import Annotated
 
@@ -50,15 +51,15 @@ def showing_movie(request: Request) -> str | None:
     try:
         with snapshot.store.reader() as conn:
             row = conn.execute(_DEMO_MOVIE_SQL, (now,)).fetchone()
-    except SnapshotNotReady:
+    except (SnapshotNotReady, sqlite3.Error):
+        # 스냅샷 연결은 /ai/chat 실행기와 함께 쓴다. 실행기가 건 5초 중단(progress handler)이
+        # 이 질의를 끊을 수 있으므로, 실패하면 "영화 제목"으로 둔다 — 버튼 목록은 500을 내지 않는다
         return None
     return row[0] if row else None
 
 
 @router.get("/presets")
-async def list_presets(
-    request: Request, _: Annotated[str, Depends(current_user_id)]
-) -> PresetList:
+async def list_presets(request: Request, _: Annotated[str, Depends(current_user_id)]) -> PresetList:
     movie = showing_movie(request)
     items = [
         PresetItem(presetId=p.preset_id, title=p.title, example=fill_example(p.example, movie))

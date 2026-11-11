@@ -107,6 +107,7 @@ k6 run -e SCREENING_ID=5123 -e SEAT_ID_FROM=4060001 -e VUS=10 -e SEATS_PER_VU=20
 
 - **`server_errors`**(5xx·연결 오류) — 무중단 배포의 합격선이다. `preStop 5초`+`graceful 20초`와 `scaleDownDelaySeconds 60`이 제대로 걸려 있으면 0이다
 - **`hold_active_hold`** — contention에서 0이 아니면 **토큰이 부족한 것**이고 측정이 무효다
+- **`hold_other`** — contention에서 거의 100%면 측정 전에 경로부터 틀렸다: 먼저 `BASE_URL`이 `/api`로 끝나는지 본다(빠지면 전부 gateway 404 `NOT_FOUND`)
 - **`payment_result_unknown`** — 지연 카드(`9999`)를 쓰지 않았는데 0이 아니면 Payment 응답이 3초를 넘긴 것이다. 그 자체로 오류는 아니지만(예매는 `PENDING`이고 재조회로 확정) 전환 중이라면 들여다볼 신호다
 
 - **`payment_unresolved`** — 503 뒤 단건 조회로 종료 상태(`CONFIRMED`·`PAYMENT_FAILED`·`EXPIRED`·`CANCELED`)를 끝까지 못 본 건이다. 0이어야 한다

@@ -39,7 +39,10 @@
 - [ ] 토큰 — Access Token **60분**(Terraform `access_token_validity = 60`). **데모 직전에 다시 받는다**: `python3 tests/k6/tools/loadtest_users.py refresh && … tokens --min-valid-minutes 40 --out ~/.seatsac/k6-tokens.txt`(k6는 테스트 중 로그인을 부르지 않는다). 토큰 파일은 레포 밖, 커밋·노션 금지
 - [ ] 신호등 대시보드(3.1.7, 런북 6-F) 열어 두기 — 시간 범위를 **데모 직전부터**로 잡는다(⑤ 행 건수 카드가 범위 안 합계라서)
 - [ ] CloudFront 경유 SSE 확인: `python3 tests/k6/tools/sse_lag.py --duration 60 --url "$API/screenings/$DEMO_SCREENING/seats/stream"` → 하트비트가 **15초 간격으로 몰리지 않고** 온다(압축 끔·캐시 비활성이 안 돼 있으면 뭉쳐서 온다)
-- [ ] 데이터 초기화 (5.1.1 런북): 예매 정리 · Valkey 키 삭제 · 회차 시드 재적재 — 재적재로 회차 ID가 바뀌면 위 회차를 다시 고른다
+- [ ] 리허설마다 **새 회차**를 고른다(`pick_targets.py` — 남은 선점은 300초 뒤 저절로 풀린다). 남은 확정 예매·선점은 5.1.1 런북 `docs/runbooks/demo-zero-downtime.md` 1장 절차로만 정리한다 — **시드 재적재·Valkey 키 직접 삭제·RDS 직접 수정은 하지 않는다**(회차 ID가 바뀌면 booking 분석 회차 `SMOKE_SCREENING_ID`도 바뀌어야 해 모든 booking 배포가 abort된다)
+- [ ] 노드 4대(`infra/scripts/cluster-scale.sh up 2`, 런북 6-H-1 1) — 장면 2 부하 발생기가 booking과 CPU를 다투지 않게. 데모가 끝나면 `up 1`
+- [ ] 리허설에서 `run-in-cluster.sh contention`을 한 번 돌려 노드에 k6 이미지를 받아 두고, 로그 머리말의 노드 배치(k6 파드가 booking과 다른 노드인지)를 확인
+- [ ] 장면 2는 5.1.1 블루/그린이 **끝나고 60초(scaleDownDelay) 뒤**에 — `kubectl -n cinema-staging get rollout`이 Healthy. 그 전에는 파드가 2배라 k6 파드가 Pending이 되어 180초 뒤 실패할 수 있다
 - [ ] 리허설 1회 — **특히 장면 4의 타이밍**
 
 ### 1-3. 환경변수 (진행자 터미널)
@@ -184,7 +187,7 @@ done
 curl -s -X DELETE "$API/bookings/{bookingId}/hold" -H "Authorization: Bearer $TOKEN_A" -H "Idempotency-Key: $(uuidgen)"
 ```
 
-- 경쟁 회차는 좌석이 지저분해지므로 **다음 리허설에는 다른 회차**를 쓰거나 5.1.1 초기화 런북을 돌린다
+- 경쟁 회차는 그대로 두고 **다음 리허설에는 다른 회차**를 쓴다. 남은 확정 예매·선점은 `docs/runbooks/demo-zero-downtime.md` 1-3 절차로 정리한다(확정 예매는 `reset_demo_data.py` 미리보기 → `--apply`)
 - 확정 예매를 만든 경우: 릴레이가 켜져 있으면 `booking_outbox_pending` 0 확인, 꺼져 있으면 아웃박스에 쌓인 것이 정상(`APP_OUTBOX_RELAY_ENABLED`, 런타임 계약 3장)
 
 ---

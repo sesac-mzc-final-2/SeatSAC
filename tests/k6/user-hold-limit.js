@@ -50,6 +50,16 @@ function release(token, bookingId) {
   });
 }
 
+function whyHoldFailed(status) {
+  switch (status) {
+    case 404: return "경로·회차를 찾지 못했다 — BASE_URL 끝에 /api가 있는지(gateway 라우트가 /api를 받는다), SCREENING_ID가 맞는지";
+    case 409: return "이 사용자가 이미 이 회차에 선점이 있거나 좌석이 비어 있지 않다";
+    case 400: return "예매 마감(시작 5분 전)이거나 배치에 없는·비활성 좌석이다 — pick_targets.py로 다시 고른다";
+    case 401: return "토큰 만료 — loadtest_users.py refresh → tokens --out";
+    default: return "응답 본문·booking 로그를 traceId로 확인";
+  }
+}
+
 function codeOf(res) {
   try {
     return res.json("code") || "";
@@ -65,7 +75,7 @@ export default function (data) {
   const first = hold(token, data.screeningId, seatA);
   if (!check(first, { "① 좌석 A 선점 201": (r) => r.status === 201 })) {
     unexpected.add(1);
-    console.error(`① ${first.status} ${codeOf(first)} — 이 사용자가 이미 이 회차에 선점이 있거나 좌석이 비어 있지 않다`);
+    console.error(`① ${first.status} ${codeOf(first)} — ${whyHoldFailed(first.status)}`);
     return;
   }
   const bookingA = first.json("bookingId");

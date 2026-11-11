@@ -1,6 +1,6 @@
 # k6 부하 시나리오
 
-클러스터 안 **Job**으로 돌리고 gateway Service를 직접 부른다(`http://gateway:8080`) — 그래서 **`/api` 접두사가 없다**. Job·스케줄은 김종식(OPS-10), 시나리오·대상 데이터는 남궁일(인계 15번).
+클러스터 안 **Job**으로 돌리고 gateway Service를 직접 부른다(`http://gateway:8080/api`). ALB를 거치지 않아도 **`/api` 접두사는 붙인다** — gateway 라우트가 `Path=/api/...`로 받고 gateway가 직접 떼기 때문이다(StripPrefix=1). 빠지면 모든 요청이 gateway 404 `NOT_FOUND`다. Job·스케줄은 김종식(OPS-10), 시나리오·대상 데이터는 남궁일(인계 15번).
 
 | 시나리오 | 증명할 것 | 임계값 |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ $R cleanup    # 남은 k6 리소스 지우기
 
 ```bash
 # 같은 좌석 100명 (토큰 100개 필요)
-k6 run -e BASE_URL=http://gateway:8080 -e SCREENING_ID=5123 -e SEAT_ID=4060121 \
+k6 run -e BASE_URL=http://gateway:8080/api -e SCREENING_ID=5123 -e SEAT_ID=4060121 \
        -e K6_TOKENS_FILE="$K6_TOKENS_FILE" tests/k6/seat-hold-contention.js
 
 # 조회 (토큰 불필요)
@@ -109,6 +109,7 @@ k6 run -e SCREENING_ID=5123 -e SEAT_ID_FROM=4060001 -e VUS=10 -e SEATS_PER_VU=20
 
 - **`server_errors`**(5xx·연결 오류) — 무중단 배포의 합격선이다. `preStop 5초`+`graceful 20초`와 `scaleDownDelaySeconds 60`이 제대로 걸려 있으면 0이다
 - **`hold_active_hold`** — contention에서 0이 아니면 **토큰이 부족한 것**이고 측정이 무효다
+- **`hold_other`** — 0이어야 한다. contention에서 이 건수가 VU 수(100)와 거의 같으면 측정 전에 경로부터 틀렸다: 먼저 `BASE_URL`이 `/api`로 끝나는지 본다(빠지면 전부 gateway 404 `NOT_FOUND`)
 - **`payment_result_unknown`** — 지연 카드(`9999`)를 쓰지 않았는데 0이 아니면 Payment 응답이 3초를 넘긴 것이다. 그 자체로 오류는 아니지만(예매는 `PENDING`이고 재조회로 확정) 전환 중이라면 들여다볼 신호다
 
 - **`payment_unresolved`** — 503 뒤 단건 조회로 종료 상태(`CONFIRMED`·`PAYMENT_FAILED`·`EXPIRED`·`CANCELED`)를 끝까지 못 본 건이다. 0이어야 한다

@@ -34,7 +34,7 @@ from seatsac_ai import bookings as my_bookings
 from seatsac_ai.cache import template as tpl
 from seatsac_ai.cache.slots import Extracted, extract, is_followup, meaning_signature
 from seatsac_ai.cache.store import CacheEntry, ChatCache
-from seatsac_ai.common.errors import llm_unavailable, snapshot_not_ready
+from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
@@ -74,6 +74,8 @@ _REJECTION_MESSAGE = {
     "SQL_ERROR": "SQL 실행에 실패했습니다.",
     "TIMEOUT": "조회가 너무 오래 걸려 중단했습니다.",
 }
+# 사유는 계약대로 PARSE_ERROR지만 SQL은 해석했다. 화면 안내만 실제 원인으로(#93 리뷰)
+_MISSING_STARTED_FILTER = "이미 시작한 회차를 빼는 조건이 없어 답하지 않았습니다."
 _SLOT_FORMAT = {
     "time": re.compile(r"^([01]\d|2[0-3]):[0-5]\d$"),
     "date": re.compile(r"^\d{4}-\d{2}-\d{2}$"),
@@ -146,6 +148,8 @@ class ChatService:
         if cache is not None and user_id is not None:
             sid, previous = await cache.load_session(user_id, session_id)
         follow_up = previous is not None and is_followup(question)
+        # 문맥(세션)이 없어도 "그중 …" 말투는 캐시를 보지도 저장하지도 않는다(#94 리뷰)
+        skip_cache = is_followup(question)
 
         usage = Usage()
         calls = 0
@@ -157,7 +161,7 @@ class ChatService:
             if self._bookings is not None and my_bookings.is_personal(question):
                 body = await self._my_bookings(authorization, now)
             # ③④⑤ 캐시
-            elif cache is not None and not follow_up:
+            elif cache is not None and not skip_cache:
                 ext = self._extract(question, now)
                 if ext.cacheable:
                     body, vector = await self._from_cache(cache, ext, system_params, deadline)
@@ -183,7 +187,8 @@ class ChatService:
         body["latencyMs"] = int((time.monotonic() - started) * 1000)
         self._record(question, body, usage)
         if cache is not None and user_id is not None and sid is not None:
-            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE"):
+            # MY_BOOKINGS도 저장하지 않는다 — SQL 없는 문맥이라 후속 질문에 못 쓴다(#96 리뷰)
+            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS"):
                 await cache.save_session(
                     user_id, sid, {"question": question, "sql": body["sql"], "path": body["path"]}
                 )
@@ -228,27 +233,36 @@ class ChatService:
             _count_tokens(usage, failed_path)
             raise llm_unavailable(exc.reason) from exc  # type: ignore[arg-type]
         # 재요청을 다 쓰고도 실패
-        reason = (last_rejection or {}).get("reason", "PARSE_ERROR")
-        rejected = _rejected(reason, (last_rejection or {}).get("object"), last_sql, self._as_of())
+        last = last_rejection or {}
+        rejected = _rejected(
+            last.get("reason", "PARSE_ERROR"),
+            last.get("object"),
+            last_sql,
+            self._as_of(),
+            message=last.get("message"),
+        )
         return rejected, None, calls
 
     # --- 내 예매 --------------------------------------------------------------
 
     async def _my_bookings(self, authorization: str | None, now: datetime) -> dict[str, Any]:
         try:
-            items = await self._bookings.fetch(authorization)  # type: ignore[union-attr]
-        except Exception:
-            AI_CHAT.labels("my_bookings", "error").inc()
+            page = await self._bookings.fetch(authorization)  # type: ignore[union-attr]
+        except ApiError as exc:
+            # 공개 API 장애(503)만 오류로 센다. 토큰 없음·만료(401)는 사용자 쪽 문제(#96 리뷰)
+            if exc.status >= 500:
+                AI_CHAT.labels("my_bookings", "error").inc()
             raise
-        rows = my_bookings.to_rows(items)
+        rows = my_bookings.to_rows(page.items)
+        more = f" 최근 {len(rows)}건만 확인했습니다(전체 {page.total}건)." if page.truncated else ""
         as_of = now.isoformat(timespec="seconds")
         return {
-            "answer": f"{my_bookings.answer_text(rows, now)} ({_clock(as_of)} 기준)",
+            "answer": f"{my_bookings.answer_text(rows, now)}{more} ({_clock(as_of)} 기준)",
             "path": "MY_BOOKINGS",
             "columns": my_bookings.COLUMNS,
             "rows": rows,
             "rowCount": len(rows),
-            "truncated": False,
+            "truncated": page.truncated,
             "sql": None,
             "presetId": None,
             "asOf": as_of,
@@ -264,7 +278,9 @@ class ChatService:
         return extract(question, now, theaters, movies)
 
     async def _embed(self, cache: ChatCache, text: str) -> list[float] | None:
-        if not (cache.semantic_ready and self._s.semantic_cache_enabled and cache.embedder):
+        if not (self._s.semantic_cache_enabled and cache.embedder):
+            return None
+        if not await cache.semantic_available():  # 기동 때 연결 오류였으면 여기서 다시 시도
             return None
         try:
             return await asyncio.to_thread(cache.embedder.embed, text)
@@ -379,7 +395,7 @@ class ChatService:
             raise _Retry(
                 f"screening 을 조회할 때는 s.starts_at > '{now}' 조건을 붙인다"
                 "(이미 시작한 회차 제외)",
-                {"reason": PARSE_ERROR},
+                {"reason": PARSE_ERROR, "message": _MISSING_STARTED_FILTER},
             )
         timeout = min(self._s.sql_timeout_seconds, deadline - time.monotonic())
         if timeout <= 0:
@@ -462,8 +478,11 @@ class ChatService:
                     "presetId": body["presetId"],
                     "latencyMs": body["latencyMs"],
                     "llmCalls": body["llm"]["calls"],
-                    "tokens": {"input": usage.input, "output": usage.output,
-                               "cacheRead": usage.cache_read},
+                    "tokens": {
+                        "input": usage.input,
+                        "output": usage.output,
+                        "cacheRead": usage.cache_read,
+                    },
                     "questionLength": len(question),
                     "questionHash": digest,
                     "sqlTemplate": sql_template(body["sql"]) if body["sql"] else None,
@@ -472,7 +491,6 @@ class ChatService:
                 }
             },
         )
-
 
 
 def _feedback(call: ToolCall, message: str) -> list[dict[str, Any]]:
@@ -567,12 +585,14 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
     }
 
 
-def _rejected(reason: str, obj: str | None, sql: str | None, as_of: str) -> dict[str, Any]:
+def _rejected(
+    reason: str, obj: str | None, sql: str | None, as_of: str, *, message: str | None = None
+) -> dict[str, Any]:
     body = _empty("REJECTED", REJECTED_ANSWER, as_of)
     body["sql"] = sql
     body["rejection"] = {
         "reason": reason,
-        "message": _REJECTION_MESSAGE.get(reason, "SQL을 실행할 수 없습니다."),
+        "message": message or _REJECTION_MESSAGE.get(reason, "SQL을 실행할 수 없습니다."),
         "object": obj,
     }
     return body

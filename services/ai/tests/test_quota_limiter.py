@@ -131,4 +131,10 @@ def test_valkey_down_rejects_instead_of_calling_claude():
     with pytest.raises(ApiError) as caught:
         asyncio.run(ask(lim))
     assert caught.value.status == 503 and caught.value.code == "AI_LLM_UNAVAILABLE"
-    assert caught.value.details[0].reason == "QUOTA_STORE_UNAVAILABLE"
+    detail = caught.value.details[0]
+    # 계약: 한도 저장소 장애는 quotaStore/ai-valkey(provider/anthropic 아님, #93 리뷰)
+    assert (detail.field, detail.value, detail.reason) == (
+        "quotaStore",
+        "ai-valkey",
+        "QUOTA_STORE_UNAVAILABLE",
+    )

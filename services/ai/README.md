@@ -51,6 +51,18 @@ readiness는 각 작업이 `app.state.readiness.register(이름, 점검)`으로 
 | 프롬프트 캐싱으로 싸게 읽은 토큰 | `sum(increase(ai_tokens_total{kind="cache_read"}[1h]))` |
 | Claude 지연 p95 | `histogram_quantile(0.95, sum by (le) (rate(ai_llm_call_seconds_bucket[5m])))` |
 
+> ⚠️ 표 안의 `\|`는 마크다운 표 때문에 쓴 것이다. **원문(.md)에서 복사하면 `\|`를 `|`로 바꿔야** PromQL이 파싱된다(#95 리뷰). 정규식이 있는 식은 아래에 그대로 붙여 둔다.
+
+```promql
+# Claude 없이 답한 비율
+sum(increase(ai_chat_total{result="ok",path=~"cache_exact|cache_semantic|my_bookings"}[1h])) / sum(increase(ai_chat_total{result="ok"}[1h]))
+# Claude 답 1건당 토큰(input+output)
+sum(increase(ai_tokens_total{kind=~"input|output"}[1h])) / sum(increase(ai_chat_total{path=~"preset|nl2sql|rejected|out_of_scope"}[1h]))
+# 캐시로 답한 건수(아낀 토큰 = 1건당 토큰 × 이 값)
+sum(increase(ai_chat_total{result="ok",path=~"cache_exact|cache_semantic"}[1h]))
+```
+
+- `ai_llm_call_seconds` 버킷은 0.5~25초(Claude 한도 15초까지 p95가 잘리지 않게).
 - 경로 `out_of_scope`·`rejected`도 Claude를 부른 답이라 "1건당 토큰"의 분모에 넣는다.
 - 캐시 적중률의 분모는 **캐시를 본 질문**만이다. 후속 질문("그중 …")과 같은 종류 값이 두 번 나온 질문은 캐시를 보지 않아 세지 않는다.
 - Claude 호출이 중간에 실패한 질문도 이미 쓴 토큰은 `ai_tokens_total`에 들어간다(`path`는 직전에 고른 도구).

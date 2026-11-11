@@ -77,6 +77,10 @@ class SnapshotStore:
         self._state_lock = threading.Lock()  # 현재 세대·질의 수 보호
 
     # --- 상태 -----------------------------------------------------------------
+    def now(self) -> datetime:
+        """스토어 시계(KST). 테스트는 SnapshotStore(clock=...)로 고정한다."""
+        return self._clock()
+
     def is_ready(self) -> bool:
         """두 범위(오늘·나머지)가 한 번씩 적재를 마쳤다. readiness 점검이 이 값을 쓴다."""
         return all(scope in self._refreshed for scope in SCOPES)

@@ -1246,7 +1246,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 
 - 조건: 6-G-5 「staging에서 ai 확인(M6 중)」 — 4.2.1·4.2.2가 돌지 않는 시간, 스크럼에 시간 공유. 노드 켜짐 시간(평일 08:23~23:07)
 - 방법: ai Valkey는 노드 보안그룹에서만 열려 있어 **이미 떠 있는 ai 파드 안에서** `kubectl exec`로 확인한다(새 리소스를 만들지 않는다). 지금 staging ai 이미지에는 `redis` 패키지가 없어(#93에서 추가) **표준 라이브러리만 쓰는** 스크립트를 stdin으로 넘긴다
-- 쓰는 키: 확인용 인덱스 `ai_semcheck_idx` · 키 `ai:semcheck:0~2`(TTL 120초). 끝나면 바로 지운다. 앱의 `ai_semcache_idx`·`ai:semcache:*`는 건드리지 않는다
+- 쓰는 키: 확인용 인덱스 `ai_semcheck_idx` · 키 `ai:semcheck:0~2`(TTL 120초, conventions 4장 ai Valkey 표). 끝나면 바로 지운다. 앱의 `ai_semcache_idx`·`ai:semcache:*`는 건드리지 않는다
 
 ```bash
 export AWS_PROFILE=cinema-admin
@@ -1330,6 +1330,8 @@ except (RuntimeError, OSError) as exc:
     if unsupported:
         result = "unsupported"
 finally:
+    try: cmd("DISCARD")                # MULTI 도중 오류로 빠져나왔으면 대기열을 버린다(아니면 아래 정리가 실행되지 않고 쌓이기만 한다)
+    except (RuntimeError, OSError): pass   # MULTI 밖이면 "DISCARD without MULTI" — 정상
     try:                               # 연결이 끊겼으면 키는 TTL 120초로 사라지고, 남은 것은 다음 실행 첫머리에서 지운다
         for i in range(3):
             cmd("DEL", f"{PFX}{i}")
@@ -1342,8 +1344,9 @@ print({
     "unknown": "⚠️ 판정 못 함(연결·OOM·0건 등) — 위 출력을 보고 아래 표대로 다시 확인",
 }[result])
 PY
-# 처음 status에서 desired가 0이었고, 스크럼에 공유된 다른 ai 확인이 지금 없을 때만 끈다
-infra/scripts/cluster-scale.sh down ng-ai
+# 끄기는 직접 판단해서 한 줄만 실행한다(블록째 붙여 넣어도 꺼지지 않게 주석으로 둔다):
+#   처음 status에서 desired가 0이었고, 스크럼에 공유된 다른 ai 확인이 지금 없을 때만
+# infra/scripts/cluster-scale.sh down ng-ai
 ```
 
 | 결과 | 뜻 · 다음 일 |

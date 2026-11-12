@@ -77,7 +77,7 @@
 
 | 서비스 | ConfigMap 키 | Secret `{svc}-secrets` 키 |
 | --- | --- | --- |
-| gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 404, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
+| gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 토큰이 있으면 404, 없으면 인증이 먼저라 401, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
 | booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`(30~600, 벗어나면 기동 실패. 멱등 처리 중 키도 같은 값. 바꾸면 이전 TTL 동안 고아 판정이 어긋나므로 데모 준비 때 한 번만), `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 큐와 3.1.8 알림 Lambda 연결 뒤 `true`(런북 6-B-3) — 큐만 있고 받는 쪽이 없으면 메시지가 DLQ로도 못 가고 7일 뒤 사라진다` | `SPRING_DATASOURCE_PASSWORD` |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL`, `APP_COGNITO_ENDPOINT`(선택, 기본 `https://cognito-idp.{AWS_REGION}.amazonaws.com`, `AWS_REGION`이 없으면 `ap-northeast-2` — 프로필 첫 생성 때 `GetUser`) | `SPRING_DATASOURCE_PASSWORD` |
@@ -202,7 +202,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 15 | 부하 테스트 시나리오 대상 API·데이터 | 남궁일 | 김종식 OPS-10 (k6 Job) | 4.2.1 전 | k6 스크립트 dry-run |
 | ⚠️AI 16 | ECR `cinema/ai`·ai Valkey·`ai-secrets`·`cinema-infra-endpoints` 키 2개·`ng-ai`·Application `cinema-ai` | 김종식 (3.1.18·3.1.19) | 김서현 staging 배포 | rc1(11/6) | `kubectl -n argocd get application cinema-ai`, `ng-ai` 1대일 때 ai readiness 200 |
 | ⚠️AI 17 | CI(`changed-services.sh` ai 분기, `pr-check` `python`·ai 기동 확인, `build-push` ai) — **#79에 먼저 포함**(3.4.8 PR이 검사를 받도록) · gitops `base/ai`·`overlays/staging/ai` | 김종식 (3.1.20) | 김서현 (main 머지 = 배포) | CI는 3.4.8 리베이스 전, gitops는 3.1.18 apply 후 | PR `image`(ai)·`python` 통과 |
-| ⚠️AI 18 | gateway `/api/ai/**` 라우트(플래그 off, 라우트 metadata `response-timeout: 28000`) + 분석 쿼리 `/ai` 제외 | 한채연(3.3.8)·김종식(3.1.21) | 김서현·한채연 화면 | **rc1(11/6)** | 플래그 off에서 `/api/ai/chat` 404, gateway 블루/그린 통과 |
+| ⚠️AI 18 | gateway `/api/ai/**` 라우트(플래그 off, 라우트 metadata `response-timeout: 28000`) + 분석 쿼리 `/ai` 제외 | 한채연(3.3.8)·김종식(3.1.21) | 김서현·한채연 화면 | **rc1(11/6)** | 플래그 off에서 토큰으로 `/api/ai/chat` 404(토큰이 없으면 401 — 인증이 라우팅보다 먼저), gateway 블루/그린 통과 |
 | ⚠️AI 19 | `contracts/openapi/ai.openapi.yaml` + 예시 | 김서현·한채연 (2.2.8) | 한채연 채팅 화면(3.3.7) | 11/6 | contract-check 통과 |
 
 ## 8. 인프라 쪽 남은 정리
@@ -263,7 +263,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 층 | 상한 | 넘으면 |
 | --- | --- | --- |
 | CloudFront 원본 응답 대기 | 30초 (기존 설정, 3.1.11) | 504 |
-| gateway `/api/ai/**` 라우트 `response-timeout` | **28초** (`28000`) | 504 `UPSTREAM_TIMEOUT` |
+| gateway `/api/ai/**` 라우트 `response-timeout` | **28초** (`28000`) | 503 `SERVICE_UNAVAILABLE`(`details[{field: service, value: ai, reason: UPSTREAM_TIMEOUT}]`) — gateway는 하위 서비스의 연결 실패·시간 초과를 모두 503으로 준다(3.3.1, `GatewayErrorHandler`). ai 파드가 없을 때는 같은 503에 `reason` `UPSTREAM_UNAVAILABLE` |
 | ai 요청 전체 기한 `APP_AI_REQUEST_DEADLINE_SECONDS` | **25초** | 503 `AI_LLM_UNAVAILABLE` `TIMEOUT` — 정상 경로에서는 여기서 먼저 끝나 화면이 ai의 오류 형식을 받는다 |
 | └ Claude 호출 1회 | min(15초, 남은 시간) × 최대 3회 | 다음 호출 없이 위 503 |
 | └ SQLite 실행 1회 | min(5초, 남은 시간) | `REJECTED` 또는 SQL 오류 재요청 |

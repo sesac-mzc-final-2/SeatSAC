@@ -171,29 +171,45 @@ def test_snapshot_becoming_unready_mid_query_is_503():
     assert caught.value.code == "AI_SNAPSHOT_NOT_READY"
 
 
-def test_screening_sql_without_started_filter_is_retried():
-    """data-model 6-1: Claude가 '시작한 회차 제외'를 빼먹으면 사유를 붙여 다시 묻는다."""
+def test_screening_sql_without_started_filter_still_excludes_started():
+    """data-model 6-1: Claude가 '시작한 회차 제외'를 빼먹어도 실행할 SQL에 붙여 바로 답한다."""
     no_filter = (
         "SELECT m.title AS movie_title, s.starts_at FROM screening s "
         "JOIN movie m ON m.movie_id = s.movie_id WHERE s.business_date = '2026-11-17'"
     )
-    llm = ScriptedLlm(
-        tool("run_sql", sql=no_filter, explanation="오늘 회차"),
-        tool("run_sql", sql=AFTER_20, explanation="오늘 20시 이후 회차"),
+    body = ask(ScriptedLlm(tool("run_sql", sql=no_filter, explanation="오늘 회차")))
+    assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 1
+    starts = sorted(row[1] for row in body["rows"])
+    assert "2026-11-17 18:00" not in starts  # 19:40 기준 이미 시작
+    assert starts == ["2026-11-17 19:50", "2026-11-17 20:00", "2026-11-17 21:00",
+                      "2026-11-17 22:30", "2026-11-18 00:30"]  # fmt: skip
+    assert "s.starts_at > :now" in body["sql"]
+
+
+def test_earlier_time_comparison_does_not_bring_back_started_screenings():
+    """#93 재리뷰: 21:30에 '20시 이후'를 `>= 20:00`으로만 걸러도 20:00·21:00 회차는 빠진다."""
+    after_20 = (
+        "SELECT s.starts_at FROM screening s "
+        "WHERE s.business_date = '2026-11-17' AND s.starts_at >= '2026-11-17 20:00'"
     )
-    body = ask(llm)
-    assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 2
-    feedback = llm.requests[1]["messages"][-1]["content"][0]["content"]
-    assert "starts_at > '2026-11-17 19:40'" in feedback
+    service = ChatService(
+        loaded_store(), ScriptedLlm(tool("run_sql", sql=after_20, explanation="x")),
+        Settings(_env_file=None),
+    )  # fmt: skip
+    at_2130 = datetime(2026, 11, 17, 21, 30, tzinfo=KST)
+    body = asyncio.run(service.answer("오늘 20시 이후", now=at_2130))
+    assert sorted(row[0] for row in body["rows"]) == ["2026-11-17 22:30", "2026-11-18 00:30"]
 
 
-def test_screening_sql_without_started_filter_is_rejected_when_calls_run_out():
-    no_filter = "SELECT count(*) FROM screening WHERE business_date = '2026-11-17'"
-    bad = tool("run_sql", sql=no_filter, explanation="x")
-    body = ask(ScriptedLlm(bad, bad, bad))
-    assert body["path"] == "REJECTED" and body["rejection"]["reason"] == "PARSE_ERROR"
-    # 사유는 계약대로 PARSE_ERROR, 안내 문장은 실제 원인(#93 리뷰)
-    assert body["rejection"]["message"] == "이미 시작한 회차를 빼는 조건이 없어 답하지 않았습니다."
+def test_started_filter_goes_into_join_on_so_left_join_keeps_its_meaning():
+    """LEFT JOIN screening 은 ON 에 붙인다 — 이후 회차가 없는 영화도 행으로 남는다."""
+    sql = (
+        "SELECT m.title AS movie_title, count(s.screening_id) AS screening_count FROM movie m "
+        "LEFT JOIN screening s ON s.movie_id = m.movie_id GROUP BY m.movie_id ORDER BY m.movie_id"
+    )
+    body = ask(ScriptedLlm(tool("run_sql", sql=sql, explanation="영화별 남은 회차")))
+    # 19:40 이후: 별의 항해 1(18:00 제외) · 한강의 밤 2 · 고양이 탐정 2 · 철의 심장 3
+    assert [row[1] for row in body["rows"]] == [1, 2, 2, 3]
 
 
 def test_sql_without_screening_does_not_need_started_filter():

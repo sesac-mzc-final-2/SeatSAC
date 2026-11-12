@@ -75,7 +75,7 @@ def test_movie_examples_have_no_fixed_titles():
 
 
 def test_showing_movie_falls_back_when_the_query_is_interrupted():
-    """실행기의 5초 중단이 같은 연결의 이 질의를 끊어도 500이 아니라 None("영화 제목")이다."""
+    """질의가 시간 제한에 끊겨도(실행기 TIMEOUT) 500이 아니라 준비 전("영화 제목")으로 둔다."""
     import sqlite3
     from contextlib import contextmanager
     from types import SimpleNamespace
@@ -83,6 +83,9 @@ def test_showing_movie_falls_back_when_the_query_is_interrupted():
     from seatsac_ai.api.presets import showing_movie
 
     class Conn:
+        def set_progress_handler(self, *_):
+            pass
+
         def execute(self, *_):
             raise sqlite3.OperationalError("interrupted")
 

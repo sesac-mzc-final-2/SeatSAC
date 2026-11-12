@@ -92,24 +92,45 @@ def _validate(sql: str, max_rows: int) -> ValidatedSql:
     return ValidatedSql(sql=tree.sql(dialect="sqlite"), tables=tables, limit_capped=capped)
 
 
-def filters_started(sql: str) -> bool:
-    """`starts_at > …`(또는 `>=`, `… < starts_at`) 비교가 있는가. 이미 시작한 회차를 빼는 조건.
+def exclude_started(query: ValidatedSql) -> ValidatedSql:
+    """screening 을 읽는 모든 SELECT에 `<별칭>.starts_at > :now` 를 붙인 SQL (data-model 6-1).
 
-    data-model 6-1: 회차를 읽는 모든 질의는 starts_at > 지금(KST). 값이 '지금'인지까지는 보지 않는다
-    (질문의 '20시 이후' 비교도 같은 모양이라). 조건이 아예 없는 SQL만 잡는다.
+    Claude가 조건을 빼먹거나 지금보다 이른 시각과 비교해도(예: 21:30에 `>= '20:00'`)
+    이미 시작한 회차가 답에 나오지 않는다. FROM 의 screening 은 WHERE 에, JOIN 의 screening 은
+    ON 에 AND 로 붙인다(LEFT JOIN 의미를 바꾸지 않게). 실행할 때 :now 를 넘겨야 한다.
     """
-    try:
-        tree = sqlglot.parse_one(sql, read="sqlite")
-    except SqlglotError:
-        return False
+    if "screening" not in query.tables:
+        return query
+    tree = sqlglot.parse_one(query.sql, read="sqlite")
+    for select in list(tree.find_all(exp.Select)):
+        from_ = select.args.get("from_")
+        if from_ and _is_screening(from_.this):
+            select.where(_not_started(from_.this), append=True, copy=False)
+        for join in select.args.get("joins") or []:
+            if _is_screening(join.this):
+                on = join.args.get("on")
+                cond = _not_started(join.this)
+                join.set("on", exp.and_(on, cond) if on else cond)
+    return ValidatedSql(
+        sql=tree.sql(dialect="sqlite"), tables=query.tables, limit_capped=query.limit_capped
+    )
 
-    def is_starts_at(node: exp.Expression) -> bool:
-        return isinstance(node, exp.Column) and node.name.lower() == "starts_at"
 
-    for cmp in tree.find_all(exp.GT, exp.GTE):
-        if is_starts_at(cmp.this):
-            return True
-    return any(is_starts_at(cmp.expression) for cmp in tree.find_all(exp.LT, exp.LTE))
+def _is_screening(node: exp.Expression) -> bool:
+    # 같은 이름의 CTE 는 실제 표가 아니다(그 CTE 안의 SELECT 가 따로 조건을 받는다)
+    return (
+        isinstance(node, exp.Table)
+        and node.name.lower() == "screening"
+        and not node.db
+        and node.name.lower() not in _ctes_in_scope(node)
+    )
+
+
+def _not_started(table: exp.Table) -> exp.Expression:
+    return exp.GT(
+        this=exp.column("starts_at", table=table.alias_or_name),
+        expression=exp.Placeholder(this="now"),
+    )
 
 
 def sql_template(sql: str) -> str | None:

@@ -15,8 +15,8 @@ REJECTED 로 끝난다(#92 리뷰).
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -25,12 +25,14 @@ from pydantic import BaseModel
 from seatsac_ai.api.deps import current_user_id
 from seatsac_ai.resources import fill_example, presets
 from seatsac_ai.snapshot.store import SnapshotNotReady
+from seatsac_ai.sql.executor import SqlExecutionError, execute
+from seatsac_ai.sql.validator import ValidatedSql, validate
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 _DEMO_MOVIE_SQL = """
 SELECT m.title FROM screening s JOIN movie m ON m.movie_id = s.movie_id
-WHERE s.starts_at > ?
+WHERE s.starts_at > :now
 GROUP BY m.movie_id ORDER BY count(*) DESC, m.title LIMIT 1
 """
 
@@ -54,6 +56,11 @@ class ShowingMovie:
 _NOT_READY = ShowingMovie(ready=False, title=None)
 
 
+@lru_cache(maxsize=1)
+def _demo_movie_query() -> ValidatedSql:
+    return validate(_DEMO_MOVIE_SQL)
+
+
 def showing_movie(request: Request) -> ShowingMovie:
     """지금(스토어 시계) 이후 회차가 가장 많은 영화. 동기 SQLite라 to_thread로 부른다."""
     snapshot = getattr(request.app.state, "snapshot", None)
@@ -61,13 +68,13 @@ def showing_movie(request: Request) -> ShowingMovie:
         return _NOT_READY
     now = f"{snapshot.store.now():%Y-%m-%d %H:%M}"
     try:
-        with snapshot.store.reader() as conn:
-            row = conn.execute(_DEMO_MOVIE_SQL, (now,)).fetchone()
-    except (SnapshotNotReady, sqlite3.Error):
-        # 스냅샷 연결은 /ai/chat 실행기와 함께 쓴다. 실행기가 건 5초 중단(progress handler)이
-        # 이 질의를 끊을 수 있으므로, 실패하면 준비 전처럼 둔다 — 버튼 목록은 500을 내지 않는다
+        # 스냅샷 연결은 /ai/chat 과 함께 쓰므로 실행기(execute: 잠금 + 시간 제한)로 부른다.
+        # 잠금 밖에서 쓰면 /ai/chat 의 5초 중단에 끊길 수 있었다(#101 리뷰)
+        result = execute(snapshot.store, _demo_movie_query(), {"now": now}, max_rows=1)
+    except (SnapshotNotReady, SqlExecutionError):
+        # 그래도 실패하면 준비 전처럼 둔다 — 버튼 목록은 500을 내지 않는다
         return _NOT_READY
-    return ShowingMovie(ready=True, title=row[0] if row else None)
+    return ShowingMovie(ready=True, title=result.rows[0][0] if result.rows else None)
 
 
 @router.get("/presets")

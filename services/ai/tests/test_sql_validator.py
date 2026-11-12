@@ -7,7 +7,7 @@ from seatsac_ai.sql.validator import (
     NOT_SELECT,
     PARSE_ERROR,
     SqlRejected,
-    filters_started,
+    exclude_started,
     validate,
 )
 
@@ -112,16 +112,44 @@ def test_sql_template_hides_values_for_logs():
 @pytest.mark.parametrize(
     ("sql", "expected"),
     [
-        ("SELECT * FROM screening s WHERE s.starts_at > '2026-11-17 19:40'", True),
-        ("SELECT * FROM screening WHERE starts_at >= '2026-11-17 20:00'", True),
-        ("SELECT * FROM screening s WHERE '2026-11-17 19:40' < s.starts_at", True),
-        ("SELECT * FROM screening WHERE business_date = '2026-11-17'", False),
-        ("SELECT * FROM screening s WHERE s.starts_at < '2026-11-17 23:00'", False),
-        ("SELECT count(*) FROM screening", False),
+        # FROM 은 WHERE 에 AND 로
+        (
+            "SELECT s.starts_at FROM screening s WHERE s.starts_at >= '2026-11-17 20:00'",
+            "SELECT s.starts_at FROM screening AS s "
+            "WHERE s.starts_at >= '2026-11-17 20:00' AND s.starts_at > :now LIMIT 500",
+        ),
+        # 별칭 없음 · WHERE 없음
+        (
+            "SELECT count(*) FROM screening",
+            "SELECT COUNT(*) FROM screening WHERE screening.starts_at > :now LIMIT 500",
+        ),
+        # JOIN 은 ON 에
+        (
+            "SELECT m.title FROM movie m LEFT JOIN screening s ON s.movie_id = m.movie_id",
+            "SELECT m.title FROM movie AS m LEFT JOIN screening AS s "
+            "ON s.movie_id = m.movie_id AND s.starts_at > :now LIMIT 500",
+        ),
+        # 서브쿼리 안의 screening 도
+        (
+            "SELECT title FROM movie WHERE movie_id IN (SELECT movie_id FROM screening)",
+            "SELECT title FROM movie WHERE movie_id IN "
+            "(SELECT movie_id FROM screening WHERE screening.starts_at > :now) LIMIT 500",
+        ),
+        # screening 을 읽지 않으면 그대로
+        ("SELECT title FROM movie", "SELECT title FROM movie LIMIT 500"),
     ],
 )
-def test_filters_started(sql, expected):
-    assert filters_started(sql) is expected
+def test_exclude_started(sql, expected):
+    assert exclude_started(validate(sql)).sql == expected
+
+
+def test_exclude_started_filters_inside_a_cte_not_the_cte_reference():
+    sql = "WITH upcoming AS (SELECT movie_id FROM screening) SELECT count(*) FROM upcoming"
+    out = exclude_started(validate(sql)).sql
+    assert out == (
+        "WITH upcoming AS (SELECT movie_id FROM screening WHERE screening.starts_at > :now) "
+        "SELECT COUNT(*) FROM upcoming LIMIT 500"
+    )
 
 
 @pytest.mark.parametrize(

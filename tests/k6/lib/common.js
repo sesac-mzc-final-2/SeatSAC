@@ -1,8 +1,8 @@
 // k6 스크립트 공통 — 토큰·UUID·오류 읽기. 외부 jslib을 import하지 않는다
 // (부하 테스트가 외부 의존으로 흔들리지 않게).
 
-/** 클러스터 안에서는 gateway Service를 직접 부른다 → /api 접두사가 없다 */
-export const BASE = __ENV.BASE_URL || "http://gateway:8080";
+/** 클러스터 안에서는 gateway Service를 직접 부른다 — gateway 라우트가 Path=/api/...라 /api 접두사는 그대로 붙인다(gateway가 StripPrefix=1로 뗀다) */
+export const BASE = __ENV.BASE_URL || "http://gateway:8080/api";
 
 /**
  * Cognito 테스트 계정 토큰. 인증 API 요청 수 제한 때문에 k6 안에서 로그인하지 않고 미리 발급해 둔다

@@ -44,7 +44,12 @@ HTTP_SERVER_REQUESTS = Histogram(
 AI_CHAT = Counter("ai_chat", "Chat requests by path and result", ["path", "result"])
 AI_TOKENS = Counter("ai_tokens", "Claude API tokens", ["kind", "path"])
 AI_CACHE_REQUESTS = Counter("ai_cache_requests", "Cache lookups", ["layer", "result"])
-AI_LLM_CALL_SECONDS = Histogram("ai_llm_call_seconds", "Claude API call duration", ["result"])
+# Claude 호출 한도 15초(APP_AI_LLM_TIMEOUT_SECONDS)까지 p95가 보이게.
+# 기본 버킷은 10초에서 잘린다(#95 리뷰)
+LLM_CALL_BUCKETS = (0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25)
+AI_LLM_CALL_SECONDS = Histogram(
+    "ai_llm_call_seconds", "Claude API call duration", ["result"], buckets=LLM_CALL_BUCKETS
+)
 AI_SQL_EXEC_SECONDS = Histogram("ai_sql_exec_seconds", "SQLite execution duration")
 AI_REJECTED = Counter("ai_rejected", "SQL validator rejections", ["reason"])
 AI_SNAPSHOT_AGE_SECONDS = Gauge("ai_snapshot_age_seconds", "Snapshot age", ["scope"])

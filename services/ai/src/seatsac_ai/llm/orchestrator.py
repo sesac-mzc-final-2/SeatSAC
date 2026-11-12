@@ -217,6 +217,8 @@ class ChatService:
                     messages += _feedback(call, retry.message)
         except LlmUnavailable as exc:
             AI_CHAT.labels(failed_path, "error").inc()
+            # 앞선 호출이 성공했다면 그 토큰은 이미 비용이 나갔다 — 실패한 질문이라도 센다
+            _count_tokens(usage, failed_path)
             raise llm_unavailable(exc.reason) from exc  # type: ignore[arg-type]
         # 재요청을 다 쓰고도 실패
         last = last_rejection or {}
@@ -253,7 +255,7 @@ class ChatService:
     ) -> tuple[dict[str, Any] | None, list[float] | None]:
         entry = await cache.get_exact(ext.key_text)
         if entry is not None and entry.kinds != ext.kinds:
-            entry = None  # 슬롯 종류가 다르면 버린다 — 지표도 놓친 것으로 센다(#94 리뷰)
+            entry = None  # 키는 같은데 슬롯 종류가 다르면 쓰지 않는다(hit로 세지 않음)
         AI_CACHE_REQUESTS.labels("exact", "hit" if entry else "miss").inc()
         path = "CACHE_EXACT"
         vector = None
@@ -431,14 +433,7 @@ class ChatService:
     def _record(self, question: str, body: dict[str, Any], usage: Usage) -> None:
         path = body["path"].lower()
         AI_CHAT.labels(path, "ok").inc()
-        for kind, n in (
-            ("input", usage.input),
-            ("output", usage.output),
-            ("cache_read", usage.cache_read),
-            ("cache_write", usage.cache_write),
-        ):
-            if n:
-                AI_TOKENS.labels(kind, path).inc(n)
+        _count_tokens(usage, path)
         digest = hmac.new(_HASH_KEY, question.encode(), hashlib.sha256).hexdigest()[:16]
         log.info(
             "chat answered",
@@ -478,6 +473,18 @@ def _feedback(call: ToolCall, message: str) -> list[dict[str, Any]]:
             ],
         },
     ]
+
+
+def _count_tokens(usage: Usage, path: str) -> None:
+    """ai_tokens_total. input·output = 우리 캐시가 줄이는 비용, cache_* = 프롬프트 캐싱(따로)."""
+    for kind, n in (
+        ("input", usage.input),
+        ("output", usage.output),
+        ("cache_read", usage.cache_read),
+        ("cache_write", usage.cache_write),
+    ):
+        if n:
+            AI_TOKENS.labels(kind, path).inc(n)
 
 
 def _semantic_match(entry: CacheEntry, similarity: float, ext: Extracted, threshold: float) -> bool:

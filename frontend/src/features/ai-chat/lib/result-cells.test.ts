@@ -14,6 +14,9 @@ describe("result-cells", () => {
   it("금액·비율·숫자·null", () => {
     expect(formatCell({ name: "amount", type: "integer" }, 30000)).toBe("30,000원");
     expect(formatCell({ name: "remaining_ratio", type: "real" }, 0.065)).toBe("6.5%");
+    expect(formatCell({ name: "remaining_ratio", type: "real" }, 1)).toBe("100%");
+    // SQL 이 이미 ×100 한 값은 그대로 퍼센트 — 650% 로 보이지 않게
+    expect(formatCell({ name: "remaining_ratio", type: "real" }, 6.5)).toBe("6.5%");
     expect(formatCell({ name: "remaining_seats", type: "integer" }, 1210)).toBe("1,210");
     expect(formatCell({ name: "director", type: "text" }, null)).toBe("–");
   });

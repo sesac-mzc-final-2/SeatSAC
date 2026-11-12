@@ -51,7 +51,11 @@ export function formatCell(column: Pick<ChatColumn, "name" | "type">, value: Cha
   if (column.name === "id" || column.name.endsWith("_id")) return String(value);
   if (typeof value === "number") {
     if (column.name === "amount") return formatWon(value);
-    if (column.name.endsWith("_ratio")) return `${Math.round(value * 1000) / 10}%`;
+    if (column.name.endsWith("_ratio")) {
+      // 비율은 0~1 소수가 기준(ai schema.yaml). SQL 이 이미 ×100 한 값(1 초과)이면 그대로 퍼센트로 본다
+      const percent = value > 1 ? value : value * 100;
+      return `${Math.round(percent * 10) / 10}%`;
+    }
     return value.toLocaleString("ko-KR");
   }
   const time = KST_MINUTE.exec(value);

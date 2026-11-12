@@ -1238,6 +1238,130 @@ infra/scripts/cluster-scale.sh down ng-ai
 | 재생성 리허설 3.1.15 | `ng-ai` 0 · 플래그 off로 기록 | 소요 시간 비교 기준 유지 |
 | staging에서 ai 확인(M6 중) | 테스트가 돌지 않는 시간에만, 스크럼에서 시간 공유 | — |
 
+#### 6-G-6. 의미 캐시 벡터 검색 확인 (3.4.5, ai Valkey — #94 머지 전 1회, 김종식) — ✅ 11/11
+
+> **확인 결과 (2026-11-11)**: `valkey_version:8.2.0` · `FT.CREATE OK` · `FT.SEARCH` 1건(`score 0`, `entry e1`) → **벡터 검색 동작, 의미 캐시 사용 가능**. 클러스터를 다시 만들거나 엔진 버전을 바꾸면 다시 확인한다.
+
+3.4.5 의미 캐시는 ai Valkey의 valkey-search(`FT.CREATE … VECTOR HNSW`·`FT.SEARCH … KNN`)를 쓴다. ElastiCache `cinema-staging-ai-valkey`(Valkey 8.2, `reserved-memory-percent 50`)에서 이 명령이 되는지 **#94 머지 전에** 한 번 확인한다. 안 되면 앱은 자동으로 정확 일치 캐시만 쓴다(런타임 계약 9-1 B1) — 장애는 아니지만 2차 데모(의미 캐시 적중)를 바꿔야 하므로 미리 안다.
+
+- 조건: 6-G-5 「staging에서 ai 확인(M6 중)」 — 4.2.1·4.2.2가 돌지 않는 시간, 스크럼에 시간 공유. 노드 켜짐 시간(평일 08:23~23:07)
+- 방법: ai Valkey는 노드 보안그룹에서만 열려 있어 **이미 떠 있는 ai 파드 안에서** `kubectl exec`로 확인한다(새 리소스를 만들지 않는다). 지금 staging ai 이미지에는 `redis` 패키지가 없어(#93에서 추가) **표준 라이브러리만 쓰는** 스크립트를 stdin으로 넘긴다
+- 쓰는 키: 확인용 인덱스 `ai_semcheck_idx` · 키 `ai:semcheck:0~2`(TTL 120초, conventions 4장 ai Valkey 표). 끝나면 바로 지운다. 앱의 `ai_semcache_idx`·`ai:semcache:*`는 건드리지 않는다
+
+```bash
+export AWS_PROFILE=cinema-admin
+infra/scripts/cluster-scale.sh status ng-ai     # desired를 적어 둔다 — 이미 1이면 다른 확인이 쓰는 중이니 마지막 down을 하지 않는다
+infra/scripts/cluster-scale.sh up ng-ai
+kubectl -n cinema-staging rollout status deployment/ai --timeout=10m
+kubectl -n cinema-staging exec -i deploy/ai -- python - <<'PY'
+# ai Valkey 벡터 검색 확인 (런북 6-G-6) — 표준 라이브러리만, RESP2
+import os, socket, ssl, struct, time
+
+host = os.environ["AI_VALKEY_HOST"]
+port = int(os.environ.get("APP_AI_VALKEY_PORT", "6379"))
+sock = ssl.create_default_context().wrap_socket(socket.create_connection((host, port), timeout=5), server_hostname=host)
+rf = sock.makefile("rb")
+
+def read():
+    line = rf.readline().rstrip(b"\r\n")
+    kind, rest = line[:1], line[1:]
+    if kind == b"+": return rest.decode()
+    if kind == b"-": raise RuntimeError(rest.decode())
+    if kind == b":": return int(rest)
+    if kind == b"$":
+        n = int(rest)
+        if n < 0: return None
+        data = rf.read(n + 2)[:-2]
+        try: return data.decode()
+        except UnicodeDecodeError: return f"<{n} bytes>"
+    if kind == b"*":
+        n = int(rest)
+        return None if n < 0 else [read() for _ in range(n)]
+    raise RuntimeError(f"모르는 응답: {line[:40]!r}")
+
+def cmd(*args):
+    parts = [b"*%d\r\n" % len(args)]
+    for a in args:
+        b = a if isinstance(a, bytes) else str(a).encode()
+        parts.append(b"$%d\r\n%s\r\n" % (len(b), b))
+    sock.sendall(b"".join(parts))
+    return read()
+
+IDX, PFX, DIM = "ai_semcheck_idx", "ai:semcheck:", 384
+def vec(i):
+    v = [0.0] * DIM
+    v[i] = 1.0
+    return struct.pack(f"<{DIM}f", *v)
+
+print("PING", cmd("PING"))
+try: print([l for l in cmd("INFO", "server").splitlines() if l.startswith(("valkey_version", "redis_version"))])
+except RuntimeError as exc: print("INFO 실패(확인과 무관):", exc)
+try:                                   # 지난번 확인이 중간에 끊겼을 때 남은 것
+    for i in range(3):
+        cmd("DEL", f"{PFX}{i}")
+    cmd("FT.DROPINDEX", IDX)
+except (RuntimeError, OSError): pass
+result, unsupported = "unknown", False
+try:
+    # #94 cache/store.py ValkeySearchIndex.ensure()와 같은 모양
+    try:
+        print("FT.CREATE", cmd("FT.CREATE", IDX, "ON", "HASH", "PREFIX", "1", PFX,
+                               "SCHEMA", "kinds", "TAG",
+                               "embedding", "VECTOR", "HNSW", "6",
+                               "TYPE", "FLOAT32", "DIM", DIM, "DISTANCE_METRIC", "COSINE"))
+    except RuntimeError as exc:
+        unsupported = "unknown command" in str(exc).lower()   # 명령 자체가 없다 = 미지원 확정
+        raise
+    for i, kinds in ((0, "time"), (1, "time"), (2, "date")):
+        key = f"{PFX}{i}"
+        # HSET·EXPIRE를 한 트랜잭션으로 — 사이에 끊겨도 TTL 없는 ai:* 키가 남지 않는다(noeviction)
+        cmd("MULTI")
+        cmd("HSET", key, "embedding", vec(i), "kinds", kinds, "entry", f"e{i}")
+        cmd("EXPIRE", key, 120)
+        cmd("EXEC")
+    time.sleep(1)                      # 인덱스 반영 대기
+    # #94 nearest()와 같은 모양: 슬롯 종류 TAG로 거른 뒤 KNN 1
+    reply = cmd("FT.SEARCH", IDX, "(@kinds:{time})=>[KNN 1 @embedding $vec AS score]",
+                "PARAMS", "2", "vec", vec(1), "RETURN", "2", "score", "entry", "DIALECT", "2")
+    print("FT.SEARCH", reply)          # 기대: [1, 'ai:semcheck:1', ['score', '0', 'entry', 'e1']] (필드 순서는 다를 수 있다)
+    # 1건 · 그 문서가 e1 · score(COSINE 거리)가 0에 가까움 — 같은 벡터를 넣었으므로 거리 0이어야 한다
+    fields = dict(zip(reply[2][::2], reply[2][1::2])) if reply and reply[0] == 1 and len(reply) > 2 else {}
+    try: score = float(fields.get("score", "nan"))
+    except (TypeError, ValueError): score = float("nan")
+    result = "ok" if fields.get("entry") == "e1" and abs(score) < 1e-3 else "unknown"
+except (RuntimeError, OSError) as exc:
+    print("오류:", exc)
+    if unsupported:
+        result = "unsupported"
+finally:
+    try: cmd("DISCARD")                # MULTI 도중 오류로 빠져나왔으면 대기열을 버린다(아니면 아래 정리가 실행되지 않고 쌓이기만 한다)
+    except (RuntimeError, OSError): pass   # MULTI 밖이면 "DISCARD without MULTI" — 정상
+    try:                               # 연결이 끊겼으면 키는 TTL 120초로 사라지고, 남은 것은 다음 실행 첫머리에서 지운다
+        for i in range(3):
+            cmd("DEL", f"{PFX}{i}")
+        cmd("FT.DROPINDEX", IDX)
+    except (RuntimeError, OSError):
+        pass
+print({
+    "ok": "✅ 벡터 검색 동작 — 의미 캐시 사용 가능",
+    "unsupported": "❌ 벡터 검색 미지원(FT.CREATE 없음) — 정확 일치 캐시만(B1)",
+    "unknown": "⚠️ 판정 못 함(연결·OOM·0건 등) — 위 출력을 보고 아래 표대로 다시 확인",
+}[result])
+PY
+# 끄기는 직접 판단해서 한 줄만 실행한다(블록째 붙여 넣어도 꺼지지 않게 주석으로 둔다):
+#   처음 status에서 desired가 0이었고, 스크럼에 공유된 다른 ai 확인이 지금 없을 때만
+# infra/scripts/cluster-scale.sh down ng-ai
+```
+
+| 결과 | 뜻 · 다음 일 |
+| --- | --- |
+| `✅` (`FT.SEARCH`가 1건, `entry e1`, `score` ≈ 0) | 의미 캐시 사용 가능. #94 PR에 결과 한 줄(Valkey 버전·시각) 남기기 |
+| `❌ 미지원` (`ERR unknown command 'FT.CREATE'`) | 이 클러스터에 valkey-search가 없다 → 앱은 정확 일치 캐시만 쓴다. 2차 데모 시나리오에서 「의미 캐시 적중」을 빼거나, ai Valkey 엔진·노드 종류 변경을 검토(Terraform — M6 금지, rc2 뒤 결정). 김서현에게 공유 |
+| `⚠️ 판정 못 함` — `FT.CREATE` OK인데 `FT.SEARCH` 0건이거나 `score`가 0이 아님 | 인덱스 반영이 늦었을 수 있다 → 스크립트를 한 번 더. 그래도 0건이면 질의 문법(TAG·KNN) 차이 → 출력 그대로 #94에 남기기 |
+| `KeyError: 'AI_VALKEY_HOST'` | ai 파드에 `cinema-infra-endpoints`가 안 들어갔다 → 6-G-1 3단계 |
+| 연결 시간 초과 | ai Valkey 보안그룹(노드 SG → 6379)에 `ng-ai` 노드가 빠졌다 → `ai_valkey.tf` 인바운드 확인 |
+| `OOM command not allowed` | ai Valkey 메모리가 찼다(`noeviction`) → 메모리 경보·`INFO memory` 확인 |
+
 ### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)
 
 코드: SeatSAC `tests/k6/`(시나리오 4개 · `run-in-cluster.sh` · `tools/loadtest_users.py`·`pick_targets.py`·`sse_lag.py`) · SeatSAC-gitops `base/gateway/networkpolicy.yaml`(`k6-loadtest` → gateway 허용). Terraform 변경 없음. 시나리오·읽는 법은 `tests/k6/README.md`
@@ -1249,7 +1373,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 | 사용자당 진행 중 선점 1건 | `run-in-cluster.sh user-hold` | 체크 5개 전부 ✓ |
 | 다른 화면 반영 1초 이내 | `tools/sse_lag.py`(CloudFront 경유, 화면과 같은 경로) + `deploy` 부하 | 이벤트 지연 p95 ≤ 1초, 하트비트 15초 간격 |
 | 만료 반영 2초 | Prometheus `booking_hold_expiry_lag_seconds` (contention 승자의 선점이 300초 뒤 만료) | p95 < 2초 |
-| (참고) 커넥션 풀 | `hikaricp_connections_pending{application="booking"}` | 0 — 0이 아니면 풀 5 → 10 검토(남궁일) |
+| (참고) 커넥션 풀 | `hikaricp_connections_acquire_seconds_max{application="booking"}` (커넥션 얻기까지 기다린 최대 시간) | 0.1초 미만 — 크면 풀 대기가 지연의 원인(11/11: 풀 5에서 0.547초 → booking 15) |
 
 **GitOps 예외**: 이 테스트는 관리자(`cinema-admin`)가 `run-in-cluster.sh`로 **실행 중에만 있는** Job·ConfigMap(스크립트)·Secret(토큰)을 `cinema-staging`에 만들고 끝나면 지운다. 라벨 `app.kubernetes.io/name=k6-loadtest`로만 만들고 지우며, ArgoCD가 관리하는 리소스는 건드리지 않는다(추적 라벨이 없어 selfHeal·prune 대상이 아님). 스크립트는 Job을 먼저 만들고 ConfigMap·Secret은 처음부터 Job의 ownerReference를 달고 만든다 → 중간에 죽어도 Job TTL(15분) 뒤 같이 지워진다. 남았으면 `tests/k6/run-in-cluster.sh cleanup`
 
@@ -1316,7 +1440,7 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090:909
 | --- | --- | --- |
 | 만료 반영 | `histogram_quantile(0.95, sum by (le) (increase(booking_hold_expiry_lag_seconds_bucket[15m])))` | < 2 — **파드 기동 후 10분 안의 첫 스윕은 제외**(노드 0대 구간 뒤 밀린 만료가 한 번 크게 찍힌다, 런타임 계약 5장) |
 | 선점 결과 | `sum by (result) (increase(booking_seat_hold_total[10m]))` | contention 직후 success 1 · conflict 99 근처 |
-| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_pending{application="booking"}[15m])` | 0 |
+| 커넥션 풀 대기 | `max_over_time(hikaricp_connections_acquire_seconds_max{application="booking"}[5m])` · 쿼리 1건 시간 `…usage_seconds_max` — **각 실행이 끝나고 2분 안에** 조회한다 | acquire 0.1초 미만. `hikaricp_connections_pending`은 순간값이라 15초 수집 간격에서 1초짜리 경쟁을 놓친다 — `_max`(최근 최댓값)를 본다. `_max`는 최근 약 2분(Micrometer 기본 `distributionStatisticExpiry`)만 유지하고, 범위를 넓히면 앞 실행 값이 섞인다 — 300초 뒤 다시 돌린 회차도 그 회차가 끝난 직후 5분 범위로 따로 잰다 |
 | 5xx | `sum(increase(http_server_requests_seconds_count{status=~"5..",uri!~"/actuator.*"}[15m])) by (application)` | 0 (ai 제외) |
 | CPU | `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="cinema-staging",container!=""}[1m]))` | 리포트에 최대값 |
 
@@ -1349,6 +1473,7 @@ rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파
 | 증상 | 원인 · 조치 |
 | --- | --- |
 | 요청이 전부 타임아웃(`status 0`, `server_errors`) | gateway NetworkPolicy에 `k6-loadtest` 허용이 없다 → gitops `base/gateway/networkpolicy.yaml` 확인(6-E 표) |
+| 요청이 전부 404 `NOT_FOUND` | `BASE_URL`에 `/api`가 빠졌다 — gateway 라우트가 `/api/...`로 받고 gateway가 직접 뗀다(StripPrefix=1). `-e BASE_URL=`을 따로 넘기지 않는다(기본값 `http://gateway:8080/api`) |
 | 401 | 토큰 만료 — `loadtest_users.py refresh` → `tokens --out` 다시 |
 | `hold_active_hold > 0` | 토큰이 VU보다 적거나 같은 사용자가 그 회차에 선점을 남겼다 → 300초 기다리거나 다른 회차(`pick_targets.py`) |
 | 400 `SCREENING_STARTED`(`BOOKING_CLOSED`) | 회차 시작 5분 전부터 마감 → `pick_targets.py`로 다시 고른다 |

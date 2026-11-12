@@ -122,6 +122,7 @@
 | `ai:session:{userId}:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·슬롯). 파드가 바뀌어도 유지. **키에 `X-User-Id`를 넣어 사용자별로 격리**한다 — 다른 사용자의 `sessionId`를 보내도 그 사용자 키에는 닿지 않는다. `sessionId`는 서버가 UUID로 발급하고, 요청의 `sessionId`가 이 사용자 키에 없으면(만료·남의 것·위조) 새 세션으로 시작한다(오류 아님) |
 | `ai:quota:min:{userId}:{yyyyMMddHHmm}` · `ai:quota:day:{userId}:{yyyyMMdd}` | 60초 · 1일 | 사용 한도 카운터(분당 10·하루 100). gateway 요청 수 제한(ADR-62)과 별개인 **ai 앱 안** 한도 |
 | `ai:inflight:{userId}` | **40초** | 사용자당 동시 1건. `SET NX PX 40000`, 값은 요청마다 새 토큰. 끝나면 **값이 내 토큰일 때만** 지운다(Lua 비교 후 `DEL` — 늦게 끝난 요청이 다음 요청의 잠금을 지우지 않게). TTL 40초가 gateway 라우트 28초·요청 전체 기한 25초(`APP_AI_REQUEST_DEADLINE_SECONDS`)보다 길어 갱신 없이도 처리 중 만료되지 않는다. 파드가 죽어 못 지운 경우만 TTL로 풀린다 |
+| `ai:semcheck:0~2` (HASH, 인덱스 `ai_semcheck_idx`) | 120초 | 확인용(런북 6-G-6 의미 캐시 벡터 검색 확인). `HSET`·`EXPIRE`를 `MULTI/EXEC`로 함께 걸고 실행 끝에 키·인덱스를 지운다. 앱은 쓰지 않는다 |
 
 - "내 예매" 같은 **개인 질문은 캐시하지 않는다**(다른 사용자에게 적중 방지)
 - 파라미터 그룹: `maxmemory-policy noeviction`, `reserved-memory-percent 50`(t4g.micro에서 벡터 검색 필수 조건), TLS. `allkeys-lru`로 두면 메모리가 찰 때 한도·동시 1건 키(`ai:quota:*`·`ai:inflight:*`)도 지워져 한도를 우회할 수 있어서 **아무 키도 지우지 않는** `noeviction`으로 한다
@@ -407,7 +408,7 @@
 | `SPRING_DATASOURCE_URL` | `jdbc:mysql://${DB_HOST}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` |
 | `SPRING_DATASOURCE_USERNAME` | `{svc}_app` |
 | (`FLYWAY_URL`) | ⚠️ ConfigMap이 아니라 **Flyway Job의 env**(gitops `base/{svc}/flyway-job.yaml`): `DB_HOST`를 `cinema-infra-endpoints`에서 받아 `jdbc:mysql://$(DB_HOST):3306/{svc}_db?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&trustServerCertificate=false&disableSslHostnameVerification=false&sslMode=verify-full`로 조립(쿠버네티스 env 치환, 10/25). **Flyway Job 전용**(DB 쓰는 서비스만, 앱은 읽지 않는다). flyway 11.7 이미지에는 MySQL Connector/J가 없어 MariaDB Connector/J **2.7.x**가 `jdbc:mysql://`를 처리한다. 2.x의 TLS 옵션은 `useSsl`이고(`sslMode`는 3.x 옵션이라 2.x는 무시 → TLS가 켜지지 않아 `RSA public key is not available`로 실패), `serverSslCert`로 준 RDS CA로 **서버 인증서·호스트 이름을 검증**한다. `trustServerCertificate=false`·`disableSslHostnameVerification=false`는 2.x 기본값이지만 검증을 끄지 않는다는 뜻을 URL에 명시한다. CA는 ConfigMap `rds-ca-bundle`(Terraform `envs/staging-k8s/rds_ca.tf`)을 `/etc/rds-ca`에 마운트. `sslMode=verify-full`은 3.x로 바뀔 때를 위한 것 |
-| `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` |
+| `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` (booking만 `15` — 4.2.1 동시 선점에서 풀 대기 0.55초, 11/11). 연결 수(RDS db.t4g.small `max_connections` 약 170, 경보 `rds_connection_alarm` 130): 평소 booking 최대 4 × 15 = 60 + catalog 20·user 10·payment 5 = 95. booking 블루/그린 전환 순간~60초는 preview가 active 수까지 늘어(2장) 최대 8 × 15 = 120 + 35 = 155 → 경보. booking이 늘어난 상태의 전환(4.2.2·1차 데모) 전에 `maxReplicas` 2(95) 또는 풀 10(115)을 정한다 |
 | `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 Flyway 훅 Job) |
 | `SPRING_DATA_REDIS_HOST` / `_PORT` / `_SSL_ENABLED` | `${VALKEY_HOST}` / `6379` / `true` (Valkey 쓰는 서비스만) |
 
@@ -720,7 +721,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 | 테이블 | 컬럼 | 출처(공개 API) | 갱신 |
 | --- | --- | --- | --- |
-| `movie` | `movie_id` PK, `title`, `title_en`, `view_grade`, `slot_minutes`, `release_date`, `director`, `genres`(쉼표), `synopsis` | `GET /movies?status=NOW_SHOWING`을 `page=0`부터 `totalPages - 1`까지 모두 조회한 뒤 목록의 각 영화에 `GET /movies/{id}` 호출 | 10분 |
+| `movie` | `movie_id` PK, `title`, `title_en`, `view_grade`, `slot_minutes`, `runtime_minutes`, `release_date`, `director`, `genres`(쉼표), `synopsis` | `GET /movies?status=NOW_SHOWING`을 `page=0`부터 `totalPages - 1`까지 모두 조회한 뒤 목록의 각 영화에 `GET /movies/{id}` 호출 | 10분 |
 | `theater` | `theater_id` PK, `name`, `region`, `has_layout` | `GET /theaters?hasLayout=true` | 10분 |
 | `screening` | `screening_id` PK, `movie_id`, `theater_id`, `auditorium_id`, `auditorium_name`, `screen_type`, `business_date`(`YYYY-MM-DD`), `starts_at`·`ends_at`(KST `YYYY-MM-DD HH:MM`), `start_hour`(0~23), `film_format`, `total_seats`, `remaining_seats`, `remaining_seats_source`, `fetched_at` | `GET /screenings?date&theaterId` (극장 4곳 × 오늘~+6일) | **오늘 1분**, 나머지 10분 |
 | `snapshot_meta` | `table_name`, `scope`, `refreshed_at` | — | 적재마다 |

@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from seatsac_ai import __version__
 from seatsac_ai.api import actuator, chat, presets
+from seatsac_ai.bookings import MyBookingsClient
 from seatsac_ai.cache.embedder import FastEmbedder
 from seatsac_ai.cache.store import ChatCache, Embedder, ValkeySearchIndex
 from seatsac_ai.common.errors import install_exception_handlers
@@ -47,6 +48,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await snapshot.stop()
         if app.state.valkey is not None:
             await app.state.valkey.aclose()
+        if app.state.bookings is not None:
+            await app.state.bookings.aclose()
 
 
 def create_app(
@@ -123,13 +126,24 @@ def create_app(
             index=semantic_index if settings.semantic_cache_enabled else None,
         )
 
+    # "내 예매"(3.4.10) — 스냅샷과 같은 공개 API 주소
+    app.state.bookings = (
+        MyBookingsClient(settings.public_api_base_url) if settings.public_api_base_url else None
+    )
+
     # 질문 처리(3.4.2·3.4.3). 스냅샷이 없으면 /ai/chat 은 503 AI_SNAPSHOT_NOT_READY
     app.state.chat = None
     if app.state.snapshot is not None:
         if llm is None:
             key = settings.anthropic_api_key
             llm = AnthropicClient(key.get_secret_value() if key else None, settings.ai_model)
-        app.state.chat = ChatService(app.state.snapshot.store, llm, settings, cache=app.state.cache)
+        app.state.chat = ChatService(
+            app.state.snapshot.store,
+            llm,
+            settings,
+            cache=app.state.cache,
+            bookings=app.state.bookings,
+        )
 
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)

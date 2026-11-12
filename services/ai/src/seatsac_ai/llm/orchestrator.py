@@ -2,7 +2,8 @@
 
   ③ 슬롯 추출 → ④ 정확 일치 캐시 → ⑤ 의미 캐시 → (못 찾으면) ⑥ Claude(프리셋/SQL/범위 밖)
   → ⑦ 실행 → ⑧ 성공한 PRESET·NL2SQL 캐시 저장 → ⑨ 답·로그·지표·세션
-나중에 끼워 넣을 단계: ② 개인 질문("내 예매") → 3.4.10
+  ② 개인 질문("내 예매")은 캐시·Claude보다 먼저
+     — 공개 API를 사용자 토큰으로 불러 템플릿 문장(bookings.py)
 ① 사용 한도는 이 함수 밖(api/chat.py)에서 QuotaLimiter 로 감싼다.
 캐시(ai Valkey)가 없으면(local) ③~⑤·⑧·세션을 건너뛰고 늘 Claude로 답한다.
 
@@ -29,10 +30,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from seatsac_ai import bookings as my_bookings
 from seatsac_ai.cache import template as tpl
 from seatsac_ai.cache.slots import Extracted, extract, is_followup, meaning_signature
 from seatsac_ai.cache.store import CacheEntry, ChatCache
-from seatsac_ai.common.errors import llm_unavailable, snapshot_not_ready
+from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
@@ -106,9 +108,11 @@ class ChatService:
         settings: Settings,
         clock: Callable[[], datetime] = lambda: datetime.now(KST),
         cache: ChatCache | None = None,
+        bookings: my_bookings.MyBookingsClient | None = None,
     ) -> None:
         self._store = store
         self._cache = cache
+        self._bookings = bookings
         self._clock = clock  # 테스트가 "지금"을 고정할 때만 바꾼다
         self._llm = llm
         self._s = settings
@@ -126,6 +130,7 @@ class ChatService:
         *,
         user_id: str | None = None,
         session_id: str | None = None,
+        authorization: str | None = None,
     ) -> dict[str, Any]:
         """계약 ChatResponse. 캐시가 있으면 sessionId 도 채운다(없으면 api/chat.py 가 새로 발급)."""
         started = time.monotonic()
@@ -149,8 +154,11 @@ class ChatService:
         ext: Extracted | None = None
         vector: list[float] | None = None
         try:
+            # ② 개인 질문 — Claude·캐시 없이
+            if self._bookings is not None and my_bookings.is_personal(question):
+                body = await self._my_bookings(authorization, now)
             # ③④⑤ 캐시
-            if cache is not None and not skip_cache:
+            elif cache is not None and not skip_cache:
                 ext = self._extract(question, now)
                 if ext.cacheable:
                     body, vector = await self._from_cache(cache, ext, system_params, deadline)
@@ -176,7 +184,8 @@ class ChatService:
         body["latencyMs"] = int((time.monotonic() - started) * 1000)
         self._record(question, body, usage)
         if cache is not None and user_id is not None and sid is not None:
-            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE"):
+            # MY_BOOKINGS도 저장하지 않는다 — SQL 없는 문맥이라 후속 질문에 못 쓴다(#96 리뷰)
+            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS"):
                 await cache.save_session(
                     user_id, sid, {"question": question, "sql": body["sql"], "path": body["path"]}
                 )
@@ -230,6 +239,32 @@ class ChatService:
             message=last.get("message"),
         )
         return rejected, None, calls
+
+    # --- 내 예매 --------------------------------------------------------------
+
+    async def _my_bookings(self, authorization: str | None, now: datetime) -> dict[str, Any]:
+        try:
+            page = await self._bookings.fetch(authorization)  # type: ignore[union-attr]
+        except ApiError as exc:
+            # 공개 API 장애(503)만 오류로 센다. 토큰 없음·만료(401)는 사용자 쪽 문제(#96 리뷰)
+            if exc.status >= 500:
+                AI_CHAT.labels("my_bookings", "error").inc()
+            raise
+        rows = my_bookings.to_rows(page.items)
+        more = f" 최근 {len(rows)}건만 확인했습니다(전체 {page.total}건)." if page.truncated else ""
+        as_of = now.isoformat(timespec="seconds")
+        return {
+            "answer": f"{my_bookings.answer_text(rows, now)}{more} ({_clock(as_of)} 기준)",
+            "path": "MY_BOOKINGS",
+            "columns": my_bookings.COLUMNS,
+            "rows": rows,
+            "rowCount": len(rows),
+            "truncated": page.truncated,
+            "sql": None,
+            "presetId": None,
+            "asOf": as_of,
+            "rejection": None,
+        }
 
     # --- 캐시 -----------------------------------------------------------------
 

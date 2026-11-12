@@ -54,6 +54,17 @@ describe("AiChatDock (3.3.7)", () => {
     expect(await screen.findByRole("button", { name: "오늘 ○시 이후 회차" })).toBeInTheDocument();
   });
 
+  it("presets 응답을 기다리는 동안은 입력은 받되 보내지 않는다 — 플래그 off 인지 아직 모른다", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+    renderDock();
+    await userEvent.click(screen.getByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "오늘 20시 이후{Enter}");
+    expect(screen.getByRole("textbox", { name: "질문" })).toHaveValue("오늘 20시 이후");
+    expect(screen.getByRole("button", { name: "보내기" })).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/ai/presets", expect.anything());
+  });
+
   it("추천 질문이 404(플래그 off)면 준비 중 안내, 닫으면 버튼을 숨긴다", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       json(404, { code: "NOT_FOUND", message: "x", traceId: TRACE, details: [] }),

@@ -56,6 +56,7 @@ export function AiChatDock() {
           draft={draft}
           onDraftChange={setDraft}
           presets={presets.data?.items ?? []}
+          checking={presets.isLoading}
           notReady={notReady}
           unavailable={unavailable}
           onRetryAvailability={() => void presets.refetch()}

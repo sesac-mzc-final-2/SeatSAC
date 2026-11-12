@@ -13,6 +13,8 @@ interface Props {
   draft: string;
   onDraftChange: (draft: string) => void;
   presets: ChatPreset[];
+  /** 추천 질문 API 응답 대기 중 — 플래그 off 를 아직 모르니 입력은 받되 전송만 막는다 */
+  checking: boolean;
   /** 추천 질문 API 가 404(gateway 플래그 off) — 「준비 중」 안내만, 닫으면 Dock 이 버튼을 숨긴다 */
   notReady: boolean;
   /** 추천 질문 API 가 503 등으로 실패 — 챗봇을 비활성 안내로 */
@@ -28,6 +30,7 @@ export function ChatPanel({
   draft,
   onDraftChange: setDraft,
   presets,
+  checking,
   notReady,
   unavailable,
   onRetryAvailability,
@@ -41,7 +44,7 @@ export function ChatPanel({
   const { entries, ask, restart, isPending, cooldownSeconds } = chat;
 
   const disabled = notReady || unavailable;
-  const blocked = disabled || isPending || cooldownSeconds > 0;
+  const blocked = disabled || checking || isPending || cooldownSeconds > 0;
   const trimmed = draft.trim();
   const tooLong = draft.length > MAX_MESSAGE_LENGTH;
 
@@ -67,14 +70,14 @@ export function ChatPanel({
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!tooLong) send(draft);
+    if (!blocked && !tooLong) send(draft);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // 한글 조합 중 Enter 는 글자 확정이라 보내지 않는다
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (!tooLong) send(draft);
+      if (!blocked && !tooLong) send(draft);
     }
   };
 

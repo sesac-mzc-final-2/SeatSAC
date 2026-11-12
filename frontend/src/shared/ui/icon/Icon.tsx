@@ -32,6 +32,9 @@ const PATHS = {
   "grip-vertical": "M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01",
   trash: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3",
   save: "M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6",
+  send: "M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z",
+  "message-square": "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z",
+  plus: "M12 5v14M5 12h14",
 } as const;
 
 export type IconName = keyof typeof PATHS;

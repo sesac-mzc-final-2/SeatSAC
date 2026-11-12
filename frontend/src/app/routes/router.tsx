@@ -16,7 +16,7 @@ import { RouteErrorPage } from "./route-error-page";
 const page = (route: RouteObject): RouteObject => ({ ...route, errorElement: <RouteErrorPage /> });
 
 /**
- * 2.2.5 화면 목록. W9 `/admin/ai`(3.3.7)는 해당 WBS에서 추가한다.
+ * 2.2.5 화면 목록. AI 챗봇(3.3.7)은 별도 경로 없이 레이아웃 우하단 대화창이다(`features/ai-chat`, ADR-82 — 관리자 화면 없음).
  * `/callback`은 CloudFront가 쿼리를 무시하고 index.html을 주므로 SPA 라우트로 받는다.
  */
 export const router = createBrowserRouter([

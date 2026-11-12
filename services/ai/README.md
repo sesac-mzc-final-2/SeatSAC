@@ -37,12 +37,12 @@ uv run pytest
 | --- | --- | --- |
 | 로컬 | `uv run python -m eval.e2e --base http://localhost:8085` | Compose `valkey-ai`(6380) + `.env`의 개발 전용 키 + `PUBLIC_API_BASE_URL`(로컬 gateway 또는 staging CloudFront). Valkey가 없으면 5·6·11(캐시·세션)이 FAIL, 키가 없으면 Claude가 필요한 질문이 503 `CIRCUIT_OPEN` |
 | staging(port-forward) | `kubectl -n cinema-staging port-forward svc/ai 8085:8080` 뒤 같은 명령 | `ng-ai` 1대(김종식 `cluster-scale.sh up ng-ai`, 런북 6-G-2 A)·readiness UP. 4.2.1·4.2.2가 돌지 않는 시간에만(런북 6-G-5) |
-| CloudFront(플래그 off) | `--base https://<배포 도메인>/api --token "$TOKEN" --expect-disabled` | 라우트가 없어 **토큰이 있으면 404, 없으면 401**(gateway 인증이 라우팅보다 먼저) |
+| CloudFront(플래그 off) | `--base https://<배포 도메인>/api --token "$TOKEN" --expect-disabled` | 라우트가 없어 **토큰이 있으면 404, 없으면 401**(gateway 인증이 라우팅보다 먼저). 토큰 없는 401은 플래그가 켜져 있어도 같아서 `--token`이 필수다 |
 | CloudFront(플래그 on, E2E) | `--base https://<배포 도메인>/api --token "$TOKEN"` | rc2 뒤 gitops `APP_AI_ENABLED=true` + `ng-ai` 1대. 로그인한 사용자의 Access Token(화면 개발자 도구 → 네트워크 → `Authorization` 헤더, 또는 `tests/k6/tools/loadtest_users.py tokens`) |
 
 - 직접 호출(로컬·port-forward)은 gateway가 넣는 `X-User-Id`를 스크립트가 임의 UUID로 붙인다. "내 예매"(MY_BOOKINGS)는 요청의 `Authorization`을 그대로 공개 API에 넘기므로 **토큰 없이는 401이 정상**이고, 200을 보려면 `--token`을 준다(`X-User-Id`는 토큰의 `sub`로 맞춘다)
 - 같은 ai Valkey에 두 번째로 돌리면 4번이 PRESET 대신 CACHE_SEMANTIC/CACHE_EXACT로 나올 수 있다(정상)
-- 검증기 차단(10-a·10-b)은 Claude가 거부 사유를 받고 고쳐 쓸 수 있어 REJECTED·OUT_OF_SCOPE 또는 `ai_rejected_total` 증가 중 하나로 본다. 결정적 확인은 `tests/test_sql_validator.py`·`test_sql_executor.py`(pytest)
+- 검증기 차단(10-a·10-b)은 Claude가 거부 사유를 받고 고쳐 쓸 수 있어 REJECTED·OUT_OF_SCOPE 또는 `ai_rejected_total` 증가 중 하나로 본다. CloudFront 경유는 지표를 볼 수 없어 path가 차단이 아니면 SKIP(판정 불가)이다. 결정적 확인은 `tests/test_sql_validator.py`·`test_sql_executor.py`(pytest)
 - 토큰·질문 원문은 출력하지 않는다
 
 ## 패키지

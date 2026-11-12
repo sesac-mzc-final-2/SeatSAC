@@ -14,10 +14,13 @@ dependencies = [
     "fastembed>=0.4",
     "sqlglot>=25",
     "pyyaml>=6",
+    "anthropic>=0.40",
+    "redis>=5.2",
 ]
 
 [dependency-groups]
 dev = [
+    "fakeredis[lua]>=2.26",
     "pytest>=8.3",
     "ruff>=0.8",
 ]

@@ -92,6 +92,47 @@ def _validate(sql: str, max_rows: int) -> ValidatedSql:
     return ValidatedSql(sql=tree.sql(dialect="sqlite"), tables=tables, limit_capped=capped)
 
 
+def exclude_started(query: ValidatedSql) -> ValidatedSql:
+    """screening 을 읽는 모든 SELECT에 `<별칭>.starts_at > :now` 를 붙인 SQL (data-model 6-1).
+
+    Claude가 조건을 빼먹거나 지금보다 이른 시각과 비교해도(예: 21:30에 `>= '20:00'`)
+    이미 시작한 회차가 답에 나오지 않는다. FROM 의 screening 은 WHERE 에, JOIN 의 screening 은
+    ON 에 AND 로 붙인다(LEFT JOIN 의미를 바꾸지 않게). 실행할 때 :now 를 넘겨야 한다.
+    """
+    if "screening" not in query.tables:
+        return query
+    tree = sqlglot.parse_one(query.sql, read="sqlite")
+    for select in list(tree.find_all(exp.Select)):
+        from_ = select.args.get("from_")
+        if from_ and _is_screening(from_.this):
+            select.where(_not_started(from_.this), append=True, copy=False)
+        for join in select.args.get("joins") or []:
+            if _is_screening(join.this):
+                on = join.args.get("on")
+                cond = _not_started(join.this)
+                join.set("on", exp.and_(on, cond) if on else cond)
+    return ValidatedSql(
+        sql=tree.sql(dialect="sqlite"), tables=query.tables, limit_capped=query.limit_capped
+    )
+
+
+def _is_screening(node: exp.Expression) -> bool:
+    # 같은 이름의 CTE 는 실제 표가 아니다(그 CTE 안의 SELECT 가 따로 조건을 받는다)
+    return (
+        isinstance(node, exp.Table)
+        and node.name.lower() == "screening"
+        and not node.db
+        and node.name.lower() not in _ctes_in_scope(node)
+    )
+
+
+def _not_started(table: exp.Table) -> exp.Expression:
+    return exp.GT(
+        this=exp.column("starts_at", table=table.alias_or_name),
+        expression=exp.Placeholder(this="now"),
+    )
+
+
 def sql_template(sql: str) -> str | None:
     """로그용: 값(문자열·숫자)을 ?로 바꾼 SQL. 질문에 든 개인정보가 SQL 값으로 남지 않게 한다."""
     try:

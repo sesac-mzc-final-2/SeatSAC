@@ -49,9 +49,8 @@ from seatsac_ai.sql.executor import (
     execute_async,
 )
 from seatsac_ai.sql.validator import (
-    PARSE_ERROR,
     SqlRejected,
-    filters_started,
+    exclude_started,
     sql_template,
     validate,
 )
@@ -72,8 +71,6 @@ _REJECTION_MESSAGE = {
     "SQL_ERROR": "SQL 실행에 실패했습니다.",
     "TIMEOUT": "조회가 너무 오래 걸려 중단했습니다.",
 }
-# 사유는 계약대로 PARSE_ERROR지만 SQL은 해석했다. 화면 안내만 실제 원인으로(#93 리뷰)
-_MISSING_STARTED_FILTER = "이미 시작한 회차를 빼는 조건이 없어 답하지 않았습니다."
 _SLOT_FORMAT = {
     "time": re.compile(r"^([01]\d|2[0-3]):[0-5]\d$"),
     "date": re.compile(r"^\d{4}-\d{2}-\d{2}$"),
@@ -272,7 +269,10 @@ class ChatService:
             return None, vector
         params = system_params | ext.values()
         try:
-            ran_sql, result = await self._execute(entry.sql, params, deadline)
+            # Claude가 쓴 SQL에서 온 템플릿은 처음 답할 때처럼 시작한 회차 제외 조건을 붙인다
+            ran_sql, result = await self._execute(
+                entry.sql, params, deadline, claude_sql=entry.origin == "NL2SQL"
+            )
         except _Retry as retry:  # 스냅샷 모양이 바뀌었거나 너무 오래 걸림 — Claude로
             log.warning("캐시 SQL 실행 실패(Claude로 처리): %s", retry.message)
             return None, vector
@@ -294,7 +294,12 @@ class ChatService:
             return
         # 같은 값으로 템플릿을 다시 실행해 결과가 같을 때만 저장한다(템플릿 실수 = 오적중을 막는다)
         try:
-            _, again = await self._execute(template.sql, system_params | ext.values(), deadline)
+            _, again = await self._execute(
+                template.sql,
+                system_params | ext.values(),
+                deadline,
+                claude_sql=made.origin == "NL2SQL",
+            )
         except (_Retry, LlmUnavailable) as exc:
             log.info("캐시하지 않음(템플릿 실행 실패): %s", exc)
             return
@@ -334,32 +339,27 @@ class ChatService:
             sql = str(call.input.get("sql", ""))
             # maxLength 80은 도구 스키마의 힌트일 뿐 API가 강제하지 않는다
             explanation = str(call.input.get("explanation") or "조회 결과").strip()[:80]
-            ran_sql, result = await self._execute(
-                sql, system_params, deadline, now=system_params["now"]
-            )
+            ran_sql, result = await self._execute(sql, system_params, deadline, claude_sql=True)
             body = self._result_body("NL2SQL", _answer(explanation, result), result, ran_sql, None)
             return body, _Made("NL2SQL", sql, None, {}, explanation, result)
         raise _Retry(f"알 수 없는 도구 {call.name}")
 
     async def _execute(
-        self, sql: str, params: dict[str, Any], deadline: float, now: str | None = None
+        self, sql: str, params: dict[str, Any], deadline: float, claude_sql: bool = False
     ) -> tuple[str, QueryResult]:
         """검증 → 실행. (실제로 실행한 SQL, 결과)
 
-        now 를 주면(Claude가 쓴 SQL) screening 을 읽을 때 시작한 회차를 빼는 조건이 있는지도 본다
-        (data-model 6-1). 프리셋은 SQL에 :now 가 이미 들어 있어 보지 않는다.
+        Claude가 쓴 SQL(claude_sql)은 screening 을 읽는 SELECT마다 `starts_at > :now` 를
+        붙여 실행한다(data-model 6-1, #93 리뷰). 조건을 빼먹거나 지금보다 이른 시각과 비교해도
+        시작한 회차가 나오지 않는다. 프리셋은 SQL에 :now 가 이미 들어 있다.
         """
         try:
             validated = validate(sql, self._s.max_rows)
         except SqlRejected as r:
             rejection = {"reason": r.reason, "object": r.object}
             raise _Retry(f"SQL이 거부되었다({r.reason}): {r.message}", rejection) from r
-        if now is not None and "screening" in validated.tables and not filters_started(sql):
-            raise _Retry(
-                f"screening 을 조회할 때는 s.starts_at > '{now}' 조건을 붙인다"
-                "(이미 시작한 회차 제외)",
-                {"reason": PARSE_ERROR, "message": _MISSING_STARTED_FILTER},
-            )
+        if claude_sql:
+            validated = exclude_started(validated)
         timeout = min(self._s.sql_timeout_seconds, deadline - time.monotonic())
         if timeout <= 0:
             raise LlmUnavailable("TIMEOUT")

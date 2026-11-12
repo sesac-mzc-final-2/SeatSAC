@@ -366,7 +366,7 @@
 | 서비스 | 배포 | replicas (HPA) | requests cpu / mem | limits mem | Valkey | RDS 스키마 | Pod Identity |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | gateway | **블루/그린** (Rollout) | 1 (HPA 끔, 블루/그린 중 2) | 250m / 512Mi | 768Mi | — | — | 없음 |
-| booking | **블루/그린** (Rollout) | 1 (1~4, CPU 70%) | 250m / 512Mi | 768Mi | ✅ | `booking_db` | `cinema-staging-booking-pod`: `sqs:SendMessage`·`GetQueueUrl` on 알림 큐 |
+| booking | **블루/그린** (Rollout) | 1 (1~2, CPU 70% — 11/12 최대 4 → 2, 아래 블루/그린 파드 수·3장 연결 수) | 250m / 512Mi | 768Mi | ✅ | `booking_db` | `cinema-staging-booking-pod`: `sqs:SendMessage`·`GetQueueUrl` on 알림 큐 |
 | catalog | 롤링 (maxUnavailable 0, maxSurge 1) | 1 (1~4) | 200m / 448Mi | 640Mi | ✅ | `catalog_db` | 없음 |
 | user | 롤링 | 1 (1~2) | 150m / 384Mi | 576Mi | — | `user_db` | 없음 (`GetUser`는 Access Token으로 호출, IAM 불필요) |
 | payment | 롤링 | 1 (고정) | 150m / 384Mi | 576Mi | — | `payment_db` | 없음 |
@@ -377,7 +377,7 @@
 - 두 서비스 동시 블루/그린 금지(노드 2대). 공통 모듈 급한 반영도 한 번에 한 서비스씩: catalog·user·payment → booking → gateway
 - 프로브: `startupProbe` readiness 경로 5초 × 30회, `readinessProbe` 5초 / 실패 3, `livenessProbe` 10초 / 실패 3
 - 블루/그린: active Service `{svc}`, preview Service `{svc}-preview`, `prePromotionAnalysis` 통과 후 전환, `scaleDownDelaySeconds: 60`. gateway는 ALB 대상 그룹 확인(ADR-35)
-- 블루/그린 파드 수: 분석 중 preview는 **1개**(`previewReplicaCount: 1`, active는 HPA 그대로). 전환 직전 preview를 active 수까지 늘리므로 **전환 순간~60초만 2배**(booking HPA 4 → 8개, requests 2 vCPU) → 노드 2대에서 preview가 Pending이면 전환이 멈추고 10분 뒤 abort. 데모 주간 booking `maxReplicas` 2 여부는 ⏳ 남궁일 확인
+- 블루/그린 파드 수: 분석 중 preview는 **1개**(`previewReplicaCount: 1`, active는 HPA 그대로). 전환 직전 preview를 active 수까지 늘리므로 **전환 순간~60초만 2배**(booking HPA 최대 2 → 4개, requests 1 vCPU) → 노드 2대에서 preview가 Pending이면 전환이 멈추고 10분 뒤 abort. booking `maxReplicas`는 **2**(11/12 결정 — 4면 전환 순간 8개 × 풀 15로 RDS 연결이 경보를 넘는다, 3장). 4.2.1(11/11)은 최대 4에서 쟀으므로 4.2.2 전에 최대 2로 contention·deploy를 한 번 다시 재서 선점 p95·CPU를 확인한다
 - booking 만료 스캔·아웃박스 릴레이는 **preview 파드에서도 돈다** → 만료·릴레이 로직 변경은 이전 버전과 호환되게(조건부 UPDATE로 한 번만 처리)
 
 ### 3. 설정·Secret (서비스가 읽는 이름)
@@ -408,7 +408,8 @@
 | `SPRING_DATASOURCE_URL` | `jdbc:mysql://${DB_HOST}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` |
 | `SPRING_DATASOURCE_USERNAME` | `{svc}_app` |
 | (`FLYWAY_URL`) | ⚠️ ConfigMap이 아니라 **Flyway Job의 env**(gitops `base/{svc}/flyway-job.yaml`): `DB_HOST`를 `cinema-infra-endpoints`에서 받아 `jdbc:mysql://$(DB_HOST):3306/{svc}_db?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&trustServerCertificate=false&disableSslHostnameVerification=false&sslMode=verify-full`로 조립(쿠버네티스 env 치환, 10/25). **Flyway Job 전용**(DB 쓰는 서비스만, 앱은 읽지 않는다). flyway 11.7 이미지에는 MySQL Connector/J가 없어 MariaDB Connector/J **2.7.x**가 `jdbc:mysql://`를 처리한다. 2.x의 TLS 옵션은 `useSsl`이고(`sslMode`는 3.x 옵션이라 2.x는 무시 → TLS가 켜지지 않아 `RSA public key is not available`로 실패), `serverSslCert`로 준 RDS CA로 **서버 인증서·호스트 이름을 검증**한다. `trustServerCertificate=false`·`disableSslHostnameVerification=false`는 2.x 기본값이지만 검증을 끄지 않는다는 뜻을 URL에 명시한다. CA는 ConfigMap `rds-ca-bundle`(Terraform `envs/staging-k8s/rds_ca.tf`)을 `/etc/rds-ca`에 마운트. `sslMode=verify-full`은 3.x로 바뀔 때를 위한 것 |
-| `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` (booking만 `15` — 4.2.1 동시 선점에서 풀 대기 0.55초, 11/11). 연결 수(RDS db.t4g.small `max_connections` 약 170, 경보 `rds_connection_alarm` 130): 평소 booking 최대 4 × 15 = 60 + catalog 20·user 10·payment 5 = 95. booking 블루/그린 전환 순간~60초는 preview가 active 수까지 늘어(2장) 최대 8 × 15 = 120 + 35 = 155 → 경보. booking이 늘어난 상태의 전환(4.2.2·1차 데모) 전에 `maxReplicas` 2(95) 또는 풀 10(115)을 정한다 |
+| `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` (booking만 `15` — 4.2.1 동시 선점에서 풀 대기 0.55초, 11/11). 연결 수(RDS db.t4g.small `max_connections` 약 170, 경보 `rds_connection_alarm` 130): booking `maxReplicas` 2(2장, 11/12)로 평소 booking 최대 2 × 15 = 30 + catalog 20·user 10·payment 5 = 65, 블루/그린 전환 순간~60초는 preview가 active 수까지 늘어(2장) 최대 4 × 15 = 60 + 35 = 95 < 경보. (최대 4였다면 8 × 15 + 35 = 155 → 경보) |
+| `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE` | 없음 = Hikari 기본(최대 풀과 같음) (booking만 `5`, 11/12) — 쉬는 연결은 5개만 두고 부하가 오면 최대 풀까지 늘린다(한가해지면 idle-timeout 기본 10분 뒤 5개로). 블루/그린 분석 중 preview(조회만)가 기동하자마자 15개를 열지 않게 한다. 최댓값 계산은 위 행 그대로(부하 중이면 15까지 쓴다) |
 | `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 Flyway 훅 Job) |
 | `SPRING_DATA_REDIS_HOST` / `_PORT` / `_SSL_ENABLED` | `${VALKEY_HOST}` / `6379` / `true` (Valkey 쓰는 서비스만) |
 

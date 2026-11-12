@@ -54,8 +54,14 @@ def system_blocks(cache: bool) -> list[dict[str, Any]]:
     return [block]
 
 
-def user_text(question: str, now: datetime) -> str:
-    return (
-        f"오늘: {now:%Y-%m-%d}({_WEEKDAYS[now.weekday()]}) · 지금: {now:%Y-%m-%d %H:%M} (KST)\n"
-        f"질문: {question}"
-    )
+def user_text(question: str, now: datetime, previous: dict[str, Any] | None = None) -> str:
+    """previous: 후속 질문일 때 직전 질문·SQL(세션).
+
+    "그중 건대입구만"을 직전 SQL에 조건을 더해 풀게 한다.
+    """
+    head = f"오늘: {now:%Y-%m-%d}({_WEEKDAYS[now.weekday()]}) · 지금: {now:%Y-%m-%d %H:%M} (KST)\n"
+    if previous:
+        head += f"직전 질문: {previous.get('question')}\n"
+        if previous.get("sql"):
+            head += f"직전 SQL: {previous['sql']}\n"
+    return head + f"질문: {question}"

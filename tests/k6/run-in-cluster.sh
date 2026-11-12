@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------
-# 4.2.1 (OPS-10) k6 시나리오를 클러스터 안 일회성 Job으로 돌린다 — gateway Service를 직접 부른다(http://gateway:8080, /api 없음)
+# 4.2.1 (OPS-10) k6 시나리오를 클러스터 안 일회성 Job으로 돌린다 — gateway Service를 직접 부른다(http://gateway:8080/api — gateway 라우트가 /api를 받아 직접 뗀다)
 #   사용: tests/k6/run-in-cluster.sh <시나리오> [-e KEY=VALUE ...]     (레포 루트, 관리자 cinema-admin, 노드 켜짐)
 #         tests/k6/run-in-cluster.sh cleanup                           (남은 k6 리소스 지우기)
 #     contention  같은 좌석 100명 동시 선점 (seat-hold-contention.js)  토큰 VUS(기본 100)개
@@ -106,7 +106,7 @@ job_manifest() {
             labelSelector: { matchExpressions: [ { key: "app.kubernetes.io/name", operator: "In", values: ["gateway","booking","catalog"] } ] } } } ] } },
           containers: [ {
             name: "k6", image: $image, args: $args,
-            env: ([ { name: "BASE_URL", value: "http://gateway:8080" } ]
+            env: ([ { name: "BASE_URL", value: "http://gateway:8080/api" } ]
                   + (if $tokens == "" then [] else [ { name: "K6_TOKENS_FILE", value: "/tokens/tokens.txt" } ] end)),
             resources: { requests: { cpu: "500m", memory: "256Mi" }, limits: { memory: "1Gi" } },
             securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } },

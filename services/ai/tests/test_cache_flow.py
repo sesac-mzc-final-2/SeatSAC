@@ -98,6 +98,25 @@ def test_nl2sql_answer_is_cached_as_a_template():
     assert hit["answer"].startswith("오늘 21시 이후 회차: 3건입니다.")
 
 
+def test_cached_claude_sql_still_drops_screenings_that_already_started():
+    """Claude SQL엔 실행할 때 `starts_at > :now` 를 붙인다(#93). 캐시로 답할 때도 똑같이."""
+    no_filter = (
+        "SELECT m.title AS movie_title, s.starts_at FROM screening s "
+        "JOIN movie m ON m.movie_id = s.movie_id "
+        "WHERE s.business_date = '2026-11-17' AND s.starts_at >= '2026-11-17 20:00' "
+        "ORDER BY s.starts_at"
+    )
+    llm = ScriptedLlm(tool("run_sql", sql=no_filter, explanation="오늘 20시 이후 회차"))
+    service, _ = make(llm)
+    first = ask(service, "오늘 20시 넘어서 시작하는 영화 제목")
+    assert first["path"] == "NL2SQL" and first["rowCount"] == 4
+    later = NOW.replace(hour=20, minute=30)
+    hit = ask(service, "오늘 20시 넘어서 시작하는 영화 제목", now=later)
+    assert hit["path"] == "CACHE_EXACT" and hit["llm"]["calls"] == 0
+    assert hit["rowCount"] < first["rowCount"]
+    assert all(row[1] > "2026-11-17 20:30" for row in hit["rows"])
+
+
 def test_cached_relative_date_follows_the_day_it_is_asked():
     llm = ScriptedLlm(
         tool("run_preset", presetId="theater_schedule",

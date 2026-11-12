@@ -2,8 +2,8 @@ import { http } from "@/shared/api";
 import type { ChatPresetList, ChatRequest, ChatResponse } from "../model/types";
 
 /**
- * AI-04 추천 질문 목록. 로그인 뒤 가장 먼저 불러 챗봇을 보일지 정한다:
- * 404(gateway 플래그 `APP_AI_ENABLED=false`) → 숨김, 503(ai 파드 없음) → 비활성 안내
+ * AI-04 추천 질문 목록. 챗봇 창을 처음 열 때 부른다(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5):
+ * 404(gateway 플래그 `APP_AI_ENABLED=false`) → 준비 중 안내 뒤 숨김, 503(ai 파드 없음) → 비활성 안내
  */
 export const listChatPresets = (signal?: AbortSignal) => http<ChatPresetList>("/ai/presets", { signal });
 

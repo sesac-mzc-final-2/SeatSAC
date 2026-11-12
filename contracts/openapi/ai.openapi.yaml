@@ -7,8 +7,8 @@ info:
     자연어로 묻는 챗봇. 처리는 비용이 낮은 경로부터 — 정확 일치 캐시 → 의미 캐시 → (Claude 1회 호출로) 프리셋
     또는 NL2SQL. 검색 대상은 ai 파드 메모리의 SQLite 스냅샷(공개 API로 채운 데이터)뿐이고 기존 MSA DB는 건드리지 않는다.
     외부 호출은 `/api` 접두사, Gateway가 StripPrefix=1 (`/api/ai/chat` → ai `/ai/chat`).
-    gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND** — 화면은 첫 `GET /ai/presets`
-    404로 챗봇 버튼을 숨긴다. 켜져 있을 때 `/api/ai/**` 라우트만 응답 타임아웃 28초(ai 요청 전체 기한 25초).
+    gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND** — 화면은 챗봇 창을 열 때 부른
+    `GET /ai/presets`가 404면 「준비 중」 안내 뒤 챗봇 버튼을 숨긴다(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5). 켜져 있을 때 `/api/ai/**` 라우트만 응답 타임아웃 28초(ai 요청 전체 기한 25초).
     조회 전용이라 `Idempotency-Key`는 받지 않는다. 오류 코드 4개(`AI_*`)는 `services/ai` 안에서 정의하고 형식은
     `contracts/schemas/error.v1.json` 그대로.
 servers:
@@ -130,8 +130,9 @@ paths:
       description: |
         `services/ai/src/seatsac_ai/resources/presets.yaml`의 프리셋 12개를 화면 버튼용으로 돌려준다(17-4).
         버튼을 누르면 화면은 `example` 문장을 그대로 `POST /ai/chat`의 `message`로 보낸다(별도 프리셋 실행 API 없음).
-        정적 목록이라 ai 자체는 503을 내지 않는다. 화면은 로그인 뒤 이 API를 먼저 불러 404(플래그 off)면 챗봇 버튼을 숨기고,
-        503(ai 파드 없음)이면 비활성 안내를 보여준다.
+        정적 목록이라 ai 자체는 503을 내지 않는다. 화면은 **챗봇 창을 열 때** 이 API를 부른다 — 로그인·메인 진입 때
+        자동 호출은 하지 않는다(좌석 데모·부하 테스트 중 `ng-ai` 0대라도 ai 트래픽 0, 런북 6-G-5). 404(플래그 off)면
+        「준비 중」 안내 뒤 챗봇 버튼을 숨기고, 503(ai 파드 없음)이면 비활성 안내를 보여준다.
       security: [ { bearerAuth: [] } ]
       responses:
         "200":

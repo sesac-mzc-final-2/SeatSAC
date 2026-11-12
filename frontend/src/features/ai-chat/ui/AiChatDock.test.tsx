@@ -44,13 +44,27 @@ describe("AiChatDock (3.3.7)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("추천 질문이 404(플래그 off)면 버튼을 숨긴다", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(json(404, { code: "NOT_FOUND", message: "x", traceId: TRACE, details: [] }));
+  it("로그인 직후에는 /api/ai 를 부르지 않는다 — 창을 처음 열 때 presets 를 부른다", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(json(200, presets));
     renderDock();
+    expect(screen.getByRole("button", { name: "AI 상영 도우미 열기" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "AI 상영 도우미 열기" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ai/presets", expect.anything()));
-    await waitFor(() => expect(screen.queryByRole("button", { name: /AI 상영 도우미/ })).not.toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: "오늘 ○시 이후 회차" })).toBeInTheDocument();
+  });
+
+  it("추천 질문이 404(플래그 off)면 준비 중 안내, 닫으면 버튼을 숨긴다", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      json(404, { code: "NOT_FOUND", message: "x", traceId: TRACE, details: [] }),
+    );
+    renderDock();
+    await userEvent.click(screen.getByRole("button", { name: "AI 상영 도우미 열기" }));
+    expect(await screen.findByText("AI 상영 도우미는 아직 준비 중이에요")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "질문" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "닫기" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /AI 상영 도우미/ })).not.toBeInTheDocument();
   });
 
   it("503(ai 파드 없음)이면 버튼은 두고 창 안에서 비활성 안내", async () => {
@@ -59,7 +73,7 @@ describe("AiChatDock (3.3.7)", () => {
     );
     renderDock();
     await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
-    expect(screen.getByText("AI 챗봇이 지금은 쉬고 있어요")).toBeInTheDocument();
+    expect(await screen.findByText("AI 챗봇이 지금은 쉬고 있어요")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "질문" })).toBeDisabled();
   });
 
@@ -71,7 +85,7 @@ describe("AiChatDock (3.3.7)", () => {
     });
     renderDock();
     await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
-    await userEvent.click(screen.getByRole("button", { name: "오늘 ○시 이후 회차" }));
+    await userEvent.click(await screen.findByRole("button", { name: "오늘 ○시 이후 회차" }));
 
     expect(await screen.findByText(cacheSemantic.value.answer)).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "영화" })).toBeInTheDocument();

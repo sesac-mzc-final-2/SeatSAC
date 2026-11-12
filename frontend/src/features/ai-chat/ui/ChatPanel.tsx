@@ -13,6 +13,8 @@ interface Props {
   draft: string;
   onDraftChange: (draft: string) => void;
   presets: ChatPreset[];
+  /** 추천 질문 API 가 404(gateway 플래그 off) — 「준비 중」 안내만, 닫으면 Dock 이 버튼을 숨긴다 */
+  notReady: boolean;
   /** 추천 질문 API 가 503 등으로 실패 — 챗봇을 비활성 안내로 */
   unavailable: boolean;
   onRetryAvailability: () => void;
@@ -26,6 +28,7 @@ export function ChatPanel({
   draft,
   onDraftChange: setDraft,
   presets,
+  notReady,
   unavailable,
   onRetryAvailability,
   retryingAvailability,
@@ -37,7 +40,8 @@ export function ChatPanel({
   const logRef = useRef<HTMLDivElement>(null);
   const { entries, ask, restart, isPending, cooldownSeconds } = chat;
 
-  const blocked = unavailable || isPending || cooldownSeconds > 0;
+  const disabled = notReady || unavailable;
+  const blocked = disabled || isPending || cooldownSeconds > 0;
   const trimmed = draft.trim();
   const tooLong = draft.length > MAX_MESSAGE_LENGTH;
 
@@ -133,7 +137,18 @@ export function ChatPanel({
       </header>
 
       <div className={styles.log} ref={logRef} role="log" aria-live="polite" aria-label="대화 내용">
-        {unavailable ? (
+        {notReady ? (
+          <div className={styles.intro}>
+            <span className={styles.introIcon} aria-hidden="true">
+              <Icon name="sparkles" size={22} strokeWidth={1.5} />
+            </span>
+            <p className={styles.introTitle}>AI 상영 도우미는 아직 준비 중이에요</p>
+            <p className={styles.introText}>곧 만나요. 예매·조회는 평소대로 이용할 수 있어요.</p>
+            <Button size="sm" onClick={onClose}>
+              닫기
+            </Button>
+          </div>
+        ) : unavailable ? (
           <div className={styles.intro}>
             <span className={styles.introIcon} aria-hidden="true">
               <Icon name="alert-circle" size={22} strokeWidth={1.5} />
@@ -178,7 +193,7 @@ export function ChatPanel({
         )}
       </div>
 
-      {!unavailable && entries.length > 0 && presets.length > 0 && (
+      {!disabled && entries.length > 0 && presets.length > 0 && (
         <div className={styles.presetBar}>{presetChips}</div>
       )}
 
@@ -197,7 +212,7 @@ export function ChatPanel({
           placeholder={
             cooldownSeconds > 0 ? `${cooldownSeconds}초 뒤에 물어볼 수 있어요` : "예) 내일 건대입구 편성표 보여줘"
           }
-          disabled={unavailable || cooldownSeconds > 0}
+          disabled={disabled || cooldownSeconds > 0}
           aria-invalid={tooLong || undefined}
           aria-describedby={`${titleId}-count`}
         />

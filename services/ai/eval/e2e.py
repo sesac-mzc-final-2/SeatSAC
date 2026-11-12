@@ -13,7 +13,7 @@ NL2SQL·MY_BOOKINGS)가 200으로 답하는지, 검증기가 위험한 SQL을 �
     # ③ 플래그 off 확인 — 라우트가 없어 토큰이 있으면 404, 없으면 401(인증이 라우팅보다 먼저)
     uv run python -m eval.e2e --base https://<배포 도메인>/api --token "$TOKEN" --expect-disabled
 
-- 질문은 9건(사용자당 분당 10건 한도 안). 429가 오면 Retry-After 만큼 기다려 한 번 다시 보낸다
+- 질문은 9건(사용자당 분당 10건 한도 안). 429가 오면 Retry-After 만큼(분당 한도, 70초 이하일 때만) 기다려 한 번 다시 보낸다 — 하루 한도(자정까지)는 기다리지 않고 기록
 - 같은 ai Valkey에 두 번째로 돌리면 첫 질문이 PRESET 대신 CACHE_SEMANTIC/CACHE_EXACT 로 나올 수 있다(정상, 표에 그대로 적는다)
 - "내 예매"(MY_BOOKINGS)는 요청의 Authorization 을 그대로 공개 API에 넘기므로 **토큰 없이 직접 부르면 401** 이 맞다.
   직접 호출에서도 보려면 --token 에 Cognito Access Token 을 주면 된다(X-User-Id 는 토큰의 sub 로 바꿔 준다)
@@ -113,6 +113,8 @@ class Client:
             r.elapsed_ms = int((time.monotonic() - started) * 1000)  # type: ignore[attr-defined]
             if r.status_code == 429 and attempt == 0:
                 wait = int(r.headers.get("Retry-After", "60"))
+                if wait > 70:  # PER_DAY(KST 자정까지, 최대 86,400초) — 기다리지 않고 그대로 기록
+                    return r
                 print(f"    429 AI_QUOTA_EXCEEDED — {wait}초 뒤 다시 보낸다")
                 time.sleep(wait + 1)
                 continue
@@ -305,7 +307,7 @@ def run_all(client: Client, rep: Report) -> None:
         + ("" if well_formed else " · presetId·title·example 가 빠진 항목 있음"),
     )
     has_movie_buttons = any(
-        "{movie}" in i.get("example", "") or i.get("example") == "영화 제목" for i in items
+        "{movie}" in i.get("example", "") or "영화 제목" in i.get("example", "") for i in items
     )
     rep.add(
         "2-a",
@@ -375,12 +377,12 @@ def run_all(client: Client, rep: Report) -> None:
             ),
         )
 
-    # 7. NL2SQL — 프리셋에 없는 질문(평가 세트 theater_counts)
-    r = client.chat("극장별로 오늘 남은 회차 수 알려줘")
+    # 7. NL2SQL — 프리셋에 없는 질문(평가 세트 q25 region. 극장별 회차 수는 프리셋 theater_counts_today 라 쓰지 않는다)
+    r = client.chat("서울에 있는 극장 어디야?")
     b = _json(r)
     rep.add(
         "7",
-        "NL2SQL(극장별 오늘 남은 회차 수) → 200 · sql 있음",
+        "NL2SQL(서울에 있는 극장) → 200 · sql 있음",
         _chat_ok(r, b) and b.get("path") in ("NL2SQL",) + CACHE_PATHS and bool(b.get("sql")),
         _summary(b, r)
         if r.status_code == 200
@@ -407,7 +409,9 @@ def run_all(client: Client, rep: Report) -> None:
         rep.add(
             "8",
             "MY_BOOKINGS — 토큰 없이 직접 호출 → 401 TOKEN_REQUIRED",
-            r.status_code == 401 and _is_error_v1(b, "UNAUTHORIZED"),
+            r.status_code == 401
+            and _is_error_v1(b, "UNAUTHORIZED")
+            and any(d.get("reason") == "TOKEN_REQUIRED" for d in b.get("details", [])),
             f"{r.status_code} {b.get('code')} {b.get('details')} (200은 --token 으로 확인)",
         )
 

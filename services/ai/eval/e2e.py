@@ -150,7 +150,7 @@ def _is_error_v1(body: dict[str, Any], code: str | None = None) -> bool:
         and bool(re.fullmatch(r"[A-Z_]+", body["code"]))
         and isinstance(body.get("message"), str)
         and isinstance(body.get("traceId"), str)
-        and bool(TRACE_ID.match(body["traceId"]))
+        and bool(TRACE_ID.fullmatch(body["traceId"]))
         and isinstance(details, list)
         and all(
             isinstance(d, dict)

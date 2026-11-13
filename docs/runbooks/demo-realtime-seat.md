@@ -68,7 +68,7 @@ export K6_TOKENS_FILE=~/.seatsac/k6-tokens.txt   # 경쟁용 100개
 | T+4분경 | 장면 4 — 미리 잡은 선점이 만료 | T-1분 + 5분 |
 
 > **장면 4 타이밍.** 선점 TTL은 이제 설정(`APP_SEAT_HOLD_TTL_SECONDS`, 30~600초, #76)이지만 **데모에서는 기본 300초 그대로 둔다**.
-> - 줄이려면 gitops booking overlay 값 변경 = booking 배포다. M6(11/9~13)엔 booking 변경 금지, 데모 주간엔 머지 금지라 바꿀 창이 사실상 없다
+> - 줄이려면 gitops booking overlay 값 변경 = booking 배포다. M6(11/9~13)엔 booking 변경 금지였고, 이후에는 시연·측정이 돌지 않는 시간에 booking 블루/그린 1회로 바꿀 수 있다(11/14 동결 삭제)
 > - 화면 문구 「5분 동안 좌석을 지켜 드려요」 등이 300초에 고정돼 있어 값을 바꾸면 안내와 실제가 어긋난다
 > - 값을 바꾸면 이전 TTL 동안 커밋 중/고아 판정이 어긋난다(런타임 계약 3장 booking 행)
 >

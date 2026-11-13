@@ -9,7 +9,7 @@ info:
     금액은 선점 때 확정(좌석 수 × 15,000원). 결제 거절도 HTTP 200 + status로 구분(10장 #5).
     결제 수단(ADR-112): `TOSSPAY`는 포트원 V2 결제창 — `POST /bookings/{id}/payments`(준비) → 화면 requestPayment →
     `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(완료 확인)의 두 단계. `CARD`는 모의 결제(MOCK)로 테스트·분석 전용 —
-    헤더 `X-Payment-Mock-Key`(booking Secret `APP_PAYMENT_MOCK_KEY`)가 맞거나 `X-User-Role=ADMIN`일 때만 받고, 그 밖은 400(reason MOCK_NOT_ALLOWED).
+    헤더 `X-Payment-Mock-Key`(booking Secret `APP_PAYMENT_MOCK_KEY`)가 맞을 때만 받고(k6·분석 Job), 그 밖은 400(reason MOCK_NOT_ALLOWED). 화면에는 모의 결제가 없다.
 servers:
   - url: /api
 security: []   # 기본 인증 없음. 인증이 필요한 operation에 security: [ { bearerAuth: [] } ]
@@ -246,7 +246,7 @@ paths:
         - `TOSSPAY`: 준비(`POST /bookings/{id}/payments`)로 받은 paymentId를 보내면 Payment가 포트원 단건 조회로
           status·금액을 검증해 APPROVED·FAILED를 정한다. 결제창이 아직 끝나지 않았으면(READY·PENDING) 503 PAYMENT_RESULT_UNKNOWN → 재조회.
           paymentId가 예매에 붙은 것과 다르면 409 PAYMENT_ALREADY_REQUESTED.
-        - `CARD`: 모의 결제(ADR-13) — 테스트·분석 전용. `X-Payment-Mock-Key` 또는 ADMIN만. 끝 4자리 0000 → CARD_DECLINED,
+        - `CARD`: 모의 결제(ADR-13) — 테스트·분석 전용. `X-Payment-Mock-Key`가 맞을 때만. 끝 4자리 0000 → CARD_DECLINED,
           1111 → INSUFFICIENT_BALANCE, 9999 → 5초 지연 후 승인(503 PAYMENT_RESULT_UNKNOWN → GET /bookings/{id} 재조회), 그 밖은 승인.
           카드 번호는 저장·로그하지 않는다(Payment는 card_last4만).
       security: [ { bearerAuth: [] } ]
@@ -351,7 +351,7 @@ components:
       name: X-Payment-Mock-Key
       in: header
       required: false
-      description: "모의 결제(method CARD) 허용 키 — k6·블루/그린 분석 Job 전용(booking Secret `APP_PAYMENT_MOCK_KEY`와 같을 때만). 사람은 ADMIN 역할로 대신한다. 값은 로그·PR·문서에 쓰지 않는다"
+      description: "모의 결제(method CARD) 허용 키 — k6·블루/그린 분석 Job 전용(booking Secret `APP_PAYMENT_MOCK_KEY`와 같을 때만). 사람(화면)은 모의 결제를 쓰지 않는다. 값은 로그·PR·문서에 쓰지 않는다"
       schema: { type: string, minLength: 16 }
 
   responses:

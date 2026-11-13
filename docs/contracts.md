@@ -45,7 +45,7 @@
 | USER | `GET /bookings/{bookingId}` | — | 결제 결과 재확인 |
 | USER | `DELETE /bookings/{bookingId}/hold` | BKG-03 | |
 | USER | `POST /bookings/{bookingId}/payments` | BKG-10 | `Idempotency-Key` 필수. TOSSPAY 결제 준비(paymentId + 포트원 결제창 값), ADR-112 |
-| USER | `POST /bookings/{bookingId}/pay` | BKG-10 | `Idempotency-Key` 필수, 거절도 200. `method` TOSSPAY(완료 확인)·CARD(모의, `X-Payment-Mock-Key` 또는 ADMIN만) |
+| USER | `POST /bookings/{bookingId}/pay` | BKG-10 | `Idempotency-Key` 필수, 거절도 200. `method` TOSSPAY(완료 확인)·CARD(모의, `X-Payment-Mock-Key`가 맞을 때만 — k6·분석 Job) |
 | 없음(서명) | `POST /webhooks/portone` | PAY-05 | 포트원 웹훅. Standard Webhooks 서명, 본문 불신 → 단건 조회 재검증 |
 | USER | `POST /bookings/{bookingId}/cancel` | BKG-07 | |
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |

@@ -11,19 +11,20 @@
 | 파일 | 내용 | 담당 (CODEOWNERS) |
 | --- | --- | --- |
 | `openapi/catalog.openapi.yaml` | 외부 9개 (조회 6 · 관리자 3) | 한채연 |
-| `openapi/booking.openapi.yaml` | 외부 7개 (좌석 현황·SSE·선점·해제·결제·조회·취소) | 남궁일 |
+| `openapi/booking.openapi.yaml` | 외부 8개 (좌석 현황·SSE·선점·해제·결제 준비·결제·조회·취소) | 남궁일 |
+| `openapi/payment.openapi.yaml` | 외부 1개 (포트원 웹훅 — 인증 없음, 서명 검증) | 남궁일 |
 | `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장) | 한채연 |
 | ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`) | 김서현 · 한채연 |
 | ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
-| `openapi/internal/payment.internal.openapi.yaml` | 내부 3개 | 남궁일 |
+| `openapi/internal/payment.internal.openapi.yaml` | 내부 4개 (생성·조회·확인·취소) | 남궁일 |
 | `events/seat-event.v1.json` | Valkey Pub/Sub → SSE | 남궁일 |
 | `events/booking.confirmed.v1.json` | SQS 예매 완료 알림 | 남궁일 (소비 Lambda 김종식) |
 | `schemas/error.v1.json` | 공통 오류 응답 | 전원 |
 | `*/examples/**` | 예시 메시지 = 서비스 테스트 fixture | 각 담당 |
 
-합계: 외부 23(⚠️AI ai 2개 포함) · 내부 8 · 이벤트 2.
+합계: 외부 25(⚠️AI ai 2개·포트원 웹훅 1개 포함) · 내부 9 · 이벤트 2.
 
 ## 2. API 목록
 
@@ -43,7 +44,9 @@
 | USER | `POST /seats/hold` | BKG-02 | `Idempotency-Key` 필수 |
 | USER | `GET /bookings/{bookingId}` | — | 결제 결과 재확인 |
 | USER | `DELETE /bookings/{bookingId}/hold` | BKG-03 | |
-| USER | `POST /bookings/{bookingId}/pay` | BKG-10 | `Idempotency-Key` 필수, 거절도 200 |
+| USER | `POST /bookings/{bookingId}/payments` | BKG-10 | `Idempotency-Key` 필수. TOSSPAY 결제 준비(paymentId + 포트원 결제창 값), ADR-112 |
+| USER | `POST /bookings/{bookingId}/pay` | BKG-10 | `Idempotency-Key` 필수, 거절도 200. `method` TOSSPAY(완료 확인)·CARD(모의, `X-Payment-Mock-Key` 또는 ADMIN만) |
+| 없음(서명) | `POST /webhooks/portone` | PAY-05 | 포트원 웹훅. Standard Webhooks 서명, 본문 불신 → 단건 조회 재검증 |
 | USER | `POST /bookings/{bookingId}/cancel` | BKG-07 | |
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
@@ -62,6 +65,8 @@
 | catalog → booking | `GET /internal/screenings/seat-counts?ids=` (최대 100) | **300ms** 전체 | `remainingSeatsSource: TOTAL` |
 | booking → payment | `POST /internal/payments` | 1초 / 3초, 타임아웃·연결 오류만 같은 paymentId로 1회 재시도 → 조회 | 503 `PAYMENT_RESULT_UNKNOWN` |
 | booking → payment | `GET /internal/payments/{id}` | 1초 / 3초 | 결과 미확인 |
+| booking → payment | `POST /internal/payments/{id}/verify` | 1초 / 3초, 타임아웃·연결 오류만 1회 재시도 → 조회 | 503 `PAYMENT_RESULT_UNKNOWN` (TOSSPAY 완료 확인) |
+| payment → 포트원 | `GET /payments/{id}` · `POST /payments/{id}/cancel` (`api.portone.io`) | 1초 / 3초, 서킷 `portone` | verify·cancel 503 `SERVICE_UNAVAILABLE` |
 | booking → payment | `POST /internal/payments/{id}/cancel` `{reason}` | 1초 / 3초 | 503 (화면 재시도) |
 
 공통: 재시도 없음(위 1건 제외), Resilience4j 서킷(실패율 50%·10초), 호출 깊이 1, `X-Trace-Id`·`X-User-Id` 전달.
@@ -82,7 +87,7 @@
 | 8 | 오류 `details` | **항상 배열**(필수, 없으면 `[]`), 원소 `{field, value?, reason?}` | 2.2.4 v0.3, API 명세서 1-4 |
 | 9 | 페이징 없는 목록 | `{items}` (`/theaters`, `/screenings`, 내부 summaries·theaters·seat-counts) | 2.2.4 D8, ADR-54 |
 | 10 | 내부 회차 API의 좌석 ID | **삭제**. booking은 CAT-04 배치도를 (상영관, 버전) 키로 파드 캐시 | 2.2.4 v0.3 |
-| 11 | 결제 | paymentId = booking 발급 UUID, `PROCESSING` 상태, 거절도 200, 모의 카드 0000·1111·9999 | API 명세서 10장 #3~5, ADR-13 |
+| 11 | 결제 | paymentId = booking 발급 UUID(포트원 paymentId로도 그대로), `PROCESSING` 상태, 거절도 200. **TOSSPAY**(포트원, 화면) = 준비 → 결제창 → 완료 확인(서버가 단건 조회로 금액 대조) · **CARD**(모의 0000·1111·9999) = 테스트·분석 전용, 호출자 제한 | API 명세서 10장 #3~5, ADR-13 → **ADR-112** |
 | 12 | 예매 완료 알림 | 아웃박스 + 릴레이, `eventId` = 아웃박스 UUID(재전송 같은 값) | 10/21 확정 |
 | 13 | SSE 적용 규칙 | `seq == lastSeq + 1`일 때만 적용, 빈틈이면 200ms 뒤 BKG-01 재조회 | API 명세서 v1.1 |
 | 14 | 하위 호환 | 필드 추가만. 깨지는 변경은 새 엔드포인트·`.v2` 파일. 구현 전 설계 변경만 `contract-break-ok` 라벨 | ADR-32·55, 2.2.7 |

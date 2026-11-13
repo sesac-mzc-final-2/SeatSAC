@@ -7,6 +7,9 @@ info:
     Gateway 라우트 1순위: `/screenings/{id}/seats`, `/screenings/{id}/seats/stream`은 catalog보다 먼저 booking으로.
     멱등 키(1-5): `POST /seats/hold`, `POST /bookings/{id}/pay` 필수. Valkey `idem:{userId}:{키}` 24시간.
     금액은 선점 때 확정(좌석 수 × 15,000원). 결제 거절도 HTTP 200 + status로 구분(10장 #5).
+    결제 수단(ADR-112): `TOSSPAY`는 포트원 V2 결제창 — `POST /bookings/{id}/payments`(준비) → 화면 requestPayment →
+    `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(완료 확인)의 두 단계. `CARD`는 모의 결제(MOCK)로 테스트·분석 전용 —
+    헤더 `X-Payment-Mock-Key`(booking Secret `APP_PAYMENT_MOCK_KEY`)가 맞거나 `X-User-Role=ADMIN`일 때만 받고, 그 밖은 400(reason MOCK_NOT_ALLOWED).
 servers:
   - url: /api
 security: []   # 기본 인증 없음. 인증이 필요한 operation에 security: [ { bearerAuth: [] } ]
@@ -178,16 +181,19 @@ paths:
           description: "BOOKING_STATE_CONFLICT — details[{ field: \"status\", value, reason: BOOKING_NOT_PENDING·PAYMENT_IN_PROGRESS }]"
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
-  /bookings/{bookingId}/pay:
+  /bookings/{bookingId}/payments:
     post:
       tags: [bookings]
-      operationId: payBooking
-      summary: BKG-10 결제 요청 (예매당 1회) → BKG-06 확정 또는 PAYMENT_FAILED
+      operationId: preparePayment
+      summary: BKG-10 결제 준비 (TOSSPAY) — paymentId 발급 + 포트원 결제창에 넘길 값
       x-feature-id: BKG-10
       description: |
-        모의 카드(ADR-13): 끝 4자리 0000 → CARD_DECLINED, 1111 → INSUFFICIENT_BALANCE, 9999 → 5초 지연 후 승인
-        (Booking 타임아웃 → 503 PAYMENT_RESULT_UNKNOWN → GET /bookings/{id} 재조회 시연), 그 밖은 승인.
-        카드 번호는 저장·로그하지 않는다(Payment는 card_last4만).
+        포트원 결제창을 열기 전에 부른다(ADR-112). 검증(본인·PENDING·선점 유효·결제 1회·예매 마감 전)을 통과하면
+        paymentId(UUID)를 발급해 예매에 붙이고(예매당 1회, ADR-24) Payment에 PROCESSING 행을 만든 뒤,
+        화면이 `requestPayment`에 그대로 넣을 값(storeId·channelKey·paymentId·orderName·totalAmount·currency·payMethod)을 돌려준다.
+        결제창이 끝나면 화면은 `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`로 결과 확인을 요청한다 —
+        결제창의 성공·실패·취소 응답은 신호일 뿐이고 결과는 서버가 포트원 단건 조회로 정한다.
+        돈은 이 API에서 움직이지 않는다. 결제창을 열지 않고 떠나면 Payment는 7분 뒤 포트원 조회로 닫고, 예매는 만료+2분 뒤 만료 스캔이 반영한다.
       security: [ { bearerAuth: [] } ]
       parameters:
         - $ref: "#/components/parameters/BookingId"
@@ -196,8 +202,68 @@ paths:
         required: true
         content:
           application/json:
+            schema: { $ref: "#/components/schemas/PaymentPrepareRequest" }
+            example: { method: TOSSPAY }
+      responses:
+        "200":
+          description: 준비됨 — 같은 Idempotency-Key 재요청은 같은 응답
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentPrepareResult" }
+              example:
+                bookingId: 9876
+                paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13"
+                amount: 30000
+                orderName: "SeatSAC 영화 예매 2석"
+                expiresAt: "2026-11-16T14:08:00+09:00"
+                checkout: { provider: PORTONE, storeId: "store-00000000-0000-0000-0000-000000000000", channelKey: "channel-key-00000000-0000-0000-0000-000000000000", payMethod: EASY_PAY, currency: KRW }
+        "400":
+          description: |
+            VALIDATION_FAILED(method가 TOSSPAY가 아님, Idempotency-Key 없음) ·
+            SCREENING_STARTED(예매 마감 — 상영 시작 5분 전부터, details[{ field: "screeningId", value, reason: "BOOKING_CLOSED" }])
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/NotOwner" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            PAYMENT_ALREADY_REQUESTED(이미 준비·요청된 결제 — 결과는 GET /bookings/{id}) ·
+            BOOKING_STATE_CONFLICT(PENDING 아님 · 선점 만료 details[{ field: "status", value, reason: "HOLD_EXPIRED" }]) ·
+            IDEMPOTENCY_KEY_CONFLICT · IDEMPOTENCY_IN_PROGRESS
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "503":
+          description: SERVICE_UNAVAILABLE — Payment 응답 없음·서킷 열림·포트원 비활성(`APP_PORTONE_ENABLED=false`), 또는 Catalog 응답 없음(예매 마감 확인 전). 예매는 바뀌지 않는다
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  /bookings/{bookingId}/pay:
+    post:
+      tags: [bookings]
+      operationId: payBooking
+      summary: BKG-10 결제 (예매당 1회) → BKG-06 확정 또는 PAYMENT_FAILED
+      x-feature-id: BKG-10
+      description: |
+        `method`로 갈린다(ADR-112).
+        - `TOSSPAY`: 준비(`POST /bookings/{id}/payments`)로 받은 paymentId를 보내면 Payment가 포트원 단건 조회로
+          status·금액을 검증해 APPROVED·FAILED를 정한다. 결제창이 아직 끝나지 않았으면(READY·PENDING) 503 PAYMENT_RESULT_UNKNOWN → 재조회.
+          paymentId가 예매에 붙은 것과 다르면 409 PAYMENT_ALREADY_REQUESTED.
+        - `CARD`: 모의 결제(ADR-13) — 테스트·분석 전용. `X-Payment-Mock-Key` 또는 ADMIN만. 끝 4자리 0000 → CARD_DECLINED,
+          1111 → INSUFFICIENT_BALANCE, 9999 → 5초 지연 후 승인(503 PAYMENT_RESULT_UNKNOWN → GET /bookings/{id} 재조회), 그 밖은 승인.
+          카드 번호는 저장·로그하지 않는다(Payment는 card_last4만).
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+        - $ref: "#/components/parameters/MockPaymentKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
             schema: { $ref: "#/components/schemas/PayRequest" }
-            example: { method: CARD, card: { number: "4242424242424242", expiry: "12/28", holder: KIM } }
+            examples:
+              tosspay:
+                value: { method: TOSSPAY, paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13" }
+              mockCard:
+                value: { method: CARD, card: { number: "4242424242424242", expiry: "12/28", holder: KIM } }
       responses:
         "200":
           description: 승인(CONFIRMED) 또는 거절(PAYMENT_FAILED). 둘 다 200, status로 구분
@@ -211,16 +277,17 @@ paths:
                     status: CONFIRMED
                     confirmedAt: "2026-11-16T14:04:10+09:00"
                     seatLabels: [J7, J8]
-                    payment: { paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", status: APPROVED, cardLast4: "4242", approvedAt: "2026-11-16T14:04:10+09:00" }
+                    payment: { paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", method: TOSSPAY, status: APPROVED, cardLast4: null, approvedAt: "2026-11-16T14:04:10+09:00" }
                 declined:
                   value:
                     bookingId: 9876
                     status: PAYMENT_FAILED
-                    payment: { paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", status: FAILED, failureCode: CARD_DECLINED }
+                    payment: { paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", method: TOSSPAY, status: FAILED, failureCode: USER_CANCELED }
         "400":
           description: |
-            VALIDATION_FAILED(결제 수단·카드 형식, Idempotency-Key 없음) ·
-            SCREENING_STARTED(예매 마감 — 상영 시작 5분 전부터. 결제를 부르지 않는다, 선점은 TTL로 풀린다.
+            VALIDATION_FAILED(결제 수단·카드 형식, Idempotency-Key 없음, CARD인데 card 없음, TOSSPAY인데 paymentId 없음,
+            CARD 호출자 제한 — details[{ field: "method", value: "CARD", reason: "MOCK_NOT_ALLOWED" }]) ·
+            SCREENING_STARTED(예매 마감 — 상영 시작 5분 전부터. 결제를 부르지 않는다, 선점은 TTL로 풀린다. TOSSPAY 완료 확인은 마감 뒤에도 받는다 — 이미 결제됐으면 ADR-100 환불 경로.
             details[{ field: "screeningId", value, reason: "BOOKING_CLOSED" }])
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -228,13 +295,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: |
-            PAYMENT_ALREADY_REQUESTED(결과는 GET /bookings/{id}) ·
+            PAYMENT_ALREADY_REQUESTED(결과는 GET /bookings/{id}. TOSSPAY는 보낸 paymentId가 예매에 붙은 것과 다를 때도) ·
             BOOKING_STATE_CONFLICT(PENDING 아님, 또는 승인 후 만료 → details[{ field: "status", value: "EXPIRED", reason: "HOLD_EXPIRED" }, { field: "refunded", value: true }]) ·
             IDEMPOTENCY_KEY_CONFLICT · IDEMPOTENCY_IN_PROGRESS
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "503":
           description: |
-            PAYMENT_RESULT_UNKNOWN — details[{ field: "paymentId", value }]. 예매는 PENDING 유지, 화면은 GET /bookings/{id}를 2초 간격 최대 5회 ·
+            PAYMENT_RESULT_UNKNOWN — details[{ field: "paymentId", value }]. 예매는 PENDING 유지, 화면은 GET /bookings/{id}를 2초 간격 최대 5회
+            (TOSSPAY: 포트원 상태가 아직 READY·PENDING, 또는 포트원·Payment 응답 없음) ·
             SERVICE_UNAVAILABLE — Payment 서킷 열림, 또는 Catalog 응답 없음(예매 마감 확인 전 — 결제를 부르지 않는다)
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
@@ -279,6 +347,12 @@ components:
       { name: Idempotency-Key, in: header, required: true, description: "요청마다 새 UUID, 재시도만 같은 값", schema: { type: string, format: uuid } }
     IdempotencyKeyOptional:
       { name: Idempotency-Key, in: header, required: false, description: "상태 전이 자체가 멱등이라 선택", schema: { type: string, format: uuid } }
+    MockPaymentKey:
+      name: X-Payment-Mock-Key
+      in: header
+      required: false
+      description: "모의 결제(method CARD) 허용 키 — k6·블루/그린 분석 Job 전용(booking Secret `APP_PAYMENT_MOCK_KEY`와 같을 때만). 사람은 ADMIN 역할로 대신한다. 값은 로그·PR·문서에 쓰지 않는다"
+      schema: { type: string, minLength: 16 }
 
   responses:
     Unauthorized:
@@ -301,7 +375,12 @@ components:
     SeatStatus: { type: string, enum: [AVAILABLE, HELD, RESERVED] }
     BookingStatus: { type: string, enum: [PENDING, CONFIRMED, PAYMENT_FAILED, EXPIRED, CANCELED] }
     PaymentStatus: { type: string, enum: [PROCESSING, APPROVED, FAILED, CANCELED] }
-    FailureCode: { type: [string, "null"], enum: [CARD_DECLINED, INSUFFICIENT_BALANCE, null] }
+    PaymentMethod: { type: string, enum: [CARD, TOSSPAY], description: "CARD = 모의 결제(테스트·분석 전용) · TOSSPAY = 포트원 토스페이(ADR-112)" }
+    FailureCode:
+      type: [string, "null"]
+      x-extensible-enum: [CARD_DECLINED, INSUFFICIENT_BALANCE, PG_DECLINED, USER_CANCELED, AMOUNT_MISMATCH, null]
+      description: "CARD_DECLINED·INSUFFICIENT_BALANCE = 모의(ADR-13) · PG_DECLINED = 포트원 FAILED · USER_CANCELED = 결제창에서 사용자 취소 · AMOUNT_MISMATCH = 포트원 결제 금액이 예매 금액과 달라 서버가 취소(위변조 의심)"
+
 
     SeatSnapshot:
       type: object
@@ -339,8 +418,9 @@ components:
       required: [paymentId, status]
       properties:
         paymentId: { type: string, format: uuid, description: "Booking 발급 UUID (10장 #4)" }
+        method: { $ref: "#/components/schemas/PaymentMethod" }
         status: { $ref: "#/components/schemas/PaymentStatus" }
-        cardLast4: { type: [string, "null"] }
+        cardLast4: { type: [string, "null"], description: "CARD(모의)만. TOSSPAY는 null" }
         failureCode: { $ref: "#/components/schemas/FailureCode" }
         approvedAt: { type: [string, "null"], format: date-time }
         canceledAt: { type: [string, "null"], format: date-time }
@@ -367,16 +447,45 @@ components:
 
     PayRequest:
       type: object
-      required: [method, card]
+      required: [method]
+      description: "`method`에 따라 필수 필드가 다르다 — TOSSPAY: paymentId · CARD: card. 빠지면 400 VALIDATION_FAILED"
       properties:
-        method: { type: string, enum: [CARD] }
+        method: { $ref: "#/components/schemas/PaymentMethod" }
+        paymentId: { type: string, format: uuid, description: "TOSSPAY 필수 — POST /bookings/{id}/payments가 발급한 값" }
         card:
           type: object
+          description: "CARD(모의) 필수. TOSSPAY에서는 보내지 않는다"
           required: [number, expiry, holder]
           properties:
             number: { type: string, pattern: "^[0-9]{12,19}$", description: "모의 카드. 저장·로그 금지" }
             expiry: { type: string, pattern: "^(0[1-9]|1[0-2])/[0-9]{2}$", examples: ["12/28"] }
             holder: { type: string, minLength: 1, maxLength: 50 }
+
+    PaymentPrepareRequest:
+      type: object
+      required: [method]
+      properties:
+        method: { type: string, enum: [TOSSPAY], description: "준비가 필요한 수단만. CARD(모의)는 준비 없이 /pay 한 번" }
+
+    PaymentPrepareResult:
+      type: object
+      required: [bookingId, paymentId, amount, orderName, expiresAt, checkout]
+      properties:
+        bookingId: { type: integer, format: int64 }
+        paymentId: { type: string, format: uuid, description: "Booking 발급. 포트원 paymentId(가맹점 채번, 매번 고유)로 그대로 쓴다" }
+        amount: { type: integer, description: "requestPayment.totalAmount — 서버가 완료 확인 때 포트원 응답 amount.total과 대조한다" }
+        orderName: { type: string, maxLength: 100 }
+        expiresAt: { type: string, format: date-time, description: "선점 만료. 이 안에 결제창을 끝내지 않으면 승인돼도 환불(ADR-100)" }
+        checkout:
+          type: object
+          description: "포트원 브라우저 SDK requestPayment에 그대로 넘기는 공개 값(비밀 아님)"
+          required: [provider, storeId, channelKey, payMethod, currency]
+          properties:
+            provider: { type: string, enum: [PORTONE] }
+            storeId: { type: string }
+            channelKey: { type: string, description: "토스페이 채널 키" }
+            payMethod: { type: string, enum: [EASY_PAY] }
+            currency: { type: string, enum: [KRW] }
 
     PayResult:
       type: object

@@ -1,0 +1,72 @@
+openapi: 3.1.0
+info:
+  title: seatsac payment webhook API
+  version: "1.0"
+  description: |
+    포트원 V2 웹훅 수신 (PAY-05 · 남궁일, ADR-112). 호출자는 포트원 서버 — CloudFront `/api/*` → ALB → gateway(`/api/webhooks/**` 인증 없음, StripPrefix=1) → payment.
+    외부에 열린 payment 경로는 이것 하나다(`/api/payments/**`는 여전히 gateway 404).
+    인증은 Bearer가 아니라 **Standard Webhooks 서명**(헤더 `webhook-id`·`webhook-timestamp`·`webhook-signature`, 웹훅 시크릿 `APP_PORTONE_WEBHOOK_SECRET`)으로 하고,
+    원본 본문(raw body) 그대로 검증한다. 본문 내용은 믿지 않는다 — paymentId만 꺼내 `verify`와 같은 단건 조회·검증을 다시 한다.
+    포트원은 실패(2xx 아님)하면 최대 5회 재발송(0→1→4→16→64→256분)하므로 처리는 멱등이어야 한다.
+servers:
+  - url: /api
+security: []   # Bearer 없음 — 서명 헤더로 검증 (gateway SecurityConfig permitAll)
+paths:
+  /webhooks/portone:
+    post:
+      operationId: receivePortOneWebhook
+      summary: PAY-05 포트원 웹훅 — 서명 검증 뒤 결제 상태 재검증 (멱등)
+      x-feature-id: PAY-05
+      x-caller: [portone]
+      description: |
+        처리하는 type: `Transaction.Paid`(→ verify와 같은 경로로 APPROVED, 이미 FAILED·CANCELED 행이면 포트원 취소 — 돈만 나간 상태 방지),
+        `Transaction.Failed`(→ FAILED), `Transaction.Cancelled`·`Transaction.PartialCancelled`(→ CANCELED). 그 밖의 type은 200으로 무시한다.
+        우리 DB에 없는 paymentId는 200으로 무시하고 WARN 로그만 남긴다(다른 가맹점·테스트 결제).
+        booking 쪽 반영(확정·환불)은 이 API가 하지 않는다 — booking의 단건 조회 폴링과 만료 스캔이 Payment 상태를 읽어 반영한다.
+      parameters:
+        - { name: webhook-id, in: header, required: true, schema: { type: string } }
+        - { name: webhook-timestamp, in: header, required: true, schema: { type: string }, description: "epoch 초. 5분 넘게 차이 나면 401" }
+        - { name: webhook-signature, in: header, required: true, schema: { type: string }, description: "v1,{base64 HMAC-SHA256} (Standard Webhooks)" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortOneWebhook" }
+            example:
+              type: Transaction.Paid
+              timestamp: "2026-11-16T05:04:10.000Z"
+              data: { paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", storeId: "store-00000000-0000-0000-0000-000000000000", transactionId: "0193e2b0-0000-7000-8000-000000000000" }
+      responses:
+        "200":
+          description: 받았다(처리했거나 무시했다). 본문 없음 — 포트원은 2xx만 본다
+        "400":
+          description: VALIDATION_FAILED — 본문이 JSON이 아니거나 `type`·`data.paymentId`가 없음. 재발송해도 같으므로 포트원이 그만두게 4xx
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "401":
+          description: UNAUTHORIZED — 서명 불일치·타임스탬프 5분 초과·헤더 없음(details[].reason WEBHOOK_SIGNATURE_INVALID). 본문은 읽지 않는다
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "503":
+          description: SERVICE_UNAVAILABLE — 포트원 단건 조회 응답 없음·DB 오류. 포트원이 재발송한다
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+components:
+  schemas:
+    ErrorResponse:
+      $ref: "../schemas/error.v1.json"
+
+    PortOneWebhook:
+      type: object
+      required: [type, data]
+      description: "포트원 V2 웹훅 본문(필요한 필드만). 모르는 필드는 무시한다"
+      properties:
+        type: { type: string, examples: ["Transaction.Paid", "Transaction.Failed", "Transaction.Cancelled"] }
+        timestamp: { type: string, format: date-time }
+        data:
+          type: object
+          required: [paymentId]
+          properties:
+            paymentId: { type: string, description: "가맹점(booking) 채번 ID. UUID가 아니면 우리 결제가 아니다 → 무시" }
+            storeId: { type: string }
+            transactionId: { type: string }
+          additionalProperties: true
+      additionalProperties: true

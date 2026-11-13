@@ -880,14 +880,14 @@ SeatSAC-gitops/
 | 머지 | Squash merge |
 | 커밋 메시지 | Conventional Commits + 기능 ID 또는 WBS ID: `feat(booking): BKG-02 좌석 선점 Lua 스크립트`, `infra(terraform): 3.1.3 RDS·Valkey` |
 | 릴리스 태그 | `rc1` 11/6(M5), `rc2` 11/13(M6), `v1.0.0` 11/19(리허설 전) |
-| 동결 | 11/13 이후 `fix/`만, 승인 2명 + 김종식 확인. **11/16~20 데모 주간은 승인된 fix 외 머지 금지** |
+| 동결 | 11/13 이후 `fix/`만, 승인 1명 + 김종식 확인. **11/16~20 데모 주간은 승인된 fix 외 머지 금지** |
 | ⚠️AI 일정·머지 (ADR-87) | **rc1(11/6)**: gateway `/api/ai/**` 라우트(플래그 off)·gateway 분석 쿼리 `/ai` 제외 머지 완료. ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)**: AI 기능은 계속 머지할 수 있다 — 허용 경로는 `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai/**`·`overlays/staging/ai/**`만. gateway·booking·`libs/`·Terraform 변경은 이 기간 금지(부하·전환 테스트 환경 보호). **테스트 준비 예외(11/10 일정 변경)**: 4.2.1 부하 테스트 준비가 M6로 밀려 테스트 도구·문서는 M6에도 머지할 수 있다 — `tests/k6/**`, `docs/**`(런북·문서, `CLAUDE.md` 재생성 포함), gitops `base/*/networkpolicy.yaml`의 **테스트 Job 라벨 허용 규칙 추가만**(예: `k6-loadtest` → gateway. Rollout·Deployment 템플릿은 그대로라 블루/그린·재시작이 없다). 조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 4.2.1·4.2.2 테스트가 돌지 않는 시간에 머지. 서비스 코드·Terraform 금지는 그대로. **AI 화면 예외(11/12)**: 3.3.7 챗봇 화면도 M6에 머지할 수 있다 — 이 경로는 전체 허용: `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스), `frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음). 기존 파일은 **추가만**(기존 동작 그대로): `frontend/src/widgets/page-layout/ui/PageLayout.tsx`(Dock import·배치), `frontend/src/shared/ui/icon/Icon.tsx`(아이콘 경로), `frontend/src/shared/api/http.ts`(`Retry-After`를 `ApiError`에 담기 — 기존 오류 처리 그대로, `http.test.ts` 포함), `frontend/src/app/routes/router.tsx`(주석만). `http.ts`는 모든 화면이 쓰는 클라이언트라 `pr-check` `frontend`(vitest) 통과를 조건에 넣는다. frontend는 S3 + CloudFront 배포라 클러스터 파드·블루/그린·노드와 무관하고, 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5) → 로그인·메인 진입 때 ai 트래픽이 없어 4.2.1·4.2.2·좌석 데모 측정에 섞이지 않는다. 조건: PR 본문에 「M6 예외(AI 화면)」와 이유, 스크럼 공유, 테스트가 돌지 않는 시간에 머지(`frontend-deploy`는 S3 업로드·CloudFront 무효화만). 그 밖의 `frontend/**`는 금지 그대로. 테스트(4.2.1·4.2.2)는 `ng-ai` desired 0·플래그 off. ai 검증은 로컬 Compose + **개발 전용 Claude API 키**(`.env`), staging 확인은 테스트가 돌지 않는 시간에 `kubectl port-forward svc/ai`(스크럼에서 시간 공유) · **rc2(11/13)**: ai 코드도 동결, 이후 ai는 `fix/`만. M6 테스트가 끝난 뒤 gateway `APP_AI_ENABLED=true` gitops PR 1회 · **데모 주간(11/16~20)**: ai `fix/`도 머지 금지(ADR-64 그대로). 11/17 AI 데모는 `ng-ai` 수동 기동(머지 아님) |
 
 ### 3. PR
 
 | 항목 | 규칙 |
 | --- | --- |
-| 승인 | 1명 (11/13 이후 2명). `libs/`·`build-logic/` 변경은 2명(김종식 + 영향받는 서비스 담당) |
+| 승인 | 1명 (11/13 이후에도 1명 — 11/13 결정). `libs/`·`build-logic/` 변경은 2명(김종식 + 영향받는 서비스 담당) |
 | 필수 검사 (ruleset) | `java`·`gitleaks`·`image`·`frontend`(pr-check), `lint (OpenAPI · JSON Schema · 예시)`·`하위 호환 (base 대비)`(contract-check). 여섯 검사 모두 **모든 PR에서 실행**된다(contract-check는 `paths` 필터 없이 `변경 감지` job이 계약 변경이 없으면 두 job을 건너뜀 = 성공. `image`도 같은 방식: 이미지 대상이 없으면 건너뜀 = 성공. `frontend`도 같은 방식: `frontend 변경 감지` job이 `frontend/**` 변경이 없으면 건너뜀 = 성공). `infra-plan`은 `paths` 필터가 있어 필수로 걸지 않는다 — `infra/terraform/**` PR은 리뷰어가 plan 코멘트를 확인. `java`는 Gradle wrapper·서비스 골격이 들어온 뒤 필수로 추가. ⚠️AI `python`(pr-check)도 같은 「변경 없으면 건너뜀」 방식으로 필수 검사에 추가 → 일곱 검사(워크플로가 main에 들어간 뒤 ruleset에 `python`을 추가한다 — 그 전에 추가하면 job이 없어 모든 PR이 대기) |
 | 크기 | 400줄 이하 권장(생성 코드·lock 제외) |
 | 리뷰 응답 | 24시간 이내(주말 제외) |

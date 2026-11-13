@@ -1222,7 +1222,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 
 #### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
 
-1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태)
+1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태). **전제: ai 「도구 강제」 수정 PR(김서현, 11/13)이 머지돼 staging ai 이미지에 들어간 뒤** — 그 전 이미지는 Sonnet 5.5가 도구 강제 옵션을 받지 않아 모든 질문이 503이다. ArgoCD `cinema-ai` 이미지 태그가 그 PR의 머지 커밋인지 확인하고 켠다
 2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
 3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
 4. 데모가 끝난 뒤에만 `cluster-scale.sh down ng-ai`
@@ -1365,6 +1365,32 @@ PY
 | `KeyError: 'AI_VALKEY_HOST'` | ai 파드에 `cinema-infra-endpoints`가 안 들어갔다 → 6-G-1 3단계 |
 | 연결 시간 초과 | ai Valkey 보안그룹(노드 SG → 6379)에 `ng-ai` 노드가 빠졌다 → `ai_valkey.tf` 인바운드 확인 |
 | `OOM command not allowed` | ai Valkey 메모리가 찼다(`noeviction`) → 메모리 경보·`INFO memory` 확인 |
+
+#### 6-G-7. ai Valkey 무응답 확인 (데모 전 1회, 김종식·김서현) — ⬜
+
+로컬에서 Valkey가 멈췄을 때 챗봇 답이 **63초** 걸렸다(연결 재시도 10회, 11/13 김서현). staging ai Valkey가 응답하지 않을 때도 시간 예산(9-1: ai 전체 기한 25초 < gateway 28초 < CloudFront 30초) 안에서 ai의 오류 형식으로 끝나는지 데모 전에 본다. ai 쪽 재시도 수정(김서현)이 staging에 들어간 뒤 한다.
+
+- 시간: 11/15까지 · 평일 노드 켜짐 시간 · 4.2.1·4.2.2·좌석 데모 리허설과 겹치지 않게(스크럼 공유) · `up ng-ai`(6-G-2 A) 상태
+- 방법: ai Valkey 노드를 재부팅해 몇 분간 응답이 없게 만든다(새 리소스를 만들지 않는다. ai 전용 클러스터라 좌석 선점·기존 Valkey와 무관). 그동안 챗봇 질문을 보낸다
+
+```bash
+export AWS_PROFILE=cinema-admin
+CID=$(aws elasticache describe-replication-groups --replication-group-id cinema-staging-ai-valkey \
+      --query 'ReplicationGroups[0].MemberClusters[0]' --output text)
+aws elasticache reboot-cache-cluster --cache-cluster-id "$CID" --cache-node-ids-to-reboot 0001
+kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # 터미널 B — readiness가 빠지는지(PING 실패)
+# 터미널 A: 로그인한 화면(또는 토큰)으로 /api/ai/chat 질문 3번 — 응답 코드·걸린 시간·code·details[].reason을 적는다
+aws elasticache describe-cache-clusters --cache-cluster-id "$CID" --query 'CacheClusters[0].CacheClusterStatus'   # available이 되면 끝
+```
+
+| 확인 | 합격 |
+| --- | --- |
+| 무응답 중 챗봇 응답 시간 | **25초 이하**(ai 전체 기한). 28초에 gateway 504·30초에 CloudFront 504가 나면 ai 재시도가 기한을 넘는 것 → 김서현 |
+| 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`. 둘 다 합격 |
+| Claude 호출 | 무응답 중 `ai_tokens_total`이 늘지 않는다(한도 기록 실패 → 호출 안 함) |
+| 복구 | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 질문 200. 파드 재시작 없이 돌아오는지 |
+
+- 결과는 이 절 머리말(⬜ → ✅ + 날짜·응답 시간)과 스크럼에 남긴다. 25초를 넘으면 데모 Plan B: AI 데모 중 ai Valkey 경보(메모리 80%)·`SeatSAC AI` 대시보드를 보고, 무응답이면 `cluster-scale.sh down ng-ai`(6-G-4) 후 「일시 중지」 안내
 
 ### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)
 

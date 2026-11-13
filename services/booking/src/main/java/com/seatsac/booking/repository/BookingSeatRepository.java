@@ -21,19 +21,6 @@ public interface BookingSeatRepository extends JpaRepository<BookingSeat, Bookin
     @Query("select bs.id.seatId from BookingSeat bs where bs.id.bookingId = :bookingId")
     List<Long> findSeatIdsByBookingId(@Param("bookingId") Long bookingId);
 
-    /** 좌석 현황·409 reason 판정용 — uk_booking_seat_screening_seat 범위만 읽는다 */
-    @Query("""
-        select bs.id.seatId
-          from BookingSeat bs
-          join Booking b on b.bookingId = bs.id.bookingId
-         where bs.screeningId = :screeningId
-           and bs.id.seatId in :seatIds
-           and b.status = :status
-        """)
-    List<Long> findSeatIdsByScreeningIdAndSeatIdInAndStatus(@Param("screeningId") Long screeningId,
-                                                            @Param("seatIds") List<Long> seatIds,
-                                                            @Param("status") BookingStatus status);
-
     /** BKG-01 좌석 현황 — 점유 중(PENDING·CONFIRMED)인 좌석과 그 상태 */
     @Query("""
         select bs.id.seatId, b.status

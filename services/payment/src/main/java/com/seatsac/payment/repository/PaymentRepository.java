@@ -92,6 +92,20 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
         """)
     List<Payment> findRefundOwed(@Param("threshold") Instant threshold, Pageable pageable);
 
+    /**
+     * 늦은 결제 다시 보기(ADR-112) — 최근 FAILED로 닫혔고 돈이 잡힌 흔적이 없는 PORTONE 행. 닫은 뒤 사용자가 결제를
+     * 끝냈는데 웹훅이 오지 않은 경우를 스윕이 포트원 조회로 찾는다
+     */
+    @Query("""
+        select p from Payment p
+         where p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
+           and p.status = com.seatsac.payment.enums.PaymentStatus.FAILED
+           and p.pgTransactionId is null
+           and p.updatedAt >= :since
+         order by p.updatedAt asc
+        """)
+    List<Payment> findRecentlyFailedWithoutTransaction(@Param("since") Instant since, Pageable pageable);
+
     /** PAY-03 — 승인된 결제만 취소한다. 이미 CANCELED면 0행이고 첫 취소 사유를 유지한다 */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""

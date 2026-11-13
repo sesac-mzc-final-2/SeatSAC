@@ -3,6 +3,7 @@ package com.seatsac.payment.portone;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.seatsac.payment.config.PortOneProperties;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
@@ -34,6 +35,9 @@ import org.springframework.web.client.RestClientResponseException;
  *   <li>오류 본문의 {@code type}은 정규식이 아니라 Jackson으로 읽는다</li>
  *   <li>{@code @Retry}는 쓰지 않는다 — 재호출은 부르는 쪽이 코드로 1회(GET만)</li>
  * </ul>
+ *
+ * <p>서킷이 열려 있으면(포트원이 계속 응답하지 않음) 부르지 않고 바로 {@link PortOneUnavailableException}이다 —
+ * 부르는 쪽은 「응답 없음」 하나만 다루면 된다(503 {@code PORTONE_UNAVAILABLE}, 스윕은 다음 주기).
  *
  * <p>Secret·응답 전체는 로그에 쓰지 않는다. 지표 {@code payment_pg_call_total{op,result}}.
  */
@@ -67,7 +71,7 @@ public class PortOneClient {
     }
 
     /** 단건 조회. 포트원에 없는 결제(결제창을 열지 않았다)는 비어 있음 */
-    @CircuitBreaker(name = "portone")
+    @CircuitBreaker(name = "portone", fallbackMethod = "findWhenOpen")
     public Optional<PortOnePayment> find(String paymentId) {
         try {
             PortOnePayment payment = rest.get()
@@ -113,7 +117,7 @@ public class PortOneClient {
      * @throws PortOneRejectedException 포트원이 확정 거절(아직 결제되지 않음 등)
      * @throws PortOneUnavailableException 응답을 못 받음 — <b>취소가 됐는지 모른다</b>, 부르는 쪽이 대조
      */
-    @CircuitBreaker(name = "portone")
+    @CircuitBreaker(name = "portone", fallbackMethod = "cancelWhenOpen")
     public CancelOutcome cancel(String paymentId, int amount, String reason) {
         Map<String, Object> body = storeId == null
             ? Map.of("amount", amount, "currentCancellableAmount", amount, "reason", reason)
@@ -138,6 +142,11 @@ public class PortOneClient {
             // FAILED 또는 모양이 다름 — 확정 거절로 본다
             throw new PortOneRejectedException(status == null ? "UNKNOWN_CANCELLATION" : "CANCELLATION_" + status);
         } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 401 || status == 403) {
+                // API Secret·storeId 설정 오류 — 조회(find)와 같이 「응답 못 받음」으로 다룬다(확정 거절이 아니다)
+                throw unavailable("cancel", "error", "HTTP " + status);
+            }
             // 4xx — 본문의 type으로 「이미 됐을 수 있다」와 확정 거절을 가른다
             String type = errorType(e.getResponseBodyAsString());
             count("cancel", "ok");
@@ -153,6 +162,16 @@ public class PortOneClient {
         } catch (RestClientException e) {
             throw unavailable("cancel", "error", e.getClass().getSimpleName());
         }
+    }
+
+    /** 서킷 OPEN — 포트원을 부르지 않았다. 응답을 못 받은 것과 같게 다룬다 */
+    private Optional<PortOnePayment> findWhenOpen(String paymentId, CallNotPermittedException e) {
+        throw unavailable("get", "error", "CIRCUIT_OPEN");
+    }
+
+    /** 서킷 OPEN — 취소 요청을 보내지 않았다. 부르는 쪽은 응답 없음과 같이 대조한다 */
+    private CancelOutcome cancelWhenOpen(String paymentId, int amount, String reason, CallNotPermittedException e) {
+        throw unavailable("cancel", "error", "CIRCUIT_OPEN");
     }
 
     public enum CancelOutcome {

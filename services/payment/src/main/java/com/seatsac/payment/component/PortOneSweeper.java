@@ -24,6 +24,9 @@ import org.springframework.stereotype.Component;
  *       MOCK의 30초 정리({@link StaleProcessingCloser})와 다른 기준·다른 질문(포트원에 물을 수 있다)</li>
  *   <li><b>환불 미완료</b>: FAILED인데 돈이 잡혀 있고({@code pg_transaction_id}) 환불 확인이 없는 행을 60초 넘게 손대지
  *       않았으면 대조·재시도. 다시 보내는 주체는 이 스윕과 booking 재요청뿐이다(웹훅은 대조만)</li>
+ *   <li><b>늦은 결제 다시 보기</b>: 최근 30분 안에 FAILED로 닫혔고 돈이 잡힌 흔적이 없는 행을 5분마다 포트원에 다시 묻는다.
+ *       닫은 뒤 사용자가 열어 둔 결제창에서 결제를 끝냈는데 웹훅({@code Transaction.Paid})이 오지 않으면 이 경로만이
+ *       찾는다 → PAID면 환불 미완료 표식 → 2번이 환불</li>
  * </ol>
  *
  * <p>포트원이 꺼져 있으면({@code enabled=false}) 돌지 않는다. 포트원 응답이 없으면 해당 건은 다음 주기로 미룬다.
@@ -38,6 +41,9 @@ public class PortOneSweeper {
     static final Duration REFUND_RETRY_AFTER = Duration.ofSeconds(60);
     /** 이보다 오래 환불이 끝나지 않으면 사람이 봐야 한다 — 지표로 알린다 */
     static final Duration REFUND_UNRESOLVED_AFTER = Duration.ofMinutes(15);
+    /** 늦은 결제 다시 보기 — 닫힌 뒤 이 기간 동안, 이 간격으로 */
+    static final Duration LATE_PAYMENT_WINDOW = Duration.ofMinutes(30);
+    static final Duration LATE_PAYMENT_INTERVAL = Duration.ofMinutes(5);
 
     private final Clock clock;
     private final PortOneProperties props;
@@ -45,12 +51,41 @@ public class PortOneSweeper {
     private final PortOneReconcileService reconcile;
     private final MeterRegistry meterRegistry;
 
+    /** 마지막 늦은 결제 다시 보기 시각 — 파드마다 따로(여러 파드가 겹쳐도 표식은 조건부 UPDATE라 한 번만) */
+    private volatile Instant lastLatePaymentCheck = Instant.EPOCH;
+
     /** @return 닫은 PROCESSING 수 + 끝낸 환불 수 */
     public int sweep() {
         if (!props.enabled()) {
             return 0;
         }
-        return closeAbandoned() + settleRefunds();
+        int handled = closeAbandoned() + settleRefunds();
+        Instant now = clock.instant();
+        if (!now.isBefore(lastLatePaymentCheck.plus(LATE_PAYMENT_INTERVAL))) {
+            lastLatePaymentCheck = now;
+            recheckLatePayments();
+        }
+        return handled;
+    }
+
+    /** @return 환불 미완료로 표시한 늦은 결제 수 */
+    public int recheckLatePayments() {
+        Instant since = clock.instant().minus(LATE_PAYMENT_WINDOW);
+        List<Payment> recent = paymentState.findRecentlyFailedWithoutTransaction(since, PageRequest.ofSize(BATCH_SIZE));
+        int marked = 0;
+        for (Payment payment : recent) {
+            try {
+                if (reconcile.noteLatePayment(payment)) {
+                    marked++;
+                }
+            } catch (com.seatsac.payment.portone.PortOneUnavailableException e) {
+                log.warn("포트원 응답이 없어 늦은 결제 확인을 다음으로 미룬다 paymentId={}", payment.getPaymentId());
+            }
+        }
+        if (marked > 0) {
+            log.warn("웹훅 없이 찾은 늦은 결제 — 환불 미완료로 표시 marked={}", marked);
+        }
+        return marked;
     }
 
     int closeAbandoned() {

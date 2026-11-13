@@ -62,6 +62,8 @@ public final class FakePortOne implements AutoCloseable {
     public volatile int cancelStatus = 200;
     public volatile String cancelBody = "{\"cancellation\":{\"status\":\"SUCCEEDED\",\"id\":\"c-1\",\"totalAmount\":0}}";
     public volatile long delayMillis = 0;
+    /** 이 결제들은 조회 응답의 취소 내역에 REQUESTED(PG가 처리 중)를 붙인다 */
+    public final java.util.Set<String> requestedCancel = ConcurrentHashMap.newKeySet();
 
     private final HttpServer server;
 
@@ -90,6 +92,7 @@ public final class FakePortOne implements AutoCloseable {
         cancelStatus = 200;
         cancelBody = "{\"cancellation\":{\"status\":\"SUCCEEDED\",\"id\":\"c-1\",\"totalAmount\":0}}";
         delayMillis = 0;
+        requestedCancel.clear();
     }
 
     private void handle(HttpExchange exchange) throws IOException {
@@ -115,7 +118,11 @@ public final class FakePortOne implements AutoCloseable {
                 respond(exchange, 404, "{\"type\":\"PAYMENT_NOT_FOUND\",\"message\":\"없음\"}");
                 return;
             }
-            respond(exchange, 200, remote.json());
+            String json = remote.json();
+            if (requestedCancel.contains(paymentId)) {
+                json = json.substring(0, json.length() - 1) + ",\"cancellations\":[{\"status\":\"REQUESTED\",\"id\":\"c-9\"}]}";
+            }
+            respond(exchange, 200, json);
             return;
         }
         if (path.endsWith("/cancel")) {

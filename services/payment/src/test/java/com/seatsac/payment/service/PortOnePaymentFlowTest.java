@@ -19,6 +19,8 @@ import com.seatsac.payment.enums.PgProvider;
 import com.seatsac.payment.portone.FakePortOne;
 import com.seatsac.payment.portone.FakePortOne.Remote;
 import com.seatsac.payment.repository.PaymentRepository;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
@@ -62,6 +64,10 @@ class PortOnePaymentFlowTest {
     StaleProcessingCloser mockCloser;
     @Autowired
     PaymentRepository paymentRepository;
+    @Autowired
+    CircuitBreakerRegistry circuitBreakers;
+    @Autowired
+    MeterRegistry meterRegistry;
 
     @BeforeEach
     void setUp() {
@@ -378,6 +384,101 @@ class PortOnePaymentFlowTest {
 
         assertThat(paymentService.get(mock.paymentId()).status()).isEqualTo(PaymentStatus.APPROVED);
         assertThat(PORTONE.received).isEmpty();
+    }
+
+    // --- 리뷰 반영 (#117) ---
+
+    /** 서킷이 열리면 포트원을 부르지 않고 503 — 500이 아니다. 스윕은 예외 없이 끝난다 */
+    @Test
+    void openCircuitIsUnavailableNotInternalErrorAndSweepKeepsGoing() {
+        String processing = prepared(30_000);
+        String approvedId = approved(30_000);
+        var circuit = circuitBreakers.circuitBreaker("portone");
+        circuit.transitionToForcedOpenState();
+        try {
+            for (Runnable call : java.util.List.<Runnable>of(
+                () -> paymentService.verify(processing),
+                () -> paymentService.cancel(approvedId, PaymentCancelReason.BOOKING_CANCELED))) {
+                assertThatThrownBy(call::run)
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).code().responseCode())
+                    .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
+            }
+            paymentState.startOrFind(UUID.randomUUID().toString(), 7401L, 30_000, PaymentMethod.TOSSPAY, null,
+                Instant.now().minus(Duration.ofMinutes(8)));
+            sweeper.sweep();                                     // 예외 없이 끝나고 다음 주기로 미룬다
+            sweeper.recheckLatePayments();
+            assertThat(PORTONE.received).isEmpty();
+            assertThat(paymentService.get(processing).status()).isEqualTo(PaymentStatus.PROCESSING);
+            assertThat(paymentService.get(approvedId).status()).isEqualTo(PaymentStatus.APPROVED);
+        } finally {
+            circuit.transitionToClosedState();
+        }
+    }
+
+    /** 결제창 미완료로 닫은 뒤 결제가 끝났는데 웹훅이 오지 않아도 스윕이 찾아 환불 미완료로 표시한다 */
+    @Test
+    void latePaymentWithoutWebhookIsFoundByTheSweeper() {
+        String id = paymentState.startOrFind(UUID.randomUUID().toString(), 7501L, 30_000,
+            PaymentMethod.TOSSPAY, null, Instant.now().minus(Duration.ofMinutes(8))).payment().getPaymentId();
+        sweeper.sweep();                                        // FAILED(PROCESSING_TIMEOUT)
+        PORTONE.payments.put(id, Remote.paid(30_000));          // 그 뒤 결제가 끝났다 — 웹훅은 오지 않는다
+
+        assertThat(sweeper.recheckLatePayments()).isEqualTo(1);
+
+        Payment payment = paymentRepository.findById(id).orElseThrow();
+        assertThat(payment.isRefundOwed()).isTrue();
+        assertThat(PORTONE.cancels()).isEmpty();                // 표식까지만 — 환불은 환불 미완료 단계가 보낸다
+        assertThat(sweeper.recheckLatePayments()).isZero();     // 이미 표시된 행은 다시 보지 않는다
+    }
+
+    /** 웹훅은 금액 불일치여도 표식까지만 — 취소는 스윕이 보낸다(포트원에 아무것도 보내지 않는다) */
+    @Test
+    void paidWebhookWithWrongAmountMarksOnlyAndDoesNotCancel() {
+        String id = prepared(30_000);
+        PORTONE.payments.put(id, Remote.paid(15_000));
+
+        webhookService.handle("Transaction.Paid", id);
+
+        Payment payment = paymentRepository.findById(id).orElseThrow();
+        assertThat(payment.getFailureCode()).isEqualTo(PaymentFailureCode.AMOUNT_MISMATCH);
+        assertThat(payment.isRefundOwed()).isTrue();
+        assertThat(PORTONE.cancels()).isEmpty();
+    }
+
+    /** 앞서 보낸 취소가 PG에서 처리 중(REQUESTED)이면 스윕이 취소를 다시 보내지 않는다 */
+    @Test
+    void refundWithRequestedCancellationIsNotSentAgain() {
+        String id = prepared(30_000);
+        PORTONE.payments.put(id, Remote.paid(15_000));
+        webhookService.handle("Transaction.Paid", id);          // 환불 미완료 표식
+        PORTONE.requestedCancel.add(id);
+        paymentState.touch(id, Instant.now().minus(Duration.ofSeconds(120)));
+
+        sweeper.sweep();
+
+        assertThat(PORTONE.cancels()).isEmpty();
+        assertThat(paymentRepository.findById(id).orElseThrow().isRefundOwed()).isTrue();
+    }
+
+    /** 취소 401·403은 설정 오류 — 확정 거절이 아니라 응답 없음으로 세고 대조한다 */
+    @Test
+    void cancelUnauthorizedIsCountedAsErrorNotOk() {
+        String id = approved(30_000);
+        PORTONE.cancelStatus = 401;
+        PORTONE.cancelBody = "{\"type\":\"UNAUTHORIZED\",\"message\":\"secret\"}";
+        double errorsBefore = meterRegistry.counter("payment_pg_call_total", "op", "cancel", "result", "error").count();
+        double okBefore = meterRegistry.counter("payment_pg_call_total", "op", "cancel", "result", "ok").count();
+
+        assertThatThrownBy(() -> paymentService.cancel(id, PaymentCancelReason.BOOKING_CANCELED))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
+        assertThat(meterRegistry.counter("payment_pg_call_total", "op", "cancel", "result", "error").count())
+            .isEqualTo(errorsBefore + 1);
+        assertThat(meterRegistry.counter("payment_pg_call_total", "op", "cancel", "result", "ok").count())
+            .isEqualTo(okBefore);
+        assertThat(paymentService.get(id).status()).isEqualTo(PaymentStatus.APPROVED);
     }
 
     // --- helpers ---

@@ -50,6 +50,11 @@ public record PortOnePayment(
         return "CANCELLED".equals(status) || "PARTIAL_CANCELLED".equals(status);
     }
 
+    /** 앞서 보낸 취소를 PG가 아직 처리 중이다(취소 내역에 REQUESTED) — 다시 보내지 않는다 */
+    public boolean hasRequestedCancellation() {
+        return cancellations != null && cancellations.stream().anyMatch(c -> "REQUESTED".equals(c.status()));
+    }
+
     /** 결제창이 아직 끝나지 않았다(READY·PENDING·PAY_PENDING·VIRTUAL_ACCOUNT_ISSUED 등) */
     public boolean isUnsettled() {
         return !isPaid() && !isFailed() && !isCancelled();

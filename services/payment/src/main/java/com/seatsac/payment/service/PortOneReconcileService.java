@@ -51,11 +51,23 @@ public class PortOneReconcileService {
     }
 
     /**
-     * PROCESSING인 PORTONE 행을 포트원 상태로 확정한다.
+     * PROCESSING인 PORTONE 행을 포트원 상태로 확정한다(verify·스윕). 금액 불일치면 표식 뒤 바로 환불을 시도한다.
      *
      * @throws PortOneUnavailableException 포트원 응답을 못 받음 — 행은 그대로, 부르는 쪽이 503·다음 주기
      */
     public Outcome reconcileProcessing(Payment payment) {
+        return reconcileProcessing(payment, true);
+    }
+
+    /**
+     * 웹훅용 — 확정은 같지만 <b>포트원에 아무것도 보내지 않는다</b>. 금액 불일치는 환불 미완료 표식까지만 하고 환불은
+     * 스윕이 보낸다(웹훅 재발송이 취소 요청을 여러 번 만들지 않게, 다른 팀 장애 기록).
+     */
+    public Outcome reconcileForWebhook(Payment payment) {
+        return reconcileProcessing(payment, false);
+    }
+
+    private Outcome reconcileProcessing(Payment payment, boolean refundNow) {
         Optional<PortOnePayment> found = portOne.find(payment.getPaymentId());
         if (found.isEmpty()) {
             return Outcome.NOT_YET;   // 결제창을 열지 않았다(포트원에 결제 자체가 없음)
@@ -77,7 +89,7 @@ public class PortOneReconcileService {
             log.warn("포트원 결제 금액 불일치 — FAILED(AMOUNT_MISMATCH), 환불 미완료로 둔다 paymentId={} bookingId={} 기대={} 실제={} {}",
                 paymentId, payment.getBookingId(), payment.getAmount(),
                 remote.amount() == null ? null : remote.amount().total(), remote.currency());
-            if (changed) {
+            if (changed && refundNow) {
                 tryRefund(paymentId, payment.getAmount(), "AMOUNT_MISMATCH", now);
             }
             return Outcome.MISMATCH;
@@ -145,6 +157,12 @@ public class PortOneReconcileService {
         Instant now = clock.instant();
         try {
             Optional<PortOnePayment> found = portOne.find(paymentId);
+            if (found.isPresent() && found.get().hasRequestedCancellation()) {
+                // 앞서 보낸 취소를 PG가 처리 중이다 — 다시 보내지 않고 기다린다(취소 API에 멱등 키가 없다)
+                paymentState.touch(paymentId, now);
+                log.info("포트원 취소 처리 중(REQUESTED) — 다시 보내지 않는다 paymentId={}", paymentId);
+                return false;
+            }
             if (found.isEmpty() || found.get().isCancelled() || !found.get().isPaid()) {
                 // 취소됐거나(환불 끝), 돈이 잡힌 적이 없다(환불할 것 없음) — 둘 다 끝낸다
                 paymentState.confirmRefund(paymentId, PaymentCancelReason.STALE_PAYMENT, now);

@@ -104,6 +104,11 @@ public class PaymentStateService {
         return paymentRepository.findRefundOwed(threshold, pageable);
     }
 
+    @Transactional(readOnly = true)
+    public List<Payment> findRecentlyFailedWithoutTransaction(Instant since, Pageable pageable) {
+        return paymentRepository.findRecentlyFailedWithoutTransaction(since, pageable);
+    }
+
     /** PAY-03 — 승인된 결제만 취소한다. 0행이면 이미 취소됐거나 승인 상태가 아니다 */
     @Transactional
     public boolean cancel(String paymentId, PaymentCancelReason reason, Instant now) {

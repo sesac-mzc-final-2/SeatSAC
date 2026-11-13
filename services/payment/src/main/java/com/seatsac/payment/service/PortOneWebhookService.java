@@ -39,14 +39,14 @@ public class PortOneWebhookService {
         switch (type) {
             case "Transaction.Paid" -> {
                 if (payment.isProcessing()) {
-                    reconcile.reconcileProcessing(payment);
+                    reconcile.reconcileForWebhook(payment);
                 } else if (payment.isFailed() && payment.getPgTransactionId() == null) {
                     reconcile.noteLatePayment(payment);   // 늦은 결제 — 표식만, 환불은 스윕
                 }
             }
             case "Transaction.Failed" -> {
                 if (payment.isProcessing()) {
-                    reconcile.reconcileProcessing(payment);
+                    reconcile.reconcileForWebhook(payment);
                 }
             }
             case "Transaction.Cancelled", "Transaction.PartialCancelled" -> {

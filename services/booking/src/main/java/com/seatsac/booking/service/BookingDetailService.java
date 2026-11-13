@@ -67,6 +67,11 @@ public class BookingDetailService {
         if (payment == null || booking.getStatus() != BookingStatus.PENDING) {
             return payment;
         }
+        if (payment.isProcessing() && "TOSSPAY".equals(payment.method())) {
+            // 토스페이는 payment가 스스로 끝나지 않는다(포트원 결제창). 화면이 결과를 다시 볼 때 포트원 확인도 같이 한다 —
+            // 그래야 완료 확인(/pay)이 503으로 끝났어도 재조회로 결과가 나온다(웹훅·7분 정리를 기다리지 않는다)
+            payment = verifyOrKeep(payment);
+        }
 
         if (payment.isApproved()) {
             // 승인 뒤 만료였으면 방금 환불했다 → 조회한 값(APPROVED)은 이미 낡았다.
@@ -85,6 +90,16 @@ public class BookingDetailService {
         }
         // PROCESSING이면 그대로 둔다 — 아직 결과를 모른다
         return payment;
+    }
+
+    /** 포트원 확인. 아직 결제창 미완료·응답 없음이면 조회한 값(PROCESSING) 그대로 — 예매 조회는 200이어야 한다 */
+    private PaymentResult verifyOrKeep(PaymentResult processing) {
+        try {
+            return paymentClient.verify(processing.paymentId());
+        } catch (RuntimeException e) {
+            log.debug("포트원 확인 결과 없음 — PROCESSING 그대로 paymentId={}", processing.paymentId());
+            return processing;
+        }
     }
 
     /**

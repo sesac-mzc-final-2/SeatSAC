@@ -78,8 +78,9 @@ class PaymentClientTest {
         server.start();
 
         meterRegistry = new SimpleMeterRegistry();
+        // 포트원을 품은 호출(verify·cancel)도 3초 — 느린 응답(4초)으로 응답 없음을 만든다
         client = new PaymentClient(new InternalRestClientFactory(),
-            "http://127.0.0.1:" + server.getAddress().getPort(), meterRegistry);
+            "http://127.0.0.1:" + server.getAddress().getPort(), java.time.Duration.ofSeconds(3), meterRegistry);
     }
 
     @AfterEach
@@ -266,16 +267,17 @@ class PaymentClientTest {
 
     /** 응답이 없으면 1회 다시 확인하고, 그래도 없으면 조회한다 */
     @Test
-    void verifyTimeoutRetriesOnceThenLooksUp() {
+    void verifyTimeoutIsUnknownWithoutRetry() {
         responses.add(Response.slow(tossPayJson("APPROVED")));
-        responses.add(Response.slow(tossPayJson("APPROVED")));
-        responses.add(Response.ok(tossPayJson("APPROVED")));   // GET
 
-        PaymentResult result = client.verify(PAYMENT_ID);
-
-        assertThat(result.isApproved()).isTrue();
-        assertThat(postCount).hasValue(2);
-        assertThat(requestedPaths).last().asString().isEqualTo("GET /internal/payments/" + PAYMENT_ID);
+        assertThatThrownBy(() -> client.verify(PAYMENT_ID))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
+        // 한 번만 — 다시 부르면 gateway 응답 제한(15초)을 넘긴다. 화면의 단건 조회가 verify를 다시 부른다
+        assertThat(postCount).hasValue(1);
+        assertThat(requestedPaths).hasSize(1);
+        assertThat(metric("timeout")).isEqualTo(1);
     }
 
     /** 409(모의 결제 행)는 재호출하지 않는다 — 409 PAYMENT_ALREADY_REQUESTED로 올린다 */

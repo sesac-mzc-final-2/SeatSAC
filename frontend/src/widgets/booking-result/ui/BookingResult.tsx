@@ -46,7 +46,7 @@ export function BookingResult({ booking, screening, movie, outcome, seatSelectHr
         icon="clock"
         eyebrow={outcome.message}
         title="결제를 마치지 않았어요"
-        description="이 예매는 다시 결제할 수 없어요. 고른 좌석은 선점 시간이 끝나고 약 2분 안에 자동으로 풀려요. 그사이 결제가 승인된 것으로 확인되면 자동으로 환불돼요."
+        description="결제가 아직 확인되지 않았어요. 결제를 마쳤다면 잠시 뒤 「결과 다시 확인」을 눌러 주세요. 결제하지 않았다면 고른 좌석은 선점 시간이 끝난 뒤 몇 분 안에 자동으로 풀리고, 그사이 결제가 승인된 것으로 확인되면 자동으로 환불돼요."
         summary={summary}
         actions={
           <>

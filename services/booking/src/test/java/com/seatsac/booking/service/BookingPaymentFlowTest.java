@@ -747,12 +747,30 @@ class BookingPaymentFlowTest {
         verify(paymentClient, never()).request(any());
     }
 
+    /** 준비는 예매 단위로 멱등 — 새로고침·결제창을 닫은 뒤 다시 누르면 같은 결제로 결제창을 연다 */
     @Test
-    void prepareTwiceIsRejected() {
+    void prepareAgainReturnsTheSamePaymentWhileCheckoutIsOpen() {
         Long bookingId = hold(101L);
-        prepare(bookingId);
+        PaymentPrepareResponse first = prepare(bookingId);
 
-        assertThatThrownBy(() -> prepare(bookingId))
+        PaymentPrepareResponse again = prepare(bookingId);
+
+        assertThat(again.paymentId()).isEqualTo(first.paymentId());
+        assertThat(again.checkout()).isEqualTo(first.checkout());
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getCurrentPaymentId())
+            .isEqualTo(first.paymentId());
+    }
+
+    /** 이미 끝난 결제(또는 결제창이 없는 모의 결제)가 붙어 있으면 다시 준비할 수 없다 */
+    @Test
+    void prepareAfterAFinishedPaymentIsRejected() {
+        Long bookingId = hold(101L);
+        String paymentId = prepare(bookingId).paymentId();
+        willReturn(new PaymentResult(paymentId, bookingId, 30_000, "APPROVED", null, null, null, Instant.now(),
+            null, "TOSSPAY", "PORTONE", "tx-1", null)).given(paymentClient).prepare(any());
+
+        assertThatThrownBy(() -> bookingPaymentService.prepare(USER, bookingId,
+            new PaymentPrepareRequest(PaymentMethod.TOSSPAY)))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.PAYMENT_ALREADY_REQUESTED.name());
@@ -791,6 +809,39 @@ class BookingPaymentFlowTest {
         Booking booking = bookingRepository.findById(bookingId).orElseThrow();
         assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
         assertThat(booking.getCurrentPaymentId()).isNotNull();
+
+        // payment가 돌아오면 다시 눌러 같은 paymentId로 준비가 된다(409로 막히지 않는다)
+        assertThat(prepare(bookingId).paymentId()).isEqualTo(booking.getCurrentPaymentId());
+    }
+
+    /** 완료 확인이 503(결제창 직후 포트원 반영 전)이어도, 화면의 단건 조회가 포트원 확인을 다시 해 결과가 나온다 */
+    @Test
+    void detailVerifiesTossPayStillProcessingAndConfirms() {
+        Long bookingId = hold(101L);
+        String paymentId = prepare(bookingId).paymentId();
+        given(paymentClient.find(paymentId)).willReturn(java.util.Optional.of(preparedFor(bookingId, paymentId)));
+        given(paymentClient.verify(paymentId)).willReturn(tossPayApproved(bookingId, paymentId));
+
+        var detail = bookingDetailService.get(USER, bookingId);
+
+        assertThat(detail.status()).isEqualTo(BookingStatus.CONFIRMED);
+        verify(paymentClient).verify(paymentId);
+        assertThat(outboxMessageRepository.count()).isEqualTo(1);
+    }
+
+    /** 포트원 확인이 아직이면(결제창 미완료·응답 없음) 예매는 PENDING 그대로 200 */
+    @Test
+    void detailKeepsPendingWhenTossPayVerifyHasNoResultYet() {
+        Long bookingId = hold(101L);
+        String paymentId = prepare(bookingId).paymentId();
+        given(paymentClient.find(paymentId)).willReturn(java.util.Optional.of(preparedFor(bookingId, paymentId)));
+        given(paymentClient.verify(paymentId)).willThrow(
+            com.seatsac.booking.common.BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception());
+
+        var detail = bookingDetailService.get(USER, bookingId);
+
+        assertThat(detail.status()).isEqualTo(BookingStatus.PENDING);
+        assertThat(detail.payment().status()).isEqualTo("PROCESSING");
     }
 
     // --- 모의 결제(CARD) 호출자 제한 ---

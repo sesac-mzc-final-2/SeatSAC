@@ -75,6 +75,7 @@ function prepareFailure(error: unknown): PayOutcome {
           ? { kind: "expired", refunded: false }
           : { kind: "error", message: "예매 상태가 바뀌어 결제를 진행할 수 없습니다." };
       default:
+        // 5xx(payment 응답 없음 등)는 다시 눌러도 된다 — 준비는 예매 단위로 멱등이라 같은 결제로 결제창을 연다
         return { kind: "error", message: messageForError(error) };
     }
   }

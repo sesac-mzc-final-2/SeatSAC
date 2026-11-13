@@ -67,8 +67,10 @@ public class BookingPaymentService {
     private final PaymentProperties paymentProperties;
 
     /**
-     * ① TOSSPAY 결제 준비. payment에 닿지 못하면 503이고 예매에는 paymentId가 붙은 채 PENDING으로 남는다 —
-     * 다시 준비할 수 없으니 선점 만료 + 유예 뒤 만료 처리가 정리한다(payment 행이 없으면 일반 만료).
+     * ① TOSSPAY 결제 준비. <b>예매 단위로 멱등</b>이다 — 이미 붙은 결제가 아직 결제창 대기(PROCESSING)면 같은 paymentId와
+     * 결제창 값을 다시 준다. 새로고침(토큰·상태가 메모리, ADR-63)·결제창을 실수로 닫은 뒤·payment 503 뒤에 다시 누르면
+     * 같은 결제로 결제창을 연다(포트원은 같은 paymentId로 결제창을 다시 여는 것을 받는다 — 11/14 테스트 채널 확인).
+     * 이미 끝난 결제(승인·거절)나 모의 결제가 붙어 있으면 409 {@code PAYMENT_ALREADY_REQUESTED}.
      */
     public PaymentPrepareResponse prepare(String userId, Long bookingId, PaymentPrepareRequest request) {
         if (request.method() != PaymentMethod.TOSSPAY) {
@@ -78,11 +80,17 @@ public class BookingPaymentService {
         Instant now = clock.instant();
         Booking booking = bookingReader.findById(bookingId)
             .orElseThrow(BookingErrorCode.BOOKING_NOT_FOUND::exception);
-        String paymentId = attachNewPayment(booking, userId, now);
+        boolean resume = booking.getCurrentPaymentId() != null;
+        String paymentId = resume ? resumablePaymentId(booking, userId, now) : attachNewPayment(booking, userId, now);
 
         String orderName = BookingPolicy.orderNameOf(booking.getSeatCount());
         PaymentResult prepared = paymentClient.prepare(new PaymentRequest(paymentId, bookingId,
             booking.getAmount(), PaymentMethod.TOSSPAY, null, orderName));
+        if (resume && (!prepared.isProcessing() || prepared.checkout() == null)) {
+            // 이미 끝났거나(승인·거절) 결제창이 없는 결제(모의)다 — 다시 결제창을 열 수 없다
+            throw BookingErrorCode.PAYMENT_ALREADY_REQUESTED.exception(ErrorDetail.of("bookingId", bookingId,
+                BookingErrorCode.PAYMENT_ALREADY_REQUESTED.name()));
+        }
         if (!prepared.isProcessing() || prepared.checkout() == null) {
             // 준비 응답은 PROCESSING + checkout뿐이다. 그 밖이면 payment 쪽 버그 — 결과를 모른다고 답한다
             log.warn("결제 준비 응답이 예상과 다르다 bookingId={} paymentId={} status={}", bookingId,
@@ -161,6 +169,23 @@ public class BookingPaymentService {
         // 결제창 미완료(PROCESSING)·결과 미확인이면 503 PAYMENT_RESULT_UNKNOWN — 예매는 PENDING 유지
         PaymentResult payment = paymentClient.verify(paymentId);
         return settle(booking, paymentId, payment, true);
+    }
+
+    /** 이미 붙은 결제로 다시 준비 — 새로 붙일 때와 같은 검사(본인·PENDING·선점 유효·예매 마감 전) */
+    private String resumablePaymentId(Booking booking, String userId, Instant now) {
+        if (!booking.isOwnedBy(userId)) {
+            throw BookingErrorCode.NOT_OWNER.exception();
+        }
+        if (booking.getStatus() != BookingStatus.PENDING) {
+            throw BookingErrorCode.BOOKING_NOT_PENDING.exception(ErrorDetail.of("status",
+                booking.getStatus().name(), BookingErrorCode.BOOKING_NOT_PENDING.name()));
+        }
+        if (booking.isExpiredAt(now)) {
+            throw BookingErrorCode.HOLD_EXPIRED.exception(ErrorDetail.of("status",
+                booking.getStatus().name(), BookingErrorCode.HOLD_EXPIRED.name()));
+        }
+        screeningCache.requireOpen(screeningCache.screeningOfBooking(booking.getBookingId(), booking.getScreeningId()));
+        return booking.getCurrentPaymentId();
     }
 
     /** 검증 → 마감 확인 → 새 결제 ID를 조건부 UPDATE로 붙인다. 붙이지 못하면 현재 상태에 맞는 409 */

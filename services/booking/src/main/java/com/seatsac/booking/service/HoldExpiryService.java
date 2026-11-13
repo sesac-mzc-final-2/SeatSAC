@@ -137,11 +137,14 @@ public class HoldExpiryService {
         }
 
         PaymentResult result = payment.get();
-        log.info("유예가 지난 결제 중 예매를 결제 상태로 끝낸다 bookingId={} paymentId={} 결제상태={}",
-            booking.getBookingId(), result.paymentId(), result.status());
         if (result.isProcessing()) {
+            // 결제창 미완료 — payment가 준비 + 7분에 닫을 때까지 매 주기 다시 본다. 매번 info면 로그가 쌓인다
+            log.debug("유예가 지났지만 결제가 아직 PROCESSING — 보류 bookingId={} paymentId={}",
+                booking.getBookingId(), result.paymentId());
             return Optional.of(Outcome.DEFERRED);
         }
+        log.info("유예가 지난 결제 중 예매를 결제 상태로 끝낸다 bookingId={} paymentId={} 결제상태={}",
+            booking.getBookingId(), result.paymentId(), result.status());
         if (result.isApproved()) {
             // 만료라 확정은 0행 → 환불 → EXPIRED. 환불을 확인하지 못하면 PENDING으로 남겨 다음 주기에 다시
             Applied applied = resultApplier.applyApproved(booking, result);

@@ -8,6 +8,7 @@ import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.web.client.InternalRestClientFactory;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
@@ -36,12 +37,20 @@ import org.springframework.web.client.RestClient;
 public class PaymentClient {
 
     private final RestClient payment;
+    /**
+     * payment가 안에서 포트원을 부르는 호출(verify·cancel)용 — 응답 대기가 길다. payment의 포트원 호출은 연결 1초·응답
+     * 3초에 GET 1회 재호출까지 최대 약 8초라, 공통 3초로 기다리면 booking이 먼저 끊고 결과를 모른다고 답한다.
+     * gateway 응답 제한(15초)보다는 짧다
+     */
+    private final RestClient paymentWithPg;
     private final MeterRegistry meterRegistry;
 
     public PaymentClient(InternalRestClientFactory factory,
                          @Value("${app.services.payment-url}") String paymentUrl,
+                         @Value("${app.services.payment-pg-read-timeout:10s}") Duration pgReadTimeout,
                          MeterRegistry meterRegistry) {
         this.payment = factory.create(paymentUrl);
+        this.paymentWithPg = factory.create(paymentUrl, pgReadTimeout);
         this.meterRegistry = meterRegistry;
     }
 
@@ -99,6 +108,7 @@ public class PaymentClient {
     /**
      * PAY-04 — {@code TOSSPAY} 결제 확인. payment가 포트원 단건 조회로 상태·금액을 검증해 {@code APPROVED}·
      * {@code FAILED}·{@code CANCELED}를 정한다. 이미 끝난 행은 포트원을 부르지 않으므로 같은 ID로 다시 불러도 된다.
+     * 응답 대기는 {@code app.services.payment-pg-read-timeout}(기본 10초)이고 재호출하지 않는다.
      *
      * <p><b>결제창 미완료({@code PROCESSING})는 장애가 아니다</b> — 503 {@code PAYMENT_RESULT_UNKNOWN}으로 화면이
      * 단건 조회로 다시 보게 하되 {@code timeout}으로 세지 않는다. 세면 사용자가 결제창을 늦게 닫는 것만으로
@@ -108,14 +118,9 @@ public class PaymentClient {
      */
     @CircuitBreaker(name = "payment")
     public PaymentResult verify(String paymentId) {
+        // 재호출하지 않는다 — 한 번이 포트원 조회를 품어 길고(최대 약 10초), 다시 부르면 gateway 응답 제한(15초)을
+        // 넘긴다. 결과를 모르면 503으로 끝내고, 화면의 단건 조회가 verify를 다시 부른다
         Attempt attempt = postVerify(paymentId);
-        if (attempt.noResponse()) {
-            log.warn("결제 확인 응답을 받지 못해 1회 재호출한다 paymentId={}", paymentId);
-            attempt = postVerify(paymentId);
-        }
-        if (attempt.noResponse()) {
-            attempt = Attempt.of(find(paymentId).orElse(null));
-        }
 
         PaymentResult result = attempt.result();
         if (result == null) {
@@ -159,7 +164,7 @@ public class PaymentClient {
         try {
             // 취소 성공은 booking_payment_call_total로 세지 않는다 — 그 지표의 라벨은
             // approved·declined·timeout·error 네 개로 정해져 있고 자동 롤백이 그대로 쓴다
-            return payment.post()
+            return paymentWithPg.post()
                 .uri("/internal/payments/{paymentId}/cancel", paymentId)
                 .body(new CancelRequest(reason))
                 .retrieve()
@@ -217,7 +222,7 @@ public class PaymentClient {
     /** 확인 POST 한 번. 4xx(409 {@code NOT_VERIFIABLE}·404)는 재시도해도 같으니 재호출하지 않는다 */
     private Attempt postVerify(String paymentId) {
         try {
-            return Attempt.of(payment.post().uri("/internal/payments/{paymentId}/verify", paymentId)
+            return Attempt.of(paymentWithPg.post().uri("/internal/payments/{paymentId}/verify", paymentId)
                 .retrieve()
                 .body(PaymentResult.class));
         } catch (HttpClientErrorException.Conflict e) {

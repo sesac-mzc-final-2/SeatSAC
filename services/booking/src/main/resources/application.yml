@@ -50,6 +50,8 @@ app:
   services:
     catalog-url: ${APP_SERVICES_CATALOG_URL:http://catalog:8080}
     payment-url: ${APP_SERVICES_PAYMENT_URL:http://payment:8080}
+    # payment가 포트원을 부르는 호출(verify·cancel)의 응답 대기 — 포트원 최대 약 8초 < 이 값 < gateway 15초 (ADR-112)
+    payment-pg-read-timeout: ${APP_SERVICES_PAYMENT_PG_READ_TIMEOUT:10s}
   seat-hold:
     ttl-seconds: ${APP_SEAT_HOLD_TTL_SECONDS:300}
     strategy: ${APP_SEAT_HOLD_STRATEGY:redis}   # ADR-45 인터페이스. db-lock은 나중

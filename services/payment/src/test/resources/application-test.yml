@@ -16,4 +16,13 @@ app:
     mock-delay-card: 9999
     # 기동 정리는 테스트가 직접 불러 확인한다 (컨텍스트 기동 때 돌면 세어 볼 수 없다)
     close-stale-on-startup: false
+  # 포트원은 테스트마다 가짜 서버(StubHttpServer) 주소를 @DynamicPropertySource로 넣는다
+  portone:
+    enabled: true
+    api-base-url: http://127.0.0.1:1   # 덮어쓰지 않은 테스트가 실수로 밖에 나가지 않게 닿지 않는 주소
+    api-secret: test-api-secret
+    webhook-secret: whsec_dGVzdC13ZWJob29rLXNlY3JldC0xMjM0NTY3ODkw
+    store-id: store-test
+    channel-key-tosspay: channel-key-tosspay-test
+    pending-timeout: 7m
 logging.level.org.hibernate.SQL: INFO

@@ -4,6 +4,7 @@ import com.seatsac.payment.entity.Payment;
 import com.seatsac.payment.enums.PaymentCancelReason;
 import com.seatsac.payment.enums.PaymentFailureCode;
 import com.seatsac.payment.enums.PaymentStatus;
+import com.seatsac.payment.enums.PgProvider;
 import java.time.Instant;
 import java.util.List;
 import org.springframework.data.domain.Pageable;
@@ -18,12 +19,16 @@ import org.springframework.data.repository.query.Param;
  */
 public interface PaymentRepository extends JpaRepository<Payment, String> {
 
-    /** 4단계 — 모의 판정 결과 반영. PROCESSING일 때만 */
+    /**
+     * 4단계 — 판정 결과 반영. PROCESSING일 때만. PORTONE은 {@code pgTransactionId}(돈이 잡힌 증거)를 함께 적는다 —
+     * FAILED(AMOUNT_MISMATCH)인데 transactionId가 있으면 환불 미완료 표식이다(ADR-112)
+     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update Payment p
            set p.status = :status,
                p.failureCode = :failureCode,
+               p.pgTransactionId = :pgTransactionId,
                p.approvedAt = :approvedAt,
                p.updatedAt = :now
          where p.paymentId = :paymentId
@@ -32,8 +37,60 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
     int settleProcessing(@Param("paymentId") String paymentId,
                          @Param("status") PaymentStatus status,
                          @Param("failureCode") PaymentFailureCode failureCode,
+                         @Param("pgTransactionId") String pgTransactionId,
                          @Param("approvedAt") Instant approvedAt,
                          @Param("now") Instant now);
+
+    /**
+     * 늦은 결제 — 이미 FAILED·CANCELED로 끝낸 행에 포트원 PAID가 왔다(웹훅·스윕). 돈이 잡혔다는 증거만 남겨
+     * 환불 미완료로 만든다. 한 번만(transactionId가 비어 있을 때만)
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Payment p
+           set p.pgTransactionId = :pgTransactionId,
+               p.updatedAt = :now
+         where p.paymentId = :paymentId
+           and p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
+           and p.status = com.seatsac.payment.enums.PaymentStatus.FAILED
+           and p.pgTransactionId is null
+        """)
+    int markRefundOwed(@Param("paymentId") String paymentId,
+                       @Param("pgTransactionId") String pgTransactionId,
+                       @Param("now") Instant now);
+
+    /** 환불 미완료 행의 환불이 포트원에서 확인됐다 — canceled_at만 채운다(status는 FAILED 그대로). 한 번만 */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Payment p
+           set p.canceledAt = :now,
+               p.cancelReason = :reason,
+               p.updatedAt = :now
+         where p.paymentId = :paymentId
+           and p.status = com.seatsac.payment.enums.PaymentStatus.FAILED
+           and p.pgTransactionId is not null
+           and p.canceledAt is null
+        """)
+    int confirmRefund(@Param("paymentId") String paymentId,
+                      @Param("reason") PaymentCancelReason reason,
+                      @Param("now") Instant now);
+
+    /** 스윕이 다시 볼 때까지 손댄 시각만 올린다(환불 재시도 간격 60초의 기준) */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Payment p set p.updatedAt = :now where p.paymentId = :paymentId")
+    int touch(@Param("paymentId") String paymentId, @Param("now") Instant now);
+
+    /** 환불 미완료(ADR-112) — FAILED인데 돈이 잡혀 있고 환불 확인이 없는 PORTONE 행. 손댄 지 오래된 것부터 */
+    @Query("""
+        select p from Payment p
+         where p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
+           and p.status = com.seatsac.payment.enums.PaymentStatus.FAILED
+           and p.pgTransactionId is not null
+           and p.canceledAt is null
+           and p.updatedAt <= :threshold
+         order by p.updatedAt asc
+        """)
+    List<Payment> findRefundOwed(@Param("threshold") Instant threshold, Pageable pageable);
 
     /** PAY-03 — 승인된 결제만 취소한다. 이미 CANCELED면 0행이고 첫 취소 사유를 유지한다 */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
@@ -57,8 +114,10 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
     @Query("""
         select p.paymentId from Payment p
          where p.status = com.seatsac.payment.enums.PaymentStatus.PROCESSING
+           and p.pgProvider = :provider
            and p.createdAt <= :threshold
          order by p.createdAt asc
         """)
-    List<String> findStaleProcessingIds(@Param("threshold") Instant threshold, Pageable pageable);
+    List<String> findStaleProcessingIds(@Param("provider") PgProvider provider,
+                                        @Param("threshold") Instant threshold, Pageable pageable);
 }

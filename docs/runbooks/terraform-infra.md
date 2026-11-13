@@ -1401,24 +1401,34 @@ export K6_TOKENS_FILE=~/.seatsac/k6-tokens.txt
 
 # 3) 대상 회차·좌석 (공개 조회 API만, 시작 60분 이상 남은 회차 · 시나리오마다 다른 회차)
 API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api"
-eval "$(python3 tests/k6/tools/pick_targets.py --base-url "$API")"  # 고른 회차 설명은 화면(stderr)에 나온다
+python3 tests/k6/tools/pick_targets.py --base-url "$API" > ~/.seatsac/k6-targets.env.tmp \
+  && mv ~/.seatsac/k6-targets.env.tmp ~/.seatsac/k6-targets.env \
+  && source ~/.seatsac/k6-targets.env    # 설명은 화면(stderr). 실패하면 기존 파일을 덮지 않는다 → --date로 다시 고른다. 터미널 B도 이 파일을 읽는다
 env | grep -E '^(CONTENTION|USERHOLD|DEPLOY|BROWSE)_|^THEATER_'      # 리포트에 적는다
 ```
 
+- 회차는 **파일(`~/.seatsac/k6-targets.env`)로 저장한다** — `eval`로만 넣으면 그 터미널에만 남아 터미널 B가 다른 회차를 보거나 빈 값이 된다(11/11 A 6042 · B 6043으로 이벤트를 못 받음)
 - `pick_targets.py`가 회차를 못 찾으면 `--date`로 다음 날을 고른다(예매 마감 = 상영 시작 5분 전)
 - 토큰 파일·`~/.seatsac/`은 레포 밖이다. 커밋·PR·노션에 붙이지 않는다
 
 #### 6-H-2. 실행 (이 순서로)
 
 ```bash
-R=tests/k6/run-in-cluster.sh       # 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
+R=tests/k6/run-in-cluster.sh       # 터미널 A (6-H-1을 실행한 터미널). 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
 
-# ① 사용자당 선점 1건 (토큰 1개, 30초)
+# 터미널 B 준비 (새 터미널은 변수가 비어 있다 — 레포 루트에서 한 번)
+export AWS_PROFILE=cinema-admin                                     # 없으면 terraform output이 실패한다
+API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api"
+source ~/.seatsac/k6-targets.env                                    # 6-H-1 3)에서 저장한 파일
+echo "$API" "$CONTENTION_SCREENING_ID" "$DEPLOY_SCREENING_ID"        # 모두 값이 나와야 하고, 회차가 터미널 A와 같아야 한다
+
+# ① 터미널 A — 사용자당 선점 1건 (토큰 1개, 30초)
 $R user-hold -e SCREENING_ID=$USERHOLD_SCREENING_ID -e SEAT_IDS=$USERHOLD_SEAT_IDS
 
 # ② 같은 좌석 100명 (1분 안에 끝난다) — 다른 터미널에서 SSE를 같이 연다(이벤트 HELD 1건, 300초 뒤 EXPIRED 1건)
 python3 tests/k6/tools/sse_lag.py --duration 360 --url "$API/screenings/$CONTENTION_SCREENING_ID/seats/stream"   # 터미널 B
 $R contention -e SCREENING_ID=$CONTENTION_SCREENING_ID -e SEAT_ID=$CONTENTION_SEAT_ID                         # 터미널 A
+#    → 터미널 B에 「연결됨」이 찍힌 뒤 A를 실행한다
 #    → 「성공 1 · 사용자 제한 0 · p95 …ms」 확인. 300초 뒤 터미널 B에 EXPIRED → 만료 반영(6-H-3)
 
 # ③ 조회 캐시 (토큰 없음, 약 2분)
@@ -1430,7 +1440,7 @@ $R deploy -e SCREENING_ID=$DEPLOY_SCREENING_ID -e SEAT_ID_FROM=$DEPLOY_SEAT_ID_F
 kubectl -n cinema-staging get hpa booking -w                                                                    # 터미널 C — 증설되면 리포트에
 ```
 
-- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 `pick_targets.py`로 새로 고른다), user-hold는 바로 다시 된다(스스로 해제)
+- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 터미널 A에서 6-H-1 3)으로 새로 고른 뒤 **터미널 B에서도 `source ~/.seatsac/k6-targets.env`를 다시** 실행한다), user-hold는 바로 다시 된다(스스로 해제)
 - 같은 시각에 k6 Job은 하나만 돈다(스크립트가 막는다 — 결과가 섞인다)
 - 블루/그린 중 무중단 확인(`deploy` + 실제 배포)은 4.2.2(6-D)
 
@@ -1478,6 +1488,7 @@ rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파
 | --- | --- |
 | 요청이 전부 타임아웃(`status 0`, `server_errors`) | gateway NetworkPolicy에 `k6-loadtest` 허용이 없다 → gitops `base/gateway/networkpolicy.yaml` 확인(6-E 표) |
 | 요청이 전부 404 `NOT_FOUND` | `BASE_URL`에 `/api`가 빠졌다 — gateway 라우트가 `/api/...`로 받고 gateway가 직접 뗀다(StripPrefix=1). `-e BASE_URL=`을 따로 넘기지 않는다(기본값 `http://gateway:8080/api`) |
+| `sse_lag.py`가 `ValueError: unknown url type: '/screenings//seats/stream'` | 그 터미널에 `$API`·`$CONTENTION_SCREENING_ID`가 비어 있다(변수는 만든 터미널에만 있다) → 6-H-2 「터미널 B 준비」. `k6-targets.env`가 없으면 터미널 A에서 `echo $CONTENTION_SCREENING_ID`로 회차를 확인해 URL에 숫자를 직접 넣는다 |
 | 401 | 토큰 만료 — `loadtest_users.py refresh` → `tokens --out` 다시 |
 | `hold_active_hold > 0` | 토큰이 VU보다 적거나 같은 사용자가 그 회차에 선점을 남겼다 → 300초 기다리거나 다른 회차(`pick_targets.py`) |
 | 400 `SCREENING_STARTED`(`BOOKING_CLOSED`) | 회차 시작 5분 전부터 마감 → `pick_targets.py`로 다시 고른다 |

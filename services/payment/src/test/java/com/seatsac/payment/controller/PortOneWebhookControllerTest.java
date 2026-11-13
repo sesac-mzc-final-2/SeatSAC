@@ -33,7 +33,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @TestPropertySource(properties = {
     "app.portone.enabled=true",
     "app.portone.api-base-url=http://127.0.0.1:1",
-    "app.portone.webhook-secret=whsec_dGVzdC13ZWJob29rLXNlY3JldC0xMjM0NTY3ODkw",
+    "app.portone.webhook-secret=whsec_dGVzdC13ZWJob29rLXNlY3JldC0xMjM0NTY3ODkw", // gitleaks:allow — 테스트용 가짜 값
     "app.portone.pending-timeout=7m"
 })
 class PortOneWebhookControllerTest {

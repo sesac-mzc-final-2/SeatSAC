@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 class WebhookSignatureVerifierTest {
 
     private static final Instant NOW = Instant.parse("2026-11-16T05:04:10Z");
-    private static final String SECRET = "whsec_dGVzdC13ZWJob29rLXNlY3JldC0xMjM0NTY3ODkw";
+    private static final String SECRET = "whsec_dGVzdC13ZWJob29rLXNlY3JldC0xMjM0NTY3ODkw"; // gitleaks:allow — 테스트용 가짜 값
     private static final String BODY = "{\"type\":\"Transaction.Paid\",\"data\":{\"paymentId\":\"3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13\"}}";
 
     private static WebhookSignatureVerifier verifier(String secret) {

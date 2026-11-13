@@ -21,7 +21,7 @@ app:
     enabled: true
     api-base-url: http://127.0.0.1:1   # 덮어쓰지 않은 테스트가 실수로 밖에 나가지 않게 닿지 않는 주소
     api-secret: test-api-secret
-    webhook-secret: whsec_dGVzdC13ZWJob29rLXNlY3JldC0xMjM0NTY3ODkw
+    webhook-secret: whsec_dGVzdC13ZWJob29rLXNlY3JldC0xMjM0NTY3ODkw   # gitleaks:allow — 테스트용 가짜 값
     store-id: store-test
     channel-key-tosspay: channel-key-tosspay-test
     pending-timeout: 7m

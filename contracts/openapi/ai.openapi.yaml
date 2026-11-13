@@ -7,7 +7,7 @@ info:
     자연어로 묻는 챗봇. 처리는 비용이 낮은 경로부터 — 정확 일치 캐시 → 의미 캐시 → (Claude 1회 호출로) 프리셋
     또는 NL2SQL. 검색 대상은 ai 파드 메모리의 SQLite 스냅샷(공개 API로 채운 데이터)뿐이고 기존 MSA DB는 건드리지 않는다.
     외부 호출은 `/api` 접두사, Gateway가 StripPrefix=1 (`/api/ai/chat` → ai `/ai/chat`).
-    gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND** — 화면은 챗봇 창을 열 때 부른
+    gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND**(토큰이 있을 때. 토큰이 없으면 gateway 인증이 라우팅보다 먼저라 401) — 화면은 챗봇 창을 열 때 부른
     `GET /ai/presets`가 404면 「준비 중」 안내 뒤 챗봇 버튼을 숨긴다(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5). 켜져 있을 때 `/api/ai/**` 라우트만 응답 타임아웃 28초(ai 요청 전체 기한 25초).
     조회 전용이라 `Idempotency-Key`는 받지 않는다. 오류 코드 4개(`AI_*`)는 `services/ai` 안에서 정의하고 형식은
     `contracts/schemas/error.v1.json` 그대로.

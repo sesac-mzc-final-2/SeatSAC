@@ -47,7 +47,7 @@
 | 62 | Gateway 요청 수 제한 미도입(`rl:` 키·429 없음) | |
 | 24 | 결제는 예매당 1회, 실패하면 PAYMENT_FAILED + 좌석 해제 | 20 폐기 |
 | 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외. **112로 부분 대체** — 화면은 토스페이, 모의는 테스트·분석 전용 |
-| 112 | 결제는 **포트원(PortOne) V2 + 토스페이**(간편결제, `payMethod EASY_PAY`). 화면은 토스페이만. 두 단계: `POST /bookings/{id}/payments`(준비, paymentId 발급) → 결제창 → `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(payment가 포트원 단건 조회로 PAID·금액 검증). 웹훅 `Transaction.Paid` 병행(본문 불신). 모의(`CARD`)는 테스트·분석 전용 — 헤더 `X-Payment-Mock-Key`가 맞을 때만(화면에는 없음). paymentId는 booking 발급 UUID 그대로. 결제창 미완료 정리: payment 7분, booking 만료+2분 | 11/13. 결제 경로 매트릭스 `docs/payment-paths.md`. 13 부분 대체·60 대체 |
+| 112 | 결제는 **포트원(PortOne) V2 + 토스페이**(간편결제, `payMethod EASY_PAY`). 화면은 토스페이만. 두 단계: `POST /bookings/{id}/payments`(준비, paymentId 발급) → 결제창 → `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(payment가 포트원 단건 조회로 PAID·금액 검증). 웹훅 `Transaction.Paid` 병행(본문 불신). 모의(`CARD`)는 테스트·분석 전용 — 헤더 `X-Payment-Mock-Key`가 맞을 때만(화면에는 없음). paymentId는 booking 발급 UUID 그대로. 결제창 미완료 정리: payment 7분, booking 만료+2분 | 11/13. 결제 경로 매트릭스 `docs/payment-paths.md`. 13 부분 대체·60 대체. 계약 PR #115는 `contract-break-ok`(55의 「M3 이후 금지」 예외 — 응답 enum 값 추가뿐이고 소비자인 화면·booking이 같은 기간에 함께 바뀐다). 일정은 #121(64 개정)로 동결 없음 |
 | 30 · 51 | 예매 완료 알림: booking만 SQS 발행(아웃박스 + 릴레이) → Lambda(로그), DLQ 3회. **OPS-08 일별 집계는 제외** | |
 
 ## 4. 인프라·배포

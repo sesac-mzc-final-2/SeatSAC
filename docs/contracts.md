@@ -65,11 +65,11 @@
 | catalog → booking | `GET /internal/screenings/seat-counts?ids=` (최대 100) | **300ms** 전체 | `remainingSeatsSource: TOTAL` |
 | booking → payment | `POST /internal/payments` | 1초 / 3초, 타임아웃·연결 오류만 같은 paymentId로 1회 재시도 → 조회 | 503 `PAYMENT_RESULT_UNKNOWN` |
 | booking → payment | `GET /internal/payments/{id}` | 1초 / 3초 | 결과 미확인 |
-| booking → payment | `POST /internal/payments/{id}/verify` | 1초 / 3초, 타임아웃·연결 오류만 1회 재시도 → 조회 | 503 `PAYMENT_RESULT_UNKNOWN` (TOSSPAY 완료 확인) |
-| payment → 포트원 | `GET /payments/{id}` · `POST /payments/{id}/cancel` (`api.portone.io`) | 1초 / 3초, 서킷 `portone` | verify·cancel 503 `SERVICE_UNAVAILABLE` |
-| booking → payment | `POST /internal/payments/{id}/cancel` `{reason}` | 1초 / 3초 | 503 (화면 재시도) |
+| booking → payment | `POST /internal/payments/{id}/verify` | **1초 / 10초**(`APP_SERVICES_PAYMENT_PG_READ_TIMEOUT` — 안에서 포트원을 부른다), 재호출 없음 | 503 `PAYMENT_RESULT_UNKNOWN` (TOSSPAY 완료 확인 — 화면의 `GET /bookings/{id}` 재조회가 verify를 다시 부른다) |
+| booking → payment | `POST /internal/payments/{id}/cancel` `{reason}` | **1초 / 10초**(같은 설정 — PORTONE은 포트원 취소 + 대조) | 503 (화면 재시도) |
+| payment → 포트원 | `GET /payments/{id}` · `POST /payments/{id}/cancel` (`api.portone.io`) | 1초 / 3초, GET만 1회 재호출(최대 약 8초 < booking 10초 < gateway 15초), 서킷 `portone` | verify·cancel 503 `SERVICE_UNAVAILABLE`(PORTONE_UNAVAILABLE) |
 
-공통: 재시도 없음(위 1건 제외), Resilience4j 서킷(실패율 50%·10초), 호출 깊이 1, `X-Trace-Id`·`X-User-Id` 전달.
+공통: 재시도 없음(위 1건 제외), Resilience4j 서킷(실패율 50%·10초), 호출 깊이 1(예외: booking → payment → 포트원, ADR-112 — 위 시간 예산), `X-Trace-Id`·`X-User-Id` 전달.
 
 ⚠️AI ai는 내부 API를 부르지 않는다. 공개 API(`GET /movies`·`/movies/{id}`·`/theaters`·`/screenings`, 사용자 토큰으로 `GET /users/me/bookings`)를 CloudFront 주소로 호출한다(ADR-84). 기존 계약 변경 없음.
 
@@ -81,7 +81,7 @@
 | 2 | userId | Cognito `sub` 문자열(`format: uuid`), DB `CHAR(36)` | ADR-37, ERD 6차 |
 | 3 | 프로필 email·name | user가 Access Token으로 Cognito `GetUser`. `NotAuthorizedException`은 **401 `UNAUTHORIZED`**(`details[].reason` `TOKEN_REJECTED`), 그 밖의 실패는 **503 `IDENTITY_UNAVAILABLE`** | 2.2.4 v0.3, ADR-54 |
 | 4 | `GET /internal/theaters` | **만든다** (USR-05 극장 검증, Catalog 실패 시 검증 생략) | API 명세서 10장 #6 |
-| 5 | 범위 | 위 29개 + ⚠️AI ai 외부 2개 = 31개. gateway 요청 수 제한(429)은 없음 — ai의 429 `AI_QUOTA_EXCEEDED`는 ai 앱 안 비용 보호 | ADR-62·82 |
+| 5 | 범위 | 위 32개 + ⚠️AI ai 외부 2개 = 34개(ADR-112: 결제 준비·포트원 웹훅 외부 2개, verify 내부 1개 추가). gateway 요청 수 제한(429)은 없음 — ai의 429 `AI_QUOTA_EXCEEDED`는 ai 앱 안 비용 보호 | ADR-62·82 |
 | 6 | booking.confirmed v1 payload | `screeningId`·`seatCount`·`confirmedAt` **필수** (발행자 booking 하나, 구현 전) | API 명세서 9-2, ADR-55 |
 | 7 | traceId 형식 | 스키마에 `pattern: ^[0-9a-f]{32}$` (오류·좌석 이벤트·알림 공통), 오류의 traceId는 null 불가 | GW-03 10/21, ADR-55 |
 | 8 | 오류 `details` | **항상 배열**(필수, 없으면 `[]`), 원소 `{field, value?, reason?}` | 2.2.4 v0.3, API 명세서 1-4 |

@@ -9,9 +9,11 @@ info:
     CARD 처리 순서: PROCESSING 행 INSERT·커밋 → 모의 판정(트랜잭션 밖) → UPDATE … WHERE status='PROCESSING'.
     모의 카드(ADR-13): 끝 4자리 0000 CARD_DECLINED · 1111 INSUFFICIENT_BALANCE · 9999 5초 지연 후 승인 · 그 밖 승인.
     TOSSPAY 처리 순서: POST(PROCESSING 행 + checkout 값) → 화면이 포트원 결제창 → POST …/verify(포트원 GET /payments/{paymentId}로 status·금액 검증 → APPROVED·FAILED).
-    포트원 호출은 연결 1초·응답 3초, 서킷 `portone`. 결제창을 열지 않고 떠난 PROCESSING은 `APP_PORTONE_PENDING_TIMEOUT`(7분) 뒤 포트원 조회로 닫는다.
+    포트원 호출은 연결 1초·응답 3초(GET만 코드로 1회 재호출 — 최대 약 8초), 서킷 `portone`(열리면 포트원을 부르지 않고 503 PORTONE_UNAVAILABLE).
+    그래서 booking은 verify·cancel만 응답 대기 10초(`APP_SERVICES_PAYMENT_PG_READ_TIMEOUT`)로 부른다. 결제창을 열지 않고 떠난 PROCESSING은 `APP_PORTONE_PENDING_TIMEOUT`(7분) 뒤 포트원 조회로 닫는다.
+    닫은 뒤(FAILED, 돈이 잡힌 흔적 없음) 30분 동안은 5분마다 포트원을 다시 조회해, 웹훅 없이 늦게 결제된 건도 환불 미완료로 잡는다.
     30초 `PROCESSING_TIMEOUT` 정리(ADR-60)는 MOCK 행에만 적용한다.
-    오류 code는 공통 코드, 세부는 details[].reason (INVALID_PAYMENT_ID·INVALID_AMOUNT·INVALID_CARD·INVALID_METHOD·PAYMENT_NOT_FOUND).
+    오류 code는 공통 코드, 세부는 details[].reason (INVALID_PAYMENT_ID·INVALID_AMOUNT·INVALID_CARD·INVALID_ORDER_NAME·INVALID_METHOD·PAYMENT_NOT_FOUND).
 servers:
   - url: http://payment:8080
 security: []   # 내부 API: 사용자 인증 없음. 호출자는 NetworkPolicy로 제한 (OPS-15)
@@ -56,7 +58,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Payment" }
         "400":
-          description: VALIDATION_FAILED — reason INVALID_PAYMENT_ID·INVALID_AMOUNT(15,000의 배수, 15,000~60,000)·INVALID_CARD(CARD인데 card 없음·형식)·INVALID_METHOD
+          description: VALIDATION_FAILED — reason INVALID_PAYMENT_ID·INVALID_AMOUNT(15,000의 배수, 15,000~60,000)·INVALID_CARD(CARD인데 card 없음·형식)·INVALID_ORDER_NAME(TOSSPAY인데 orderName 없음)·INVALID_METHOD
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "409":
           description: PAYMENT_CONFLICT — reason PAYMENT_ID_CONFLICT·PAYMENT_ALREADY_EXISTS
@@ -94,10 +96,13 @@ paths:
         - PAID인데 금액이 다름 → **먼저** FAILED(failureCode AMOUNT_MISMATCH, pgTransactionId 기록 = 환불 미완료 표식) → 포트원 전액 취소 요청.
           취소 응답을 못 받거나 거절돼도 FAILED는 그대로이고, 환불은 1분 스윕이 `GET` 대조 뒤 끝까지 처리한다(응답 끊김으로 환불이 누락되지 않게).
           환불이 끝나면 canceledAt이 채워진다(status는 FAILED 그대로) — 브라우저 금액 위변조
-        - FAILED → FAILED(failureCode PG_DECLINED, 사용자 취소면 USER_CANCELED)
+        - FAILED → FAILED(failureCode PG_DECLINED, 사용자 취소면 USER_CANCELED — 포트원 응답 `failure.reason`·`failure.pgMessage`에
+          「취소」·「cancel」이 있으면 사용자 취소로 본다. 토스페이 테스트 채널에서 결제창 취소·X 닫기 모두 FAILED로 남는 것 확인, 11/14)
         - READY·PENDING(결제창 미완료) → PROCESSING 그대로 200
+        - 포트원에 결제가 없음(404 — 결제창을 한 번도 열지 않음) → PROCESSING 그대로 200
         - CANCELLED·PARTIAL_CANCELLED → CANCELED
-        이미 끝난 행(APPROVED·FAILED·CANCELED)은 포트원을 부르지 않고 그대로 200(멱등). 웹훅 `Transaction.Paid`도 같은 로직을 탄다.
+        이미 끝난 행(APPROVED·FAILED·CANCELED)은 포트원을 부르지 않고 그대로 200(멱등). 웹훅 `Transaction.Paid`도 같은 확정 로직을 타되,
+        금액 불일치일 때 웹훅은 환불 미완료 표식까지만 하고 취소 요청은 스윕이 보낸다(웹훅은 포트원에 아무것도 보내지 않는다).
         포트원 응답을 못 받으면 503(booking은 PAYMENT_RESULT_UNKNOWN으로 화면 재조회).
       parameters: [ { $ref: "#/components/parameters/PaymentId" } ]
       responses:
@@ -178,7 +183,7 @@ components:
 
     CancelReason: { type: string, enum: [HOLD_EXPIRED, BOOKING_CANCELED, STALE_PAYMENT] }
 
-    PaymentMethod: { type: string, x-extensible-enum: [CARD, TOSSPAY], description: "CARD = 모의(MOCK) · TOSSPAY = 포트원 토스페이(PORTONE). 수단이 늘 수 있어 열린 집합" }
+    PaymentMethod: { type: string, enum: [CARD, TOSSPAY], description: "요청용 닫힌 집합 — CARD = 모의(MOCK) · TOSSPAY = 포트원 토스페이(PORTONE). 응답의 method는 열린 집합" }
     PgProvider: { type: string, enum: [MOCK, PORTONE] }
 
     PaymentRequest:
@@ -207,7 +212,7 @@ components:
         paymentId: { type: string, format: uuid }
         bookingId: { type: integer, format: int64 }
         amount: { type: integer }
-        method: { $ref: "#/components/schemas/PaymentMethod" }
+        method: { type: string, x-extensible-enum: [CARD, TOSSPAY], description: "응답용 열린 집합(수단이 늘 수 있다). 요청은 닫힌 PaymentMethod" }
         pgProvider: { $ref: "#/components/schemas/PgProvider" }
         status: { type: string, enum: [PROCESSING, APPROVED, FAILED, CANCELED] }
         cardLast4: { type: [string, "null"], description: "CARD만. TOSSPAY는 null" }

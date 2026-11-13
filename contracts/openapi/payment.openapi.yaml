@@ -19,7 +19,7 @@ paths:
       x-feature-id: PAY-05
       x-caller: [portone]
       description: |
-        처리하는 type: `Transaction.Paid`(PROCESSING 행이면 verify와 같은 경로로 APPROVED. 이미 FAILED·CANCELED 행 = 늦은 결제면 **환불 미완료 표식만**(pgTransactionId 기록) 남기고
+        처리하는 type: `Transaction.Paid`(PROCESSING 행이면 verify와 같은 확정 — 금액이 맞으면 APPROVED, 다르면 FAILED(AMOUNT_MISMATCH) + 환불 미완료 표식까지만(취소는 스윕). 이미 FAILED·CANCELED 행 = 늦은 결제면 **환불 미완료 표식만**(pgTransactionId 기록) 남기고
         취소는 1분 스윕이 보낸다 — 웹훅이 여러 번 와도 취소 요청이 여러 번 나가지 않게), `Transaction.Failed`(PROCESSING → FAILED),
         `Transaction.Cancelled`·`Transaction.PartialCancelled`(APPROVED → CANCELED, 환불 미완료면 canceledAt 기록). 그 밖의 type은 200으로 무시한다.
         **웹훅은 대조만 하고 포트원에 아무것도 보내지 않는다.**
@@ -45,7 +45,7 @@ paths:
           description: VALIDATION_FAILED — 본문이 JSON이 아니거나 `type`·`data.paymentId`가 없음. 재발송해도 같으므로 포트원이 그만두게 4xx
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "401":
-          description: UNAUTHORIZED — 서명 불일치·타임스탬프 5분 초과·헤더 없음(details[].reason WEBHOOK_SIGNATURE_INVALID). 본문은 읽지 않는다
+          description: UNAUTHORIZED — 서명 불일치·타임스탬프 5분 초과·헤더 없음(details[].reason WEBHOOK_SIGNATURE_INVALID). 서명 계산에 원본 본문을 쓰지만 본문을 파싱하지는 않는다
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "503":
           description: SERVICE_UNAVAILABLE — 포트원 단건 조회 응답 없음·DB 오류. 포트원이 재발송한다

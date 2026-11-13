@@ -38,6 +38,28 @@ export function BookingResult({ booking, screening, movie, outcome, seatSelectHr
     </ButtonLink>
   );
 
+  // 토스페이 결제창을 닫았고 서버도 결과를 모른다 — 다시 결제할 수 없으니(예매당 1회) 좌석이 풀리길 안내한다
+  if (outcome?.kind === "windowClosed" && booking.status === "PENDING") {
+    return (
+      <ResultLayout
+        tone="pending"
+        icon="clock"
+        eyebrow={outcome.message}
+        title="결제를 마치지 않았어요"
+        description="이 예매는 다시 결제할 수 없어요. 고른 좌석은 선점 시간이 끝나고 약 2분 안에 자동으로 풀려요. 그사이 결제가 승인된 것으로 확인되면 자동으로 환불돼요."
+        summary={summary}
+        actions={
+          <>
+            <Button variant="primary" block onClick={onRecheck}>
+              결과 다시 확인
+            </Button>
+            {home}
+          </>
+        }
+      />
+    );
+  }
+
   // 다시 조회해 결과가 나왔으면(PENDING이 아니면) 아래에서 그 결과를 그린다
   if (outcome?.kind === "unknown" && booking.status === "PENDING") {
     return (
@@ -110,7 +132,7 @@ export function BookingResult({ booking, screening, movie, outcome, seatSelectHr
           title="선점 시간이 지나 예매가 취소됐어요"
           description={
             outcome?.kind === "expired" && outcome.refunded
-              ? "결제된 금액은 자동으로 환불 처리했어요. 이 데모에서는 실제 결제·환불이 일어나지 않아요."
+              ? "결제된 금액은 자동으로 환불 처리했어요. 테스트 결제라 실제로 돈이 빠져나가지 않아요."
               : "좌석 선택 후 5분이 지나 자동으로 취소됐어요. 좌석을 다시 골라 주세요."
           }
           summary={summary}

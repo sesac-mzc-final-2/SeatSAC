@@ -53,6 +53,11 @@ app:
   seat-hold:
     ttl-seconds: ${APP_SEAT_HOLD_TTL_SECONDS:300}
     strategy: ${APP_SEAT_HOLD_STRATEGY:redis}   # ADR-45 인터페이스. db-lock은 나중
+  payment:
+    # 모의 결제(CARD) 허용 키 — k6·분석 Job만(Secret booking-secrets). 비어 있으면 기계 경로가 꺼진다 (ADR-112)
+    mock-key: ${APP_PAYMENT_MOCK_KEY:}
+    # 결제 요청이 붙은 PENDING의 만료 보류 유예 — 지나면 결제 상태를 조회해 끝낸다
+    pending-grace: ${APP_PAYMENT_PENDING_GRACE:2m}
   sqs:
     # 기본값을 두지 않는다(런타임 계약 1장). 로컬 값은 application-local.yml에만 —
     # 기본값이 있으면 staging ConfigMap에서 키가 빠진 것이 드러나지 않고 엉뚱한 주소로 재시도한다

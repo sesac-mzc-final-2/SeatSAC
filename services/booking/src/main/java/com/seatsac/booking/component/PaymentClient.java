@@ -46,7 +46,8 @@ public class PaymentClient {
     }
 
     /**
-     * PAY-01 — 모의 결제 승인. 거절도 정상 응답이다(결과가 {@code FAILED}).
+     * PAY-01 — 결제 생성. {@code CARD}(모의)는 이 호출에서 판정까지 끝난다(거절도 정상 응답, 결과 {@code FAILED}).
+     * {@code TOSSPAY}는 {@link #prepare}를 쓴다.
      *
      * @throws BusinessException 503 {@code PAYMENT_RESULT_UNKNOWN} 끝까지 결과를 모를 때,
      *                           503 {@code PAYMENT_UNAVAILABLE} 서킷이 열렸을 때
@@ -70,6 +71,60 @@ public class PaymentClient {
             count("timeout");
             throw BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception(
                 ErrorDetail.of("paymentId", request.paymentId()));
+        }
+        count(result.isApproved() ? "approved" : "declined");
+        return result;
+    }
+
+    /**
+     * PAY-01 — {@code TOSSPAY} 결제 준비. payment가 {@code PROCESSING} 행을 만들고 결제창 값({@code checkout})을
+     * 돌려준다. 돈은 움직이지 않으므로 결과 지표({@code booking_payment_call_total})로 세지 않는다 — 판정은
+     * {@link #verify}가 센다. 응답을 못 받으면 같은 ID로 1회 다시 부르고(payment는 행을 먼저 만든다 —
+     * 같은 ID 재호출은 같은 행), 그래도 모르면 503 {@code PAYMENT_UNAVAILABLE}이다.
+     */
+    @CircuitBreaker(name = "payment")
+    public PaymentResult prepare(PaymentRequest request) {
+        Attempt attempt = post(request);
+        if (attempt.noResponse()) {
+            log.warn("결제 준비 응답을 받지 못해 같은 결제 ID로 1회 재호출한다 paymentId={} bookingId={}",
+                request.paymentId(), request.bookingId());
+            attempt = post(request);
+        }
+        if (attempt.result() == null) {
+            throw BookingErrorCode.PAYMENT_UNAVAILABLE.exception();
+        }
+        return attempt.result();
+    }
+
+    /**
+     * PAY-04 — {@code TOSSPAY} 결제 확인. payment가 포트원 단건 조회로 상태·금액을 검증해 {@code APPROVED}·
+     * {@code FAILED}·{@code CANCELED}를 정한다. 이미 끝난 행은 포트원을 부르지 않으므로 같은 ID로 다시 불러도 된다.
+     *
+     * <p><b>결제창 미완료({@code PROCESSING})는 장애가 아니다</b> — 503 {@code PAYMENT_RESULT_UNKNOWN}으로 화면이
+     * 단건 조회로 다시 보게 하되 {@code timeout}으로 세지 않는다. 세면 사용자가 결제창을 늦게 닫는 것만으로
+     * 블루/그린 자동 롤백(timeout·error 5%)이 걸린다.
+     *
+     * @throws BusinessException 503 {@code PAYMENT_RESULT_UNKNOWN} 결과를 모르거나 아직 결제창이 끝나지 않았을 때
+     */
+    @CircuitBreaker(name = "payment")
+    public PaymentResult verify(String paymentId) {
+        Attempt attempt = postVerify(paymentId);
+        if (attempt.noResponse()) {
+            log.warn("결제 확인 응답을 받지 못해 1회 재호출한다 paymentId={}", paymentId);
+            attempt = postVerify(paymentId);
+        }
+        if (attempt.noResponse()) {
+            attempt = Attempt.of(find(paymentId).orElse(null));
+        }
+
+        PaymentResult result = attempt.result();
+        if (result == null) {
+            count("timeout");
+            throw BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception(ErrorDetail.of("paymentId", paymentId));
+        }
+        if (result.isProcessing()) {
+            // 결제창이 아직 끝나지 않았다(또는 포트원이 아직 결과를 주지 않았다) — 세지 않는다
+            throw BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception(ErrorDetail.of("paymentId", paymentId));
         }
         count(result.isApproved() ? "approved" : "declined");
         return result;
@@ -159,6 +214,30 @@ public class PaymentClient {
         }
     }
 
+    /** 확인 POST 한 번. 4xx(409 {@code NOT_VERIFIABLE}·404)는 재시도해도 같으니 재호출하지 않는다 */
+    private Attempt postVerify(String paymentId) {
+        try {
+            return Attempt.of(payment.post().uri("/internal/payments/{paymentId}/verify", paymentId)
+                .retrieve()
+                .body(PaymentResult.class));
+        } catch (HttpClientErrorException.Conflict e) {
+            // 모의(CARD) 결제 ID로 TOSSPAY 완료를 불렀다 — 호출자 실수라 payment 오류로 세지 않는다
+            log.warn("확인할 수 없는 결제다(모의 결제) paymentId={}", paymentId);
+            throw BookingErrorCode.PAYMENT_ID_MISMATCH.exception(ErrorDetail.of("paymentId", paymentId,
+                BookingErrorCode.PAYMENT_ID_MISMATCH.name()));
+        } catch (HttpClientErrorException e) {
+            count("error");
+            log.error("결제 확인이 거부됐다 status={} paymentId={}", e.getStatusCode(), paymentId);
+            throw e;
+        } catch (BusinessException e) {
+            if (isUnavailable(e)) {
+                return Attempt.unavailable();   // 타임아웃·연결 오류·상대 5xx(포트원 응답 없음 포함)
+            }
+            count("error");
+            throw e;
+        }
+    }
+
     private static boolean isUnavailable(BusinessException e) {
         return CommonResponseCode.SERVICE_UNAVAILABLE.name().equals(e.code().responseCode());
     }
@@ -186,15 +265,21 @@ public class PaymentClient {
         }
     }
 
-    /** PAY-01 요청 — 카드는 payment가 끝 4자리만 저장한다 */
+    /**
+     * PAY-01 요청 — 카드는 payment가 끝 4자리만 저장한다.
+     *
+     * @param card      {@code CARD}(모의)만
+     * @param orderName {@code TOSSPAY}만 — 포트원 결제창에 보이는 주문명
+     */
     public record PaymentRequest(String paymentId, Long bookingId, Integer amount,
-                                 PaymentMethod method, Card card) {
+                                 PaymentMethod method, Card card, String orderName) {
 
         /** 카드 정보가 로그에 찍히지 않게 가린다 */
         @Override
         public String toString() {
             return "PaymentRequest(paymentId=" + paymentId + ", bookingId=" + bookingId
-                + ", amount=" + amount + ", method=" + method + ", card=****)";
+                + ", amount=" + amount + ", method=" + method + ", orderName=" + orderName
+                + ", card=****)";
         }
 
         public record Card(String number, String expiry, String holder) {
@@ -218,11 +303,14 @@ public class PaymentClient {
     /**
      * 쓰는 필드만 받는다(모르는 필드는 무시). 시각은 응답의 {@code +09:00}을 그대로 읽는다.
      *
-     * <p>{@code failureCode}는 payment의 내부 코드다({@code CARD_DECLINED}·
-     * {@code INSUFFICIENT_BALANCE}·{@code PROCESSING_TIMEOUT}). <b>외부 응답으로 그대로 흘리지
-     * 않는다</b> — booking 계약({@code PayResult}·{@code Booking})의 {@code failureCode}는 앞의 두
-     * 값과 null만 허용하므로, 3.2.6에서 응답을 만들 때 그 밖의 값은 null로 바꿔 「결제 실패」로만
-     * 보여 준다({@link #publicFailureCode}).
+     * <p>{@code failureCode}는 payment의 내부 코드다(모의 {@code CARD_DECLINED}·{@code INSUFFICIENT_BALANCE},
+     * 포트원 {@code PG_DECLINED}·{@code USER_CANCELED}·{@code AMOUNT_MISMATCH}, 운영용 {@code PROCESSING_TIMEOUT}).
+     * <b>외부 응답으로 그대로 흘리지 않는다</b> — booking 계약({@code PayResult}·{@code Booking})의
+     * {@code failureCode}에 있는 값만 남기고 그 밖의 값은 null로 바꿔 「결제 실패」로만 보여 준다
+     * ({@link #publicFailureCode}).
+     *
+     * <p>{@code method}·{@code pgProvider}·{@code pgTransactionId}·{@code checkout}은 ADR-112에서 붙었다.
+     * {@code checkout}은 {@code TOSSPAY} 준비({@code PROCESSING}) 응답에만 있다.
      */
     public record PaymentResult(
         String paymentId,
@@ -233,8 +321,20 @@ public class PaymentClient {
         String failureCode,
         String cancelReason,
         Instant approvedAt,
-        Instant canceledAt
+        Instant canceledAt,
+        String method,
+        String pgProvider,
+        String pgTransactionId,
+        Checkout checkout
     ) {
+        /** 수단·PG 정보 없이 만드는 결과 (모의 결제 테스트) */
+        public PaymentResult(String paymentId, Long bookingId, Integer amount, String status,
+                             String cardLast4, String failureCode, String cancelReason,
+                             Instant approvedAt, Instant canceledAt) {
+            this(paymentId, bookingId, amount, status, cardLast4, failureCode, cancelReason,
+                approvedAt, canceledAt, null, null, null, null);
+        }
+
         public boolean isApproved() {
             return "APPROVED".equals(status);
         }
@@ -260,7 +360,12 @@ public class PaymentClient {
         }
     }
 
+    /** 포트원 결제창 값 — {@code TOSSPAY} 준비 응답에만 온다 */
+    public record Checkout(String provider, String storeId, String channelKey, String payMethod,
+                           String currency) {
+    }
+
     /** booking 외부 응답에 담아도 되는 거절 사유 (계약 {@code FailureCode}) */
     private static final Set<String> PUBLIC_FAILURE_CODES =
-        Set.of("CARD_DECLINED", "INSUFFICIENT_BALANCE");
+        Set.of("CARD_DECLINED", "INSUFFICIENT_BALANCE", "PG_DECLINED", "USER_CANCELED", "AMOUNT_MISMATCH");
 }

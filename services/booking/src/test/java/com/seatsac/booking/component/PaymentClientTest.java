@@ -122,9 +122,24 @@ class PaymentClientTest {
             """.formatted(PAYMENT_ID, status);
     }
 
+    private static String tossPayJson(String status) {
+        return """
+            {"paymentId":"%s","bookingId":5001,"amount":30000,"method":"TOSSPAY","pgProvider":"PORTONE",
+             "status":"%s","cardLast4":null,"pgTransactionId":null,"failureCode":null,"cancelReason":null,
+             "approvedAt":null,"canceledAt":null,"createdAt":"2026-10-23T12:02:59+09:00",
+             "checkout":{"provider":"PORTONE","storeId":"store-test","channelKey":"channel-key-test",
+                         "payMethod":"EASY_PAY","currency":"KRW"}}
+            """.formatted(PAYMENT_ID, status);
+    }
+
+    private static PaymentRequest tossPayRequest() {
+        return new PaymentRequest(PAYMENT_ID, BOOKING, 30_000, PaymentMethod.TOSSPAY, null,
+            "SeatSAC 영화 예매 2석");
+    }
+
     private static PaymentRequest request() {
         return new PaymentRequest(PAYMENT_ID, BOOKING, 30_000, PaymentMethod.CARD,
-            new PaymentRequest.Card("4111111111111112", "12/28", "KIM"));
+            new PaymentRequest.Card("4111111111111112", "12/28", "KIM"), null);
     }
 
     private double metric(String result) {
@@ -191,6 +206,88 @@ class PaymentClientTest {
             "\"failureCode\":\"CARD_DECLINED\"")));
 
         assertThat(client.request(request()).publicFailureCode()).isEqualTo("CARD_DECLINED");
+    }
+
+    /** 포트원 거절 사유도 화면에 보인다 (계약 FailureCode, ADR-112) */
+    @Test
+    void publicFailureCodesIncludePgReasons() {
+        for (String code : List.of("PG_DECLINED", "USER_CANCELED", "AMOUNT_MISMATCH")) {
+            responses.add(Response.ok(paymentJson("FAILED").replace("\"failureCode\":null",
+                "\"failureCode\":\"" + code + "\"")));
+            assertThat(client.request(request()).publicFailureCode()).isEqualTo(code);
+        }
+    }
+
+    /** TOSSPAY 준비 응답의 수단·PG·결제창 값을 읽는다 */
+    @Test
+    void resultParsesMethodAndCheckout() {
+        responses.add(Response.ok(tossPayJson("PROCESSING")));
+
+        PaymentResult result = client.prepare(tossPayRequest());
+
+        assertThat(result.isProcessing()).isTrue();
+        assertThat(result.method()).isEqualTo("TOSSPAY");
+        assertThat(result.pgProvider()).isEqualTo("PORTONE");
+        assertThat(result.cardLast4()).isNull();
+        assertThat(result.checkout()).isEqualTo(new PaymentClient.Checkout("PORTONE", "store-test",
+            "channel-key-test", "EASY_PAY", "KRW"));
+        // 준비는 돈이 움직이지 않는다 — 결과 지표로 세지 않는다
+        assertThat(metric("timeout")).isZero();
+        assertThat(metric("approved")).isZero();
+    }
+
+    // --- verify (TOSSPAY 완료 확인) ---
+
+    @Test
+    void verifyApprovedIsReturnedAndCounted() {
+        responses.add(Response.ok(tossPayJson("APPROVED").replace("\"pgTransactionId\":null",
+            "\"pgTransactionId\":\"tx-1\"")));
+
+        PaymentResult result = client.verify(PAYMENT_ID);
+
+        assertThat(result.isApproved()).isTrue();
+        assertThat(result.pgTransactionId()).isEqualTo("tx-1");
+        assertThat(requestedPaths).containsExactly("POST /internal/payments/" + PAYMENT_ID + "/verify");
+        assertThat(metric("approved")).isEqualTo(1);
+    }
+
+    /** 결제창 미완료는 503이지만 장애가 아니다 — timeout으로 세면 자동 롤백 지표가 오염된다 */
+    @Test
+    void verifyProcessingIsUnknownButNotCountedAsTimeout() {
+        responses.add(Response.ok(tossPayJson("PROCESSING")));
+
+        assertThatThrownBy(() -> client.verify(PAYMENT_ID))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
+        assertThat(metric("timeout")).isZero();
+        assertThat(metric("error")).isZero();
+    }
+
+    /** 응답이 없으면 1회 다시 확인하고, 그래도 없으면 조회한다 */
+    @Test
+    void verifyTimeoutRetriesOnceThenLooksUp() {
+        responses.add(Response.slow(tossPayJson("APPROVED")));
+        responses.add(Response.slow(tossPayJson("APPROVED")));
+        responses.add(Response.ok(tossPayJson("APPROVED")));   // GET
+
+        PaymentResult result = client.verify(PAYMENT_ID);
+
+        assertThat(result.isApproved()).isTrue();
+        assertThat(postCount).hasValue(2);
+        assertThat(requestedPaths).last().asString().isEqualTo("GET /internal/payments/" + PAYMENT_ID);
+    }
+
+    /** 409(모의 결제 행)는 재호출하지 않는다 — 409 PAYMENT_ALREADY_REQUESTED로 올린다 */
+    @Test
+    void verifyConflictIsNotRetried() {
+        responses.add(Response.status(409));
+
+        assertThatThrownBy(() -> client.verify(PAYMENT_ID))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.PAYMENT_ALREADY_REQUESTED.name());
+        assertThat(postCount).hasValue(1);
     }
 
     // --- 응답을 못 받은 경우 ---

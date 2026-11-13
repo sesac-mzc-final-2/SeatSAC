@@ -107,7 +107,7 @@ public class BookingDetailService {
 
     private static PaymentView viewOf(PaymentResult result) {
         return Optional.ofNullable(result)
-            .map(r -> PaymentView.of(r.paymentId(), r.status(), r.cardLast4(),
+            .map(r -> PaymentView.of(r.paymentId(), r.status(), r.method(), r.cardLast4(),
                 r.publicFailureCode(), r.approvedAt(), r.canceledAt()))
             .orElse(null);
     }

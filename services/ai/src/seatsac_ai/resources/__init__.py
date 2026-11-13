@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 
 # 슬롯 종류(질문에서 뽑아 바꾸는 값). 기능명세서 v4 15-2 3단계와 같은 이름
-SLOT_KINDS = ("time", "date", "theater", "movie", "n")
+SLOT_KINDS = ("time", "date", "theater", "movie", "n", "grade")
 # 서버가 항상 넣는 값. 프리셋 `params`에는 적지 않는다
 SYSTEM_PARAMS = ("today", "now")
 

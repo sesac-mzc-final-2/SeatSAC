@@ -22,7 +22,7 @@ CASES = {
     "movie_next_screening": ({"movie": "별의 항해"}, 1),
     "late_night_today": ({}, 2),
     "movie_runtime": ({"movie": "철의 심장"}, 1),
-    "movies_by_view_grade": ({}, 4),
+    "movies_by_view_grade": ({"grade": "ALL"}, 1),
     "theater_counts_today": ({}, 2),
 }
 

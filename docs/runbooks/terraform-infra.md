@@ -1372,6 +1372,7 @@ PY
 
 - 시간: 11/15까지 · 평일 노드 켜짐 시간 · 4.2.1·4.2.2·좌석 데모 리허설과 겹치지 않게(스크럼 공유) · `up ng-ai`(6-G-2 A) 상태
 - 방법: ai Valkey 노드를 재부팅해 몇 분간 응답이 없게 만든다(새 리소스를 만들지 않는다. ai 전용 클러스터라 좌석 선점·기존 Valkey와 무관). 그동안 챗봇 질문을 보낸다
+- ⚠️ 재부팅하면 ai Valkey의 **데이터가 모두 사라진다**(복제본·영속화 없음): 캐시·세션·한도 카운터와 의미 캐시 인덱스 `ai_semcache_idx`. 캐시·세션·한도는 TTL 데이터라 괜찮다. 하지만 지금 ai 코드(`cache/store.py`)는 인덱스를 **기동 때 한 번만** 만들고, 검색이 실패해도 「놓침」으로만 처리한다 → 재부팅 뒤에는 파드를 다시 띄울 때까지 **의미 캐시가 계속 적중하지 않는다**(2차 데모 「의미 캐시 적중」이 안 됨). 그래서 확인 끝에 반드시 아래 「복구」를 한다. AI 데모 당일(11/17)에는 하지 않는다
 
 ```bash
 export AWS_PROFILE=cinema-admin
@@ -1381,6 +1382,11 @@ aws elasticache reboot-cache-cluster --cache-cluster-id "$CID" --cache-node-ids-
 kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # 터미널 B — readiness가 빠지는지(PING 실패)
 # 터미널 A: 로그인한 화면(또는 토큰)으로 /api/ai/chat 질문 3번 — 응답 코드·걸린 시간·code·details[].reason을 적는다
 aws elasticache describe-cache-clusters --cache-cluster-id "$CID" --query 'CacheClusters[0].CacheClusterStatus'   # available이 되면 끝
+
+# 복구 — 의미 캐시 인덱스를 다시 만들게 ai 파드를 새로 띄운다(kubectl delete 대신 노드를 내렸다 올린다, GitOps 규칙)
+infra/scripts/cluster-scale.sh down ng-ai && infra/scripts/cluster-scale.sh up ng-ai
+kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # Ready까지(startupProbe 최대 150초)
+# 같은 질문을 두 번 → 두 번째가 path CACHE_EXACT, 표현만 바꾼 질문 → CACHE_SEMANTIC 이면 의미 캐시 복구
 ```
 
 | 확인 | 합격 |
@@ -1388,8 +1394,10 @@ aws elasticache describe-cache-clusters --cache-cluster-id "$CID" --query 'Cache
 | 무응답 중 챗봇 응답 시간 | **25초 이하**(ai 전체 기한). 28초에 gateway 504·30초에 CloudFront 504가 나면 ai 재시도가 기한을 넘는 것 → 김서현 |
 | 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`. 둘 다 합격 |
 | Claude 호출 | 무응답 중 `ai_tokens_total`이 늘지 않는다(한도 기록 실패 → 호출 안 함) |
-| 복구 | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 질문 200. 파드 재시작 없이 돌아오는지 |
+| 복구(파드 재시작 전) | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 질문 200 — 정확 일치 캐시·한도는 파드 재시작 없이 돌아와야 한다. 의미 캐시는 위 이유로 적중하지 않는 게 지금 코드의 동작이다 |
+| 복구(파드 재시작 뒤) | `CACHE_SEMANTIC` 적중 1회. 안 되면 2차 데모 전에 김서현 |
 
+- 김서현 님께 공유: 의미 캐시 검색이 `no such index`로 실패하면 `semantic_ready`를 내리고 `start()`를 다시 부르게 하면(연결 오류 때의 재시도와 같은 방식) 파드 재시작 없이 복구된다 — rc2 뒤라 `fix/`로, 데모 주간 전(11/15)까지만
 - 결과는 이 절 머리말(⬜ → ✅ + 날짜·응답 시간)과 스크럼에 남긴다. 25초를 넘으면 데모 Plan B: AI 데모 중 ai Valkey 경보(메모리 80%)·`SeatSAC AI` 대시보드를 보고, 무응답이면 `cluster-scale.sh down ng-ai`(6-G-4) 후 「일시 중지」 안내
 
 ### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)

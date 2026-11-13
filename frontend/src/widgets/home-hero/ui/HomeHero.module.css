@@ -19,6 +19,8 @@
   grid-area: text;
   align-self: center;
   min-width: 0;
+}
+.textInner {
   animation: heroRise 0.4s ease both;
 }
 .kicker {

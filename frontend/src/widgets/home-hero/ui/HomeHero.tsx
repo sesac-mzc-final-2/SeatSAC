@@ -49,37 +49,53 @@ function prefersReducedMotion(): boolean {
 /** W1 상단 히어로: 서비스 소개 3장을 5초마다 돌려 가며 보여 준다 */
 export function HomeHero() {
   const [index, setIndex] = useState(0);
-  // 마우스를 올렸거나 안쪽에 포커스가 있으면 자동 넘김을 멈춘다 (읽거나 누르는 중에 바뀌지 않게)
-  const [paused, setPaused] = useState(false);
+  // 마우스를 올렸거나 안쪽에 포커스가 있으면 자동 넘김을 멈춘다 (읽거나 누르는 중에 바뀌지 않게).
+  // 둘을 따로 기억한다 — 포커스가 안에 남아 있는데 마우스만 나갔다고 다시 돌지 않게
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const paused = hovered || focused;
+  // 직접 넘긴 소개만 스크린리더에 읽어 준다. 자동 넘김까지 읽으면 5초마다 끼어든다
+  const [announce, setAnnounce] = useState(false);
   const count = SLIDES.length;
   const slide = SLIDES[index];
 
   useEffect(() => {
     if (paused || prefersReducedMotion()) return;
     // index 가 바뀔 때마다 다시 걸어, 직접 넘긴 직후에도 5초를 온전히 보여 준다
-    const timer = window.setTimeout(() => setIndex((index + 1) % count), AUTO_SLIDE_MS);
+    const timer = window.setTimeout(() => {
+      setAnnounce(false);
+      setIndex((index + 1) % count);
+    }, AUTO_SLIDE_MS);
     return () => window.clearTimeout(timer);
   }, [count, index, paused]);
+
+  const show = (next: number) => {
+    setAnnounce(true);
+    setIndex(next);
+  };
 
   return (
     <section
       className={styles.hero}
       aria-label="서비스 소개"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false);
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
       }}
     >
-      <div key={index} className={styles.text}>
-        <span className={styles.kicker}>{slide.kicker}</span>
-        <h1 className={styles.headline}>
-          {slide.headline.map((line) => (
-            <span key={line}>{line}</span>
-          ))}
-        </h1>
-        <p className={styles.description}>{slide.description}</p>
+      {/* live region 은 요소가 유지돼야 읽힌다 → 바깥은 그대로 두고 안쪽만 key 로 바꿔 등장 효과를 준다 */}
+      <div className={styles.text} aria-live={announce ? "polite" : "off"} aria-atomic="true">
+        <div key={index} className={styles.textInner}>
+          <span className={styles.kicker}>{slide.kicker}</span>
+          <h1 className={styles.headline}>
+            {slide.headline.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
+          </h1>
+          <p className={styles.description}>{slide.description}</p>
+        </div>
       </div>
       <div className={styles.art} aria-hidden="true">
         <div className={styles.screen}>SCREEN</div>
@@ -98,17 +114,17 @@ export function HomeHero() {
               className={styles.line}
               aria-pressed={i === index}
               aria-label={`${item.kicker} 소개 보기`}
-              onClick={() => setIndex(i)}
+              onClick={() => show(i)}
             />
           ))}
         </div>
         <span>
           <b>{String(index + 1).padStart(2, "0")}</b> / {String(count).padStart(2, "0")}
         </span>
-        <button type="button" className={styles.arrow} aria-label="이전 소개" onClick={() => setIndex((index + count - 1) % count)}>
+        <button type="button" className={styles.arrow} aria-label="이전 소개" onClick={() => show((index + count - 1) % count)}>
           <Icon name="chevron-left" size={18} />
         </button>
-        <button type="button" className={styles.arrow} aria-label="다음 소개" onClick={() => setIndex((index + 1) % count)}>
+        <button type="button" className={styles.arrow} aria-label="다음 소개" onClick={() => show((index + 1) % count)}>
           <Icon name="chevron-right" size={18} />
         </button>
       </div>

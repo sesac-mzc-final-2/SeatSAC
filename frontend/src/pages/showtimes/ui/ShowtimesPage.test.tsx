@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionContext, unavailableSession, type Session } from "@/entities/session";
@@ -50,17 +50,19 @@ function mockApi(preferences: unknown) {
 
 function renderPage(session: Session, path = "/showtimes") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const tree = (s: Session) => (
     <QueryClientProvider client={client}>
-      <SessionContext.Provider value={session}>
+      <SessionContext.Provider value={s}>
         <ToastProvider>
           <MemoryRouter initialEntries={[path]}>
             <ShowtimesPage />
           </MemoryRouter>
         </ToastProvider>
       </SessionContext.Provider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const result = render(tree(session));
+  return { ...result, setSession: (s: Session) => result.rerender(tree(s)) };
 }
 
 describe("ShowtimesPage — 선호 반영 (USR-05)", () => {
@@ -123,5 +125,42 @@ describe("ShowtimesPage — 선호 반영 (USR-05)", () => {
     const tabs = await screen.findByRole("group", { name: "극장 선택" });
     expect(await within(tabs).findByRole("button", { name: "가산디지털" })).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByRole("button", { name: /^18:30 시작/ })).not.toHaveAccessibleName(/선호/);
+  });
+
+  it("선호 응답이 제한 시간(3초) 안에 오지 않으면 끊고 선호 없이 첫 극장으로", async () => {
+    // beforeEach 는 Date 만 가짜로 둔다 → 이 테스트는 setTimeout 까지 가짜로 다시 건다
+    vi.useRealTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-11-14T09:00:00+09:00"));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("/api/users/me/preferences")) {
+        // 응답하지 않는 요청 — 끊길 때만 끝난다
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        });
+      }
+      if (url.startsWith("/api/theaters")) return jsonResponse({ items: theaters });
+      return jsonResponse({ items: [screening(101, 1, "18:30")] });
+    });
+    renderPage(loggedIn);
+    await screen.findByRole("group", { name: "극장 선택" });
+    expect(screen.queryByRole("button", { name: /^18:30 시작/ })).not.toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(3000);
+    const tabs = screen.getByRole("group", { name: "극장 선택" });
+    await waitFor(() => expect(within(tabs).getByRole("button", { name: "가산디지털" })).toHaveAttribute("aria-pressed", "true"));
+    expect(await screen.findByRole("button", { name: /^18:30 시작/ })).not.toHaveAccessibleName(/선호/);
+  });
+
+  it("로그아웃되면 캐시에 남은 선호도 바로 쓰지 않는다", async () => {
+    mockApi({ preferredTheaters: [{ rank: 1, theaterId: 2 }], preferredTimeSlot: "EVENING", preferredGenres: [] });
+    const { setSession } = renderPage(loggedIn);
+    expect(await screen.findByRole("button", { name: "건대입구, 선호 극장" })).toBeInTheDocument();
+
+    setSession({ ...unavailableSession, status: "anonymous" });
+    expect(screen.queryByRole("button", { name: /선호 극장/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /선호 시간대/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "선호 바꾸기" })).not.toBeInTheDocument();
   });
 });

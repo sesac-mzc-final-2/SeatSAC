@@ -5,7 +5,7 @@ import { movieDetailQuery } from "@/entities/movie";
 import { moviesIn, screeningListQuery, type Screening } from "@/entities/screening";
 import { useSession } from "@/entities/session";
 import { theaterListQuery } from "@/entities/theater";
-import { myPreferencesQuery, timeSlotLabel, timeSlotOfHour } from "@/entities/user";
+import { getMyPreferences, myPreferencesQuery, timeSlotLabel, timeSlotOfHour } from "@/entities/user";
 import { BookingSteps } from "@/features/booking-steps";
 import { useEnterSeatSelect } from "@/features/enter-seat-select";
 import { DateTabs, MovieSelect, TheaterTabs, useShowtimesFilter } from "@/features/showtimes-filter";
@@ -21,14 +21,36 @@ import styles from "./ShowtimesPage.module.css";
  * 로그인 사용자는 마이페이지 선호(USR-05)가 반영된다: 1순위 선호 극장을 기본 선택, 선호 극장 탭·선호 시간대 회차에 하트.
  * 선호를 못 받으면(비로그인·실패) 선호 없이 그대로 보여 준다.
  */
+/** 선호 조회 제한 시간. 극장 선택이 이 응답을 기다리므로 짧게 둔다 */
+const PREFERENCES_TIMEOUT_MS = 3000;
+
+/** react-query 의 signal(화면 이탈 등)과 제한 시간 중 먼저 오는 쪽으로 요청을 끊는다 */
+function withTimeout(signal: AbortSignal, ms: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException("선호 조회 시간 초과", "TimeoutError")), ms);
+  const abort = () => {
+    clearTimeout(timer);
+    controller.abort(signal.reason);
+  };
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+  return controller.signal;
+}
+
 export function ShowtimesPage() {
   useDocumentTitle("상영시간표");
 
   const session = useSession();
   const loggedIn = session.status === "authenticated";
-  // 선호는 보조 정보라 다시 시도하지 않는다 — 실패하면 기다리지 않고 선호 없이 연다
-  const preferencesQuery = useQuery({ ...myPreferencesQuery(), enabled: loggedIn, retry: false });
-  const preferences = preferencesQuery.data ?? null;
+  // 선호는 보조 정보라 다시 시도하지 않고, 응답이 늦으면(PREFERENCES_TIMEOUT_MS) 끊고 선호 없이 연다
+  const preferencesQuery = useQuery({
+    ...myPreferencesQuery(),
+    queryFn: ({ signal }) => getMyPreferences(withTimeout(signal, PREFERENCES_TIMEOUT_MS)),
+    enabled: loggedIn,
+    retry: false,
+  });
+  // 로그아웃 직후(이동 전)에도 캐시된 선호가 남지 않게 로그인 상태일 때만 쓴다
+  const preferences = loggedIn ? (preferencesQuery.data ?? null) : null;
   const preferredTheaterIds = useMemo(
     () => [...(preferences?.preferredTheaters ?? [])].sort((a, b) => a.rank - b.rank).map((t) => t.theaterId),
     [preferences],

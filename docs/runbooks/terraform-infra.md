@@ -1212,9 +1212,13 @@ REQUIRE_GATEWAY=1 REQUIRE_AI=1 infra/scripts/np-check.sh          # gateway → 
 B. 플래그 off 확인·정리 — **적용 직후에만**(플래그를 켠 뒤에는 하지 않는다)
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://{배포ID}.cloudfront.net/api/ai/presets   # 플래그 off = 404
+curl -s -o /dev/null -w '%{http_code}\n' https://{배포ID}.cloudfront.net/api/ai/presets   # 토큰 없음 = 401 (gateway 인증 /api/** 이 라우팅보다 먼저 — 플래그와 무관)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  https://{배포ID}.cloudfront.net/api/ai/presets                                          # 플래그 off = 404 NOT_FOUND (로그인 토큰이 있어야 라우트 없음이 보인다. 11/12 4.1.2 확인)
 infra/scripts/cluster-scale.sh down ng-ai
 ```
+
+> 토큰은 화면에 로그인한 뒤 개발자 도구 → 네트워크 → 아무 `/api/users/me` 요청의 `Authorization` 헤더에서 복사하거나, `tests/k6/tools/loadtest_users.py tokens`로 받는다. 두 확인을 한 번에 하려면 `cd services/ai && uv run python -m eval.e2e --base https://{배포ID}.cloudfront.net/api --token "$TOKEN" --expect-disabled`(4.1.2).
 
 #### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
 

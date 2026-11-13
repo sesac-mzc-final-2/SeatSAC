@@ -9,6 +9,8 @@
 //
 // 재현용: MOCK_FAIL_PATH=/api/screenings (화면에서 503 오류 상태) · 직접 호출은 ?fail=503 · /api/movies/999 → 404
 //        MOCK_ROLE=ADMIN (프로필 role) · 예매 ID 9001 은 회차 정보 없음(screening null)
+// AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
+//        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
@@ -330,7 +332,228 @@ function validatePreferences(body) {
   return details;
 }
 
-const requiresAuth = (path) => path.startsWith("/api/users/") || path.startsWith("/api/bookings/");
+const requiresAuth = (path) =>
+  path.startsWith("/api/users/") || path.startsWith("/api/bookings/") || path.startsWith("/api/ai/");
+
+// ---------- AI 챗봇 (ai.openapi.yaml, AI-01·AI-04) ----------
+
+/** off: 라우트 없음(404) · down: ai 파드 없음(gateway 503) · 그 밖: 정상 */
+const MOCK_AI = process.env.MOCK_AI ?? "on";
+
+const AI_PRESETS = [
+  { presetId: "today_after_time", title: "오늘 ○시 이후 회차", example: "오늘 20시 이후에 시작하는 영화 알려줘" },
+  { presetId: "theater_schedule", title: "극장 편성표", example: "내일 건대입구 편성표 보여줘" },
+  { presetId: "movie_theaters", title: "영화별 상영 극장·시간", example: "별이 지는 항구 어디서 몇 시에 해?" },
+  { presetId: "most_remaining_today", title: "잔여석 많은 오늘 회차", example: "오늘 자리 많이 남은 회차 5개" },
+  { presetId: "my_bookings", title: "내 예매", example: "내 예매 보여줘" },
+];
+
+/** 정확 일치 캐시 흉내: 같은 문장을 다시 물으면 CACHE_EXACT(토큰 0) */
+const aiAsked = new Map();
+let aiInflight = false;
+
+const kstMinute = (iso) => iso.slice(0, 16).replace("T", " ");
+const nowKstIso = () => toKstIso(new Date());
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const hhmm = (iso) => {
+  const [h, m] = iso.slice(11, 16).split(":");
+  return `${Number(h)}시 ${Number(m)}분`;
+};
+
+const SCREENING_COLUMNS = [
+  { name: "movie_title", type: "text" },
+  { name: "theater_name", type: "text" },
+  { name: "auditorium_name", type: "text" },
+  { name: "starts_at", type: "text" },
+  { name: "remaining_seats", type: "integer" },
+];
+const screeningRow = (s) => [s.movie.title, s.theater.name, s.auditorium.name, kstMinute(s.startsAt), s.remainingSeats];
+const upcoming = (dateIso) => screeningsOn(dateIso).filter((s) => new Date(s.startsAt).getTime() > Date.now());
+
+function aiAnswer(message, sessionId) {
+  const asOf = nowKstIso();
+  const base = {
+    sessionId,
+    columns: null,
+    rows: null,
+    rowCount: 0,
+    truncated: false,
+    sql: null,
+    presetId: null,
+    asOf,
+    llm: { calls: 1, inputTokens: 412, outputTokens: 58, cacheReadTokens: 3810, cacheWriteTokens: 0 },
+    latencyMs: 1860,
+    rejection: null,
+  };
+  const at = `(${hhmm(asOf)} 기준)`;
+  const table = (columns, rows) => ({ columns, rows, rowCount: rows.length });
+
+  if (/내\s*예매|예매\s*내역/.test(message)) {
+    const mine = bookings.filter((b) => b.status === "CONFIRMED" && b.screening).slice(0, 5);
+    return {
+      ...base,
+      path: "MY_BOOKINGS",
+      answer: `확정된 예매가 ${mine.length}건 있습니다. ${at}`,
+      ...table(
+        [
+          { name: "booking_id", type: "integer" },
+          { name: "status", type: "text" },
+          { name: "movie_title", type: "text" },
+          { name: "theater_name", type: "text" },
+          { name: "starts_at", type: "text" },
+          { name: "seat_labels", type: "text" },
+          { name: "amount", type: "integer" },
+        ],
+        mine.map((b) => [b.bookingId, b.status, b.screening.movieTitle, b.screening.theaterName, kstMinute(b.screening.startsAt), b.seatLabels.join(", "), b.amount]),
+      ),
+      llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+      latencyMs: 142,
+    };
+  }
+  if (/날씨|주식|맛집/.test(message)) {
+    return { ...base, path: "OUT_OF_SCOPE", answer: "영화·극장·회차·내 예매에 대해서만 답할 수 있어요.", latencyMs: 980, llm: { ...base.llm, outputTokens: 21 } };
+  }
+  if (/테이블|snapshot|스키마/.test(message)) {
+    return {
+      ...base,
+      path: "REJECTED",
+      answer: "그 질문은 지금 데이터로 답하기 어렵습니다. 영화·극장·회차에 대해 물어봐 주세요.",
+      sql: "SELECT table_name, refreshed_at FROM snapshot_meta",
+      llm: { calls: 2, inputTokens: 921, outputTokens: 164, cacheReadTokens: 7620, cacheWriteTokens: 0 },
+      latencyMs: 4120,
+      rejection: { reason: "FORBIDDEN_OBJECT", message: "허용되지 않은 테이블을 조회하는 SQL입니다.", object: "snapshot_meta" },
+    };
+  }
+  const hour = /(\d{1,2})\s*시\s*이후/.exec(message);
+  if (hour) {
+    const h = Number(hour[1]);
+    const rows = upcoming(todayIso()).filter((s) => Number(s.startsAt.slice(11, 13)) >= h);
+    return {
+      ...base,
+      path: "PRESET",
+      presetId: "today_after_time",
+      answer: `오늘 ${h}시 이후 시작하는 회차는 ${rows.length}개입니다. ${at}`,
+      ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+    };
+  }
+  const theater = theaters.find((t) => t.hasLayout && message.includes(t.name));
+  if (theater) {
+    const date = message.includes("내일") ? dateOffset(1) : todayIso();
+    const rows = (date === todayIso() ? upcoming(date) : screeningsOn(date)).filter((s) => s.theater.theaterId === theater.theaterId);
+    return {
+      ...base,
+      path: "PRESET",
+      presetId: "theater_schedule",
+      answer: `${Number(date.slice(5, 7))}월 ${Number(date.slice(8))}일 ${theater.name} 회차는 ${rows.length}개입니다. ${at}`,
+      ...table(
+        [
+          { name: "movie_title", type: "text" },
+          { name: "auditorium_name", type: "text" },
+          { name: "screen_type", type: "text" },
+          { name: "starts_at", type: "text" },
+          { name: "ends_at", type: "text" },
+          { name: "remaining_seats", type: "integer" },
+        ],
+        rows.map((s) => [s.movie.title, s.auditorium.name, s.auditorium.screenType, kstMinute(s.startsAt), kstMinute(s.endsAt), s.remainingSeats]),
+      ),
+    };
+  }
+  const movie = movies.find((m) => message.includes(m.title));
+  if (movie) {
+    const rows = upcoming(todayIso()).filter((s) => s.movie.movieId === movie.movieId);
+    return {
+      ...base,
+      path: "PRESET",
+      presetId: "movie_theaters",
+      answer: `오늘 ${movie.title} 남은 회차는 ${rows.length}개입니다. ${at}`,
+      ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+    };
+  }
+  if (/비율|매진/.test(message)) {
+    const rows = upcoming(todayIso())
+      .filter((s) => s.totalSeats > 0 && s.remainingSeats / s.totalSeats <= 0.5)
+      .map((s) => [s.movie.title, s.theater.name, kstMinute(s.startsAt), s.remainingSeats, s.totalSeats, Math.round((s.remainingSeats / s.totalSeats) * 1000) / 1000]);
+    return {
+      ...base,
+      path: "NL2SQL",
+      answer: `잔여석이 절반 이하인 오늘 회차는 ${rows.length}개입니다. ${at}`,
+      ...table(
+        [
+          { name: "movie_title", type: "text" },
+          { name: "theater_name", type: "text" },
+          { name: "starts_at", type: "text" },
+          { name: "remaining_seats", type: "integer" },
+          { name: "total_seats", type: "integer" },
+          { name: "remaining_ratio", type: "real" },
+        ],
+        rows,
+      ),
+      sql: "SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats, s.total_seats, ROUND(1.0 * s.remaining_seats / s.total_seats, 3) AS remaining_ratio FROM screening s JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id WHERE s.business_date = date('now') AND s.total_seats > 0 AND 1.0 * s.remaining_seats / s.total_seats <= 0.5 ORDER BY remaining_ratio LIMIT 500",
+      llm: { calls: 1, inputTokens: 455, outputTokens: 212, cacheReadTokens: 3810, cacheWriteTokens: 0 },
+      latencyMs: 3240,
+    };
+  }
+  // 그 밖: 잔여석 많은 오늘 회차 5개 (프리셋 most_remaining_today)
+  const rows = [...upcoming(todayIso())].sort((a, b) => b.remainingSeats - a.remainingSeats).slice(0, 5);
+  return {
+    ...base,
+    path: "PRESET",
+    presetId: "most_remaining_today",
+    answer: `오늘 자리가 많이 남은 회차 ${rows.length}개입니다. ${at}`,
+    ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+  };
+}
+
+async function handleAi(req, res, path) {
+  if (MOCK_AI === "off") return fail(res, 404, "NOT_FOUND", path);
+  if (MOCK_AI === "down") return fail(res, 503, "SERVICE_UNAVAILABLE", "no ai pod");
+
+  if (path === "/api/ai/presets" && req.method === "GET") return json(res, 200, { items: AI_PRESETS });
+
+  if (path === "/api/ai/chat" && req.method === "POST") {
+    const body = await readJson(req);
+    const message = typeof body?.message === "string" ? body.message.trim() : "";
+    if (!message || body.message.length > 300) {
+      return fail(res, 400, "VALIDATION_FAILED", "bad message", [{ field: "message", reason: "LENGTH" }]);
+    }
+    if (body.sessionId !== undefined && !/^[0-9a-f-]{36}$/i.test(String(body.sessionId))) {
+      return fail(res, 400, "VALIDATION_FAILED", "bad sessionId", [{ field: "sessionId", reason: "FORMAT" }]);
+    }
+    if (message.includes("#409") || aiInflight) return fail(res, 409, "AI_QUERY_IN_PROGRESS", "in progress");
+    if (message.includes("#429day")) {
+      res.setHeader("Retry-After", "3600");
+      return fail(res, 429, "AI_QUOTA_EXCEEDED", "daily", [{ field: "quota", value: "100/day", reason: "PER_DAY" }]);
+    }
+    if (message.includes("#429")) {
+      res.setHeader("Retry-After", "15");
+      return fail(res, 429, "AI_QUOTA_EXCEEDED", "per minute", [{ field: "quota", value: "10/min", reason: "PER_MINUTE" }]);
+    }
+    if (message.includes("#snapshot")) return fail(res, 503, "AI_SNAPSHOT_NOT_READY", "snapshot");
+    if (message.includes("#503") || message.includes("#timeout")) {
+      aiInflight = true;
+      await sleep(message.includes("#timeout") ? 2500 : 600);
+      aiInflight = false;
+      const reason = message.includes("#timeout") ? "TIMEOUT" : "OVERLOADED";
+      return fail(res, 503, "AI_LLM_UNAVAILABLE", reason, [{ field: "provider", value: "anthropic", reason }]);
+    }
+
+    const sessionId = body.sessionId ?? randomUUID();
+    const key = message.replace(/\s+/g, " ").toLowerCase();
+    let answer = aiAnswer(message, sessionId);
+    const personal = answer.path === "MY_BOOKINGS";
+    const cacheable = answer.path === "PRESET" || answer.path === "NL2SQL";
+    if (!personal && aiAsked.has(key)) {
+      answer = { ...answer, path: "CACHE_EXACT", llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, latencyMs: 31 };
+    } else if (cacheable) {
+      aiAsked.set(key, true);
+    }
+    aiInflight = true;
+    await sleep(Math.min(answer.latencyMs, 2500));
+    aiInflight = false;
+    return json(res, 200, answer);
+  }
+  return fail(res, 404, "NOT_FOUND", path);
+}
 
 // ---------- 서버 ----------
 
@@ -360,6 +583,8 @@ createServer(async (req, res) => {
   if (requiresAuth(path) && !/^Bearer\s+\S+/.test(req.headers.authorization ?? "")) {
     return fail(res, 401, "UNAUTHORIZED", "missing bearer token");
   }
+
+  if (path.startsWith("/api/ai/")) return handleAi(req, res, path);
 
   if (path === "/api/users/me" && req.method === "GET") return json(res, 200, DEV_USER);
 

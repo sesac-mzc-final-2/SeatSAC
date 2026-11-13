@@ -27,7 +27,7 @@
 | 내부 API | `/internal/**` — Gateway 라우팅 금지, NetworkPolicy로 호출자 제한 |
 | 헬스 | `/actuator/health/liveness`, `/actuator/health/readiness` (ALB는 gateway readiness만). ⚠️AI ai(Python)도 **같은 경로**로 맞춘다 — 프로브·PodMonitor 템플릿 공용 |
 | 메트릭 | `/actuator/prometheus` (ai도 같은 경로, `prometheus_client`) |
-| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`, `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만). ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
+| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`, `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만). 404가 보이는 조건: `/api/internal/**`·`/api/actuator/**`는 경로 차단 필터(`PathGuardWebFilter`)가 인증보다 먼저라 **항상** 404. 나머지는 `/api/**` 인증(`SecurityConfig`)이 라우팅보다 먼저라 **유효한 토큰으로 인증됐을 때만** 404이고, 토큰이 없으면 401 `UNAUTHORIZED`(`TOKEN_REQUIRED`), 만료·서명 불일치 등 잘못된 토큰이면 401 `UNAUTHORIZED`(`INVALID_TOKEN`). `/api/admin/ai/**`는 토큰이 없거나 잘못되면 같은 401, 인증됐지만 ADMIN이 아니면 403 `FORBIDDEN`(`ADMIN_REQUIRED`), ADMIN이면 404. ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
 
 ## 2. 코드·API 이름
 

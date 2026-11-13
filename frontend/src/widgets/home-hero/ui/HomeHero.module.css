@@ -1,33 +1,27 @@
 .hero {
   position: relative;
-  height: 390px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "text art"
+    "slider art";
+  grid-template-rows: 1fr auto;
+  column-gap: 40px;
+  row-gap: 20px;
+  min-height: 330px;
+  padding: 36px 44px 26px;
   overflow: hidden;
-  isolation: isolate;
   border: 1px solid #272b33;
   border-radius: var(--radius);
-  background: #13151a;
+  background: linear-gradient(120deg, #171a20 0%, #13151a 60%, #15171d 100%);
 }
-.art {
-  position: absolute;
-  right: 0;
-  width: 68%;
-  height: 100%;
-  background-position: 50% 35%;
-  background-size: cover;
-  animation: heroReveal 0.5s ease both;
+.text {
+  grid-area: text;
+  align-self: center;
+  min-width: 0;
 }
-.fade {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(90deg, #15171d 0%, #15171dfb 24%, #15171deb 34%, #15171d70 57%, #15171d05 85%),
-    linear-gradient(0deg, #101217b0, transparent 45%);
-}
-.content {
-  position: relative;
-  z-index: 1;
-  width: 62%;
-  padding: 33px 44px;
+.textInner {
+  animation: heroRise 0.4s ease both;
 }
 .kicker {
   display: flex;
@@ -38,17 +32,18 @@
 }
 .kicker::before {
   content: "";
-  width: 4px;
-  height: 4px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #c4c8d1;
+  background: var(--color-primary);
 }
 .headline {
-  margin: 17px 0 16px;
-  font-size: 43px;
+  margin: 16px 0 16px;
+  font-size: 41px;
   font-weight: 730;
   line-height: 1.25;
-  letter-spacing: -1.8px;
+  letter-spacing: -1.7px;
+  word-break: keep-all;
 }
 .headline span {
   display: block;
@@ -59,33 +54,48 @@
   line-height: 1.8;
   white-space: pre-line;
 }
-.movie {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 23px;
-  font-size: 13px;
+/* 오른쪽 좌석 그림 (장식): 소개마다 내 좌석·남이 잡은 좌석 표시가 바뀐다 */
+.art {
+  grid-area: art;
+  align-self: center;
+  width: 300px;
+  padding: 22px 24px 24px;
+  border: 1px solid #2a2e37;
+  border-radius: var(--radius);
+  background: #101217;
 }
-.movieEn {
-  margin-left: 2px;
-  color: #a9aeb9;
-  font-size: 12px;
+.screen {
+  margin: 0 18px 20px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #4a4f5b;
+  border-radius: 0 0 40% 40% / 0 0 8px 8px;
+  color: #6b717e;
+  font-size: 9px;
+  letter-spacing: 3px;
+  text-align: center;
 }
-.buttons {
-  display: flex;
-  gap: 10px;
-  margin-top: 17px;
+.seats {
+  display: grid;
+  gap: 8px;
 }
-.buttons > a {
-  min-height: 42px;
-  padding: 0 20px;
-  font-size: 13px;
+.seats span {
+  aspect-ratio: 1;
+  border: 1px solid #484d59;
+  border-radius: 5px;
+  transition:
+    background-color 0.4s,
+    border-color 0.4s;
+}
+.seats .taken {
+  border-color: #3a3e49;
+  background: repeating-linear-gradient(135deg, #4a4e59 0, #4a4e59 2px, #333640 2px, #333640 4px);
+}
+.seats .mine {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
 }
 .slider {
-  position: absolute;
-  right: 33px;
-  bottom: 26px;
-  z-index: 1;
+  grid-area: slider;
   display: flex;
   align-items: center;
   gap: 17px;
@@ -134,98 +144,71 @@
 .line[aria-pressed="true"]::after {
   background: #e8e9ed;
 }
-@keyframes heroReveal {
+@keyframes heroRise {
   from {
-    opacity: 0.6;
-    transform: scale(1.015);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
+    opacity: 0;
+    transform: translateY(6px);
   }
 }
 @media (max-width: 1050px) {
-  .content {
-    width: 70%;
-    padding-left: 32px;
+  .hero {
+    padding: 32px 32px 22px;
+    column-gap: 28px;
   }
   .headline {
-    font-size: 39px;
+    font-size: 37px;
+  }
+  .art {
+    width: 260px;
   }
 }
 @media (max-width: 800px) {
-  .content {
-    width: 80%;
-    padding-left: 27px;
+  .hero {
+    min-height: 290px;
+    padding: 27px 27px 18px;
   }
-  .fade {
-    background: linear-gradient(90deg, #15171dfc, #15171da5 60%, #15171d2b);
+  .headline {
+    font-size: 31px;
+    letter-spacing: -1.2px;
   }
   .art {
-    width: 77%;
+    width: 210px;
+    padding: 16px 16px 18px;
   }
-  .slider {
-    right: 21px;
-    bottom: 20px;
-  }
-  .lines {
-    display: none;
+  .seats {
+    gap: 6px;
   }
 }
 @media (max-width: 540px) {
-  /* 긴 제목·작은 화면에서 콘텐츠가 늘어나도 아래 절대 배치된 슬라이더(44px)에 버튼이 가려지지 않게:
-     높이를 고정하지 않고 콘텐츠 아래에 슬라이더만큼 여백을 둔다 */
+  /* 좁은 화면: 좌석 그림은 빼고 글만. 슬라이더는 아래 */
   .hero {
-    height: auto;
-    min-height: 401px;
-  }
-  .content {
-    width: 100%;
-    padding: 29px 23px 76px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "text"
+      "slider";
+    row-gap: 8px;
+    min-height: 0;
+    padding: 24px 20px 8px;
   }
   .art {
-    width: 100%;
-    opacity: 0.62;
-    background-position: 65% 34%;
-  }
-  .fade {
-    background:
-      linear-gradient(90deg, #15171de5, #15171d45),
-      linear-gradient(0deg, #15171dfc 0%, #15171d45 80%);
+    display: none;
   }
   .kicker {
     font-size: 10px;
   }
   .headline {
-    margin: 22px 0 20px;
-    font-size: 34px;
-    letter-spacing: -1.1px;
+    margin: 14px 0 12px;
+    font-size: 28px;
+    letter-spacing: -1px;
   }
   .description {
-    font-size: 11px;
-  }
-  .movie {
-    margin-top: 24px;
-    font-size: 11px;
-  }
-  .buttons {
-    gap: 9px;
-    margin-top: 19px;
-  }
-  .buttons > a {
-    padding: 0 15px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .slider {
-    right: 20px;
-    bottom: 15px;
     gap: 10px;
   }
   .arrow {
     display: none;
-  }
-  .lines {
-    display: flex;
   }
   .lines {
     gap: 8px;

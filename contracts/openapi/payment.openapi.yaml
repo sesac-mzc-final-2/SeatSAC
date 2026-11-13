@@ -19,8 +19,10 @@ paths:
       x-feature-id: PAY-05
       x-caller: [portone]
       description: |
-        처리하는 type: `Transaction.Paid`(→ verify와 같은 경로로 APPROVED, 이미 FAILED·CANCELED 행이면 포트원 취소 — 돈만 나간 상태 방지),
-        `Transaction.Failed`(→ FAILED), `Transaction.Cancelled`·`Transaction.PartialCancelled`(→ CANCELED). 그 밖의 type은 200으로 무시한다.
+        처리하는 type: `Transaction.Paid`(PROCESSING 행이면 verify와 같은 경로로 APPROVED. 이미 FAILED·CANCELED 행 = 늦은 결제면 **환불 미완료 표식만**(pgTransactionId 기록) 남기고
+        취소는 1분 스윕이 보낸다 — 웹훅이 여러 번 와도 취소 요청이 여러 번 나가지 않게), `Transaction.Failed`(PROCESSING → FAILED),
+        `Transaction.Cancelled`·`Transaction.PartialCancelled`(APPROVED → CANCELED, 환불 미완료면 canceledAt 기록). 그 밖의 type은 200으로 무시한다.
+        **웹훅은 대조만 하고 포트원에 아무것도 보내지 않는다.**
         우리 DB에 없는 paymentId는 200으로 무시하고 WARN 로그만 남긴다(다른 가맹점·테스트 결제).
         booking 쪽 반영(확정·환불)은 이 API가 하지 않는다 — booking의 단건 조회 폴링과 만료 스캔이 Payment 상태를 읽어 반영한다.
       parameters:

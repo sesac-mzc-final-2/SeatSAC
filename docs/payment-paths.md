@@ -26,6 +26,15 @@
 | 실시간 좌석 데모(5.1.2) 장면 5 결제 | ✓ | **토스페이**(발표자 계정·토스 앱) · 대체: ADMIN 토글로 MOCK | 거절(0000)은 「결제창에서 사용자 취소」로 대체. 리허설(11/15)에서 확정 |
 | 로컬 개발(Compose) | ✓ | 포트원 Stub(`APP_PORTONE_API_BASE_URL`로 가리킴) 또는 MOCK | Secret 없이 돌릴 수 있게. 웹훅은 로컬에 못 온다(단건 조회 폴링으로 대체) |
 
+## 외부 PG라서 생기는 규칙 (다른 팀 포트원 장애 기록에서, `services/docs/pg-md/`)
+
+- 포트원 취소 API에는 **멱등 키가 없다** → 취소는 전액만, `currentCancellableAmount`를 명시, 응답을 못 받으면 재호출 대신 `GET`으로 대조
+- 취소 응답 `REQUESTED`는 완료가 아니다 → 503 `CANCEL_PENDING`, 웹훅·스윕이 확정
+- **다시 요청할 주체가 없는 환불**(금액 불일치·늦은 결제)은 「환불 미완료」를 DB에 먼저 남기고(FAILED + `pg_transaction_id` + `canceled_at` null) 1분 스윕이 끝까지
+- **웹훅은 대조만** — 포트원에 아무것도 보내지 않는다
+- `@Retry`는 쓰지 않는다(서킷 폴백과 섞이면 재시도가 안 걸림) — GET만 코드로 1회 재호출
+- 화면에 CSP를 넣게 되면 `https://*.portone.io https://*.iamport.co`를 `connect-src`·`frame-src`에
+
 ## 토스페이로 바뀌면서 데모에서 빠지는 것
 
 | 항목 | 판단 |

@@ -92,6 +92,26 @@ button {
 button:disabled {
   cursor: not-allowed;
 }
+/* 누를 수 있는 것은 항상 손가락 커서. 링크·button 은 기본값이고, 그 밖에 클릭을 받는 요소를 여기서 맞춘다.
+   div 등에 onClick 을 달면 role 을 함께 주거나 그 요소에 cursor: pointer 를 직접 준다 */
+a[href],
+select,
+summary,
+label[for],
+input[type="checkbox"],
+input[type="radio"],
+[role="button"],
+[role="tab"],
+[role="checkbox"],
+[role="radio"],
+[role="option"],
+[role="menuitem"],
+[role="switch"] {
+  cursor: pointer;
+}
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
 
 input,
 select {

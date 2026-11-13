@@ -21,34 +21,7 @@
   top: 12px;
   left: 12px;
   z-index: 1;
-}
-.actions {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 15px;
-  background: #0e0f13bb;
-  backdrop-filter: blur(2px);
-  opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s;
-}
-.posterWrap:hover .actions,
-.posterWrap:focus-within .actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-.actions > a,
-.actions > button {
-  width: 68%;
-}
-.detail {
-  font-size: 12px;
-  text-decoration: underline;
 }
 .title {
   display: block;
@@ -76,25 +49,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 터치 기기에서만 포스터 전체를 덮는 링크 (touchHref) */
-.touchLink {
-  display: none;
-  position: absolute;
-  inset: 0;
-  z-index: 1;
+/* 주 버튼은 카드 맨 아래에 항상 보인다. 영문 제목이 없는 카드도 버튼 높이가 맞도록 아래로 민다 */
+.actions {
+  display: flex;
+  margin-top: auto;
+  padding-top: 14px;
 }
-/* 터치 기기: 호버가 없으니 오버레이 버튼을 빼고, 포스터를 누르면 바로 touchHref(예매)로 간다. 상세는 제목으로 */
-@media (hover: none) {
-  .actions {
-    display: none;
-  }
-  .touchLink {
-    display: block;
-  }
-  .grade {
-    z-index: 2;
-    pointer-events: none;
-  }
+.actions > a,
+.actions > button {
+  flex: 1 1 auto;
 }
 @media (max-width: 540px) {
   .grade {
@@ -110,5 +73,8 @@
   .english {
     margin-top: 5px;
     font-size: 9px;
+  }
+  .actions {
+    padding-top: 10px;
   }
 }

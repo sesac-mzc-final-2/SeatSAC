@@ -34,8 +34,6 @@ export function MovieCatalog() {
               key={movie.movieId}
               movie={movie}
               eager={i < 5}
-              touchHref={routes.showtimes({ movieId: movie.movieId })}
-              touchLabel={`${movie.title} 예매하기`}
               actions={
                 <ButtonLink variant="primary" size="sm" to={routes.showtimes({ movieId: movie.movieId })}>
                   예매하기 <Icon name="arrow-right" size={15} />

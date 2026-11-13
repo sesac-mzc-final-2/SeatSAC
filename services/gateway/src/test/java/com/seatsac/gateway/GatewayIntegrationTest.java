@@ -52,6 +52,7 @@ class GatewayIntegrationTest {
     private static final DisposableServer CATALOG = echoServer("catalog");
     private static final DisposableServer BOOKING = echoServer("booking");
     private static final DisposableServer USER = echoServer("user");
+    private static final DisposableServer PAYMENT = echoServer("payment");
     private static final DisposableServer COGNITO = HttpServer.create().port(0)
         .route(r -> r.get("/pool/.well-known/jwks.json", (req, res) -> res
             .header("Content-Type", "application/json")
@@ -69,13 +70,14 @@ class GatewayIntegrationTest {
         registry.add("app.services.catalog-url", () -> "http://localhost:" + CATALOG.port());
         registry.add("app.services.booking-url", () -> "http://localhost:" + BOOKING.port());
         registry.add("app.services.user-url", () -> "http://localhost:" + USER.port());
+        registry.add("app.services.payment-url", () -> "http://localhost:" + PAYMENT.port());
         registry.add("app.cognito.issuer-uri", GatewayIntegrationTest::issuer);
         registry.add("app.cognito.client-id", () -> CLIENT_ID);
     }
 
     @AfterAll
     static void stopServers() {
-        List.of(CATALOG, BOOKING, USER, COGNITO).forEach(DisposableServer::disposeNow);
+        List.of(CATALOG, BOOKING, USER, PAYMENT, COGNITO).forEach(DisposableServer::disposeNow);
     }
 
     // ---------- GW-01 라우팅 ----------
@@ -115,6 +117,61 @@ class GatewayIntegrationTest {
         expectError(get("/api/movies/actuator/health", token), 404, "NOT_FOUND");
         expectError(get("/api/payments/abc", token), 404, "NOT_FOUND");
         expectError(get("/api/auth/login", token), 404, "NOT_FOUND");
+    }
+
+    // ---------- 포트원 웹훅 (ADR-112) ----------
+
+    private static final String WEBHOOK_BODY =
+        "{\"type\":\"Transaction.Paid\",\"timestamp\":\"2026-11-16T05:04:10.000Z\",\"data\":{\"paymentId\":\"p-1\"}}";
+
+    @Test
+    void 포트원_웹훅은_토큰_없이_payment로_가고_서명_헤더와_본문을_그대로_넘긴다() {
+        JsonNode body = client.post().uri("/api/webhooks/portone")
+            .header("Content-Type", "application/json")
+            .header("webhook-id", "msg_1")
+            .header("webhook-timestamp", "1763269450")
+            .header("webhook-signature", "v1,c2lnbmF0dXJl")
+            .bodyValue(WEBHOOK_BODY)
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(JsonNode.class).returnResult().getResponseBody();
+
+        assertThat(body.get("service").asText()).isEqualTo("payment");
+        assertThat(body.get("path").asText()).isEqualTo("/webhooks/portone");
+        assertThat(body.get("body").asText()).isEqualTo(WEBHOOK_BODY); // 서명은 원본 본문으로 검증한다
+        JsonNode headers = body.get("headers");
+        assertThat(headers.get("webhook-id").asText()).isEqualTo("msg_1");
+        assertThat(headers.get("webhook-timestamp").asText()).isEqualTo("1763269450");
+        assertThat(headers.get("webhook-signature").asText()).isEqualTo("v1,c2lnbmF0dXJl");
+        assertThat(headers.has("x-user-id")).isFalse();
+    }
+
+    @Test
+    void 포트원_웹훅은_잘못된_Bearer가_붙어도_401이_아니고_사용자_헤더를_만들지_않는다() {
+        JsonNode body = client.post().uri("/api/webhooks/portone")
+            .header("X-User-Id", "attacker")
+            .header("X-User-Role", "ADMIN")
+            .headers(h -> h.setBearerAuth("not-a-jwt"))
+            .bodyValue(WEBHOOK_BODY)
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(JsonNode.class).returnResult().getResponseBody();
+        assertThat(body.get("service").asText()).isEqualTo("payment");
+        assertThat(body.get("headers").has("x-user-id")).isFalse();
+        assertThat(body.get("headers").has("x-user-role")).isFalse();
+    }
+
+    @Test
+    void 웹훅_외의_payment_경로와_다른_메서드는_열리지_않는다() {
+        String token = token(KEY, Map.of());
+        // POST만 인증 없이 열린다 — GET은 로그인 규칙(401), 로그인해도 라우트가 POST만이라 404
+        expectError(get("/api/webhooks/portone", null), 401, "UNAUTHORIZED");
+        expectError(get("/api/webhooks/portone", token), 404, "NOT_FOUND");
+        // 다른 웹훅·결제 경로는 인증 규칙 그대로, 로그인해도 라우트가 없다
+        expectError(post("/api/webhooks/other", null), 401, "UNAUTHORIZED");
+        expectError(post("/api/webhooks/portone/x", null), 401, "UNAUTHORIZED");
+        expectError(post("/api/webhooks/other", token), 404, "NOT_FOUND");
+        expectError(post("/api/payments", token), 404, "NOT_FOUND");
     }
 
     @Test
@@ -308,23 +365,24 @@ class GatewayIntegrationTest {
         }
     }
 
-    /** 받은 경로(쿼리 포함)·헤더(소문자)를 JSON으로 돌려주는 가짜 하위 서비스 */
+    /** 받은 경로(쿼리 포함)·헤더(소문자)·본문을 JSON으로 돌려주는 가짜 하위 서비스 */
     private static DisposableServer echoServer(String service) {
         return HttpServer.create().port(0)
-            .handle((req, res) -> {
+            .handle((req, res) -> req.receive().aggregate().asString().defaultIfEmpty("").flatMap(received -> {
                 Map<String, String> headers = new LinkedHashMap<>();
                 req.requestHeaders().forEach(e -> headers.put(e.getKey().toLowerCase(), e.getValue()));
                 Map<String, Object> body = new LinkedHashMap<>();
                 body.put("service", service);
                 body.put("path", req.uri());
                 body.put("headers", headers);
+                body.put("body", received);
                 try {
                     return res.header("Content-Type", "application/json")
-                        .sendString(Mono.just(MAPPER.writeValueAsString(body)));
+                        .sendString(Mono.just(MAPPER.writeValueAsString(body))).then();
                 } catch (JsonProcessingException e) {
                     return Mono.error(e);
                 }
-            })
+            }))
             .bindNow();
     }
 }

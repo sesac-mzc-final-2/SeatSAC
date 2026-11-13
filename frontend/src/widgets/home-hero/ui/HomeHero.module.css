@@ -3,34 +3,17 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
-    "text poster"
-    "actions poster";
+    "text art"
+    "slider art";
   grid-template-rows: 1fr auto;
   column-gap: 40px;
-  min-height: 390px;
-  padding: 36px 44px;
+  row-gap: 20px;
+  min-height: 330px;
+  padding: 36px 44px 26px;
   overflow: hidden;
-  isolation: isolate;
   border: 1px solid #272b33;
   border-radius: var(--radius);
-  background: #13151a;
-}
-/* 포스터는 세로 비율이라 배경으로 늘리지 않는다 — 흐리게 깔아 분위기만 내고, 실제 포스터는 오른쪽 카드로 */
-.art {
-  position: absolute;
-  inset: -48px;
-  z-index: -2;
-  background-position: 50% 35%;
-  background-size: cover;
-  filter: blur(42px);
-  opacity: 0.3;
-  animation: heroFade 0.5s ease both;
-}
-.fade {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: linear-gradient(90deg, #13151af2 0%, #13151ab8 55%, #13151a66 100%);
+  background: linear-gradient(120deg, #171a20 0%, #13151a 60%, #15171d 100%);
 }
 .text {
   grid-area: text;
@@ -53,56 +36,64 @@
   background: var(--color-primary);
 }
 .headline {
-  display: -webkit-box;
-  margin: 16px 0 14px;
-  overflow: hidden;
-  font-size: 43px;
+  margin: 16px 0 16px;
+  font-size: 41px;
   font-weight: 730;
   line-height: 1.25;
-  letter-spacing: -1.8px;
+  letter-spacing: -1.7px;
   word-break: keep-all;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
-.meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 22px;
+.headline span {
+  display: block;
 }
-.movieEn {
-  overflow: hidden;
-  color: #a9aeb9;
+.description {
+  color: #b0b5bf;
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.8;
+  white-space: pre-line;
 }
-.actions {
-  grid-area: actions;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px 24px;
-  flex-wrap: wrap;
-}
-.buttons {
-  display: flex;
-  gap: 10px;
-}
-.buttons > a {
-  min-height: 44px;
-  padding: 0 22px;
-  font-size: 13px;
-}
-.poster {
-  grid-area: poster;
+/* 오른쪽 좌석 그림 (장식): 소개마다 내 좌석·남이 잡은 좌석 표시가 바뀐다 */
+.art {
+  grid-area: art;
   align-self: center;
-  width: 208px;
-  border-radius: 11px;
-  box-shadow: 0 18px 44px #00000080;
-  animation: heroFade 0.5s ease both;
+  width: 300px;
+  padding: 22px 24px 24px;
+  border: 1px solid #2a2e37;
+  border-radius: var(--radius);
+  background: #101217;
+}
+.screen {
+  margin: 0 18px 20px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #4a4f5b;
+  border-radius: 0 0 40% 40% / 0 0 8px 8px;
+  color: #6b717e;
+  font-size: 9px;
+  letter-spacing: 3px;
+  text-align: center;
+}
+.seats {
+  display: grid;
+  gap: 8px;
+}
+.seats span {
+  aspect-ratio: 1;
+  border: 1px solid #484d59;
+  border-radius: 5px;
+  transition:
+    background-color 0.4s,
+    border-color 0.4s;
+}
+.seats .taken {
+  border-color: #3a3e49;
+  background: repeating-linear-gradient(135deg, #4a4e59 0, #4a4e59 2px, #333640 2px, #333640 4px);
+}
+.seats .mine {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
 }
 .slider {
+  grid-area: slider;
   display: flex;
   align-items: center;
   gap: 17px;
@@ -151,11 +142,6 @@
 .line[aria-pressed="true"]::after {
   background: #e8e9ed;
 }
-@keyframes heroFade {
-  from {
-    opacity: 0;
-  }
-}
 @keyframes heroRise {
   from {
     opacity: 0;
@@ -164,75 +150,65 @@
 }
 @media (max-width: 1050px) {
   .hero {
-    padding: 32px;
+    padding: 32px 32px 22px;
     column-gap: 28px;
   }
   .headline {
-    font-size: 39px;
+    font-size: 37px;
+  }
+  .art {
+    width: 260px;
   }
 }
 @media (max-width: 800px) {
   .hero {
-    min-height: 340px;
-    padding: 27px;
+    min-height: 290px;
+    padding: 27px 27px 18px;
   }
   .headline {
-    font-size: 33px;
+    font-size: 31px;
     letter-spacing: -1.2px;
   }
-  .poster {
-    width: 176px;
+  .art {
+    width: 210px;
+    padding: 16px 16px 18px;
   }
-  .lines {
-    display: none;
+  .seats {
+    gap: 6px;
   }
 }
 @media (max-width: 540px) {
-  /* 좁은 화면: 제목 옆에 작은 포스터, 버튼·슬라이더는 그 아래 전체 폭 */
+  /* 좁은 화면: 좌석 그림은 빼고 글만. 슬라이더는 아래 */
   .hero {
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "text poster"
-      "actions actions";
-    column-gap: 16px;
-    row-gap: 20px;
+      "text"
+      "slider";
+    row-gap: 8px;
     min-height: 0;
-    padding: 22px 20px 12px;
+    padding: 24px 20px 8px;
+  }
+  .art {
+    display: none;
   }
   .kicker {
     font-size: 10px;
   }
   .headline {
-    margin: 12px 0 10px;
-    font-size: 25px;
-    letter-spacing: -0.8px;
-    -webkit-line-clamp: 3;
+    margin: 14px 0 12px;
+    font-size: 28px;
+    letter-spacing: -1px;
   }
-  .movieEn {
-    font-size: 11px;
-  }
-  .meta {
-    flex-wrap: wrap;
-  }
-  .poster {
-    width: 104px;
-    border-radius: 8px;
-  }
-  .buttons {
-    gap: 9px;
-  }
-  .buttons > a {
-    padding: 0 15px;
+  .description {
     font-size: 12px;
   }
   .slider {
     gap: 10px;
-    margin-left: auto;
   }
   .arrow {
     display: none;
   }
   .lines {
-    display: flex;
     gap: 8px;
   }
   .line {

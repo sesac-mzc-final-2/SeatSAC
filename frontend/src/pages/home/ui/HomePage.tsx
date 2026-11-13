@@ -6,27 +6,22 @@ import { HomeHero } from "@/widgets/home-hero";
 import { MovieCatalog } from "@/widgets/movie-catalog";
 import styles from "./HomePage.module.css";
 
-/** W1 메인 — 영화 히어로 · 서비스 소개 줄(상영시간표 바로가기) · 상영중 영화 (CAT-01) */
+/** W1 메인 — 서비스 소개 히어로 · 상영시간표 바로가기 줄 · 상영중 영화 (CAT-01) */
 export function HomePage() {
   useDocumentTitle("상영중인 영화");
   return (
     <div className={styles.page}>
       <HomeHero />
 
-      <section className={styles.banner} aria-label="서비스 소개">
+      <section className={styles.banner} aria-label="상영시간표 바로가기">
         <div className={styles.bannerIcon}>
-          <Icon name="armchair" size={24} strokeWidth={1.5} />
+          <Icon name="calendar" size={22} strokeWidth={1.5} />
         </div>
         <div className={styles.bannerCopy}>
-          <h2>실시간 좌석 예매</h2>
+          <h2>지금 예매해 보세요</h2>
           <p>
-            좌석을 고르면 5분간 내 자리로 잡힙니다.<span> 다른 사람 화면에도 1초 안에 반영돼요.</span>
+            극장과 날짜를 고르면<span> 회차별</span> 남은 좌석을 볼 수 있어요.
           </p>
-        </div>
-        <div className={styles.miniSeats} aria-hidden="true">
-          {Array.from({ length: 12 }, (_, i) => (
-            <span key={i} className={i === 5 || i === 6 ? styles.held : undefined} />
-          ))}
         </div>
         <Link to={routes.showtimes()} className={styles.bannerAction}>
           상영시간표 보기 <Icon name="arrow-right" size={17} />

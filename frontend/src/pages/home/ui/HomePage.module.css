@@ -31,22 +31,6 @@
   color: var(--color-muted);
   font-size: 12px;
 }
-.miniSeats {
-  display: grid;
-  grid-template-columns: repeat(6, 12px);
-  gap: 5px;
-  margin-left: auto;
-  margin-right: 32px;
-}
-.miniSeats span {
-  width: 12px;
-  height: 12px;
-  border: 1px solid #484d59;
-  border-radius: 3px;
-}
-.miniSeats .held {
-  background: repeating-linear-gradient(135deg, #4a4e59 0, #4a4e59 2px, #333640 2px, #333640 4px);
-}
 .bannerAction {
   display: flex;
   align-items: center;
@@ -58,6 +42,7 @@
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 550;
+  margin-left: auto;
   white-space: nowrap;
   transition: background-color var(--t-color);
 }
@@ -88,9 +73,6 @@
   white-space: nowrap;
 }
 @media (max-width: 1050px) {
-  .miniSeats {
-    display: none;
-  }
   .bannerAction {
     margin-left: auto;
   }

@@ -1,6 +1,9 @@
 package com.seatsac.payment.portone;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 
 /**
@@ -17,7 +20,9 @@ public record PortOnePayment(
     Amount amount,
     String currency,
     Failure failure,
-    List<Cancellation> cancellations
+    List<Cancellation> cancellations,
+    /** PAID 이후에만 있다. ISO-8601 문자열 그대로 받고 {@link #paidAtOr}에서 읽는다(형식이 달라도 결제 처리를 막지 않게) */
+    String paidAt
 ) {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Amount(Long total, Long paid, Long cancelled) {
@@ -48,6 +53,21 @@ public record PortOnePayment(
     /** 결제창이 아직 끝나지 않았다(READY·PENDING·PAY_PENDING·VIRTUAL_ACCOUNT_ISSUED 등) */
     public boolean isUnsettled() {
         return !isPaid() && !isFailed() && !isCancelled();
+    }
+
+    /**
+     * 포트원이 결제를 승인한 시각. 없거나 읽을 수 없으면 {@code fallback}(우리가 확인한 시각) — 승인 시각이 비면
+     * 응답 계약({@code approvedAt})이 깨지므로 비워 두지 않는다.
+     */
+    public Instant paidAtOr(Instant fallback) {
+        if (paidAt == null || paidAt.isBlank()) {
+            return fallback;
+        }
+        try {
+            return OffsetDateTime.parse(paidAt).toInstant();
+        } catch (DateTimeParseException e) {
+            return fallback;
+        }
     }
 
     public boolean matches(int expectedAmount, String expectedCurrency) {

@@ -66,7 +66,7 @@ public class PortOneReconcileService {
 
         if (remote.isPaid()) {
             if (remote.matches(payment.getAmount(), CURRENCY)) {
-                paymentState.settle(paymentId, PaymentStatus.APPROVED, null, remote.transactionId(), now);
+                paymentState.approve(paymentId, remote.transactionId(), remote.paidAtOr(now), now);
                 log.info("포트원 결제 확인 → APPROVED paymentId={} bookingId={}", paymentId, payment.getBookingId());
                 return Outcome.APPROVED;
             }
@@ -91,7 +91,7 @@ public class PortOneReconcileService {
         }
         if (remote.isCancelled()) {
             // 우리가 보기 전에 포트원에서 취소됐다(콘솔 취소 등). 승인 → 취소로 기록을 맞춘다
-            paymentState.settle(paymentId, PaymentStatus.APPROVED, null, remote.transactionId(), now);
+            paymentState.approve(paymentId, remote.transactionId(), remote.paidAtOr(now), now);
             paymentState.cancel(paymentId, PaymentCancelReason.STALE_PAYMENT, now);
             log.warn("포트원에서 이미 취소된 결제 → CANCELED paymentId={} bookingId={}", paymentId, payment.getBookingId());
             return Outcome.CANCELED;

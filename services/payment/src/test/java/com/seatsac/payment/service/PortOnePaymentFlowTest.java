@@ -140,7 +140,8 @@ class PortOnePaymentFlowTest {
 
         assertThat(response.status()).isEqualTo(PaymentStatus.APPROVED);
         assertThat(response.pgTransactionId()).isEqualTo("tx-30000");
-        assertThat(response.approvedAt()).isNotNull();
+        // 승인 시각은 포트원이 승인한 시각이다(우리가 확인한 시각이 아니다)
+        assertThat(response.approvedAt().toInstant()).isEqualTo(java.time.Instant.parse(FakePortOne.PAID_AT));
         assertThat(response.checkout()).isNull();
         assertThat(PORTONE.gets()).hasSize(1);
         // API Secret은 Authorization: PortOne {secret} 로 간다

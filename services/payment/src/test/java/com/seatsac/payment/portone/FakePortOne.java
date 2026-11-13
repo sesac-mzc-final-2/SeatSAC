@@ -18,6 +18,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  */
 public final class FakePortOne implements AutoCloseable {
 
+    /** 돈이 잡힌 결제(PAID·CANCELLED)의 포트원 승인 시각 — 응답 {@code approvedAt}이 이 값이어야 한다 */
+    public static final String PAID_AT = "2026-11-16T05:04:10.123Z";
+
     /** 포트원 쪽 결제 하나 — 우리가 읽는 필드만 */
     public record Remote(String status, long total, String currency, String transactionId, String failureReason) {
         public static Remote paid(long total) {
@@ -42,7 +45,9 @@ public final class FakePortOne implements AutoCloseable {
             return "{\"status\":\"" + status + "\",\"id\":\"p\",\"transactionId\":"
                 + (transactionId == null ? "null" : "\"" + transactionId + "\"")
                 + ",\"amount\":{\"total\":" + total + ",\"paid\":" + total + ",\"cancelled\":0},\"currency\":\"" + currency
-                + "\",\"failure\":" + failure + ",\"ignoredField\":1}";
+                + "\",\"failure\":" + failure
+                + (transactionId == null ? "" : ",\"paidAt\":\"" + PAID_AT + "\"")
+                + ",\"ignoredField\":1}";
         }
     }
 

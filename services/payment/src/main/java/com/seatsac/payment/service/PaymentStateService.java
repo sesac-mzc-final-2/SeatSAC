@@ -72,6 +72,16 @@ public class PaymentStateService {
         return paymentRepository.settleProcessing(paymentId, status, failureCode, pgTransactionId, approvedAt, now) == 1;
     }
 
+    /**
+     * PORTONE 승인 — {@code approvedAt}은 포트원이 승인한 시각이다. 우리가 확인한 시각({@code now})을 쓰면
+     * 결제창을 끝낸 뒤 verify·웹훅·스윕이 늦게 올수록 승인 시각이 밀린다(로컬 테스트에서 3분 반).
+     */
+    @Transactional
+    public boolean approve(String paymentId, String pgTransactionId, Instant approvedAt, Instant now) {
+        return paymentRepository.settleProcessing(paymentId, PaymentStatus.APPROVED, null, pgTransactionId,
+            approvedAt, now) == 1;
+    }
+
     /** 늦은 결제 — 끝난 FAILED 행에 돈이 잡혔다는 증거를 남겨 환불 미완료로 만든다(ADR-112) */
     @Transactional
     public boolean markRefundOwed(String paymentId, String pgTransactionId, Instant now) {

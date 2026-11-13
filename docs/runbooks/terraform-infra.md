@@ -1401,8 +1401,9 @@ export K6_TOKENS_FILE=~/.seatsac/k6-tokens.txt
 
 # 3) 대상 회차·좌석 (공개 조회 API만, 시작 60분 이상 남은 회차 · 시나리오마다 다른 회차)
 API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api"
-python3 tests/k6/tools/pick_targets.py --base-url "$API" > ~/.seatsac/k6-targets.env   # 고른 회차 설명은 화면(stderr)에 나온다
-source ~/.seatsac/k6-targets.env                                    # 다른 터미널(6-H-2 터미널 B)도 같은 파일을 읽는다
+python3 tests/k6/tools/pick_targets.py --base-url "$API" > ~/.seatsac/k6-targets.env.tmp \
+  && mv ~/.seatsac/k6-targets.env.tmp ~/.seatsac/k6-targets.env \
+  && source ~/.seatsac/k6-targets.env    # 설명은 화면(stderr). 실패하면 기존 파일을 덮지 않는다 → --date로 다시 고른다. 터미널 B도 이 파일을 읽는다
 env | grep -E '^(CONTENTION|USERHOLD|DEPLOY|BROWSE)_|^THEATER_'      # 리포트에 적는다
 ```
 
@@ -1413,7 +1414,7 @@ env | grep -E '^(CONTENTION|USERHOLD|DEPLOY|BROWSE)_|^THEATER_'      # 리포트
 #### 6-H-2. 실행 (이 순서로)
 
 ```bash
-R=tests/k6/run-in-cluster.sh       # 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
+R=tests/k6/run-in-cluster.sh       # 터미널 A (6-H-1을 실행한 터미널). 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
 
 # 터미널 B 준비 (새 터미널은 변수가 비어 있다 — 레포 루트에서 한 번)
 export AWS_PROFILE=cinema-admin                                     # 없으면 terraform output이 실패한다
@@ -1421,7 +1422,7 @@ API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfro
 source ~/.seatsac/k6-targets.env                                    # 6-H-1 3)에서 저장한 파일
 echo "$API" "$CONTENTION_SCREENING_ID" "$DEPLOY_SCREENING_ID"        # 모두 값이 나와야 하고, 회차가 터미널 A와 같아야 한다
 
-# ① 사용자당 선점 1건 (토큰 1개, 30초)
+# ① 터미널 A — 사용자당 선점 1건 (토큰 1개, 30초)
 $R user-hold -e SCREENING_ID=$USERHOLD_SCREENING_ID -e SEAT_IDS=$USERHOLD_SEAT_IDS
 
 # ② 같은 좌석 100명 (1분 안에 끝난다) — 다른 터미널에서 SSE를 같이 연다(이벤트 HELD 1건, 300초 뒤 EXPIRED 1건)
@@ -1439,7 +1440,7 @@ $R deploy -e SCREENING_ID=$DEPLOY_SCREENING_ID -e SEAT_ID_FROM=$DEPLOY_SEAT_ID_F
 kubectl -n cinema-staging get hpa booking -w                                                                    # 터미널 C — 증설되면 리포트에
 ```
 
-- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 `pick_targets.py`로 새로 고른다), user-hold는 바로 다시 된다(스스로 해제)
+- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 터미널 A에서 6-H-1 3)으로 새로 고른 뒤 **터미널 B에서도 `source ~/.seatsac/k6-targets.env`를 다시** 실행한다), user-hold는 바로 다시 된다(스스로 해제)
 - 같은 시각에 k6 Job은 하나만 돈다(스크립트가 막는다 — 결과가 섞인다)
 - 블루/그린 중 무중단 확인(`deploy` + 실제 배포)은 4.2.2(6-D)
 

@@ -37,7 +37,6 @@ import com.seatsac.common.core.error.BusinessException;
 import com.seatsac.common.core.error.CommonResponseCode;
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
-import com.seatsac.common.web.user.AuthUser;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -127,10 +126,6 @@ class BookingPaymentFlowTest {
         return seatHoldService.hold(userId, new SeatHoldRequest(SCREENING, List.of(seatIds))).bookingId();
     }
 
-    private static AuthUser user(String userId) {
-        return new AuthUser(userId, "USER");
-    }
-
     private static BookingPayRequest payRequest() {
         return new BookingPayRequest(PaymentMethod.CARD, null,
             new BookingPayRequest.Card(CARD, "12/28", "KIM"));
@@ -198,7 +193,7 @@ class BookingPaymentFlowTest {
         long seqAfterHold = Long.parseLong(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING)));
         given(paymentClient.request(any())).willReturn(approved(bookingId));
 
-        BookingPaymentResponse response = bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        BookingPaymentResponse response = bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
 
         assertThat(response.status()).isEqualTo(BookingStatus.CONFIRMED);
         assertThat(response.confirmedAt()).isNotNull();
@@ -242,7 +237,7 @@ class BookingPaymentFlowTest {
         willThrow(new IllegalStateException("catalog down")).given(catalogClient)
             .findScreening(SCREENING);
 
-        BookingPaymentResponse response = bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        BookingPaymentResponse response = bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
 
         assertThat(response.status()).isEqualTo(BookingStatus.CONFIRMED);
         JsonNode payload = objectMapper.readTree(outboxMessageRepository.findAll().getFirst()
@@ -259,7 +254,7 @@ class BookingPaymentFlowTest {
         Long bookingId = hold(101L, 102L);
         given(paymentClient.request(any())).willReturn(declined(bookingId));
 
-        BookingPaymentResponse response = bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        BookingPaymentResponse response = bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
 
         assertThat(response.status()).isEqualTo(BookingStatus.PAYMENT_FAILED);
         assertThat(response.payment().failureCode()).isEqualTo("CARD_DECLINED");
@@ -283,7 +278,7 @@ class BookingPaymentFlowTest {
             return approved(bookingId);
         });
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.BOOKING_STATE_CONFLICT.name());
@@ -311,7 +306,7 @@ class BookingPaymentFlowTest {
             .given(paymentClient).cancel(anyString(), any());
 
         // 「만료·환불됨」(409 refunded=true)이 아니라 결과 미확인(503) — 돈이 아직 잡혀 있을 수 있다
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
@@ -332,7 +327,7 @@ class BookingPaymentFlowTest {
         });
         given(paymentClient.cancel(anyString(), any())).willReturn(approved);   // 아직 APPROVED
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.PAYMENT_RESULT_UNKNOWN.name());
@@ -354,7 +349,7 @@ class BookingPaymentFlowTest {
         });
         willThrow(new IllegalStateException("payment 응답 없음(취소는 됐다)"))
             .given(paymentClient).cancel(anyString(), any());
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class);
 
         PaymentResult canceled = new PaymentResult(approved.paymentId(), bookingId, 30_000, "CANCELED",
@@ -379,7 +374,7 @@ class BookingPaymentFlowTest {
         });
         willThrow(new IllegalStateException("payment 응답 없음"))
             .given(paymentClient).cancel(anyString(), any());
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class);
 
         // 환불이 아직 안 되는 동안의 조회: 예매 PENDING + 결제 APPROVED (둘 다 사실이다)
@@ -408,7 +403,7 @@ class BookingPaymentFlowTest {
         PaymentResult approved = approved(bookingId);
         given(paymentClient.request(any())).willThrow(
             com.seatsac.booking.common.BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception());
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class);
         expire(bookingId);
 
@@ -427,9 +422,9 @@ class BookingPaymentFlowTest {
     void secondPaymentRequestIsRejected() {
         Long bookingId = hold(101L);
         given(paymentClient.request(any())).willReturn(approved(bookingId));
-        bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.PAYMENT_ALREADY_REQUESTED.name());
@@ -440,7 +435,7 @@ class BookingPaymentFlowTest {
         Long bookingId = hold(101L);
 
         assertThatThrownBy(() -> bookingPaymentService.pay(
-            user("22222222-2222-4222-8222-222222222222"), MOCK_KEY, bookingId, payRequest()))
+            "22222222-2222-4222-8222-222222222222", MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.FORBIDDEN.name());
@@ -452,7 +447,7 @@ class BookingPaymentFlowTest {
         Long bookingId = hold(101L);
         expire(bookingId);
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class);
         verify(paymentClient, never()).request(any());
     }
@@ -465,7 +460,7 @@ class BookingPaymentFlowTest {
         Long bookingId = hold(101L);
         startScreeningIn(240);   // 4분 뒤 시작 = 마감 지남
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .satisfies(e -> {
                 BusinessException ex = (BusinessException) e;
@@ -487,7 +482,7 @@ class BookingPaymentFlowTest {
         startScreeningIn(360);
         given(paymentClient.request(any())).willReturn(approved(bookingId));
 
-        assertThat(bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()).status())
+        assertThat(bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()).status())
             .isEqualTo(BookingStatus.CONFIRMED);
     }
 
@@ -498,7 +493,7 @@ class BookingPaymentFlowTest {
         screeningCache.clear();
         willThrow(new IllegalStateException("catalog down")).given(catalogClient).findScreening(SCREENING);
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.SERVICE_UNAVAILABLE.name());
@@ -514,7 +509,7 @@ class BookingPaymentFlowTest {
         Long bookingId = hold(101L, 102L);
         PaymentResult payment = approved(bookingId);
         given(paymentClient.request(any())).willReturn(payment);
-        bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
         given(paymentClient.cancel(anyString(), any())).willReturn(new PaymentResult(
             payment.paymentId(), bookingId, 30_000, "CANCELED", "1112", null,
             "BOOKING_CANCELED", payment.approvedAt(), Instant.now()));
@@ -533,7 +528,7 @@ class BookingPaymentFlowTest {
     void cancelStandsEvenIfRefundCallFails() {
         Long bookingId = hold(101L);
         given(paymentClient.request(any())).willReturn(approved(bookingId));
-        bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
         willThrow(new IllegalStateException("payment down")).given(paymentClient)
             .cancel(anyString(), any());
 
@@ -650,7 +645,7 @@ class BookingPaymentFlowTest {
     void cancelIsIdempotent() {
         Long bookingId = hold(101L);
         given(paymentClient.request(any())).willReturn(approved(bookingId));
-        bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
         given(paymentClient.cancel(anyString(), any())).willReturn(new PaymentResult(
             UUID.randomUUID().toString(), bookingId, 30_000, "CANCELED", "1112", null,
             "BOOKING_CANCELED", Instant.now(), Instant.now()));
@@ -684,7 +679,7 @@ class BookingPaymentFlowTest {
         given(paymentClient.request(any())).willThrow(
             com.seatsac.booking.common.BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception());
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class);
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus())
             .isEqualTo(BookingStatus.PENDING);
@@ -707,7 +702,7 @@ class BookingPaymentFlowTest {
     void detailHidesSeatIdsForFinishedBookings() {
         Long bookingId = hold(101L);
         given(paymentClient.request(any())).willReturn(declined(bookingId));
-        bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
 
         var detail = bookingDetailService.get(USER, bookingId);
 
@@ -719,7 +714,7 @@ class BookingPaymentFlowTest {
     private Long confirmedBooking(Long seatId) {
         Long bookingId = hold(seatId);
         given(paymentClient.request(any())).willReturn(approved(bookingId));
-        bookingPaymentService.pay(user(USER), MOCK_KEY, bookingId, payRequest());
+        bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest());
         return bookingId;
     }
 
@@ -801,30 +796,24 @@ class BookingPaymentFlowTest {
     // --- 모의 결제(CARD) 호출자 제한 ---
 
     @Test
-    void mockCardNeedsKeyOrAdmin() {
+    void mockCardNeedsKey() {
         Long bookingId = hold(101L);
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), "wrong-key", bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, "wrong-key", bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .satisfies(e -> {
                 assertThat(((BusinessException) e).code().responseCode())
                     .isEqualTo(CommonResponseCode.VALIDATION_FAILED.name());
                 assertThat(reasonOf(e)).isEqualTo("MOCK_NOT_ALLOWED");
             });
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), null, bookingId, payRequest()))
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, null, bookingId, payRequest()))
             .isInstanceOf(BusinessException.class)
             .satisfies(e -> assertThat(reasonOf(e)).isEqualTo("MOCK_NOT_ALLOWED"));
         verify(paymentClient, never()).request(any());
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getCurrentPaymentId()).isNull();
 
-        // ADMIN은 키 없이
+        // 맞는 키면 결제한다 (k6·분석 Job)
         given(paymentClient.request(any())).willReturn(approved(bookingId));
-        assertThat(bookingPaymentService.pay(new AuthUser(USER, "ADMIN"), null, bookingId, payRequest())
-            .status()).isEqualTo(BookingStatus.CONFIRMED);
-
-        // 맞는 키면 USER도
-        Long another = hold(105L);
-        given(paymentClient.request(any())).willReturn(approved(another));
-        assertThat(bookingPaymentService.pay(user(USER), MOCK_KEY, another, payRequest()).status())
+        assertThat(bookingPaymentService.pay(USER, MOCK_KEY, bookingId, payRequest()).status())
             .isEqualTo(BookingStatus.CONFIRMED);
     }
 
@@ -836,7 +825,7 @@ class BookingPaymentFlowTest {
         String paymentId = prepare(bookingId).paymentId();
         given(paymentClient.verify(paymentId)).willReturn(tossPayApproved(bookingId, paymentId));
 
-        BookingPaymentResponse response = bookingPaymentService.pay(user(USER), null, bookingId,
+        BookingPaymentResponse response = bookingPaymentService.pay(USER, null, bookingId,
             tossPayRequest(paymentId));
 
         assertThat(response.status()).isEqualTo(BookingStatus.CONFIRMED);
@@ -858,7 +847,7 @@ class BookingPaymentFlowTest {
         given(paymentClient.verify(paymentId)).willThrow(
             com.seatsac.booking.common.BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception());
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), null, bookingId,
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, null, bookingId,
             tossPayRequest(paymentId)))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
@@ -874,7 +863,7 @@ class BookingPaymentFlowTest {
         given(paymentClient.verify(paymentId))
             .willReturn(tossPayFailed(bookingId, paymentId, "USER_CANCELED"));
 
-        BookingPaymentResponse response = bookingPaymentService.pay(user(USER), null, bookingId,
+        BookingPaymentResponse response = bookingPaymentService.pay(USER, null, bookingId,
             tossPayRequest(paymentId));
 
         assertThat(response.status()).isEqualTo(BookingStatus.PAYMENT_FAILED);
@@ -887,7 +876,7 @@ class BookingPaymentFlowTest {
     void tossPayCompletionWithWrongPaymentIdIsConflict() {
         Long bookingId = hold(101L);
         prepare(bookingId);
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), null, bookingId,
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, null, bookingId,
             tossPayRequest(UUID.randomUUID().toString())))
             .isInstanceOf(BusinessException.class)
             .satisfies(e -> {
@@ -898,7 +887,7 @@ class BookingPaymentFlowTest {
 
         // 준비하지 않은 예매
         Long notPrepared = holdAs(OTHER, 105L);
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(OTHER), null, notPrepared,
+        assertThatThrownBy(() -> bookingPaymentService.pay(OTHER, null, notPrepared,
             tossPayRequest(UUID.randomUUID().toString())))
             .isInstanceOf(BusinessException.class)
             .satisfies(e -> assertThat(reasonOf(e)).isEqualTo("PAYMENT_ID_MISMATCH"));
@@ -914,7 +903,7 @@ class BookingPaymentFlowTest {
         given(paymentClient.verify(paymentId)).willReturn(tossPayApproved(bookingId, paymentId));
         given(paymentClient.cancel(anyString(), any())).willReturn(canceledFor(bookingId));
 
-        assertThatThrownBy(() -> bookingPaymentService.pay(user(USER), null, bookingId,
+        assertThatThrownBy(() -> bookingPaymentService.pay(USER, null, bookingId,
             tossPayRequest(paymentId)))
             .isInstanceOf(BusinessException.class)
             .satisfies(e -> {
@@ -940,7 +929,7 @@ class BookingPaymentFlowTest {
         startScreeningIn(180);   // 3분 뒤 시작 = 마감 지남
         given(paymentClient.verify(paymentId)).willReturn(tossPayApproved(bookingId, paymentId));
 
-        assertThat(bookingPaymentService.pay(user(USER), null, bookingId, tossPayRequest(paymentId))
+        assertThat(bookingPaymentService.pay(USER, null, bookingId, tossPayRequest(paymentId))
             .status()).isEqualTo(BookingStatus.CONFIRMED);
 
         // 대조군: 같은 조건에서 준비는 막힌다
@@ -960,7 +949,7 @@ class BookingPaymentFlowTest {
             .willReturn(java.util.Optional.of(tossPayApproved(bookingId, paymentId)));
         assertThat(bookingDetailService.get(USER, bookingId).status()).isEqualTo(BookingStatus.CONFIRMED);
 
-        BookingPaymentResponse response = bookingPaymentService.pay(user(USER), null, bookingId,
+        BookingPaymentResponse response = bookingPaymentService.pay(USER, null, bookingId,
             tossPayRequest(paymentId));
 
         assertThat(response.status()).isEqualTo(BookingStatus.CONFIRMED);

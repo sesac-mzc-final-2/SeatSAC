@@ -5,15 +5,12 @@ import { bookingDetailQuery } from "@/entities/booking";
 import { movieDetailQuery } from "@/entities/movie";
 import { screeningDetailQuery } from "@/entities/screening";
 import { BookingSteps } from "@/features/booking-steps";
-import { myProfileQuery } from "@/entities/user";
 import {
-  CardForm,
   HoldTimer,
   POLL_ATTEMPTS,
   TossPayPanel,
   readTossPayReturn,
   useCountdown,
-  usePayBooking,
   useTossPay,
   type PayOutcome,
   type TossPayStage,
@@ -27,8 +24,8 @@ import { BookingResult, BookingSummaryCard, PaymentProgress } from "@/widgets/bo
 import styles from "./BookingPayPage.module.css";
 
 /**
- * W5 결제 + W6 결과 (BKG-10, ADR-112). 화면 결제는 <b>토스페이(포트원)</b>만이고, 모의 카드는 ADMIN에게만 보인다
- * (서버도 ADMIN·테스트 키가 아니면 막는다). 결제는 <b>한 번만</b> 요청한다 —
+ * W5 결제 + W6 결과 (BKG-10, ADR-112). 화면 결제는 <b>토스페이(포트원)</b>만이다(모의 결제는 k6·분석 Job 전용).
+ * 결제는 <b>한 번만</b> 요청한다 —
  * 503으로 결과를 못 받으면 `GET /bookings/{id}`를 2초 간격 최대 5회 확인하고, 다시 결제하지 않는다.
  */
 export function BookingPayPage() {
@@ -46,7 +43,6 @@ function Pay() {
   const location = useLocation();
   const navigate = useNavigate();
   const [outcome, setOutcome] = useState<PayOutcome | null>(null);
-  const [showMockCard, setShowMockCard] = useState(false);
 
   useDocumentTitle("결제");
 
@@ -65,20 +61,15 @@ function Pay() {
   });
   const movie = movieQuery.data ?? null;
 
-  // 역할은 토큰을 파싱하지 않고 프로필에서 (W9). 못 받으면 일반 사용자로 본다 — 모의 카드는 관리자 전용
-  const profileQuery = useQuery(myProfileQuery());
-  const isAdmin = profileQuery.data?.role === "ADMIN";
-
   const onSettled = (result: PayOutcome) => {
     setOutcome(result);
     if (result.kind === "error") toast.show(result.message, { tone: "error" });
     // 결과 패널은 서버가 말하는 예매 상태로 그린다 (화면이 추측하지 않는다)
     void bookingQuery.refetch();
   };
-  const pay = usePayBooking(bookingId, onSettled);
   const tossPay = useTossPay(bookingId, onSettled);
-  const paying = pay.pending || tossPay.pending;
-  const checking = pay.checking || tossPay.checking;
+  const paying = tossPay.pending;
+  const checking = tossPay.checking;
 
   // 모바일 결제창이 돌아왔다(`?paymentId=…&code=…`) → 완료 확인만 한 번. 들어온 순간의 주소로 정하고(뒤에서 주소를 지운다),
   // 이 페이지에서는 결제 폼을 다시 열지 않는다 — 같은 예매에 결제를 또 시작하면 안 된다
@@ -172,36 +163,13 @@ function Pay() {
       <>
         <HoldTimer secondsLeft={secondsLeft} />
         <div className={styles.pay}>
-          <div className={styles.methods}>
-            <TossPayPanel
-              amount={booking.amount}
-              onPay={tossPay.start}
-              pending={paying}
-              onCancel={() => release.release(booking.bookingId)}
-              cancelling={release.pending}
-            />
-            {isAdmin && (
-              <div className={styles.admin}>
-                <button
-                  type="button"
-                  className={styles.adminToggle}
-                  aria-expanded={showMockCard}
-                  onClick={() => setShowMockCard((open) => !open)}
-                >
-                  관리자 · 모의 카드로 결제 {showMockCard ? "접기" : "열기"}
-                </button>
-                {showMockCard && (
-                  <CardForm
-                    amount={booking.amount}
-                    onSubmit={pay.pay}
-                    pending={paying}
-                    onCancel={() => release.release(booking.bookingId)}
-                    cancelling={release.pending}
-                  />
-                )}
-              </div>
-            )}
-          </div>
+          <TossPayPanel
+            amount={booking.amount}
+            onPay={tossPay.start}
+            pending={paying}
+            onCancel={() => release.release(booking.bookingId)}
+            cancelling={release.pending}
+          />
           <div className={styles.summary}>
             <BookingSummaryCard booking={booking} screening={screening} movie={movie} />
           </div>

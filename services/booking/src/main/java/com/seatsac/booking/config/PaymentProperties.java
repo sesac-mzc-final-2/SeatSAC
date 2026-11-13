@@ -11,8 +11,8 @@ import org.springframework.validation.annotation.Validated;
  *
  * <ul>
  *   <li>{@code mockKey} — 환경변수 {@code APP_PAYMENT_MOCK_KEY}(Secret {@code booking-secrets}). 모의 결제
- *       ({@code CARD})를 부를 수 있는 기계 경로(k6·분석 Job)의 키다. <b>비어 있으면 기계 경로가 꺼진다</b> —
- *       그때 모의 결제는 ADMIN만 부를 수 있다</li>
+ *       ({@code CARD})를 부를 수 있는 기계 경로(k6·분석 Job)의 키다. <b>비어 있으면 모의 결제가 꺼진다</b>
+ *       (화면·사용자에게는 모의 결제가 없다)</li>
  *   <li>{@code pendingGrace} — 환경변수 {@code APP_PAYMENT_PENDING_GRACE}(기본 2분). 결제 요청이 붙은
  *       PENDING 예매의 만료 보류를 선점 만료 뒤 이만큼만 한다. 결제창을 띄운 채 떠난 사용자의 좌석이
  *       영원히 묶이지 않게 그 뒤에는 결제 상태를 조회해 끝낸다</li>

@@ -13,7 +13,6 @@ import com.seatsac.booking.service.BookingDetailService;
 import com.seatsac.booking.service.BookingPaymentService;
 import com.seatsac.booking.service.SeatReleaseService;
 import com.seatsac.common.core.http.Headers;
-import com.seatsac.common.web.user.AuthUser;
 import com.seatsac.common.web.user.CurrentUser;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -69,7 +68,7 @@ public class BookingController {
     /**
      * BKG-10 결제 요청 → BKG-06 확정. <b>거절도 200</b>이고 {@code status}로 구분한다.
      * {@code TOSSPAY}는 준비에서 받은 {@code paymentId}로 완료를 확인하고, {@code CARD}(모의)는
-     * {@code X-Payment-Mock-Key}가 맞거나 ADMIN일 때만 받는다.
+     * {@code X-Payment-Mock-Key}가 맞을 때만 받는다(k6·분석 Job).
      * 결과를 끝까지 알 수 없으면 503 {@code PAYMENT_RESULT_UNKNOWN}이고 예매는 {@code PENDING}이다.
      *
      * <p>{@code @Idempotent}가 같은 {@code Idempotency-Key}의 재요청에 <b>첫 응답을 그대로</b>
@@ -79,12 +78,12 @@ public class BookingController {
      */
     @Idempotent
     @PostMapping("/bookings/{bookingId}/pay")
-    public BookingPaymentResponse pay(@CurrentUser AuthUser user, @PathVariable Long bookingId,
+    public BookingPaymentResponse pay(@CurrentUser String userId, @PathVariable Long bookingId,
                                       @RequestHeader(Headers.IDEMPOTENCY_KEY) String idempotencyKey,
                                       @RequestHeader(value = BookingPolicy.MOCK_PAYMENT_KEY_HEADER,
                                           required = false) String mockKey,
                                       @Valid @RequestBody BookingPayRequest request) {
-        return bookingPaymentService.pay(user, mockKey, bookingId, request);
+        return bookingPaymentService.pay(userId, mockKey, bookingId, request);
     }
 
     /** BKG-07 확정 예매 취소 + 환불. 이미 취소된 예매도 200이다(멱등) */

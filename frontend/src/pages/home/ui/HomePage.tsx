@@ -20,7 +20,7 @@ export function HomePage() {
         <div className={styles.bannerCopy}>
           <h2>좋은 자리는 기다려주지 않으니까.</h2>
           <p>
-            좌석을 고르면 바로 선점. <span>5분 안에 결제를 완료해 주세요.</span>
+            좌석을 고르면 바로 선점. <span>5분 안에 모의 결제를 완료해 주세요.</span>
           </p>
         </div>
         <div className={styles.miniSeats} aria-hidden="true">

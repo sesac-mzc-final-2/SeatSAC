@@ -3,10 +3,7 @@ import type { Booking, PayRequest, PayResult } from "@/entities/booking";
 import { ApiError, NetworkError } from "@/shared/api";
 import { POLL_ATTEMPTS, settlePayment, type PayFlowDeps } from "./pay-flow";
 
-const request: PayRequest = {
-  method: "CARD",
-  card: { number: "4242424242424242", expiry: "12/28", holder: "KIM" },
-};
+const request: PayRequest = { method: "TOSSPAY", paymentId: "p-1" };
 
 const approved: PayResult = {
   bookingId: 9876,

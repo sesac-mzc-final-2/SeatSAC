@@ -653,15 +653,8 @@ async function handlePayBooking(req, res, path) {
   if (action === "/pay" && req.method === "POST") {
     const body = await readJson(req);
     const now = toKstIso(new Date());
-    if (body?.method === "CARD") {
-      if (MOCK_ROLE !== "ADMIN") return fail(res, 400, "VALIDATION_FAILED", "mock card is for tests only", [{ field: "method", value: "CARD", reason: "MOCK_NOT_ALLOWED" }]);
-      if (b.payment) return fail(res, 409, "PAYMENT_ALREADY_REQUESTED", "already requested", [{ field: "bookingId", value: b.bookingId, reason: "PAYMENT_ALREADY_REQUESTED" }]);
-      const last4 = String(body.card?.number ?? "").slice(-4);
-      const failureCode = last4 === "0000" ? "CARD_DECLINED" : last4 === "1111" ? "INSUFFICIENT_BALANCE" : null;
-      const payment = { paymentId: randomUUID(), method: "CARD", cardLast4: last4, failureCode, status: failureCode ? "FAILED" : "APPROVED", approvedAt: failureCode ? null : now, canceledAt: null };
-      settlePay(b, failureCode ? "PAYMENT_FAILED" : "CONFIRMED", payment);
-      return json(res, 200, payResult(b));
-    }
+    // 모의 결제(CARD)는 k6·분석 Job 전용(서버 키 헤더) — 화면에서는 부르지 않는다
+    if (body?.method === "CARD") return fail(res, 400, "VALIDATION_FAILED", "mock card is for tests only", [{ field: "method", value: "CARD", reason: "MOCK_NOT_ALLOWED" }]);
     if (body?.method !== "TOSSPAY") return fail(res, 400, "VALIDATION_FAILED", "bad method", [{ field: "method", reason: "INVALID_PAYMENT_METHOD" }]);
     if (!b.payment || body.paymentId !== b.payment.paymentId) {
       return fail(res, 409, "PAYMENT_ALREADY_REQUESTED", "payment id mismatch", [{ field: "paymentId", value: body.paymentId ?? null, reason: "PAYMENT_ID_MISMATCH" }]);

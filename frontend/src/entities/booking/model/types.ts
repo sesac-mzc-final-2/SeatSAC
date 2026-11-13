@@ -6,7 +6,7 @@ export type BookingStatus = "PENDING" | "CONFIRMED" | "PAYMENT_FAILED" | "EXPIRE
 
 export type PaymentStatus = "PROCESSING" | "APPROVED" | "FAILED" | "CANCELED";
 
-/** 결제 수단 — 화면은 토스페이만, CARD는 모의 결제(관리자·테스트 전용, ADR-112) */
+/** 결제 수단 — 화면은 토스페이만. CARD는 모의 결제로 k6·분석 Job 전용(서버 키 헤더, ADR-112) — 화면은 보내지 않는다 */
 export type PaymentMethod = "CARD" | "TOSSPAY";
 
 /**
@@ -86,25 +86,14 @@ export interface Booking {
   payment?: BookingPayment | null;
 }
 
-/** 모의 카드 결제 (관리자·테스트 전용). 서버가 ADMIN이나 테스트 키가 아니면 400 `MOCK_NOT_ALLOWED` */
-export interface CardPayRequest {
-  method: "CARD";
-  card: {
-    /** 모의 카드. 저장·로그하지 않는다 */
-    number: string;
-    /** MM/YY */
-    expiry: string;
-    holder: string;
-  };
-}
-
 /** 토스페이 완료 확인 — 준비에서 받은 `paymentId`. 결과는 서버가 포트원에서 확인한다 */
 export interface TossPayRequest {
   method: "TOSSPAY";
   paymentId: string;
 }
 
-export type PayRequest = CardPayRequest | TossPayRequest;
+/** BKG-10 결제 요청 — 화면은 토스페이 완료 확인만 보낸다 */
+export type PayRequest = TossPayRequest;
 
 /** `POST /bookings/{id}/payments` — 포트원 결제창에 넘길 값. 돈은 아직 움직이지 않았다 */
 export interface PaymentPrepareResult {

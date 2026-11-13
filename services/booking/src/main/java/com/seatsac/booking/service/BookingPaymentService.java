@@ -19,7 +19,6 @@ import com.seatsac.booking.service.BookingPaymentResultApplier.Applied;
 import com.seatsac.common.core.error.BusinessException;
 import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.common.core.time.Times;
-import com.seatsac.common.web.user.AuthUser;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
@@ -41,8 +40,8 @@ import org.springframework.stereotype.Service;
  * ③은 <b>만료·마감 검사를 하지 않는다</b> — 사용자는 이미 결제창에서 돈을 냈을 수 있다. 만료됐으면 결과 반영이
  * 환불하고 409(ADR-100)로 답한다.
  *
- * <p><b>CARD(모의)</b>는 테스트·분석 전용이다 — {@code X-Payment-Mock-Key}가 설정 키와 같거나 ADMIN일 때만 받고
- * 아니면 400 {@code VALIDATION_FAILED}(reason {@code MOCK_NOT_ALLOWED}). 흐름은 ①과 같은 검증 → payment 동기
+ * <p><b>CARD(모의)</b>는 테스트·분석 전용이다 — {@code X-Payment-Mock-Key}가 설정 키와 같을 때만 받고(k6·분석 Job)
+ * 아니면 400 {@code VALIDATION_FAILED}(reason {@code MOCK_NOT_ALLOWED}). 화면에는 모의 결제가 없다. 흐름은 ①과 같은 검증 → payment 동기
  * 판정(응답을 못 받으면 1회 재호출 → 조회, 끝까지 모르면 503) → 결과 반영 한 번이다.
  *
  * <p>응답은 둘 다 같다 — 승인 200 CONFIRMED · 거절 200 PAYMENT_FAILED · 만료 409 + 환불 · 환불 미확인 503.
@@ -104,18 +103,18 @@ public class BookingPaymentService {
     }
 
     /** 거절도 200이고 {@code status}로 구분한다 */
-    public BookingPaymentResponse pay(AuthUser user, String mockKey, Long bookingId,
+    public BookingPaymentResponse pay(String userId, String mockKey, Long bookingId,
                                       BookingPayRequest request) {
         return switch (request.method()) {
-            case CARD -> payWithMock(user, mockKey, bookingId, request);
-            case TOSSPAY -> completeTossPay(user.userId(), bookingId, request.paymentId());
+            case CARD -> payWithMock(userId, mockKey, bookingId, request);
+            case TOSSPAY -> completeTossPay(userId, bookingId, request.paymentId());
         };
     }
 
     /** CARD(모의) — 테스트·분석 전용. 결제 ID 발급부터 판정까지 한 번에 끝난다 */
-    private BookingPaymentResponse payWithMock(AuthUser user, String mockKey, Long bookingId,
+    private BookingPaymentResponse payWithMock(String userId, String mockKey, Long bookingId,
                                                BookingPayRequest request) {
-        if (!user.isAdmin() && !paymentProperties.mockKeyMatches(mockKey)) {
+        if (!paymentProperties.mockKeyMatches(mockKey)) {
             throw BookingErrorCode.MOCK_NOT_ALLOWED.exception(ErrorDetail.of("method",
                 PaymentMethod.CARD.name(), BookingErrorCode.MOCK_NOT_ALLOWED.name()));
         }
@@ -127,7 +126,7 @@ public class BookingPaymentService {
         Instant now = clock.instant();
         Booking booking = bookingReader.findById(bookingId)
             .orElseThrow(BookingErrorCode.BOOKING_NOT_FOUND::exception);
-        String paymentId = attachNewPayment(booking, user.userId(), now);
+        String paymentId = attachNewPayment(booking, userId, now);
 
         // 결과를 못 받으면 PaymentClient가 503 PAYMENT_RESULT_UNKNOWN을 던진다 (예매는 PENDING 유지)
         PaymentResult payment = paymentClient.request(new PaymentRequest(paymentId, bookingId,

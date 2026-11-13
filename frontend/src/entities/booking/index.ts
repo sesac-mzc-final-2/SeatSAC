@@ -3,7 +3,6 @@ export type {
   BookingPayment,
   BookingStatus,
   CancelResult,
-  CardPayRequest,
   FailureCode,
   HoldResult,
   PayRequest,

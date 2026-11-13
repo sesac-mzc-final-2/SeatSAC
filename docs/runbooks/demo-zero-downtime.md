@@ -16,7 +16,7 @@
 | --- | --- |
 | Valkey 키 직접 삭제(`seat:*`·`user-hold:*`·`hold-expiry`·`idem:*`·`seat-seq:*`) | RDS의 PENDING 예매와 어긋난다. 만료 스캔(RDS 10초)이 결국 정리하지만 그 사이 좌석판·선점 제한이 틀리게 보인다. `idem:*`를 지우면 재시도가 새 예매를 만든다 |
 | RDS 직접 DML(`booking`·`booking_seat`·`payment`) | 앱 계정만 DML 권한이 있고(마스터는 앱·Job에서 쓰지 않음), 아웃박스·결제 상태와 짝이 깨진다. 콘솔·직접 접속 금지 규칙과도 어긋난다 |
-| 회차 시드 재적재(`lotte-seed/load/run.sh`) | 회차 ID가 바뀌면 booking 분석 회차 `SMOKE_SCREENING_ID`(gitops)도 고쳐야 한다 — 안 고치면 **모든 booking 배포가 abort**(런타임 계약 5장). 재적재했다면 시연 전에 gitops PR로 함께 고친다 |
+| 회차 시드 재적재(`lotte-seed/load/run.sh`) | 회차 ID가 바뀌면 booking 분석 회차 `SMOKE_SCREENING_ID`(gitops)도 고쳐야 한다 — 안 고치면 **모든 booking 배포가 abort**(런타임 계약 5장). 재적재했다면 booking 머지 마감(**11/20 05:00**) 전에 gitops PR로 함께 고친다. 마감 뒤에는 재적재하지 않는다(회차 ID가 바뀌면 열린 화면·시연 회차도 바뀌고, 고칠 gitops PR을 머지할 수 없다) |
 | booking·Valkey 파드 재시작으로 "초기화" | 데이터는 그대로이고, 블루/그린·SSE 연결만 흔든다 |
 
 **기본 방법은 「새 회차 쓰기」다.** 좌석 배치가 있는 극장 4곳(`hasLayout`)의 회차가 하루에도 여러 개라, 쓴 회차는 그대로 두고 다음 리허설에는 다른 회차를 고른다(`pick_targets.py` — 오늘 회차가 모자라면 `--date`로 다음 날). 아래 절차는 그래도 남은 것을 치우는 용도다.

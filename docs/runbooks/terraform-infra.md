@@ -1230,7 +1230,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 #### 6-G-4. 끄기·되돌리기 (5분)
 
 1. `cluster-scale.sh down ng-ai` — ai 파드가 내려가면 `/api/ai/**`는 gateway 503(라우트가 켜져 있을 때). 화면은 챗봇 비활성 안내
-2. 필요하면 `APP_AI_ENABLED=false` PR로 404로 되돌림(gateway 블루/그린 1회 — 시연·측정 중에는 하지 않는다)
+2. AI 데모(11/17)·발표(11/20)가 모두 끝난 뒤에만 `APP_AI_ENABLED=false` PR로 404로 되돌림(gateway 블루/그린 1회). 그 전에 껐다면 gateway 머지 마감(11/20 05:00) 전에 6-G-3 1번(플래그 켜기 PR)을 다시 하고, 데모 전에 6-G-3 2·3번으로 `/api/ai/presets` 200을 확인한다
 3. 기존 서비스·RDS·Valkey는 바뀐 게 없으므로 추가 조치 없음
 
 #### 6-G-5. AI 질의 금지 구간

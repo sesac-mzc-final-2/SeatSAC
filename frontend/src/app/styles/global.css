@@ -2,6 +2,8 @@
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css");
 
 :root {
+  /* 상단 고정 헤더 높이 — 헤더 아래에 붙는 sticky 요소의 top 계산에 쓴다 */
+  --header-h: 88px;
   --color-bg: #0e0f13;
   --color-card: #181a20;
   --color-card-hover: #22252d;
@@ -168,6 +170,7 @@ img {
 
 @media (max-width: 800px) {
   :root {
+    --header-h: 76px;
     --container-gutter: 24px;
   }
   .panel {

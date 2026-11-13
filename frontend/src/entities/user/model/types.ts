@@ -1,13 +1,10 @@
 /** contracts/openapi/user.openapi.yaml — Profile · MyBooking · MyBookingPage · Preferences */
-export type UserRole = "USER" | "ADMIN";
-
 export interface Profile {
   /** Cognito sub (= X-User-Id) */
   userId: string;
   email: string;
   name: string | null;
-  /** 토큰을 파싱하지 않고 이 값으로 ADMIN 메뉴를 가른다 (W9) */
-  role: UserRole;
+  // 계약의 role(USER·ADMIN)은 받지만 쓰지 않는다 — 관리자 화면·기능이 없다
   createdAt: string;
 }
 

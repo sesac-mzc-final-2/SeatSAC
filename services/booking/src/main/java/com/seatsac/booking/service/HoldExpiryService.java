@@ -1,9 +1,13 @@
 package com.seatsac.booking.service;
 
+import com.seatsac.booking.component.PaymentClient;
+import com.seatsac.booking.component.PaymentClient.PaymentResult;
 import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.component.SeatHoldStrategy;
+import com.seatsac.booking.config.PaymentProperties;
 import com.seatsac.booking.entity.Booking;
 import com.seatsac.booking.enums.SeatEventType;
+import com.seatsac.booking.service.BookingPaymentResultApplier.Applied;
 import com.seatsac.booking.service.BookingStateService.ExpiredHold;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -24,9 +28,12 @@ import org.springframework.stereotype.Service;
  * 다시 찾지 못해 영원히 {@code PENDING}으로 남는다. 반대로 순서를 지키면 어느 지점에서 멈춰도
  * 다음 주기가 이어받고, 조건부 UPDATE가 중복 처리를 막는다.
  *
- * <p>결제를 요청한 예매({@code current_payment_id} 있음)는 이번 주기를 <b>보류</b>한다.
- * 결제 결과가 예매 상태를 정하므로 만료가 끼어들면 「승인된 결제 + 만료된 예매」가 생긴다.
- * Payment 상태를 조회해 승인된 결제를 취소(`STALE_PAYMENT`)하는 처리는 3.2.6에서 붙인다.
+ * <p>결제를 요청한 예매({@code current_payment_id} 있음)는 선점 만료 뒤 <b>유예</b>({@code app.payment.pending-grace},
+ * 기본 2분) 동안 보류한다. 결제 결과가 예매 상태를 정하므로 만료가 끼어들면 「승인된 결제 + 만료된 예매」가 생긴다.
+ * 유예가 지나면 — 결제창을 띄운 채 떠난 사용자(TOSSPAY)나 준비 응답을 못 받은 예매 — Payment 상태를 조회해 끝낸다:
+ * 결제 없음 → 일반 만료, 승인 → 환불 후 만료, 취소 → 만료, 거절 → 결제 실패(좌석 해제),
+ * 아직 {@code PROCESSING}·조회 실패 → 계속 보류(payment가 7분 뒤 닫으면 다음 주기에 거절로 온다).
+ * 결과 반영은 {@link BookingPaymentResultApplier}가 하고 조건부 UPDATE라 다른 경로와 겹쳐도 한 번만 처리된다.
  */
 @Slf4j
 @Service
@@ -37,16 +44,24 @@ public class HoldExpiryService {
     private final BookingStateService bookingState;
     private final SeatHoldStrategy seatHold;
     private final SeatEventPublisher eventPublisher;
+    private final PaymentClient paymentClient;
+    private final BookingPaymentResultApplier resultApplier;
+    private final Duration pendingGrace;
     private final Timer expiryLag;
 
     public HoldExpiryService(Clock clock, BookingRepositoryReader bookingReader,
                              BookingStateService bookingState, SeatHoldStrategy seatHold,
-                             SeatEventPublisher eventPublisher, MeterRegistry meterRegistry) {
+                             SeatEventPublisher eventPublisher, PaymentClient paymentClient,
+                             BookingPaymentResultApplier resultApplier, PaymentProperties paymentProperties,
+                             MeterRegistry meterRegistry) {
         this.clock = clock;
         this.bookingReader = bookingReader;
         this.bookingState = bookingState;
         this.seatHold = seatHold;
         this.eventPublisher = eventPublisher;
+        this.paymentClient = paymentClient;
+        this.resultApplier = resultApplier;
+        this.pendingGrace = paymentProperties.pendingGrace();
         this.expiryLag = Timer.builder("booking_hold_expiry_lag")
             .description("만료 시각과 실제 반영 시각의 차이 (목표 2초 이내)")
             .publishPercentileHistogram()
@@ -75,10 +90,18 @@ public class HoldExpiryService {
         if (pending.isEmpty()) {
             return Outcome.ALREADY_SETTLED;
         }
-        if (pending.get().getCurrentPaymentId() != null) {
-            // 결제 결과가 상태를 정한다. 장부에서 지우지 않아야 다음 주기에 다시 본다
-            log.debug("결제 중인 예매는 만료를 보류한다 bookingId={}", bookingId);
-            return Outcome.DEFERRED;
+        Booking booking = pending.get();
+        if (booking.getCurrentPaymentId() != null) {
+            if (now.isBefore(booking.getExpiresAt().plus(pendingGrace))) {
+                // 결제 결과가 상태를 정한다. 장부에서 지우지 않아야 다음 주기에 다시 본다
+                log.debug("결제 중인 예매는 만료를 보류한다 bookingId={}", bookingId);
+                return Outcome.DEFERRED;
+            }
+            Optional<Outcome> settled = settleByPayment(booking);
+            if (settled.isPresent()) {
+                return settled.get();
+            }
+            // payment에 결제 행이 없다 = 결제 요청이 닿지 않았다 → 아래 일반 만료로 간다
         }
 
         Optional<ExpiredHold> expired = bookingState.expireHold(bookingId, now);
@@ -94,6 +117,42 @@ public class HoldExpiryService {
         log.info("선점 만료 bookingId={} screeningId={} seats={} lagMs={}", hold.bookingId(),
             hold.screeningId(), hold.seatIds().size(), Duration.between(hold.expiresAt(), now).toMillis());
         return Outcome.EXPIRED;
+    }
+
+    /**
+     * 유예가 지난 결제 중 예매를 결제 상태로 끝낸다. 비어 있으면 결제 행이 없다는 뜻이다(일반 만료로 간다).
+     * 조회가 실패하면(서킷 열림 포함) 보류한다 — 모르는 상태로 좌석을 풀면 승인된 결제가 예매 없이 남는다.
+     */
+    private Optional<Outcome> settleByPayment(Booking booking) {
+        Optional<PaymentResult> payment;
+        try {
+            payment = paymentClient.find(booking.getCurrentPaymentId());
+        } catch (RuntimeException e) {
+            log.warn("유예가 지난 결제 중 예매의 결제를 조회하지 못해 보류한다 bookingId={} paymentId={}",
+                booking.getBookingId(), booking.getCurrentPaymentId(), e);
+            return Optional.of(Outcome.DEFERRED);
+        }
+        if (payment.isEmpty()) {
+            return Optional.empty();
+        }
+
+        PaymentResult result = payment.get();
+        log.info("유예가 지난 결제 중 예매를 결제 상태로 끝낸다 bookingId={} paymentId={} 결제상태={}",
+            booking.getBookingId(), result.paymentId(), result.status());
+        if (result.isProcessing()) {
+            return Optional.of(Outcome.DEFERRED);
+        }
+        if (result.isApproved()) {
+            // 만료라 확정은 0행 → 환불 → EXPIRED. 환불을 확인하지 못하면 PENDING으로 남겨 다음 주기에 다시
+            Applied applied = resultApplier.applyApproved(booking, result);
+            return Optional.of(applied == Applied.REFUND_PENDING ? Outcome.DEFERRED : Outcome.ALREADY_SETTLED);
+        }
+        if (result.isCanceled()) {
+            resultApplier.applyRefundedExpiry(booking);
+        } else {
+            resultApplier.applyDeclined(booking);
+        }
+        return Optional.of(Outcome.ALREADY_SETTLED);
     }
 
     /**

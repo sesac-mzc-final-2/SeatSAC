@@ -22,7 +22,7 @@ const SLIDES: readonly Slide[] = [
   {
     kicker: "좌석 선점",
     headline: ["고른 좌석은", "5분간 내 자리."],
-    description: "좌석을 고르는 순간 선점됩니다.\n5분 안에 모의 결제를 마치면 예매 완료.",
+    description: "좌석을 고르는 순간 선점됩니다.\n5분 안에 토스페이로 결제를 마치면 예매 완료.",
     mine: [19, 20],
     taken: [3, 4, 10, 26, 27, 28, 33],
   },

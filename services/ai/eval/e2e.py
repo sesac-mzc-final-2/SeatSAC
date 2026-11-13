@@ -15,6 +15,8 @@ NL2SQL·MY_BOOKINGS)가 200으로 답하는지, 검증기가 위험한 SQL을 �
 
 - 질문은 9건(사용자당 분당 10건 한도 안). 429가 오면 Retry-After 만큼(분당 한도, 70초 이하일 때만) 기다려 한 번 다시 보낸다 — 하루 한도(자정까지)는 기다리지 않고 기록
 - 같은 ai Valkey에 두 번째로 돌리면 첫 질문이 PRESET 대신 CACHE_SEMANTIC/CACHE_EXACT 로 나올 수 있다(정상, 표에 그대로 적는다)
+  6번(CACHE_SEMANTIC)은 두 번째 실행에서 CACHE_EXACT 로 나와 FAIL 이 된다(정확 일치 키가 시각을 빈칸으로 바꾼 문장 틀이라서) —
+  다시 돌릴 때는 캐시 키(ai:exact:*·ai:semcache:*)를 비운다
 - "내 예매"(MY_BOOKINGS)는 요청의 Authorization 을 그대로 공개 API에 넘기므로 **토큰 없이 직접 부르면 401** 이 맞다.
   직접 호출에서도 보려면 --token 에 Cognito Access Token 을 주면 된다(X-User-Id 는 토큰의 sub 로 바꿔 준다)
 - 토큰·질문 원문은 출력에 남지 않는다(답 문장·경로·건수·sql 만). 결과 JSON은 --out 으로 남긴다(기본 eval/out/, .gitignore)
@@ -361,8 +363,9 @@ def run_all(client: Client, rep: Report) -> None:
             ),
         )
         # 6. 값·말투만 다른 질문 → CACHE_SEMANTIC (슬롯 종류 같음·'오늘'·'이후' 뜻 같음)
+        #    실제 임베딩 유사도 0.96(11/13 실측). "넘어서 … 뭐 있어?"는 0.82라 기준 0.92에 못 미쳐 Claude로 간다(정상)
         other = hour + 1 if hour < 22 else hour - 1
-        q_sem = f"오늘 {other}시 넘어서 시작하는 영화 뭐 있어?"
+        q_sem = f"오늘 {other}시 이후에 하는 영화 알려줘"
         r = client.chat(q_sem)
         b = _json(r)
         rep.add(
@@ -474,7 +477,7 @@ def run_all(client: Client, rep: Report) -> None:
         paths = sorted(
             set(
                 re.findall(
-                    r'ai_chat_total\{[^}]*path="([a-z_]+)"[^}]*result="ok"\} ([1-9]\d*|\d*\.\d*[1-9]\d*)',
+                    r'ai_chat_total\{[^}]*path="([a-z0-9_]+)"[^}]*result="ok"\} ([1-9]\d*|\d*\.\d*[1-9]\d*)',
                     text,
                 )
             )

@@ -38,7 +38,7 @@ from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_rea
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
-from seatsac_ai.llm.client import LlmClient, LlmUnavailable, ToolCall, Usage
+from seatsac_ai.llm.client import NO_TOOL, LlmClient, LlmUnavailable, ToolCall, Usage
 from seatsac_ai.llm.tools import OUT_OF_SCOPE, RUN_PRESET, RUN_SQL, tool_definitions
 from seatsac_ai.resources import Preset, presets
 from seatsac_ai.snapshot.mapper import KST
@@ -76,6 +76,7 @@ _REJECTION_MESSAGE = {
 _SLOT_FORMAT = {
     "time": re.compile(r"^([01]\d|2[0-3]):[0-5]\d$"),
     "date": re.compile(r"^\d{4}-\d{2}-\d{2}$"),
+    "grade": re.compile(r"^(ALL|12|15|19)$"),
 }
 
 
@@ -205,6 +206,7 @@ class ChatService:
         # Claude 실패 지표의 path: 직전에 고른 도구를 따른다.
         # 첫 호출(도구를 고르기 전) 실패는 nl2sql로 센다 — 경로를 정하기 전이라 나눌 수 없다.
         failed_path = "nl2sql"
+        nudged = False
         try:
             while calls < self._s.llm_max_calls_per_query:
                 timeout = min(self._s.llm_timeout_seconds, deadline - time.monotonic())
@@ -213,6 +215,15 @@ class ChatService:
                 call = await self._llm.call(system, self._tools, messages, timeout)
                 calls += 1
                 usage.add(call.usage)
+                if call.name == NO_TOOL:
+                    # tool_choice=auto: 도구 없이 쓴 글은 표를 조회한 답이 아니라서 버린다.
+                    # 한 번만 다시 시키고, 또 그러면 범위 밖 문구로 답한다
+                    log.warning("Claude가 도구를 호출하지 않았다(%d번째 호출)", calls)
+                    if not nudged and calls < self._s.llm_max_calls_per_query:
+                        nudged = True
+                        messages += _nudge(call)
+                        continue
+                    return _empty("OUT_OF_SCOPE", OUT_OF_SCOPE_ANSWER, self._as_of()), None, calls
                 failed_path = "preset" if call.name == RUN_PRESET else "nl2sql"
                 try:
                     body, made = await self._run_tool(call, system_params, deadline)
@@ -368,10 +379,11 @@ class ChatService:
         if call.name == RUN_PRESET:
             preset, slots = self._resolve_preset(call.input)
             _, result = await self._execute(preset.sql, system_params | slots, deadline)
+            subject = _preset_subject(preset.title, slots)
             body = self._result_body(
-                "PRESET", _answer(preset.title, result), result, None, preset.preset_id
+                "PRESET", _answer(subject, result), result, None, preset.preset_id
             )
-            return body, _Made("PRESET", preset.sql, preset, slots, preset.title, result)
+            return body, _Made("PRESET", preset.sql, preset, slots, subject, result)
         if call.name == RUN_SQL:
             sql = str(call.input.get("sql", ""))
             # maxLength 80은 도구 스키마의 힌트일 뿐 API가 강제하지 않는다
@@ -510,6 +522,18 @@ def _feedback(call: ToolCall, message: str) -> list[dict[str, Any]]:
     ]
 
 
+_NUDGE = "글로 답하지 말고 run_preset·run_sql·out_of_scope 중 하나를 반드시 호출하라."
+
+
+def _nudge(call: ToolCall) -> list[dict[str, Any]]:
+    """도구 없이 글로 답했을 때 되돌려 보내는 말(tool_use 가 없어 tool_result 대신 평문)."""
+    turns: list[dict[str, Any]] = []
+    if any(block.get("type") == "text" for block in call.content):
+        turns.append({"role": "assistant", "content": call.content})
+    turns.append({"role": "user", "content": _NUDGE})
+    return turns
+
+
 def _count_tokens(usage: Usage, path: str) -> None:
     """ai_tokens_total. input·output = 우리 캐시가 줄이는 비용, cache_* = 프롬프트 캐싱(따로)."""
     for kind, n in (
@@ -537,6 +561,16 @@ def _semantic_match(entry: CacheEntry, similarity: float, ext: Extracted, thresh
         and tpl.anchors_present(entry.anchors, ext.question)
         and tuple(entry.meaning) == meaning_signature(ext.question)
     )
+
+
+def _preset_subject(title: str, slots: dict[str, Any]) -> str:
+    """버튼 제목의 "○시"를 실제 시각으로("오늘 ○시 이후 회차" + 20:00 → "오늘 20시 이후 회차")."""
+    time = str(slots.get("time") or "")
+    if "○시" not in title or ":" not in time:
+        return title
+    hour, minute = time.split(":")[:2]
+    clock = f"{int(hour)}시" + (f" {int(minute)}분" if int(minute) else "")
+    return title.replace("○시", clock)
 
 
 def _subject_template(subject: str, ext: Extracted) -> str:

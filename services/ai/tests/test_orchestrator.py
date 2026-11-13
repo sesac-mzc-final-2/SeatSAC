@@ -40,7 +40,30 @@ def test_preset_path():
     assert body["path"] == "PRESET" and body["presetId"] == "today_after_time"
     assert body["rowCount"] == 4 and body["sql"] is None
     assert body["llm"]["calls"] == 1 and body["llm"]["cacheReadTokens"] == 3800
-    assert body["answer"].startswith("오늘 ○시 이후 회차: 4건입니다.")
+    # 버튼 제목의 "○시"는 답 문장에서 실제 시각으로 채운다
+    assert body["answer"].startswith("오늘 20시 이후 회차: 4건입니다.")
+
+
+def test_preset_answer_shows_minutes_when_not_on_the_hour():
+    llm = ScriptedLlm(tool("run_preset", presetId="today_after_time", params={"time": "20:30"}))
+    assert ask(llm, "오늘 20시 30분 이후 영화")["answer"].startswith("오늘 20시 30분 이후 회차:")
+
+
+def test_view_grade_preset_returns_only_that_grade():
+    # 4.2.3 측정(q18·q19): 등급을 묻는데 전체 목록이 나오던 것 — 빈칸 grade 로 거른다
+    llm = ScriptedLlm(tool("run_preset", presetId="movies_by_view_grade", params={"grade": "ALL"}))
+    body = ask(llm, "전체 관람가 영화 알려줘")
+    assert body["path"] == "PRESET" and body["rowCount"] == 1
+    assert {row[0] for row in body["rows"]} == {"ALL"}
+
+
+def test_view_grade_preset_rejects_an_unknown_grade():
+    llm = ScriptedLlm(
+        tool("run_preset", presetId="movies_by_view_grade", params={"grade": "18"}),
+        tool("run_preset", presetId="movies_by_view_grade", params={"grade": "19"}),
+    )
+    body = ask(llm, "청소년 관람불가 영화 뭐 있어?")
+    assert body["llm"]["calls"] == 2 and {row[0] for row in body["rows"]} <= {"19"}
 
 
 def test_nl2sql_path_returns_the_sql_that_ran():
@@ -255,3 +278,29 @@ def test_tokens_already_spent_are_counted_even_if_a_later_call_fails():
     with pytest.raises(ApiError):
         ask(llm)
     assert tokens("input", "preset") == before + 400  # 첫 호출(성공)의 input 토큰
+
+
+def text_only(text="20시 이후에는 세 편이 있어요"):
+    from seatsac_ai.llm.client import NO_TOOL, ToolCall, Usage
+
+    return ToolCall("", NO_TOOL, {}, [{"type": "text", "text": text}], Usage(input=400, output=30))
+
+
+def test_text_only_reply_is_asked_again_and_never_shown():
+    # tool_choice=auto(claude-sonnet-5-5 는 강제 불가): 도구 없이 쓴 글은 버리고 한 번 다시 시킨다
+    llm = ScriptedLlm(
+        text_only(), tool("run_preset", presetId="today_after_time", params={"time": "20:00"})
+    )
+    body = ask(llm, "오늘 20시 이후 영화")
+    assert body["path"] == "PRESET" and body["llm"]["calls"] == 2
+    assert "세 편" not in body["answer"]
+    nudge = llm.requests[1]["messages"]
+    assert nudge[-2]["role"] == "assistant" and nudge[-1]["role"] == "user"
+    assert "반드시 호출" in nudge[-1]["content"]
+
+
+def test_text_only_twice_falls_back_to_out_of_scope():
+    llm = ScriptedLlm(text_only(), text_only())
+    body = ask(llm, "오늘 20시 이후 영화")
+    assert body["path"] == "OUT_OF_SCOPE" and body["rows"] is None
+    assert body["llm"]["calls"] == 2 and "세 편" not in body["answer"]

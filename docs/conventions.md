@@ -110,7 +110,7 @@
 | 대상 | 규칙 |
 | --- | --- |
 | 오류 응답 | ⚠️ `{ code, message, traceId, details[] }` — `details`는 **항상 배열**(없으면 `[]`), 원소 `{ field, value?, reason? }`. 화면 분기는 `code`로 한다 — 단 **401 `UNAUTHORIZED`는 `details[].reason`으로 나눈다**(재로그인으로 풀리지 않는 user의 `TOKEN_REJECTED`·`IDENTITY_MISMATCH`, 아래 공통 오류 코드 표). `message`는 개발용 (`contracts/schemas/error.v1.json`) |
-| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(항상 `USER` — 관리자 역할 없음, 11/14), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
+| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(항상 `USER` — 관리자 역할 없음, 11/14), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`, `X-Payment-Mock-Key`(모의 결제 허용 키 — k6·분석 Job만, 값은 booking Secret, ADR-112), 포트원 웹훅 `webhook-id`·`webhook-timestamp`·`webhook-signature`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
 | traceId | ⚠️ 소문자 16진수 **32자리**(UUID 하이픈 제거). Gateway가 요청마다 생성, 응답 헤더에도. 요청 없는 작업(만료 스캔·릴레이)은 새로 생성 |
 | 시간 | DB `DATETIME(3)` **UTC**(RDS `time_zone=UTC`, 앱 `Clock.systemUTC()`, 상태 전이 조건에 `NOW()` 대신 앱이 구한 `:now`). API·메시지는 ISO-8601 `+09:00`. `business_date`·`date` 파라미터·화면은 Asia/Seoul |
 | ID | PK `BIGINT AUTO_INCREMENT`(Java `Long`, OpenAPI `int64`). ⚠️ 사용자 ID = Cognito `sub`(`CHAR(36)`, `String`). holdId·paymentId·eventId = UUID v4 `CHAR(36)` |
@@ -124,6 +124,7 @@
 | 400 | `VALIDATION_FAILED`, `SCREENING_STARTED` | 전체 / booking |
 | 401 | `UNAUTHORIZED` | gateway |
 | 401 | `UNAUTHORIZED` | user — 프로필을 처음 만들 때 Access Token으로 Cognito `GetUser`를 부른다(ADR-80). 구분은 `code`가 아니라 **`details[].reason`**: `TOKEN_REQUIRED` 토큰 없음(Gateway의 토큰 없음 401과 같은 이름이라 화면은 구분하지 않는다) · `TOKEN_REJECTED` Cognito가 토큰을 거절(`NotAuthorizedException`) · `IDENTITY_MISMATCH` 토큰의 `sub`이 `X-User-Id`와 다름. `TOKEN_REJECTED`는 범위 누락처럼 **설정 문제면 다시 로그인해도 같다**(Gateway 검증 뒤 토큰이 폐기된 드문 경우만 새 토큰으로 풀린다). 화면은 토큰 갱신 1회 뒤에도 `TOKEN_REJECTED`·`IDENTITY_MISMATCH`면 재로그인으로 보내지 않고 안내로 끝낸다(로그인 반복 방지) |
+| 401 | `UNAUTHORIZED`(reason `WEBHOOK_SIGNATURE_INVALID`) | payment 웹훅 |
 | 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
 | 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |

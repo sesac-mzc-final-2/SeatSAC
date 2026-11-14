@@ -27,7 +27,7 @@
 | 3 · 33 · 61 | RDS **MySQL 8.4** 1대(**Single-AZ**, `db.t4g.small`, TLS 강제, 마스터 비밀번호는 RDS 관리 Secrets Manager) + 서비스별 스키마·계정 | Multi-AZ·AZ 장애 실험은 시간 남을 때 |
 | 33 · 59 | ElastiCache **Valkey 8.2 `cache.t4g.micro`**, `noeviction`, `notify-keyspace-events Ex`, 메모리 80%·Evictions 경보 | 부하 테스트에서 70% 넘으면 t4g.small |
 | 57 | DB 마이그레이션은 ArgoCD **Flyway 훅 Job**(`{svc}_migrator`, Sync 단계 wave -1 — ConfigMap 다음·앱 전, 실패 시 sync 중단), 앱은 Flyway 끔. 스키마·계정·Secret은 Terraform(`envs/staging-k8s`)이 클러스터 안 Job으로 생성(3.1.12) | 처음 "PreSync"였으나 첫 배포 때 ConfigMap보다 먼저 돌아 Sync wave -1로 변경(10/23) |
-| 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함, ⚠️AI 재도입 후에도 유지 — 84) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)` · `pg_provider`는 `MOCK`만 | |
+| 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함, ⚠️AI 재도입 후에도 유지 — 84) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)`(MOCK 행만) · ~~`pg_provider`는 `MOCK`만~~ → 112로 대체(`PORTONE` 추가) | |
 | 4 | 좌석 이벤트: Valkey Pub/Sub `seat-events:{회차}` → SSE, 놓치면 BKG-01 스냅샷 | 유실 허용 |
 | 5 | 선점: Valkey `SET NX EX {선점 TTL}`(`APP_SEAT_HOLD_TTL_SECONDS`, 기본 300초, 30~600)(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
 | 11 | 한 번에 최대 4석 | |
@@ -46,7 +46,8 @@
 | 55 | 계약 강화(구현 전 일괄): `booking.confirmed` 필드 3개 필수, traceId `^[0-9a-f]{32}$`, 오류 traceId null 불가. 첫 계약 PR만 `contract-break-ok`, 라벨은 구현 시작 엔드포인트·M3 이후 금지 | |
 | 62 | Gateway 요청 수 제한 미도입(`rl:` 키·429 없음) | |
 | 24 | 결제는 예매당 1회, 실패하면 PAYMENT_FAILED + 좌석 해제 | 20 폐기 |
-| 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외 |
+| 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외. **112로 부분 대체** — 화면은 토스페이, 모의는 테스트·분석 전용 |
+| 112 | 결제는 **포트원(PortOne) V2 + 토스페이**(간편결제, `payMethod EASY_PAY`). 화면은 토스페이만. 두 단계: `POST /bookings/{id}/payments`(준비, paymentId 발급) → 결제창 → `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(payment가 포트원 단건 조회로 PAID·금액 검증). 웹훅 `Transaction.Paid` 병행(본문 불신). 모의(`CARD`)는 테스트·분석 전용 — 헤더 `X-Payment-Mock-Key`가 맞을 때만(화면에는 없음). paymentId는 booking 발급 UUID 그대로. 결제창 미완료 정리: payment 7분, booking 만료+2분 | 11/13. 결제 경로 매트릭스 `docs/payment-paths.md`. 13 부분 대체·60 대체. 계약 PR #115는 `contract-break-ok`(55의 「M3 이후 금지」 예외 — 응답 enum 값 추가뿐이고 소비자인 화면·booking이 같은 기간에 함께 바뀐다). 일정은 #121(64 개정)로 동결 없음 |
 | 30 · 51 | 예매 완료 알림: booking만 SQS 발행(아웃박스 + 릴레이) → Lambda(로그), DLQ 3회. **OPS-08 일별 집계는 제외** | |
 
 ## 4. 인프라·배포

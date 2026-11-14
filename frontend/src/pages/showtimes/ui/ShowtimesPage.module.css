@@ -40,3 +40,27 @@
     font-size: 10px;
   }
 }
+.preferenceHint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -8px 0 16px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.preferenceHeart {
+  color: var(--color-primary);
+}
+.preferenceHint a {
+  margin-left: 4px;
+  color: var(--color-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (max-width: 540px) {
+  .preferenceHint {
+    margin: -6px 0 14px;
+    font-size: 11px;
+  }
+}

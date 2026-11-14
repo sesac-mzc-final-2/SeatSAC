@@ -11,9 +11,10 @@ app_subnets    = ["10.20.16.0/20", "10.20.32.0/20"]
 data_subnets   = ["10.20.48.0/24", "10.20.49.0/24"]
 
 # EKS (3.1.2)
-eks_version          = "1.36"
-node_instance_type   = "t3.large"
-developer_namespaces = ["cinema-staging", "monitoring"]
+eks_version           = "1.36"
+node_instance_type    = "t3.xlarge" # ng-a·ng-c (11/14 t3.large → t3.xlarge, 4.2.1 후속). 부족하면 한 단계씩(t3.2xlarge)
+ai_node_instance_type = "t3.large"  # ng-ai — 기본 노드와 따로
+developer_namespaces  = ["cinema-staging", "monitoring"]
 
 # RDS·Valkey (3.1.3)
 rds_engine_version    = "8.4"

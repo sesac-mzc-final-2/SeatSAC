@@ -2,7 +2,7 @@
 
 > 기준 2026-10-21. 개발(서비스 코드)과 인프라/데브옵스(Terraform·gitops·CI)가 **맞닿는 모든 약속**을 한곳에 둔다. 이름 규칙은 `docs/conventions.md`, API는 `contracts/`.
 > 이 표대로 만들면 서로 회의 없이 붙는다. 표를 바꿀 때는 PR에 양쪽(서비스 담당 + 김종식) 승인을 받는다.
-> 범위: 노드 t3.large 2대(ng-a 1 · ng-c 1, ADR-7·34) + ⚠️AI ai 전용 `ng-ai` 1대(평소 0대, ADR-86), 환경 staging 하나. 값은 10/22 확정(ADR-57·58·59·63), ⚠️AI 11/5 AI 재도입(ADR-82~87)은 각 장의 「ai」 항목과 9장.
+> 범위: 노드 t3.xlarge 2대(ng-a 1 · ng-c 1, ADR-7·34 — 11/14 t3.large에서 변경) + ⚠️AI ai 전용 `ng-ai` t3.large 1대(평소 0대, ADR-86 — 변수 `ai_node_instance_type`으로 따로), 환경 staging 하나. 값은 10/22 확정(ADR-57·58·59·63), ⚠️AI 11/5 AI 재도입(ADR-82~87)은 각 장의 「ai」 항목과 9장.
 
 ---
 
@@ -37,7 +37,7 @@
 - 두 서비스 동시 블루/그린 금지(노드 2대). 공통 모듈 급한 반영도 한 번에 한 서비스씩: catalog·user·payment → booking → gateway
 - 프로브: `startupProbe` readiness 경로 5초 × 30회, `readinessProbe` 5초 / 실패 3, `livenessProbe` 10초 / 실패 3
 - 블루/그린: active Service `{svc}`, preview Service `{svc}-preview`, `prePromotionAnalysis` 통과 후 전환, `scaleDownDelaySeconds: 60`. gateway는 ALB 대상 그룹 확인(ADR-35)
-- 블루/그린 파드 수: 분석 중 preview는 **1개**(`previewReplicaCount: 1`, active는 HPA 그대로). 전환 직전 preview를 active 수까지 늘리므로 **전환 순간~60초만 2배**(booking HPA 최대 2 → 4개, requests 1 vCPU) → 노드 2대에서 preview가 Pending이면 전환이 멈추고 10분 뒤 abort. booking `maxReplicas`는 **2**(11/12 결정 — 4면 전환 순간 8개 × 풀 15로 RDS 연결이 경보를 넘는다, 3장). 4.2.1(11/11)은 최대 4에서 쟀으므로 이 변경을 머지한 직후(rc2 전) 최대 2로 contention·deploy를 한 번 다시 재서 선점 p95·CPU를 확인한다. 선점 p95가 300ms를 넘으면 원인을 가른다 — DB 연결 대기(`hikaricp_connections_acquire_seconds_max` 큼, CPU 여유)면 파드를 늘려도 안 풀리므로 근본 수정 A(진 요청 사유 판정을 DB 없이), CPU 부족이면 「풀 10 · 최소 유휴 10 · 최대 4」(전환 순간 8 × 10 + 35 = 115)를 수정 A와 함께. **최대 4로만 되돌리지 않는다**(전환 순간 155). 데모 주간은 머지 금지라 11/15까지 끝낸다(노션 ADR-96)
+- 블루/그린 파드 수: 분석 중 preview는 **1개**(`previewReplicaCount: 1`, active는 HPA 그대로). 전환 직전 preview를 active 수까지 늘리므로 **전환 순간~60초만 2배**(booking HPA 최대 2 → 4개, requests 1 vCPU) → 노드 2대에서 preview가 Pending이면 전환이 멈추고 10분 뒤 abort. booking `maxReplicas`는 **2**(11/12 결정 — 4면 전환 순간 8개 × 풀 15로 RDS 연결이 경보를 넘는다, 3장). 4.2.1(11/11)은 최대 4에서 쟀으므로 이 변경을 머지한 직후(rc2 전) 최대 2로 contention·deploy를 한 번 다시 재서 선점 p95·CPU를 확인한다. 선점 p95가 300ms를 넘으면 원인을 가른다 — DB 연결 대기(`hikaricp_connections_acquire_seconds_max` 큼, CPU 여유)면 파드를 늘려도 안 풀리므로 근본 수정 A(진 요청 사유 판정을 DB 없이), CPU 부족이면 「풀 10 · 최소 유휴 10 · 최대 4」(전환 순간 8 × 10 + 35 = 115)를 수정 A와 함께. **최대 4로만 되돌리지 않는다**(전환 순간 155). 1차 데모(11/16) 전에 끝낸다(노션 ADR-96)
 - booking 만료 스캔·아웃박스 릴레이는 **preview 파드에서도 돈다** → 만료·릴레이 로직 변경은 이전 버전과 호환되게(조건부 UPDATE로 한 번만 처리)
 
 ## 3. 설정·Secret (서비스가 읽는 이름)
@@ -77,7 +77,7 @@
 
 | 서비스 | ConfigMap 키 | Secret `{svc}-secrets` 키 |
 | --- | --- | --- |
-| gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 404, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL` (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
+| gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 유효한 토큰이면 404, 토큰이 없거나 잘못되면 인증이 먼저라 401, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL`, `APP_SERVICES_PAYMENT_URL=http://payment:8080`(포트원 웹훅 라우트 `POST /api/webhooks/portone`만, ADR-112) (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
 | booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SERVICES_PAYMENT_PG_READ_TIMEOUT=10s`(payment가 포트원을 부르는 verify·cancel만 응답 대기 — 포트원 최대 약 8초 < 10초 < gateway 15초, ADR-112. 나머지 payment 호출은 기본 3초), `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`(30~600, 벗어나면 기동 실패. 멱등 처리 중 키도 같은 값. 바꾸면 이전 TTL 동안 고아 판정이 어긋나므로 데모 준비 때 한 번만), `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, `APP_PAYMENT_PENDING_GRACE=2m`(ADR-112 — 결제 요청이 붙은 PENDING은 만료+이 유예가 지나면 만료 스캔이 Payment를 조회해 반영. 그 전에는 보류), ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 큐와 3.1.8 알림 Lambda 연결 뒤 `true`(런북 6-B-3) — 큐만 있고 받는 쪽이 없으면 메시지가 DLQ로도 못 가고 7일 뒤 사라진다` | `SPRING_DATASOURCE_PASSWORD`, `APP_PAYMENT_MOCK_KEY`(모의 결제 허용 키, Terraform `random_password` — k6 Job·블루/그린 분석 Job이 Secret 참조로 받아 `X-Payment-Mock-Key`로 보낸다. 없으면 기계 경로 자체가 꺼짐) |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL`, `APP_COGNITO_ENDPOINT`(선택, 기본 `https://cognito-idp.{AWS_REGION}.amazonaws.com`, `AWS_REGION`이 없으면 `ap-northeast-2` — 프로필 첫 생성 때 `GetUser`) | `SPRING_DATASOURCE_PASSWORD` |
@@ -204,7 +204,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 15 | 부하 테스트 시나리오 대상 API·데이터 | 남궁일 | 김종식 OPS-10 (k6 Job) | 4.2.1 전 | k6 스크립트 dry-run |
 | ⚠️AI 16 | ECR `cinema/ai`·ai Valkey·`ai-secrets`·`cinema-infra-endpoints` 키 2개·`ng-ai`·Application `cinema-ai` | 김종식 (3.1.18·3.1.19) | 김서현 staging 배포 | rc1(11/6) | `kubectl -n argocd get application cinema-ai`, `ng-ai` 1대일 때 ai readiness 200 |
 | ⚠️AI 17 | CI(`changed-services.sh` ai 분기, `pr-check` `python`·ai 기동 확인, `build-push` ai) — **#79에 먼저 포함**(3.4.8 PR이 검사를 받도록) · gitops `base/ai`·`overlays/staging/ai` | 김종식 (3.1.20) | 김서현 (main 머지 = 배포) | CI는 3.4.8 리베이스 전, gitops는 3.1.18 apply 후 | PR `image`(ai)·`python` 통과 |
-| ⚠️AI 18 | gateway `/api/ai/**` 라우트(플래그 off, 라우트 metadata `response-timeout: 28000`) + 분석 쿼리 `/ai` 제외 | 한채연(3.3.8)·김종식(3.1.21) | 김서현·한채연 화면 | **rc1(11/6)** | 플래그 off에서 `/api/ai/chat` 404, gateway 블루/그린 통과 |
+| ⚠️AI 18 | gateway `/api/ai/**` 라우트(플래그 off, 라우트 metadata `response-timeout: 28000`) + 분석 쿼리 `/ai` 제외 | 한채연(3.3.8)·김종식(3.1.21) | 김서현·한채연 화면 | **rc1(11/6)** | 플래그 off에서 유효한 토큰으로 `/api/ai/chat` 404(토큰이 없거나 잘못되면 401 — 인증이 라우팅보다 먼저), gateway 블루/그린 통과 |
 | ⚠️AI 19 | `contracts/openapi/ai.openapi.yaml` + 예시 | 김서현·한채연 (2.2.8) | 한채연 채팅 화면(3.3.7) | 11/6 | contract-check 통과 |
 
 ## 8. 인프라 쪽 남은 정리
@@ -265,7 +265,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 층 | 상한 | 넘으면 |
 | --- | --- | --- |
 | CloudFront 원본 응답 대기 | 30초 (기존 설정, 3.1.11) | 504 |
-| gateway `/api/ai/**` 라우트 `response-timeout` | **28초** (`28000`) | 504 `UPSTREAM_TIMEOUT` |
+| gateway `/api/ai/**` 라우트 `response-timeout` | **28초** (`28000`) | 503 `SERVICE_UNAVAILABLE`(`details[{field: service, value: ai, reason: UPSTREAM_TIMEOUT}]`) — gateway는 하위 서비스의 연결 실패·시간 초과를 모두 503으로 준다(3.3.1, `GatewayErrorHandler`). ai 파드가 없을 때는 같은 503에 `reason` `UPSTREAM_UNAVAILABLE` |
 | ai 요청 전체 기한 `APP_AI_REQUEST_DEADLINE_SECONDS` | **25초** | 503 `AI_LLM_UNAVAILABLE` `TIMEOUT` — 정상 경로에서는 여기서 먼저 끝나 화면이 ai의 오류 형식을 받는다 |
 | └ Claude 호출 1회 | min(15초, 남은 시간) × 최대 3회 | 다음 호출 없이 위 503 |
 | └ SQLite 실행 1회 | min(5초, 남은 시간) | `REJECTED` 또는 SQL 오류 재요청 |
@@ -275,8 +275,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
-- 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회)은 CloudFront → gateway → catalog로 들어간다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채 — 데모 주간은 머지 금지라 끌 수 없다)** → 테스트 환경 = 데모 환경 (런북 6-G)
+- 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회)은 CloudFront → gateway → catalog로 들어간다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
 - `ng-ai`는 EventBridge Scheduler 평일 켜기 대상에서 **뺀다**(평소 0대). 켜기·끄기는 `cluster-scale.sh up ng-ai`·`down ng-ai`(cinema-admin). `cluster-scale.sh up`·`up 2`와 `cluster-schedule`의 `up`은 `ng-ai`를 켜지 않고 `down`은 `ng-ai`까지 끈다(켜 둔 채 잊어도 백업 끄기·수동 `down`이 끈다)
-- 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 데모 주간에는 플래그·ai 코드 모두 머지 금지
+- 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 이후 플래그·ai 코드 변경도 시연·측정 중이 아닐 때 머지할 수 있다(11/14 동결 삭제). 단 발표 당일 머지 마감(플래그는 gateway 블루/그린이라 **11/20 05:00**, ai 코드는 **11/20 07:00**, `docs/repo-workflow.md` 2장 동결) 뒤에는 시연·측정 중이 아니어도 머지하지 않는다
 
 <노션 반영 필요> WBS 3.1.5·3.1.6·3.1.12 메모에 "서비스 실행 계약(docs/service-runtime-contract.md) 기준", 기능명세서 OPS-11 "SSO" → "IAM 역할 + MFA(ADR-47)", OPS-15 허용 목록: ⚠️AI 11/5부터 ai 행 다시 추가(gateway → ai, monitoring → ai)

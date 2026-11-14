@@ -27,7 +27,7 @@
 | 내부 API | `/internal/**` — Gateway 라우팅 금지, NetworkPolicy로 호출자 제한 |
 | 헬스 | `/actuator/health/liveness`, `/actuator/health/readiness` (ALB는 gateway readiness만). ⚠️AI ai(Python)도 **같은 경로**로 맞춘다 — 프로브·PodMonitor 템플릿 공용 |
 | 메트릭 | `/actuator/prometheus` (ai도 같은 경로, `prometheus_client`) |
-| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`, `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만). ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
+| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`(payment는 포트원 웹훅 `POST /api/webhooks/portone` 하나만 연다 — 인증 없음, 서명은 payment가 검증, ADR-112), `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/**`(관리자 역할·API 없음 — 11/14 삭제). 404가 보이는 조건: `/api/internal/**`·`/api/actuator/**`는 경로 차단 필터(`PathGuardWebFilter`)가 인증보다 먼저라 **항상** 404. 나머지는 `/api/**` 인증(`SecurityConfig`)이 라우팅보다 먼저라 **유효한 토큰으로 인증됐을 때만** 404이고, 토큰이 없으면 401 `UNAUTHORIZED`(`TOKEN_REQUIRED`), 만료·서명 불일치 등 잘못된 토큰이면 401 `UNAUTHORIZED`(`INVALID_TOKEN`). ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
 
 ## 2. 코드·API 이름
 
@@ -43,7 +43,7 @@
 | Java 패키지 | `com.seatsac.{service}`, 공통은 `com.seatsac.common.{core,web,test}` | `com.seatsac.booking.hold` |
 | ⚠️AI Python 패키지 | `services/ai/src/seatsac_ai/{api,snapshot,llm,sql,cache,quota}` — `libs/`(Java)는 쓰지 않는다. 오류 형식·traceId 규칙은 `seatsac_ai.common`에서 같은 계약(`error.v1.json`)으로 구현 | `seatsac_ai.sql.validator` |
 | 계약 파일 | `contracts/openapi/{service}.openapi.yaml`, `openapi/internal/{service}.internal.openapi.yaml`, `events/{이름}.v{N}.json`, `schemas/{이름}.v{N}.json` | — |
-| OpenAPI 확장 | `x-feature-id`, `x-required-role: ADMIN`, `x-caller` | — |
+| OpenAPI 확장 | `x-feature-id`, `x-caller` | — |
 
 ## 3. 데이터베이스
 
@@ -110,7 +110,7 @@
 | 대상 | 규칙 |
 | --- | --- |
 | 오류 응답 | ⚠️ `{ code, message, traceId, details[] }` — `details`는 **항상 배열**(없으면 `[]`), 원소 `{ field, value?, reason? }`. 화면 분기는 `code`로 한다 — 단 **401 `UNAUTHORIZED`는 `details[].reason`으로 나눈다**(재로그인으로 풀리지 않는 user의 `TOKEN_REJECTED`·`IDENTITY_MISMATCH`, 아래 공통 오류 코드 표). `message`는 개발용 (`contracts/schemas/error.v1.json`) |
-| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(`USER`·`ADMIN`), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`, `X-Payment-Mock-Key`(모의 결제 허용 키 — k6·분석 Job만, 값은 booking Secret, ADR-112), 포트원 웹훅 `webhook-id`·`webhook-timestamp`·`webhook-signature`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
+| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(항상 `USER` — 관리자 역할 없음, 11/14), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`, `X-Payment-Mock-Key`(모의 결제 허용 키 — k6·분석 Job만, 값은 booking Secret, ADR-112), 포트원 웹훅 `webhook-id`·`webhook-timestamp`·`webhook-signature`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
 | traceId | ⚠️ 소문자 16진수 **32자리**(UUID 하이픈 제거). Gateway가 요청마다 생성, 응답 헤더에도. 요청 없는 작업(만료 스캔·릴레이)은 새로 생성 |
 | 시간 | DB `DATETIME(3)` **UTC**(RDS `time_zone=UTC`, 앱 `Clock.systemUTC()`, 상태 전이 조건에 `NOW()` 대신 앱이 구한 `:now`). API·메시지는 ISO-8601 `+09:00`. `business_date`·`date` 파라미터·화면은 Asia/Seoul |
 | ID | PK `BIGINT AUTO_INCREMENT`(Java `Long`, OpenAPI `int64`). ⚠️ 사용자 ID = Cognito `sub`(`CHAR(36)`, `String`). holdId·paymentId·eventId = UUID v4 `CHAR(36)` |
@@ -128,7 +128,6 @@
 | 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
 | 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |
-| 409 | `SCHEDULE_CONFLICT`, `SEAT_SOLD` | catalog |
 | 409 | `PAYMENT_CONFLICT`, `PAYMENT_NOT_APPROVED` | payment (내부) |
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
@@ -162,7 +161,7 @@
 | 프로필 | `local`, `staging` | `SPRING_PROFILES_ACTIVE=staging` |
 | ⚠️AI ai(Python) | `APP_AI_*`(pydantic-settings). **Python은 `${키}` 치환이 없으므로** `cinema-infra-endpoints`의 키(`AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`)를 이름 그대로 읽는다. 프로필은 `APP_ENV=local\|staging` | `APP_AI_MODEL=claude-sonnet-5-5` |
 | ⚠️AI gateway 플래그 | `APP_AI_ENABLED`(gateway `{svc}-config`, 기본 `false`) — `app.ai.enabled`. 꺼져 있으면 `/api/ai/**` 라우트가 없다 → 404 | — |
-| ⚠️AI Claude API 키 | staging: Secret `ai-secrets`의 `ANTHROPIC_API_KEY`(Terraform sensitive 변수 → K8s Secret, tfstate는 암호화 S3). **로컬: 개발 전용 키를 따로 발급해 `services/ai/.env`**(`.gitignore` 대상, Git·문서·PR 금지). 지출 한도는 Anthropic 콘솔에서 월 $20 | — |
+| ⚠️AI Claude API 키 | staging: Secret `ai-secrets`의 `ANTHROPIC_API_KEY`(Terraform sensitive 변수 → K8s Secret, tfstate는 암호화 S3). **로컬: 개발 전용 키를 따로 발급해 `services/ai/.env`**(`.gitignore` 대상, Git·문서·PR 금지). 지출 한도는 Anthropic 콘솔에서 월 $90(11/13 $20 → $90, 11/20 발표 뒤 키 폐기) | — |
 
 > `VITE_`에 비밀 값 금지. Secret 값은 Git·문서에 두지 않는다(Terraform 랜덤 생성 → K8s Secret, tfstate는 암호화 S3). ⚠️AI `.env`는 커밋 금지(gitleaks가 `sk-ant-` 형식을 막는다).
 

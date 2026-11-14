@@ -12,6 +12,16 @@
     border-color var(--t-color),
     background-color var(--t-color);
 }
+.button[data-preferred] {
+  position: relative;
+  border-color: #ff5a4e66;
+}
+.heart {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  color: var(--color-primary);
+}
 .button:hover:not(:disabled) {
   border-color: var(--color-primary);
   background: #ff5a4e0b;

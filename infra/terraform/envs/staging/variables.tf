@@ -80,7 +80,13 @@ variable "eks_public_access_cidrs" {
 }
 
 variable "node_instance_type" {
-  description = "노드 인스턴스 (ADR-7: t3.large 2대)"
+  description = "기본 노드그룹 ng-a·ng-c 인스턴스 (ADR-7: 2대. 11/14 t3.large → t3.xlarge — 4.2.1 선점 p95가 파드 CPU에 묶임)"
+  type        = string
+  default     = "t3.xlarge"
+}
+
+variable "ai_node_instance_type" {
+  description = "⚠️AI ng-ai 인스턴스 (ADR-86: ai 전용 1대). 기본 노드그룹과 따로 둔다 — 기본 노드 크기를 바꿔도 ng-ai는 교체되지 않는다"
   type        = string
   default     = "t3.large"
 }

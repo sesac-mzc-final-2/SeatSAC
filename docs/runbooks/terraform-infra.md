@@ -1391,8 +1391,8 @@ kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # Ready�
 
 | 확인 | 합격 |
 | --- | --- |
-| 무응답 중 챗봇 응답 시간 | **25초 이하**(ai 전체 기한). 28초에 gateway 504·30초에 CloudFront 504가 나면 ai 재시도가 기한을 넘는 것 → 김서현 |
-| 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`. 둘 다 합격 |
+| 무응답 중 챗봇 응답 시간 | **25초 이하**(ai 전체 기한). 28초에 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_TIMEOUT`)·30초에 CloudFront 504가 나면 ai 재시도가 기한을 넘는 것 → 김서현 |
+| 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_UNAVAILABLE`). 둘 다 합격. 같은 gateway 503이라도 `reason: UPSTREAM_TIMEOUT`이면 불합격(위 행) |
 | Claude 호출 | 무응답 중 `ai_tokens_total`이 늘지 않는다(한도 기록 실패 → 호출 안 함) |
 | 복구(파드 재시작 전) | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 질문 200 — 정확 일치 캐시·한도는 파드 재시작 없이 돌아와야 한다. 의미 캐시는 위 이유로 적중하지 않는 게 지금 코드의 동작이다 |
 | 복구(파드 재시작 뒤) | `CACHE_SEMANTIC` 적중 1회. 안 되면 2차 데모 전에 김서현 |

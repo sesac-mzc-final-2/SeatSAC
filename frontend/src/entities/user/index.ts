@@ -24,7 +24,7 @@ export {
   isRetryableBooking,
   type BookingStatusTone,
 } from "./lib/booking-status";
-export { TIME_SLOTS, timeSlotLabel } from "./lib/time-slot";
+export { TIME_SLOTS, timeSlotLabel, timeSlotOfHour } from "./lib/time-slot";
 export { BookingStatusBadge } from "./ui/BookingStatusBadge";
 export { MyBookingCard } from "./ui/MyBookingCard";
 export { ProfileSummary } from "./ui/ProfileSummary";

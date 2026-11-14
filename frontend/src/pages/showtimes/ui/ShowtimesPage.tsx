@@ -1,30 +1,76 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { Link } from "react-router";
 import { movieDetailQuery } from "@/entities/movie";
 import { moviesIn, screeningListQuery, type Screening } from "@/entities/screening";
+import { useSession } from "@/entities/session";
 import { theaterListQuery } from "@/entities/theater";
+import { getMyPreferences, myPreferencesQuery, timeSlotLabel, timeSlotOfHour } from "@/entities/user";
 import { BookingSteps } from "@/features/booking-steps";
 import { useEnterSeatSelect } from "@/features/enter-seat-select";
 import { DateTabs, MovieSelect, TheaterTabs, useShowtimesFilter } from "@/features/showtimes-filter";
-import { formatDateDots, useDocumentTitle } from "@/shared/lib";
-import { Button, EmptyState, ErrorState, LoadingBlock, PageHeading } from "@/shared/ui";
+import { routes } from "@/shared/config";
+import { formatDateDots, timeOfIso, useDocumentTitle } from "@/shared/lib";
+import { Button, EmptyState, ErrorState, Icon, LoadingBlock, PageHeading } from "@/shared/ui";
 import { ShowtimeBoard } from "@/widgets/showtime-board";
 import styles from "./ShowtimesPage.module.css";
+
+/** 선호 조회 제한 시간. 극장 선택이 이 응답을 기다리므로 짧게 둔다 */
+const PREFERENCES_TIMEOUT_MS = 3000;
+
+/**
+ * react-query 의 signal(화면 이탈 등)과 제한 시간 중 먼저 오는 쪽으로 요청을 끊는다.
+ * 요청이 끝나면(성공·실패 모두) 타이머와 리스너를 정리한다.
+ */
+async function withTimeout<T>(signal: AbortSignal, ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException("선호 조회 시간 초과", "TimeoutError")), ms);
+  const forward = () => controller.abort(signal.reason);
+  if (signal.aborted) forward();
+  else signal.addEventListener("abort", forward, { once: true });
+  try {
+    return await run(controller.signal);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", forward);
+  }
+}
 
 /**
  * W3 상영시간표 (CAT-03): 극장(배치 있는 4곳) → 날짜(7일) → 영화별·상영관별 회차.
  * 회차는 극장·날짜로 한 번 받아 두고 영화 필터는 화면에서 건다 (영화 드롭다운이 그날 편성에서 나온다).
+ * 로그인 사용자는 마이페이지 선호(USR-05)가 반영된다: 1순위 선호 극장을 기본 선택, 선호 극장 탭·선호 시간대 회차에 하트.
+ * 선호를 못 받으면(비로그인·실패) 선호 없이 그대로 보여 준다.
  */
 export function ShowtimesPage() {
   useDocumentTitle("상영시간표");
 
+  const session = useSession();
+  const loggedIn = session.status === "authenticated";
+  // 선호는 보조 정보라 다시 시도하지 않고, 응답이 늦으면(PREFERENCES_TIMEOUT_MS) 끊고 선호 없이 연다
+  const preferencesQuery = useQuery({
+    ...myPreferencesQuery(),
+    queryFn: ({ signal }) => withTimeout(signal, PREFERENCES_TIMEOUT_MS, getMyPreferences),
+    enabled: loggedIn,
+    retry: false,
+  });
+  // 로그아웃 직후(이동 전)에도 캐시된 선호가 남지 않게 로그인 상태일 때만 쓴다
+  const preferences = loggedIn ? (preferencesQuery.data ?? null) : null;
+  const preferredTheaterIds = useMemo(
+    () => [...(preferences?.preferredTheaters ?? [])].sort((a, b) => a.rank - b.rank).map((t) => t.theaterId),
+    [preferences],
+  );
+  const preferredTimeSlot = preferences?.preferredTimeSlot ?? null;
+  // 선호 극장으로 바로 열리도록, 로그인 확인·선호 조회가 끝날 때까지 극장을 고르지 않는다 (첫 극장 → 선호 극장으로 깜빡이지 않게)
+  const waitingForPreferences = session.status === "loading" || (loggedIn && preferencesQuery.isPending);
+
   const theatersQuery = useQuery(theaterListQuery({ hasLayout: true }));
   const theaters = useMemo(() => theatersQuery.data?.items ?? [], [theatersQuery.data]);
   const theaterIds = useMemo(
-    () => (theatersQuery.isSuccess ? theaters.map((t) => t.theaterId) : null),
-    [theatersQuery.isSuccess, theaters],
+    () => (theatersQuery.isSuccess && !waitingForPreferences ? theaters.map((t) => t.theaterId) : null),
+    [theatersQuery.isSuccess, waitingForPreferences, theaters],
   );
-  const { filter, setTheater, setDate, setMovie } = useShowtimesFilter(theaterIds);
+  const { filter, setTheater, setDate, setMovie } = useShowtimesFilter(theaterIds, preferredTheaterIds);
   const selectedTheater = theaters.find((t) => t.theaterId === filter.theaterId) ?? null;
 
   const screeningsQuery = useQuery({
@@ -46,6 +92,18 @@ export function ShowtimesPage() {
     () => (filter.movieId === null ? screenings : screenings.filter((s) => s.movie.movieId === filter.movieId)),
     [screenings, filter.movieId],
   );
+
+  const isPreferred = useMemo(
+    () =>
+      preferredTimeSlot === null
+        ? undefined
+        : (s: Screening) => timeSlotOfHour(Number(timeOfIso(s.startsAt).slice(0, 2))) === preferredTimeSlot,
+    [preferredTimeSlot],
+  );
+  const preferenceHint = [
+    preferredTheaterIds.some((id) => theaters.some((t) => t.theaterId === id)) ? "선호 극장" : null,
+    preferredTimeSlot ? `선호 시간대(${timeSlotLabel(preferredTimeSlot)})` : null,
+  ].filter(Boolean);
 
   const enterSeatSelect = useEnterSeatSelect();
 
@@ -84,7 +142,9 @@ export function ShowtimesPage() {
         </div>
       );
     }
-    return <ShowtimeBoard screenings={visible} onSelect={(s) => enterSeatSelect(s.screeningId)} />;
+    return (
+      <ShowtimeBoard screenings={visible} onSelect={(s) => enterSeatSelect(s.screeningId)} isPreferred={isPreferred} />
+    );
   };
 
   return (
@@ -98,7 +158,14 @@ export function ShowtimesPage() {
       </PageHeading>
 
       <section className={`panel ${styles.picker}`} aria-label="극장·날짜 선택">
-        {theaters.length > 0 && <TheaterTabs theaters={theaters} value={filter.theaterId} onChange={setTheater} />}
+        {theaters.length > 0 && (
+          <TheaterTabs
+            theaters={theaters}
+            value={filter.theaterId}
+            onChange={setTheater}
+            preferredTheaterIds={preferredTheaterIds}
+          />
+        )}
         <DateTabs value={filter.date} onChange={setDate} />
       </section>
 
@@ -112,6 +179,14 @@ export function ShowtimesPage() {
         </div>
         <MovieSelect options={movieOptions} value={filter.movieId} onChange={setMovie} missingLabel={selectedMovieTitle} />
       </div>
+
+      {preferenceHint.length > 0 && (
+        <p className={styles.preferenceHint}>
+          <Icon name="heart" size={12} fill="currentColor" className={styles.preferenceHeart} />
+          <span>내 {preferenceHint.join(" · ")}</span>
+          <Link to={routes.myPage("preferences")}>선호 바꾸기</Link>
+        </p>
+      )}
 
       {renderResults()}
     </div>

@@ -29,6 +29,11 @@
     color var(--t-color),
     border-color var(--t-color);
 }
+.heart {
+  margin-right: 5px;
+  color: var(--color-primary);
+  vertical-align: -1px;
+}
 .tab:hover {
   color: var(--color-text);
 }
@@ -50,5 +55,10 @@
   .tab {
     padding: 0 4px 14px;
     font-size: 12px;
+  }
+  .heart {
+    width: 10px;
+    height: 10px;
+    margin-right: 3px;
   }
 }

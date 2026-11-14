@@ -1,0 +1,5 @@
+# gitleaks 오탐 예외 — 값이 실제 비밀이 아닐 때만 추가한다. 형식: {커밋}:{파일}:{규칙}:{줄}
+# ADR-112 payment 테스트의 가짜 웹훅 시크릿(base64 "test-webhook-secret-1234567890"). 포트원 실제 시크릿 아님 (#117)
+033f60b040cf9cedf4c89d17d996249e4111584a:services/payment/src/test/java/com/seatsac/payment/portone/WebhookSignatureVerifierTest.java:generic-api-key:15
+033f60b040cf9cedf4c89d17d996249e4111584a:services/payment/src/test/resources/application-test.yml:generic-api-key:24
+033f60b040cf9cedf4c89d17d996249e4111584a:services/payment/src/test/java/com/seatsac/payment/controller/PortOneWebhookControllerTest.java:generic-api-key:36

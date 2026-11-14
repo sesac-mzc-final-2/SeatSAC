@@ -17,6 +17,15 @@
   width: 100%;
   height: 100%;
 }
+/* 선점된 자리(잎)만 코랄, 잎맥은 바탕색 */
+.leaf {
+  fill: var(--color-primary);
+}
+.vein {
+  fill: none;
+  stroke: var(--color-bg);
+  opacity: 0.55;
+}
 .period {
   margin-left: 1px;
   font-size: 26px;

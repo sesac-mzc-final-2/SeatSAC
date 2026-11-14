@@ -26,7 +26,7 @@ paths:
         (NotAuthorizedException, 예: aws.cognito.signin.user.admin 범위 없음) 401 UNAUTHORIZED(reason TOKEN_REJECTED),
         토큰의 sub이 X-User-Id와 다르면 401 UNAUTHORIZED(reason IDENTITY_MISMATCH),
         그 밖의 Cognito 실패(장애·타임아웃)는 503 IDENTITY_UNAVAILABLE (ADR-80).
-        role은 저장하지 않고 X-User-Role을 그대로.
+        role은 저장하지 않고 X-User-Role을 그대로 — 관리자 역할이 없어 항상 USER.
       security: [ { bearerAuth: [] } ]
       responses:
         "200":
@@ -173,7 +173,7 @@ components:
         userId: { type: string, format: uuid, description: "Cognito sub (user_id CHAR(36), ADR-37)" }
         email: { type: string, format: email }
         name: { type: [string, "null"], maxLength: 20 }
-        role: { type: string, enum: [USER, ADMIN] }
+        role: { type: string, enum: [USER], description: "항상 USER (관리자 역할 없음). 필드는 하위 호환을 위해 남긴다" }
         createdAt: { type: string, format: date-time }
 
     MyBooking:

@@ -17,6 +17,7 @@ import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.dto.response.BookingCancelResponse;
 import com.seatsac.booking.idempotency.IdempotencyStore;
 import com.seatsac.booking.dto.response.BookingPaymentResponse;
+import com.seatsac.booking.dto.response.PaymentPrepareResponse;
 import com.seatsac.booking.dto.response.PaymentView;
 import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.service.BookingCancelService;
@@ -141,11 +142,11 @@ class BookingControllerTest {
 
     @Test
     void payReturnsConfirmedWithoutLeakingTheCardNumber() throws Exception {
-        when(bookingPaymentService.pay(anyString(), anyLong(), any()))
+        when(bookingPaymentService.pay(any(), any(), anyLong(), any()))
             .thenReturn(BookingPaymentResponse.builder()
                 .bookingId(5001L).status(BookingStatus.CONFIRMED)
                 .confirmedAt(Times.toApi(NOW)).seatLabels(List.of("J7", "J8"))
-                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "APPROVED",
+                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "APPROVED", "CARD",
                     "1112", null, NOW, null))
                 .build());
 
@@ -162,11 +163,11 @@ class BookingControllerTest {
     /** 거절도 200이다 — 화면은 status로 분기한다 */
     @Test
     void declinedPaymentIsAlsoTwoHundred() throws Exception {
-        when(bookingPaymentService.pay(anyString(), anyLong(), any()))
+        when(bookingPaymentService.pay(any(), any(), anyLong(), any()))
             .thenReturn(BookingPaymentResponse.builder()
                 .bookingId(5001L).status(BookingStatus.PAYMENT_FAILED)
                 .seatLabels(List.of("J7"))
-                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "FAILED",
+                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "FAILED", "CARD",
                     "0000", "CARD_DECLINED", null, null))
                 .build());
 
@@ -187,13 +188,13 @@ class BookingControllerTest {
             .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
             .andExpect(jsonPath("$.details[0].field").value(Headers.IDEMPOTENCY_KEY));
 
-        verify(bookingPaymentService, never()).pay(anyString(), anyLong(), any());
+        verify(bookingPaymentService, never()).pay(any(), any(), anyLong(), any());
     }
 
     /** 결과를 모르면 503 — 화면은 단건 조회로 재확인한다 */
     @Test
     void unknownPaymentResultIsServiceUnavailable() throws Exception {
-        when(bookingPaymentService.pay(anyString(), anyLong(), any()))
+        when(bookingPaymentService.pay(any(), any(), anyLong(), any()))
             .thenThrow(BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception(
                 ErrorDetail.of("paymentId", "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13")));
 
@@ -213,7 +214,89 @@ class BookingControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
 
-        verify(bookingPaymentService, never()).pay(anyString(), anyLong(), any());
+        verify(bookingPaymentService, never()).pay(any(), any(), anyLong(), any());
+    }
+
+    // --- 결제 준비 · TOSSPAY (ADR-112) ---
+
+    @Test
+    void preparePaymentRequiresIdempotencyKey() throws Exception {
+        mvc.perform(post("/bookings/{id}/payments", 5001L).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"method\":\"TOSSPAY\"}").with(WithCurrentUser.user()))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+            .andExpect(jsonPath("$.details[0].field").value(Headers.IDEMPOTENCY_KEY));
+
+        verify(bookingPaymentService, never()).prepare(anyString(), anyLong(), any());
+    }
+
+    @Test
+    void preparePaymentReturnsCheckout() throws Exception {
+        when(bookingPaymentService.prepare(anyString(), anyLong(), any()))
+            .thenReturn(PaymentPrepareResponse.builder()
+                .bookingId(5001L).paymentId("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13").amount(30_000)
+                .orderName("SeatSAC 영화 예매 2석").expiresAt(Times.toApi(NOW))
+                .checkout(new PaymentPrepareResponse.Checkout("PORTONE", "store-test", "channel-key-test",
+                    "EASY_PAY", "KRW"))
+                .build());
+
+        mvc.perform(post("/bookings/{id}/payments", 5001L).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"method\":\"TOSSPAY\"}").with(WithCurrentUser.user())
+                .with(WithCurrentUser.idempotencyKey(HOLD_REQUEST)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.paymentId").value("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13"))
+            .andExpect(jsonPath("$.amount").value(30_000))
+            .andExpect(jsonPath("$.checkout.provider").value("PORTONE"))
+            .andExpect(jsonPath("$.checkout.payMethod").value("EASY_PAY"))
+            .andExpect(jsonPath("$.checkout.currency").value("KRW"));
+    }
+
+    /** 모의 결제 키 헤더가 서비스까지 간다 (값 판단은 서비스가 한다) */
+    @Test
+    void payForwardsMockKeyHeader() throws Exception {
+        when(bookingPaymentService.pay(any(), any(), anyLong(), any()))
+            .thenReturn(BookingPaymentResponse.builder()
+                .bookingId(5001L).status(BookingStatus.PAYMENT_FAILED).seatLabels(List.of("J7"))
+                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "FAILED", "CARD",
+                    "0000", "CARD_DECLINED", null, null))
+                .build());
+
+        mvc.perform(post("/bookings/{id}/pay", 5001L).contentType(MediaType.APPLICATION_JSON)
+                .content(PAY_BODY).header("X-Payment-Mock-Key", "k6-key").with(WithCurrentUser.user())
+                .with(WithCurrentUser.idempotencyKey(HOLD_REQUEST)))
+            .andExpect(status().isOk());
+
+        verify(bookingPaymentService).pay(any(), org.mockito.ArgumentMatchers.eq("k6-key"), anyLong(), any());
+    }
+
+    /** TOSSPAY 완료는 card 없이 paymentId만 보낸다 — 형식 검사에서 막히지 않는다 */
+    @Test
+    void payWithTossPayBodyWithoutCardIsValid() throws Exception {
+        when(bookingPaymentService.pay(any(), any(), anyLong(), any()))
+            .thenReturn(BookingPaymentResponse.builder()
+                .bookingId(5001L).status(BookingStatus.CONFIRMED).confirmedAt(Times.toApi(NOW))
+                .seatLabels(List.of("J7"))
+                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "APPROVED", "TOSSPAY",
+                    null, null, NOW, null))
+                .build());
+
+        mvc.perform(post("/bookings/{id}/pay", 5001L).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"method\":\"TOSSPAY\",\"paymentId\":\"3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13\"}")
+                .with(WithCurrentUser.user()).with(WithCurrentUser.idempotencyKey(HOLD_REQUEST)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.payment.method").value("TOSSPAY"))
+            .andExpect(jsonPath("$.payment.cardLast4").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    void payRejectsMalformedPaymentId() throws Exception {
+        mvc.perform(post("/bookings/{id}/pay", 5001L).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"method\":\"TOSSPAY\",\"paymentId\":\"not-a-uuid\"}")
+                .with(WithCurrentUser.user()).with(WithCurrentUser.idempotencyKey(HOLD_REQUEST)))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+
+        verify(bookingPaymentService, never()).pay(any(), any(), anyLong(), any());
     }
 
     // --- BKG-07 취소 · 단건 조회 ---
@@ -223,7 +306,7 @@ class BookingControllerTest {
         when(bookingCancelService.cancel(anyString(), anyLong()))
             .thenReturn(BookingCancelResponse.builder()
                 .bookingId(5001L).status(BookingStatus.CANCELED).canceledAt(Times.toApi(NOW))
-                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "CANCELED",
+                .payment(PaymentView.of("3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", "CANCELED", "CARD",
                     "1112", null, NOW, NOW))
                 .build());
 

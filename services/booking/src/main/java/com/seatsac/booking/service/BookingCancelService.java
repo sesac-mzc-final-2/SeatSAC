@@ -105,7 +105,7 @@ public class BookingCancelService {
         try {
             PaymentResult result = paymentClient.cancel(booking.getCurrentPaymentId(),
                 PaymentCancelReason.BOOKING_CANCELED);
-            return PaymentView.of(result.paymentId(), result.status(), result.cardLast4(),
+            return PaymentView.of(result.paymentId(), result.status(), result.method(), result.cardLast4(),
                 result.publicFailureCode(), result.approvedAt(), result.canceledAt());
         } catch (RuntimeException e) {
             log.error("환불 실패 bookingId={} paymentId={} — 취소는 유효하고 재시도가 필요하다",
@@ -169,7 +169,7 @@ public class BookingCancelService {
 
     private static PaymentView viewOf(PaymentResult result) {
         return Optional.ofNullable(result)
-            .map(r -> PaymentView.of(r.paymentId(), r.status(), r.cardLast4(),
+            .map(r -> PaymentView.of(r.paymentId(), r.status(), r.method(), r.cardLast4(),
                 r.publicFailureCode(), r.approvedAt(), r.canceledAt()))
             .orElse(null);
     }

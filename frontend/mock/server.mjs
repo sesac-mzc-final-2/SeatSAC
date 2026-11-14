@@ -555,6 +555,127 @@ async function handleAi(req, res, path) {
 
 // ---------- 서버 ----------
 
+
+// ---------- 결제 화면 (BKG-10 · 토스페이 준비·완료, ADR-112) ----------
+// /bookings/7001/pay … 7999 로 들어가면 그 번호의 PENDING 예매(선점 5분, J7·J8)가 처음 조회 때 만들어진다.
+// 새 번호로 들어가면 새 예매다. 토스페이 결제창은 개발용 가짜 창이고, 고른 결과를 /api/mock-portone/{paymentId} 에 남긴다
+
+const MOCK_STORE_ID = "store-mock";
+const payBookings = new Map();
+/** 가짜 포트원 쪽 결제 결과: paid · failed · canceled · abandoned(결제창만 닫고 기록은 준비 상태) */
+const portoneResults = new Map();
+
+function payBookingOf(id) {
+  if (id < 7001 || id > 7999) return null;
+  if (!payBookings.has(id)) {
+    const soon = Date.now() + 60 * 60000;
+    const pick =
+      upcoming(todayIso()).find((s) => new Date(s.startsAt).getTime() > soon) ?? upcoming(dateOffset(1))[0];
+    const now = new Date();
+    payBookings.set(id, {
+      bookingId: id,
+      screeningId: pick.screeningId,
+      status: "PENDING",
+      seatIds: [100107, 100108],
+      seatLabels: ["J7", "J8"],
+      seatCount: 2,
+      amount: 2 * SEAT_PRICE,
+      expiresAt: toKstIso(new Date(now.getTime() + 300_000)),
+      createdAt: toKstIso(now),
+      confirmedAt: null,
+      canceledAt: null,
+      payment: null,
+    });
+  }
+  return payBookings.get(id);
+}
+
+const payExpired = (b) => new Date(b.expiresAt).getTime() <= Date.now();
+
+function settlePay(b, status, payment) {
+  b.status = status;
+  b.payment = payment;
+  if (status === "CONFIRMED") b.confirmedAt = toKstIso(new Date());
+  if (status !== "PENDING" && status !== "CONFIRMED") b.seatIds = [];
+}
+
+const payResult = (b) => ({
+  bookingId: b.bookingId,
+  status: b.status,
+  ...(b.confirmedAt ? { confirmedAt: b.confirmedAt } : {}),
+  seatLabels: b.seatLabels,
+  payment: b.payment,
+});
+
+async function handlePayBooking(req, res, path) {
+  let m;
+  if ((m = /^\/api\/mock-portone\/([0-9a-f-]{36})$/.exec(path)) && req.method === "POST") {
+    const body = await readJson(req);
+    portoneResults.set(m[1], body?.result ?? "abandoned");
+    return json(res, 200, { ok: true });
+  }
+  if (!(m = /^\/api\/bookings\/(\d+)(\/hold|\/payments|\/pay)?$/.exec(path))) return false;
+  const b = payBookingOf(Number(m[1]));
+  if (!b) return false;
+  const action = m[2] ?? "";
+
+  if (action === "" && req.method === "GET") return json(res, 200, b);
+
+  if (action === "/hold" && req.method === "DELETE") {
+    if (b.status === "CANCELED") return json(res, 200, { bookingId: b.bookingId, status: "CANCELED", canceledAt: b.canceledAt, payment: null });
+    if (b.status !== "PENDING") return fail(res, 409, "BOOKING_STATE_CONFLICT", `status ${b.status}`, [{ field: "status", value: b.status, reason: "BOOKING_NOT_PENDING" }]);
+    if (b.payment) return fail(res, 409, "BOOKING_STATE_CONFLICT", "payment in progress", [{ field: "bookingId", value: b.bookingId, reason: "PAYMENT_IN_PROGRESS" }]);
+    settlePay(b, "CANCELED", null);
+    b.canceledAt = toKstIso(new Date());
+    return json(res, 200, { bookingId: b.bookingId, status: "CANCELED", canceledAt: b.canceledAt, payment: null });
+  }
+
+  if (action === "/payments" && req.method === "POST") {
+    const body = await readJson(req);
+    if (body?.method !== "TOSSPAY") return fail(res, 400, "VALIDATION_FAILED", "TOSSPAY only", [{ field: "method", value: body?.method ?? null, reason: "INVALID_PAYMENT_METHOD" }]);
+    if (b.payment) return fail(res, 409, "PAYMENT_ALREADY_REQUESTED", "already requested", [{ field: "bookingId", value: b.bookingId, reason: "PAYMENT_ALREADY_REQUESTED" }]);
+    if (b.status !== "PENDING") return fail(res, 409, "BOOKING_STATE_CONFLICT", `status ${b.status}`, [{ field: "status", value: b.status, reason: "BOOKING_NOT_PENDING" }]);
+    if (payExpired(b)) return fail(res, 409, "BOOKING_STATE_CONFLICT", "hold expired", [{ field: "status", value: b.status, reason: "HOLD_EXPIRED" }]);
+    const paymentId = randomUUID();
+    b.payment = { paymentId, status: "PROCESSING", method: "TOSSPAY", cardLast4: null, failureCode: null, approvedAt: null, canceledAt: null };
+    return json(res, 200, {
+      bookingId: b.bookingId,
+      paymentId,
+      amount: b.amount,
+      orderName: `SeatSAC 영화 예매 ${b.seatCount}석`,
+      expiresAt: b.expiresAt,
+      checkout: { provider: "PORTONE", storeId: MOCK_STORE_ID, channelKey: "channel-key-mock", payMethod: "EASY_PAY", currency: "KRW" },
+    });
+  }
+
+  if (action === "/pay" && req.method === "POST") {
+    const body = await readJson(req);
+    const now = toKstIso(new Date());
+    // 모의 결제(CARD)는 k6·분석 Job 전용(서버 키 헤더) — 화면에서는 부르지 않는다
+    if (body?.method === "CARD") return fail(res, 400, "VALIDATION_FAILED", "mock card is for tests only", [{ field: "method", value: "CARD", reason: "MOCK_NOT_ALLOWED" }]);
+    if (body?.method !== "TOSSPAY") return fail(res, 400, "VALIDATION_FAILED", "bad method", [{ field: "method", reason: "INVALID_PAYMENT_METHOD" }]);
+    if (!b.payment || body.paymentId !== b.payment.paymentId) {
+      return fail(res, 409, "PAYMENT_ALREADY_REQUESTED", "payment id mismatch", [{ field: "paymentId", value: body.paymentId ?? null, reason: "PAYMENT_ID_MISMATCH" }]);
+    }
+    if (b.status === "CONFIRMED" || b.status === "PAYMENT_FAILED") return json(res, 200, payResult(b));
+    if (b.status !== "PENDING") return fail(res, 409, "BOOKING_STATE_CONFLICT", `status ${b.status}`, [{ field: "status", value: b.status, reason: "HOLD_EXPIRED" }, { field: "refunded", value: b.payment.status === "CANCELED" }]);
+    await sleep(600);
+    const result = portoneResults.get(b.payment.paymentId) ?? "abandoned";
+    if (result === "abandoned") return fail(res, 503, "PAYMENT_RESULT_UNKNOWN", "window not completed", [{ field: "paymentId", value: b.payment.paymentId }]);
+    if (result === "paid") {
+      if (payExpired(b)) {
+        settlePay(b, "EXPIRED", { ...b.payment, status: "CANCELED", approvedAt: now, canceledAt: now });
+        return fail(res, 409, "BOOKING_STATE_CONFLICT", "hold expired", [{ field: "status", value: "EXPIRED", reason: "HOLD_EXPIRED" }, { field: "refunded", value: true }]);
+      }
+      settlePay(b, "CONFIRMED", { ...b.payment, status: "APPROVED", approvedAt: now });
+      return json(res, 200, payResult(b));
+    }
+    settlePay(b, "PAYMENT_FAILED", { ...b.payment, status: "FAILED", failureCode: result === "canceled" ? "USER_CANCELED" : "PG_DECLINED" });
+    return json(res, 200, payResult(b));
+  }
+  return false;
+}
+
 createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
@@ -583,6 +704,10 @@ createServer(async (req, res) => {
   }
 
   if (path.startsWith("/api/ai/")) return handleAi(req, res, path);
+
+  if (path.startsWith("/api/mock-portone/") || /^\/api\/bookings\/7\d{3}(\/|$)/.test(path)) {
+    if ((await handlePayBooking(req, res, path)) !== false) return;
+  }
 
   if (path === "/api/users/me" && req.method === "GET") return json(res, 200, DEV_USER);
 

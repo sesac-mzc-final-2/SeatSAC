@@ -6,7 +6,20 @@ export type BookingStatus = "PENDING" | "CONFIRMED" | "PAYMENT_FAILED" | "EXPIRE
 
 export type PaymentStatus = "PROCESSING" | "APPROVED" | "FAILED" | "CANCELED";
 
-export type FailureCode = "CARD_DECLINED" | "INSUFFICIENT_BALANCE" | null;
+/** 결제 수단 — 화면은 토스페이만. CARD는 모의 결제로 k6·분석 Job 전용(서버 키 헤더, ADR-112) — 화면은 보내지 않는다 */
+export type PaymentMethod = "CARD" | "TOSSPAY";
+
+/**
+ * 거절 사유. 앞의 둘은 모의 카드, 뒤의 셋은 포트원(토스페이) — PG 거절 · 결제창 취소 · 금액 불일치(서버가 자동 환불).
+ * 계약은 x-extensible-enum이라 모르는 값이 올 수 있다 → 화면은 모르는 값을 공통 문구로 보여 준다
+ */
+export type FailureCode =
+  | "CARD_DECLINED"
+  | "INSUFFICIENT_BALANCE"
+  | "PG_DECLINED"
+  | "USER_CANCELED"
+  | "AMOUNT_MISMATCH"
+  | null;
 
 /** 좌석 이벤트 종류 (contracts/events/seat-event.v1.json) */
 export type SeatEventType = "HELD" | "RELEASED" | "CONFIRMED" | "EXPIRED";
@@ -49,6 +62,8 @@ export interface HoldResult {
 export interface BookingPayment {
   paymentId: string;
   status: PaymentStatus;
+  method?: PaymentMethod;
+  /** CARD만. TOSSPAY는 null */
   cardLast4?: string | null;
   failureCode?: FailureCode;
   approvedAt?: string | null;
@@ -71,14 +86,29 @@ export interface Booking {
   payment?: BookingPayment | null;
 }
 
-export interface PayRequest {
-  method: "CARD";
-  card: {
-    /** 모의 카드. 저장·로그하지 않는다 */
-    number: string;
-    /** MM/YY */
-    expiry: string;
-    holder: string;
+/** 토스페이 완료 확인 — 준비에서 받은 `paymentId`. 결과는 서버가 포트원에서 확인한다 */
+export interface TossPayRequest {
+  method: "TOSSPAY";
+  paymentId: string;
+}
+
+/** BKG-10 결제 요청 — 화면은 토스페이 완료 확인만 보낸다 */
+export type PayRequest = TossPayRequest;
+
+/** `POST /bookings/{id}/payments` — 포트원 결제창에 넘길 값. 돈은 아직 움직이지 않았다 */
+export interface PaymentPrepareResult {
+  bookingId: number;
+  paymentId: string;
+  amount: number;
+  orderName: string;
+  /** 선점 만료. 이 안에 결제창을 끝내지 않으면 승인돼도 환불된다 */
+  expiresAt: string;
+  checkout: {
+    provider: "PORTONE";
+    storeId: string;
+    channelKey: string;
+    payMethod: "EASY_PAY";
+    currency: "KRW";
   };
 }
 

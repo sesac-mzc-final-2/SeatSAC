@@ -28,6 +28,7 @@ public enum BookingErrorCode implements ErrorCode {
     INVALID_SEATS(CommonResponseCode.VALIDATION_FAILED, "좌석 선택이 올바르지 않습니다."),
     IDEMPOTENCY_KEY_REQUIRED(CommonResponseCode.VALIDATION_FAILED, "멱등 키가 필요합니다."),
     INVALID_PAYMENT_METHOD(CommonResponseCode.VALIDATION_FAILED, "지원하지 않는 결제 수단입니다."),
+    MOCK_NOT_ALLOWED(CommonResponseCode.VALIDATION_FAILED, "모의 결제는 테스트·분석 전용입니다."),
     INVALID_STATUS(CommonResponseCode.VALIDATION_FAILED, "조회 조건이 올바르지 않습니다."),
     INVALID_PAGE(CommonResponseCode.VALIDATION_FAILED, "페이지 값이 올바르지 않습니다."),
     INVALID_IDS(CommonResponseCode.VALIDATION_FAILED, "ID 목록이 올바르지 않습니다."),
@@ -53,6 +54,7 @@ public enum BookingErrorCode implements ErrorCode {
     PAYMENT_IN_PROGRESS(CommonResponseCode.BOOKING_STATE_CONFLICT, "결제가 진행 중인 예매는 해제할 수 없습니다."),
     HOLD_EXPIRED(CommonResponseCode.BOOKING_STATE_CONFLICT, "선점이 만료되었습니다."),
     PAYMENT_ALREADY_REQUESTED(CommonResponseCode.PAYMENT_ALREADY_REQUESTED, "이미 결제를 요청한 예매입니다."),
+    PAYMENT_ID_MISMATCH(CommonResponseCode.PAYMENT_ALREADY_REQUESTED, "예매에 붙은 결제 ID와 다릅니다."),
     IDEMPOTENCY_KEY_CONFLICT(CommonResponseCode.IDEMPOTENCY_KEY_CONFLICT, "같은 키로 다른 요청을 보냈습니다."),
     IDEMPOTENCY_IN_PROGRESS(CommonResponseCode.IDEMPOTENCY_IN_PROGRESS, "같은 요청이 처리 중입니다. 잠시 후 다시 확인해 주세요."),
 

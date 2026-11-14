@@ -16,7 +16,7 @@ export function HoldTimer({ secondsLeft }: { secondsLeft: number }) {
         <Icon name="timer" size={22} />
         <div>
           <strong>선점한 자리를 지켜드리고 있어요</strong>
-          <p>시간 안에 모의 결제를 완료해 주세요. 시간이 지나면 좌석이 해제돼요.</p>
+          <p>시간 안에 결제를 완료해 주세요. 시간이 지나면 좌석이 해제돼요.</p>
         </div>
       </div>
       <span>{secondsLeft > 0 ? formatCountdown(secondsLeft) : "0:00"}</span>

@@ -68,7 +68,7 @@
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | |
+| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | 11/14 관리자 역할 제거: `X-User-Role`은 항상 `USER`, `/api/admin/**`·관리자 API·화면 없음(Cognito `ADMIN` 그룹은 쓰지 않음). ADR 번호는 노션 등록 후 |
 | 63 | 화면 토큰 저장은 **메모리**(`InMemoryWebStorage`), localStorage 금지. 새로고침은 Cognito 세션으로 재발급 | |
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, ~~데모 주간 11/16~20 머지 금지~~(11/14 삭제 — QA·피드백 반영, 시연·측정 중에는 머지하지 않음. 발표 당일 마감 booking·gateway 11/20 05:00·그 밖 07:00), 태그 rc1 11/6·rc2 11/13·v1.0.0 11/20(마감 뒤), Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |

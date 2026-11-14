@@ -1381,6 +1381,7 @@ CID=$(aws elasticache describe-replication-groups --replication-group-id cinema-
 aws elasticache reboot-cache-cluster --cache-cluster-id "$CID" --cache-node-ids-to-reboot 0001
 kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # 터미널 B — readiness가 빠지는지(PING 실패)
 # 터미널 A: 로그인한 화면(또는 토큰)으로 /api/ai/chat 질문 3번 — 응답 코드·걸린 시간·code·details[].reason을 적는다
+#   첫 질문은 Valkey가 응답을 멈춘 직후, 터미널 B에서 readiness가 빠지기 전(5초 × 3회 ≈ 15초 안)에 보낸다 — 그래야 ai까지 가서 25초 기한을 잰다
 aws elasticache describe-cache-clusters --cache-cluster-id "$CID" --query 'CacheClusters[0].CacheClusterStatus'   # available이 되면 끝
 
 # 복구 — 의미 캐시 인덱스를 다시 만들게 ai 파드를 새로 띄운다(kubectl delete 대신 노드를 내렸다 올린다, GitOps 규칙)
@@ -1393,6 +1394,7 @@ kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # Ready�
 | --- | --- |
 | 무응답 중 챗봇 응답 시간 | **25초 이하**(ai 전체 기한). 28초에 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_TIMEOUT`)·30초에 CloudFront 504가 나면 ai 재시도가 기한을 넘는 것 → 김서현 |
 | 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_UNAVAILABLE`). 둘 다 합격. 같은 gateway 503이라도 `reason: UPSTREAM_TIMEOUT`이면 불합격(위 행) |
+| ai 도달 요청 | 3번 중 1번 이상은 ai가 직접 답한 503 `AI_LLM_UNAVAILABLE`이어야 한다. 3번 모두 gateway `UPSTREAM_UNAVAILABLE`(바로 끝남)이거나 200(Valkey가 아직 살아 있음)이면 25초 기한을 확인하지 못한 것이므로 다시 한다 |
 | Claude 호출 | 무응답 중 `ai_tokens_total`이 늘지 않는다(한도 기록 실패 → 호출 안 함) |
 | 복구(파드 재시작 전) | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 질문 200 — 정확 일치 캐시·한도는 파드 재시작 없이 돌아와야 한다. 의미 캐시는 위 이유로 적중하지 않는 게 지금 코드의 동작이다 |
 | 복구(파드 재시작 뒤) | `CACHE_SEMANTIC` 적중 1회. 안 되면 2차 데모 전에 김서현 |

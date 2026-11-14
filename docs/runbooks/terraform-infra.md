@@ -1531,7 +1531,7 @@ rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파
 | 0 | 앱 PR 머지: 계약 #115 → payment #117 → booking #122 (gateway #123은 머지됨). 기본값이 꺼짐이라 머지만으로는 동작이 바뀌지 않는다 | 남궁일 |
 | 1 | 포트원 콘솔: 토스페이 **테스트** 채널 → Store ID·채널 키 확인 · API Secret(V2) 발급 · 웹훅 URL `https://{배포ID}.cloudfront.net/api/webhooks/portone`(이벤트 `Transaction.Paid` 등) 등록 → 웹훅 시크릿 발급. 비밀 값 2개는 1:1로만 전달(노션·PR·단톡방 금지) | 남궁일 → 김종식 |
 | 2 | 아래 apply (Secret 3키 · ConfigMap 2키) | 김종식 |
-| 3 | gitops 한 번에 한 서비스씩 머지: payment(NetworkPolicy + `APP_PORTONE_ENABLED=true`) → booking → gateway. booking·gateway는 설정이 바뀌면 블루/그린 1회씩(동시 블루/그린 금지) | 김종식 |
+| 3 | gitops 한 번에 한 서비스씩 머지: payment(NetworkPolicy + `APP_PORTONE_ENABLED=true`) → booking(블루/그린 1회). gateway는 웹훅 라우트 대상 `payment-url`이 앱 기본값(`http://payment:8080`)이라 설정 변경 없음 | 김종식 |
 | 4 | `REQUIRE_GATEWAY=1 infra/scripts/np-check.sh` — gateway → payment ALLOWED | 김종식 |
 | 5 | 4.1.1 통합 확인(테스트 채널로 결제 1건, 웹훅 수신 `http_server_requests{uri="/webhooks/portone"}`) | 남궁일 |
 

@@ -35,10 +35,6 @@ spring:
               uri: ${app.services.catalog-url}
               predicates:
                 - Path=/api/movies/**,/api/screenings/**,/api/theaters/**,/api/auditoriums/**
-            - id: catalog-admin
-              uri: ${app.services.catalog-url}
-              predicates:
-                - Path=/api/admin/movies/**,/api/admin/screenings/**,/api/admin/auditoriums/**
             - id: user
               uri: ${app.services.user-url}
               predicates:

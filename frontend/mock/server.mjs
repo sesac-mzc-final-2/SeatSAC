@@ -8,7 +8,7 @@
 //   MOCK_PORT=9000 npm run mock
 //
 // 재현용: MOCK_FAIL_PATH=/api/screenings (화면에서 503 오류 상태) · 직접 호출은 ?fail=503 · /api/movies/999 → 404
-//        MOCK_ROLE=ADMIN (프로필 role) · 예매 ID 9001 은 회차 정보 없음(screening null)
+//        예매 ID 9001 은 회차 정보 없음(screening null)
 // AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
 import { createServer } from "node:http";
@@ -18,8 +18,6 @@ const PORT = Number(process.env.MOCK_PORT ?? 8089);
 /** 화면에서 오류 상태를 재현할 때: 이 경로는 항상 MOCK_FAIL_STATUS(기본 503)로 응답 (예: MOCK_FAIL_PATH=/api/screenings) */
 const FAIL_PATH = process.env.MOCK_FAIL_PATH ?? "";
 const FAIL_STATUS = Number(process.env.MOCK_FAIL_STATUS ?? 503);
-/** GET /api/users/me 의 role (USER | ADMIN) */
-const MOCK_ROLE = process.env.MOCK_ROLE === "ADMIN" ? "ADMIN" : "USER";
 const KST = "+09:00";
 /** 편성이 있는 기간: 오늘 ±30일. 밖은 계약대로 `{ items: [] }`, 단건도 404 (목록·단건 범위 동일) */
 const SEED_RANGE_DAYS = 30;
@@ -200,7 +198,7 @@ const DEV_USER = {
   userId: "00000000-0000-4000-8000-000000000001",
   email: "dev@localhost",
   name: "개발 세션",
-  role: MOCK_ROLE,
+  role: "USER",
   createdAt: "2026-10-28T09:00:00+09:00",
 };
 

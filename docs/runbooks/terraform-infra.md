@@ -1522,6 +1522,44 @@ rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파
 | ai 파드 때문에 멈춤 | `cluster-scale.sh down ng-ai`(6-G-5). 정말 필요할 때만 `ALLOW_AI=1` |
 | p95만 넘는다 | 리포트에 그대로 적는다. booking CPU·`hikaricp_connections_pending`·노드 배치(k6 파드가 booking과 같은 노드인지 — 로그 머리말)를 같이 본다 |
 
+### 6-I. 포트원 토스페이 결제 — Secret·설정·웹훅 (ADR-112) — ⬜
+
+코드: SeatSAC `envs/staging-k8s/portone.tf`(Secret 키 3개·ConfigMap 키 2개) · `infra/scripts/np-check.sh`(gateway → payment ALLOWED) · `tests/k6/run-in-cluster.sh`(모의 결제 키) · SeatSAC-gitops `base/payment/networkpolicy.yaml`·`overlays/staging/{payment,booking,gateway}`. 이름은 런타임 계약 3장·6장
+
+| 순서 | 할 일 | 누가 |
+| --- | --- | --- |
+| 0 | 앱 PR 머지: 계약 #115 → payment #117 → booking #122 (gateway #123은 머지됨). 기본값이 꺼짐이라 머지만으로는 동작이 바뀌지 않는다 | 남궁일 |
+| 1 | 포트원 콘솔: 토스페이 **테스트** 채널 → Store ID·채널 키 확인 · API Secret(V2) 발급 · 웹훅 URL `https://{배포ID}.cloudfront.net/api/webhooks/portone`(이벤트 `Transaction.Paid` 등) 등록 → 웹훅 시크릿 발급. 비밀 값 2개는 1:1로만 전달(노션·PR·단톡방 금지) | 남궁일 → 김종식 |
+| 2 | 아래 apply (Secret 3키 · ConfigMap 2키) | 김종식 |
+| 3 | gitops 한 번에 한 서비스씩 머지: payment(NetworkPolicy + `APP_PORTONE_ENABLED=true`) → booking(블루/그린 1회). gateway는 웹훅 라우트 대상 `payment-url`이 앱 기본값(`http://payment:8080`)이라 설정 변경 없음 | 김종식 |
+| 4 | `REQUIRE_GATEWAY=1 infra/scripts/np-check.sh` — gateway → payment ALLOWED | 김종식 |
+| 5 | 4.1.1 통합 확인(테스트 채널로 결제 1건, 웹훅 수신 `http_server_requests{uri="/webhooks/portone"}`) | 남궁일 |
+
+```bash
+cd infra/terraform/envs/staging-k8s
+export AWS_PROFILE=cinema-admin
+read -s TF_VAR_portone_api_secret && export TF_VAR_portone_api_secret         # 입력이 화면에 안 나온다
+read -s TF_VAR_portone_webhook_secret && export TF_VAR_portone_webhook_secret
+export TF_VAR_portone_store_id='store-…' TF_VAR_portone_channel_key_tosspay='channel-key-…'   # 공개 값. 커밋하지 않는다(레포가 발표 후 Public)
+terraform plan -var-file=staging-k8s.tfvars
+#   기대: kubernetes_secret_v1.app["booking"]·["payment"] update(값은 (sensitive)) · random_password.payment_mock_key create
+#         kubernetes_config_map_v1.infra_endpoints update(+ PORTONE_STORE_ID · PORTONE_CHANNEL_KEY_TOSSPAY). 그 밖의 변경 없음
+terraform apply -var-file=staging-k8s.tfvars
+unset TF_VAR_portone_api_secret TF_VAR_portone_webhook_secret TF_VAR_portone_store_id TF_VAR_portone_channel_key_tosspay
+terraform plan -var-file=staging-k8s.tfvars    # 변수 없이 두 번째 plan → No changes (지금 값을 그대로 쓴다, portone.tf)
+
+# 값이 들어갔는지(길이만 — 값은 출력하지 않는다)
+kubectl -n cinema-staging get secret payment-secrets -o json | jq -r '.data | to_entries[] | "\(.key) \(.value | @base64d | length)"'
+kubectl -n cinema-staging get secret booking-secrets -o json | jq -r '.data.APP_PAYMENT_MOCK_KEY | @base64d | length'   # 32
+```
+
+- 떠 있는 파드는 기동 때 값을 읽는다 → apply만으로는 반영되지 않는다. 3번 gitops PR로 ConfigMap이 바뀌면 새 파드가 새 값을 읽는다
+- 변수는 넣을 때·바꿀 때만 준다. 변수가 없으면 클러스터의 지금 값을 그대로 쓴다(백업 관리자가 값 없이 apply해도 덮이지 않음). 키 교체 = 포트원에서 새 키 발급 → 같은 명령 → payment Restart(ArgoCD)
+- `APP_PORTONE_ENABLED=true`인데 Secret이 비어 있으면 기동은 되고 verify·취소가 503 `PORTONE_UNAVAILABLE`, 웹훅은 전부 401 → 2번을 3번보다 먼저
+- CloudFront는 바꿀 것 없음(`/api` origin request policy가 모든 viewer 헤더 전달 → `webhook-*` 서명 헤더 통과, POST 허용). payment → `api.portone.io`는 NAT 경유(egress 막지 않음)
+- 모의 결제 키: k6 `deploy` 시나리오는 `run-in-cluster.sh`가 `booking-secrets`를 `secretKeyRef`로 넣는다(값을 꺼내지 않는다). 블루/그린 분석 Job은 지금 결제 경로가 없어 바꿀 것 없음 — 넣으려면 `SMOKE_PAY_SCREENING_ID`가 **미래 회차**여야 한다(시작 5분 전 마감 → 지나면 모든 booking 배포 abort)
+- 발표 후 Public 전환 전: 포트원 API Secret·웹훅 시크릿 폐기(포트원 콘솔)
+
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
 코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito는 `cognito.tf`(3.1.16, 7-6).

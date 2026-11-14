@@ -394,6 +394,8 @@
 
 | ⚠️AI `AI_VALKEY_HOST` | ai Valkey primary 엔드포인트(`cinema-staging-ai-valkey`) | ai (이름 그대로 읽음) |
 | ⚠️AI `PUBLIC_API_BASE_URL` | `https://{배포ID}.cloudfront.net/api` (CloudFront 기본 도메인, Terraform 출력) | ai — 스냅샷 적재·"내 예매" 호출 |
+| `PORTONE_STORE_ID` | 포트원 Store ID (공개 값 — 결제창에 노출, Terraform 변수 `portone_store_id`, ADR-112) | payment `APP_PORTONE_STORE_ID=${PORTONE_STORE_ID}` |
+| `PORTONE_CHANNEL_KEY_TOSSPAY` | 포트원 토스페이 채널 키 (공개 값, Terraform 변수 `portone_channel_key_tosspay`) | payment `APP_PORTONE_CHANNEL_KEY_TOSSPAY=${PORTONE_CHANNEL_KEY_TOSSPAY}` — gitops가 Public이라 외부 계정 식별자도 gitops에 쓰지 않는다 |
 
 새 엔드포인트가 생기면 이 표와 `infra_endpoints.tf`에 먼저 추가하고, gitops에는 `${키}`만 쓴다. ⚠️AI Python은 `${키}` 치환을 하지 않으므로 ai는 이 ConfigMap 키를 **이름 그대로** 읽는다.
 

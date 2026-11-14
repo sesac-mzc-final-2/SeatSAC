@@ -24,7 +24,7 @@ REQUIRED="catalog booking user payment"                 # 항상 있어야 하�
 # 런타임 계약 6장: 호출하는 쪽 → 허용된 대상 (monitoring·ALB·분석 Job은 앱 파드가 아니라 여기서 보지 않는다)
 allowed() {
   case "$1" in
-    gateway) echo "catalog booking user ai" ;;
+    gateway) echo "catalog booking user ai payment" ;;   # payment: 포트원 웹훅 /webhooks/portone (ADR-112)
     catalog) echo "booking" ;;
     booking) echo "catalog payment" ;;
     user)    echo "booking catalog" ;;

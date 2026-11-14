@@ -221,8 +221,9 @@ class GatewayIntegrationTest {
         assertThat(headers.get("x-user-id").asText()).isEqualTo(SUB);
         assertThat(headers.get("x-user-role").asText()).isEqualTo("USER");
 
-        JsonNode adminHeaders = forwardedHeaders("/api/users/me", token(KEY, Map.of("cognito:groups", List.of("ADMIN"))));
-        assertThat(adminHeaders.get("x-user-role").asText()).isEqualTo("ADMIN");
+        // 관리자 역할은 없다 — Cognito ADMIN 그룹 토큰도 USER 로 넘긴다
+        JsonNode adminGroupHeaders = forwardedHeaders("/api/users/me", token(KEY, Map.of("cognito:groups", List.of("ADMIN"))));
+        assertThat(adminGroupHeaders.get("x-user-role").asText()).isEqualTo("USER");
     }
 
     @Test
@@ -256,17 +257,14 @@ class GatewayIntegrationTest {
     }
 
     @Test
-    void 관리자_경로는_ADMIN_그룹만() {
+    void 관리자_경로는_없다_ADMIN_그룹_토큰도_404() {
         String userToken = token(KEY, Map.of());
-        String adminToken = token(KEY, Map.of("cognito:groups", List.of("ADMIN")));
+        String adminGroupToken = token(KEY, Map.of("cognito:groups", List.of("ADMIN")));
 
-        JsonNode body = expectError(post("/api/admin/movies", userToken), 403, "FORBIDDEN");
-        assertThat(body.get("details").get(0).get("reason").asText()).isEqualTo("ADMIN_REQUIRED");
-
-        JsonNode routed = post("/api/admin/movies", adminToken).expectStatus().isOk()
-            .expectBody(JsonNode.class).returnResult().getResponseBody();
-        assertThat(routed.get("service").asText()).isEqualTo("catalog");
-        assertThat(routed.get("path").asText()).isEqualTo("/admin/movies");
+        expectError(post("/api/admin/movies", userToken), 404, "NOT_FOUND");
+        expectError(post("/api/admin/movies", adminGroupToken), 404, "NOT_FOUND");
+        expectError(post("/api/admin/screenings", adminGroupToken), 404, "NOT_FOUND");
+        expectError(post("/api/admin/movies", null), 401, "UNAUTHORIZED");
     }
 
     // ---------- GW-03 추적 ID ----------

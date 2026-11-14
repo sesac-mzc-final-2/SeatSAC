@@ -25,8 +25,8 @@ import reactor.core.publisher.Mono;
  * <pre>
  * 공개(토큰 안 읽음)  GET /api/movies/**, /api/theaters/**, /api/screenings/**(좌석 현황·SSE 포함), /api/auditoriums/**
  * 인증 없음(서명)    POST /api/webhooks/portone — 포트원 웹훅(ADR-112). Bearer 대신 payment가 Standard Webhooks 서명을 검증한다
- * ADMIN             /api/admin/**
  * 로그인            그 밖의 /api/** (/api/ai/** 포함 — 라우트는 플래그 app.ai.enabled 로 켜지며, 꺼져 있으면 토큰이 있어도 404)
+ *                   관리자 역할은 없다 — /api/admin/** 는 라우트가 없어 토큰이 있어도 404
  * 인증 없음          /actuator/health/**(ALB·kubelet), /actuator/prometheus(클러스터 안 수집. 외부는 CloudFront가 /api/*만 ALB로 보냄)
  * </pre>
  * 오류는 공통 형식으로 401 UNAUTHORIZED, 403 FORBIDDEN.
@@ -58,7 +58,6 @@ public class SecurityConfig {
                 .pathMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
                 .matchers(publicPaths).permitAll()
                 .matchers(webhook).permitAll()
-                .pathMatchers("/api/admin/**").hasRole("ADMIN")
                 .pathMatchers("/api/**").authenticated()
                 .anyExchange().permitAll())                    // 라우트가 없으므로 404
             .oauth2ResourceServer(o -> o
@@ -85,7 +84,7 @@ public class SecurityConfig {
     }
 
     private static Mono<Void> forbidden(ErrorResponseWriter writer, ServerWebExchange exchange) {
-        return writer.write(exchange, CommonResponseCode.FORBIDDEN, "권한이 없습니다.",
-            List.of(ErrorDetail.of("role", null, "ADMIN_REQUIRED")));
+        // 역할로 막는 경로는 없다(관리자 없음). 남겨 두는 것은 Security 가 거부했을 때도 공통 오류 형식을 지키기 위해서다
+        return writer.write(exchange, CommonResponseCode.FORBIDDEN, "권한이 없습니다.", List.of());
     }
 }

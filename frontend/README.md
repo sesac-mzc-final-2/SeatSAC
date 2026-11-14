@@ -22,7 +22,7 @@ npm run build               # tsc -b && vite build → dist/
 `mock/server.mjs` 는 catalog·user 계약 모양으로 응답하는 가짜 데이터(영화 6편·극장 4곳·하루 편성·예매 내역 23건·선호, 롯데시네마 수집 데이터·포스터 없음)다.
 `/api/users/**`·`/api/bookings/**` 는 `Authorization: Bearer` 가 있으면 누구든 통과시킨다(JWT 검증 없음). 예매 취소(BKG-07)는 메모리 상태를 바꾼다.
 `DEV_SESSION=1` 은 Vite `define`(`__DEV_SESSION__`)으로만 들어가 `vite build` 결과에는 절대 켜지지 않는다 — Cognito 값이 비어 있을 때만 가짜 세션이 된다.
-`MOCK_ROLE=ADMIN` 으로 띄우면 프로필 `role` 이 ADMIN 이고, 예매 ID 9001 은 회차 정보 없음(`screening: null`) 카드다.
+예매 ID 9001 은 회차 정보 없음(`screening: null`) 카드다.
 오류 화면 재현: 영화 ID 999 는 404 라 `/movies/999` 로 들어가면 「영화를 찾을 수 없어요」가 보이고,
 `MOCK_FAIL_PATH=/api/screenings npm run dev:mock` 처럼 띄우면 그 경로가 항상 503(`MOCK_FAIL_STATUS` 로 500 도 가능)을 돌려줘
 상영시간표의 오류 블록·문의 코드·공통 토스트를 볼 수 있다. API 를 직접 부를 때는 `?fail=503` 을 붙여도 된다. 빌드에는 포함되지 않는다.

@@ -13,7 +13,6 @@ const profile = {
   userId: "00000000-0000-4000-8000-000000000001",
   email: "chaeyeon@example.com",
   name: "한채연",
-  role: "USER",
   createdAt: "2026-10-28T09:00:00+09:00",
 };
 
@@ -62,7 +61,7 @@ describe("MyPage (W8)", () => {
 
     expect(await screen.findByRole("heading", { name: "한채연" })).toBeInTheDocument();
     expect(screen.getByText(profile.email)).toBeInTheDocument();
-    expect(screen.getByText("일반 회원")).toBeInTheDocument();
+    expect(screen.queryByText("일반 회원")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "선호 설정" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByRole("form", { name: "선호 설정" })).toBeInTheDocument();
 

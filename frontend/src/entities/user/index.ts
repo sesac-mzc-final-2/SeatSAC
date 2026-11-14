@@ -1,6 +1,5 @@
 export type {
   Profile,
-  UserRole,
   MyBooking,
   MyBookingScreening,
   MyBookingStatus,

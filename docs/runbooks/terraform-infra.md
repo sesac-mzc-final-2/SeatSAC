@@ -1230,7 +1230,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 #### 6-G-4. 끄기·되돌리기 (5분)
 
 1. `cluster-scale.sh down ng-ai` — ai 파드가 내려가면 `/api/ai/**`는 gateway 503(라우트가 켜져 있을 때). 화면은 챗봇 비활성 안내
-2. 데모 주간이 아니면 `APP_AI_ENABLED=false` PR로 404로 되돌림(데모 주간은 머지 금지라 1번만)
+2. AI 데모(11/17)·발표(11/20)가 모두 끝난 뒤에만 `APP_AI_ENABLED=false` PR로 404로 되돌림(gateway 블루/그린 1회). 그 전에 껐다면 gateway 머지 마감(11/20 05:00) 전에 6-G-3 1번(플래그 켜기 PR)을 다시 하고, 데모 전에 6-G-3 2·3번으로 `/api/ai/presets` 200을 확인한다
 3. 기존 서비스·RDS·Valkey는 바뀐 게 없으므로 추가 조치 없음
 
 #### 6-G-5. AI 질의 금지 구간
@@ -1238,7 +1238,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 | 구간 | 상태 | 이유 |
 | --- | --- | --- |
 | 부하 테스트 4.2.1 · 블루/그린 전환 테스트 4.2.2 | `ng-ai` 0 · 플래그 off | 테스트 환경 = 1차 데모 환경. 스냅샷 적재 호출이 catalog에 섞이지 않게 |
-| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 뒤 데모 주간은 머지 금지라 끌 수 없다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
+| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 상태 — 끄려면 gateway 블루/그린이 필요해 데모 직전에는 건드리지 않는다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
 | 재생성 리허설 3.1.15 | `ng-ai` 0 · 플래그 off로 기록 | 소요 시간 비교 기준 유지 |
 | staging에서 ai 확인(M6 중) | 테스트가 돌지 않는 시간에만, 스크럼에서 시간 공유 | — |
 
@@ -1608,7 +1608,7 @@ aws s3api get-public-access-block --bucket "$(terraform output -raw frontend_buc
 | 사용자 풀 | `cinema-staging-users` · 이메일 로그인(대소문자 무시) · 가입 필수 email·name · 비밀번호 8자(소문자·숫자) · 삭제 보호 끔(재생성 리허설) |
 | 앱 클라이언트 | `cinema-staging-web` · 공개(시크릿 없음) · 코드 + PKCE · 범위 `openid email profile aws.cognito.signin.user.admin` · 콜백 `https://<배포 도메인>/callback`·`http://localhost:5173/callback` · 로그아웃 `…/` · Access·ID 60분, Refresh 7일 |
 | Hosted UI 도메인 | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` (클래식 Hosted UI) |
-| 그룹 | `ADMIN` → gateway `X-User-Role: ADMIN` |
+| 그룹 | `ADMIN` — **쓰지 않는다**(11/14 관리자 역할 제거, gateway는 그룹을 읽지 않고 `X-User-Role`은 항상 `USER`). 그룹 리소스 삭제는 Terraform 후속 |
 | Pre sign-up Lambda | `cinema-staging-cognito-presignup`(Python 3.12, arm64) — Hosted UI 가입을 자동 확인(메일 발송 없음). 로그 7일 |
 
 **순서** (gateway 이미지 태그가 `CHANGE_ME`라 Application보다 먼저 태그를 넣는다)
@@ -1658,14 +1658,12 @@ kubectl -n cinema-staging get ingress gateway -o jsonpath='{.status.loadBalancer
 - 다른 앱(catalog·booking·user·payment)은 ConfigMap이 바뀌어도 자동으로 다시 뜨지 않는다. **user**는 Cognito 값을 쓰지 않으니(엔드포인트 기본값) 그대로 둔다
 - gateway 파드가 `CreateContainerConfigError`·기동 실패면 ConfigMap `COGNITO_*`가 비었는지(apply 순서), `ImagePullBackOff`면 2번(build-push)을 안 한 것
 
-#### 7-6-3. 사용자·관리자
+#### 7-6-3. 사용자
 
 ```bash
 POOL=$(cd ../staging && terraform output -raw cognito_user_pool_id)
-# 가입은 화면(Hosted UI)에서. 관리자 지정: 가입한 이메일로
-aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" --username '<가입 이메일>' --group-name ADMIN
-aws cognito-idp list-users-in-group --user-pool-id "$POOL" --group-name ADMIN --query 'Users[].Username' --output text
-# 비밀번호 분실(메일 발송 없음): 관리자가 임시 비밀번호 설정 → 다음 로그인 때 변경
+# 가입은 화면(Hosted UI)에서. 앱 관리자 역할은 없다(11/14 제거) — ADMIN 그룹에 넣어도 달라지는 것이 없다
+# 비밀번호 분실(메일 발송 없음): cinema-admin이 임시 비밀번호 설정 → 다음 로그인 때 변경
 aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username '<이메일>' --password '<임시>' --no-permanent
 ```
 
@@ -1684,7 +1682,6 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 4
 
 - [ ] Hosted UI(`$HOSTED/login?client_id=…&response_type=code&scope=openid&redirect_uri=https://$DOMAIN/callback`)에서 가입 → 메일 확인 없이 바로 로그인
 - [ ] 화면 로그인 → `/api/users/me` 200(프로필 생성, email·name 채워짐). **503 `IDENTITY_UNAVAILABLE`**이면 화면이 `aws.cognito.signin.user.admin` 범위를 요청하지 않은 것(아래)
-- [ ] ADMIN 지정 후 다시 로그인 → `/api/admin/**` 403이 아님
 - [ ] 로그아웃 → Hosted UI 세션 종료 후 `/`로 돌아옴
 - [ ] Lambda 로그 그룹 `/aws/lambda/cinema-staging-cognito-presignup`에 가입 시각 기록
 
@@ -1694,7 +1691,6 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 4
 | 가입 후 "User is not confirmed" | Pre sign-up 연결 안 됨·Lambda 오류 | `aws cognito-idp describe-user-pool --user-pool-id $POOL --query 'UserPool.LambdaConfig'`, Lambda 로그 |
 | Hosted UI `redirect_mismatch` | 콜백 URL이 클라이언트 목록과 다름(끝 `/`·http/https) | `VITE_COGNITO_REDIRECT_URI` = `https://<배포 도메인>/callback` |
 | 모든 API 401 | gateway issuer·client_id와 토큰이 다름(풀을 다시 만들었는데 ConfigMap 그대로) | 7-6-2 다시 apply → ArgoCD gateway **Restart** |
-| `/api/admin/**` 403 | 그룹 지정 전 토큰 | 로그아웃 → 다시 로그인 |
 
 ## 8. staging 6) DB 스키마·계정·K8s Secret·시드 (3.1.12)
 

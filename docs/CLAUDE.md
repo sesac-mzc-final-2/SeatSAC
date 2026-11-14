@@ -28,7 +28,7 @@
 - 클러스터를 `kubectl apply/edit/delete`로 직접 고치지 않는다(GitOps만). 사람이 ECR·frontend S3에 직접 올리지 않는다(CI만)
 - 계약(`contracts/`)을 먼저 PR로 합의하고 구현한다. 필드 추가만, 깨는 변경은 새 엔드포인트·`.v2`
 - 이름·설정·메트릭은 아래 표에 있는 것만 쓰고, 새로 만들면 표에 먼저 추가한다
-- ⚠️AI ai는 기존 MSA DB(RDS)·기존 Valkey·기존 NetworkPolicy·다른 Application을 건드리지 않는다. M6(11/9~13)에는 ai 경로(와 ADR-87의 예외 — 테스트 준비·3.3.7 AI 화면)만 머지할 수 있고, 부하·전환 테스트 중에는 `ng-ai` 0대·플래그 off, 좌석 데모 중에는 `ng-ai` 0대·AI 질의 금지(플래그는 rc2에서 켜 둔 채 — 데모 주간은 머지 금지라 끌 수 없다)
+- ⚠️AI ai는 기존 MSA DB(RDS)·기존 Valkey·기존 NetworkPolicy·다른 Application을 건드리지 않는다. M6(11/9~13)에는 ai 경로(와 ADR-87의 예외 — 테스트 준비·3.3.7 AI 화면)만 머지할 수 있고, 부하·전환 테스트 중에는 `ng-ai` 0대·플래그 off, 좌석 데모 중에는 `ng-ai` 0대·AI 질의 금지(플래그는 rc2에서 켜 둔 채)
 
 ---
 
@@ -61,7 +61,7 @@
 | 내부 API | `/internal/**` — Gateway 라우팅 금지, NetworkPolicy로 호출자 제한 |
 | 헬스 | `/actuator/health/liveness`, `/actuator/health/readiness` (ALB는 gateway readiness만). ⚠️AI ai(Python)도 **같은 경로**로 맞춘다 — 프로브·PodMonitor 템플릿 공용 |
 | 메트릭 | `/actuator/prometheus` (ai도 같은 경로, `prometheus_client`) |
-| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`(payment는 포트원 웹훅 `POST /api/webhooks/portone` 하나만 연다 — 인증 없음, 서명은 payment가 검증, ADR-112), `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/ai/**`(만들지 않음, 챗봇은 사용자만). 404가 보이는 조건: `/api/internal/**`·`/api/actuator/**`는 경로 차단 필터(`PathGuardWebFilter`)가 인증보다 먼저라 **항상** 404. 나머지는 `/api/**` 인증(`SecurityConfig`)이 라우팅보다 먼저라 **유효한 토큰으로 인증됐을 때만** 404이고, 토큰이 없으면 401 `UNAUTHORIZED`(`TOKEN_REQUIRED`), 만료·서명 불일치 등 잘못된 토큰이면 401 `UNAUTHORIZED`(`INVALID_TOKEN`). `/api/admin/ai/**`는 토큰이 없거나 잘못되면 같은 401, 인증됐지만 ADMIN이 아니면 403 `FORBIDDEN`(`ADMIN_REQUIRED`), ADMIN이면 404. ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
+| Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`(payment는 포트원 웹훅 `POST /api/webhooks/portone` 하나만 연다 — 인증 없음, 서명은 payment가 검증, ADR-112), `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/**`(관리자 역할·API 없음 — 11/14 삭제). 404가 보이는 조건: `/api/internal/**`·`/api/actuator/**`는 경로 차단 필터(`PathGuardWebFilter`)가 인증보다 먼저라 **항상** 404. 나머지는 `/api/**` 인증(`SecurityConfig`)이 라우팅보다 먼저라 **유효한 토큰으로 인증됐을 때만** 404이고, 토큰이 없으면 401 `UNAUTHORIZED`(`TOKEN_REQUIRED`), 만료·서명 불일치 등 잘못된 토큰이면 401 `UNAUTHORIZED`(`INVALID_TOKEN`). ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
 
 ### 2. 코드·API 이름
 
@@ -77,7 +77,7 @@
 | Java 패키지 | `com.seatsac.{service}`, 공통은 `com.seatsac.common.{core,web,test}` | `com.seatsac.booking.hold` |
 | ⚠️AI Python 패키지 | `services/ai/src/seatsac_ai/{api,snapshot,llm,sql,cache,quota}` — `libs/`(Java)는 쓰지 않는다. 오류 형식·traceId 규칙은 `seatsac_ai.common`에서 같은 계약(`error.v1.json`)으로 구현 | `seatsac_ai.sql.validator` |
 | 계약 파일 | `contracts/openapi/{service}.openapi.yaml`, `openapi/internal/{service}.internal.openapi.yaml`, `events/{이름}.v{N}.json`, `schemas/{이름}.v{N}.json` | — |
-| OpenAPI 확장 | `x-feature-id`, `x-required-role: ADMIN`, `x-caller` | — |
+| OpenAPI 확장 | `x-feature-id`, `x-caller` | — |
 
 ### 3. 데이터베이스
 
@@ -144,7 +144,7 @@
 | 대상 | 규칙 |
 | --- | --- |
 | 오류 응답 | ⚠️ `{ code, message, traceId, details[] }` — `details`는 **항상 배열**(없으면 `[]`), 원소 `{ field, value?, reason? }`. 화면 분기는 `code`로 한다 — 단 **401 `UNAUTHORIZED`는 `details[].reason`으로 나눈다**(재로그인으로 풀리지 않는 user의 `TOKEN_REJECTED`·`IDENTITY_MISMATCH`, 아래 공통 오류 코드 표). `message`는 개발용 (`contracts/schemas/error.v1.json`) |
-| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(`USER`·`ADMIN`), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
+| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(항상 `USER` — 관리자 역할 없음, 11/14), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
 | traceId | ⚠️ 소문자 16진수 **32자리**(UUID 하이픈 제거). Gateway가 요청마다 생성, 응답 헤더에도. 요청 없는 작업(만료 스캔·릴레이)은 새로 생성 |
 | 시간 | DB `DATETIME(3)` **UTC**(RDS `time_zone=UTC`, 앱 `Clock.systemUTC()`, 상태 전이 조건에 `NOW()` 대신 앱이 구한 `:now`). API·메시지는 ISO-8601 `+09:00`. `business_date`·`date` 파라미터·화면은 Asia/Seoul |
 | ID | PK `BIGINT AUTO_INCREMENT`(Java `Long`, OpenAPI `int64`). ⚠️ 사용자 ID = Cognito `sub`(`CHAR(36)`, `String`). holdId·paymentId·eventId = UUID v4 `CHAR(36)` |
@@ -161,7 +161,6 @@
 | 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
 | 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |
-| 409 | `SCHEDULE_CONFLICT`, `SEAT_SOLD` | catalog |
 | 409 | `PAYMENT_CONFLICT`, `PAYMENT_NOT_APPROVED` | payment (내부) |
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
@@ -240,7 +239,7 @@
 
 | 파일 | 내용 | 담당 (CODEOWNERS) |
 | --- | --- | --- |
-| `openapi/catalog.openapi.yaml` | 외부 9개 (조회 6 · 관리자 3) | 한채연 |
+| `openapi/catalog.openapi.yaml` | 외부 6개 (조회만 — 관리자 API는 11/14 삭제) | 한채연 |
 | `openapi/booking.openapi.yaml` | 외부 7개 (좌석 현황·SSE·선점·해제·결제·조회·취소) | 남궁일 |
 | `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장) | 한채연 |
 | ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`) | 김서현 · 한채연 |
@@ -253,7 +252,7 @@
 | `schemas/error.v1.json` | 공통 오류 응답 | 전원 |
 | `*/examples/**` | 예시 메시지 = 서비스 테스트 fixture | 각 담당 |
 
-합계: 외부 23(⚠️AI ai 2개 포함) · 내부 8 · 이벤트 2.
+합계: 외부 20(⚠️AI ai 2개 포함) · 내부 8 · 이벤트 2.
 
 ### 2. API 목록
 
@@ -267,7 +266,6 @@
 | 없음 | `GET /screenings?date&theaterId&movieId` | CAT-03 | `{items}`, `remainingSeatsSource` |
 | 없음 | `GET /screenings/{screeningId}` | CAT-03 | |
 | 없음 | `GET /auditoriums/{auditoriumId}/layout?version` | CAT-04 | 좌석 상태 없음 |
-| ADMIN | `POST /admin/movies`, `POST /admin/screenings`, `PATCH /admin/auditoriums/{id}/seats` | CAT-06, LAY-07 | P3 |
 | 없음 | `GET /screenings/{screeningId}/seats` | BKG-01 | **booking**, Gateway 1순위 라우트 |
 | 없음 | `GET /screenings/{screeningId}/seats/stream` | BKG-05 | SSE, **booking** |
 | USER | `POST /seats/hold` | BKG-02 | `Idempotency-Key` 필수 |
@@ -306,7 +304,7 @@
 | 2 | userId | Cognito `sub` 문자열(`format: uuid`), DB `CHAR(36)` | ADR-37, ERD 6차 |
 | 3 | 프로필 email·name | user가 Access Token으로 Cognito `GetUser`. `NotAuthorizedException`은 **401 `UNAUTHORIZED`**(`details[].reason` `TOKEN_REJECTED`), 그 밖의 실패는 **503 `IDENTITY_UNAVAILABLE`** | 2.2.4 v0.3, ADR-54 |
 | 4 | `GET /internal/theaters` | **만든다** (USR-05 극장 검증, Catalog 실패 시 검증 생략) | API 명세서 10장 #6 |
-| 5 | 범위 | 위 29개 + ⚠️AI ai 외부 2개 = 31개. gateway 요청 수 제한(429)은 없음 — ai의 429 `AI_QUOTA_EXCEEDED`는 ai 앱 안 비용 보호 | ADR-62·82 |
+| 5 | 범위 | 위 26개 + ⚠️AI ai 외부 2개 = 28개(관리자 API 3개는 11/14 삭제 — 구현된 적 없음). gateway 요청 수 제한(429)은 없음 — ai의 429 `AI_QUOTA_EXCEEDED`는 ai 앱 안 비용 보호 | ADR-62·82 |
 | 6 | booking.confirmed v1 payload | `screeningId`·`seatCount`·`confirmedAt` **필수** (발행자 booking 하나, 구현 전) | API 명세서 9-2, ADR-55 |
 | 7 | traceId 형식 | 스키마에 `pattern: ^[0-9a-f]{32}$` (오류·좌석 이벤트·알림 공통), 오류의 traceId는 null 불가 | GW-03 10/21, ADR-55 |
 | 8 | 오류 `details` | **항상 배열**(필수, 없으면 `[]`), 원소 `{field, value?, reason?}` | 2.2.4 v0.3, API 명세서 1-4 |
@@ -377,7 +375,7 @@
 - 두 서비스 동시 블루/그린 금지(노드 2대). 공통 모듈 급한 반영도 한 번에 한 서비스씩: catalog·user·payment → booking → gateway
 - 프로브: `startupProbe` readiness 경로 5초 × 30회, `readinessProbe` 5초 / 실패 3, `livenessProbe` 10초 / 실패 3
 - 블루/그린: active Service `{svc}`, preview Service `{svc}-preview`, `prePromotionAnalysis` 통과 후 전환, `scaleDownDelaySeconds: 60`. gateway는 ALB 대상 그룹 확인(ADR-35)
-- 블루/그린 파드 수: 분석 중 preview는 **1개**(`previewReplicaCount: 1`, active는 HPA 그대로). 전환 직전 preview를 active 수까지 늘리므로 **전환 순간~60초만 2배**(booking HPA 최대 2 → 4개, requests 1 vCPU) → 노드 2대에서 preview가 Pending이면 전환이 멈추고 10분 뒤 abort. booking `maxReplicas`는 **2**(11/12 결정 — 4면 전환 순간 8개 × 풀 15로 RDS 연결이 경보를 넘는다, 3장). 4.2.1(11/11)은 최대 4에서 쟀으므로 이 변경을 머지한 직후(rc2 전) 최대 2로 contention·deploy를 한 번 다시 재서 선점 p95·CPU를 확인한다. 선점 p95가 300ms를 넘으면 원인을 가른다 — DB 연결 대기(`hikaricp_connections_acquire_seconds_max` 큼, CPU 여유)면 파드를 늘려도 안 풀리므로 근본 수정 A(진 요청 사유 판정을 DB 없이), CPU 부족이면 「풀 10 · 최소 유휴 10 · 최대 4」(전환 순간 8 × 10 + 35 = 115)를 수정 A와 함께. **최대 4로만 되돌리지 않는다**(전환 순간 155). 데모 주간은 머지 금지라 11/15까지 끝낸다(노션 ADR-96)
+- 블루/그린 파드 수: 분석 중 preview는 **1개**(`previewReplicaCount: 1`, active는 HPA 그대로). 전환 직전 preview를 active 수까지 늘리므로 **전환 순간~60초만 2배**(booking HPA 최대 2 → 4개, requests 1 vCPU) → 노드 2대에서 preview가 Pending이면 전환이 멈추고 10분 뒤 abort. booking `maxReplicas`는 **2**(11/12 결정 — 4면 전환 순간 8개 × 풀 15로 RDS 연결이 경보를 넘는다, 3장). 4.2.1(11/11)은 최대 4에서 쟀으므로 이 변경을 머지한 직후(rc2 전) 최대 2로 contention·deploy를 한 번 다시 재서 선점 p95·CPU를 확인한다. 선점 p95가 300ms를 넘으면 원인을 가른다 — DB 연결 대기(`hikaricp_connections_acquire_seconds_max` 큼, CPU 여유)면 파드를 늘려도 안 풀리므로 근본 수정 A(진 요청 사유 판정을 DB 없이), CPU 부족이면 「풀 10 · 최소 유휴 10 · 최대 4」(전환 순간 8 × 10 + 35 = 115)를 수정 A와 함께. **최대 4로만 되돌리지 않는다**(전환 순간 155). 1차 데모(11/16) 전에 끝낸다(노션 ADR-96)
 - booking 만료 스캔·아웃박스 릴레이는 **preview 파드에서도 돈다** → 만료·릴레이 로직 변경은 이전 버전과 호환되게(조건부 UPDATE로 한 번만 처리)
 
 ### 3. 설정·Secret (서비스가 읽는 이름)
@@ -613,9 +611,9 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
-- 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회)은 CloudFront → gateway → catalog로 들어간다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채 — 데모 주간은 머지 금지라 끌 수 없다)** → 테스트 환경 = 데모 환경 (런북 6-G)
+- 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회)은 CloudFront → gateway → catalog로 들어간다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
 - `ng-ai`는 EventBridge Scheduler 평일 켜기 대상에서 **뺀다**(평소 0대). 켜기·끄기는 `cluster-scale.sh up ng-ai`·`down ng-ai`(cinema-admin). `cluster-scale.sh up`·`up 2`와 `cluster-schedule`의 `up`은 `ng-ai`를 켜지 않고 `down`은 `ng-ai`까지 끈다(켜 둔 채 잊어도 백업 끄기·수동 `down`이 끈다)
-- 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 데모 주간에는 플래그·ai 코드 모두 머지 금지
+- 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 이후 플래그·ai 코드 변경도 시연·측정 중이 아닐 때 머지할 수 있다(11/14 동결 삭제). 단 발표 당일 머지 마감(플래그는 gateway 블루/그린이라 **11/20 05:00**, ai 코드는 **11/20 07:00**, `docs/repo-workflow.md` 2장 동결) 뒤에는 시연·측정 중이 아니어도 머지하지 않는다
 
 
 ---
@@ -813,11 +811,11 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | |
+| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | 11/14 관리자 역할 제거: `X-User-Role`은 항상 `USER`, `/api/admin/**`·관리자 API·화면 없음(Cognito `ADMIN` 그룹은 쓰지 않음). ADR 번호는 노션 등록 후 |
 | 63 | 화면 토큰 저장은 **메모리**(`InMemoryWebStorage`), localStorage 금지. 새로고침은 Cognito 세션으로 재발급 | |
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
-| 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |
-| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), **테스트 준비 예외(11/10 일정 변경)** `tests/k6/**`·`docs/**`·gitops `base/*/networkpolicy.yaml` 테스트 Job 허용 규칙 추가는 M6에도 머지(조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 테스트 실행 중이 아닐 때), **AI 화면 예외(11/12)** 3.3.7 챗봇 화면(전체 허용 `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스)·`frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음) + 기존 파일 **추가만**: `frontend/src/widgets/page-layout/ui/PageLayout.tsx` Dock 배치·`frontend/src/shared/ui/icon/Icon.tsx` 아이콘 경로·`frontend/src/shared/api/http.ts` `Retry-After` 읽기(기존 오류 처리 그대로, 테스트 포함)·`frontend/src/app/routes/router.tsx` 주석)도 M6에 머지 — frontend는 S3 + CloudFront 배포라 클러스터·블루/그린과 무관하고 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5). 조건은 테스트 준비 예외와 같음(PR 본문 「M6 예외(AI 화면)」), 그 밖의 `frontend/**`는 금지 그대로, 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** ai 코드 동결(이후 `fix/`만), M6 테스트 뒤 플래그 켜기 · **데모 주간** ai `fix/`도 금지(64 그대로) | 64 보완 |
+| 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, ~~데모 주간 11/16~20 머지 금지~~(11/14 삭제 — QA·피드백 반영, 시연·측정 중에는 머지하지 않음. 발표 당일 마감 booking·gateway 11/20 05:00·그 밖 07:00), 태그 rc1 11/6·rc2 11/13·v1.0.0 11/20(마감 뒤), Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |
+| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), **테스트 준비 예외(11/10 일정 변경)** `tests/k6/**`·`docs/**`·gitops `base/*/networkpolicy.yaml` 테스트 Job 허용 규칙 추가는 M6에도 머지(조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 테스트 실행 중이 아닐 때), **AI 화면 예외(11/12)** 3.3.7 챗봇 화면(전체 허용 `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스)·`frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음) + 기존 파일 **추가만**: `frontend/src/widgets/page-layout/ui/PageLayout.tsx` Dock 배치·`frontend/src/shared/ui/icon/Icon.tsx` 아이콘 경로·`frontend/src/shared/api/http.ts` `Retry-After` 읽기(기존 오류 처리 그대로, 테스트 포함)·`frontend/src/app/routes/router.tsx` 주석)도 M6에 머지 — frontend는 S3 + CloudFront 배포라 클러스터·블루/그린과 무관하고 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5). 조건은 테스트 준비 예외와 같음(PR 본문 「M6 예외(AI 화면)」), 그 밖의 `frontend/**`는 금지 그대로, 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** M6 테스트 뒤 플래그 켜기(ai 코드 동결·데모 주간 머지 금지는 11/14 삭제, 64와 같이) | 64 보완 |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
 
 
@@ -879,9 +877,9 @@ SeatSAC-gitops/
 | 수명 | 최대 3일. 길어지면 기능 플래그로 나눠 머지 |
 | 머지 | Squash merge |
 | 커밋 메시지 | Conventional Commits + 기능 ID 또는 WBS ID: `feat(booking): BKG-02 좌석 선점 Lua 스크립트`, `infra(terraform): 3.1.3 RDS·Valkey` |
-| 릴리스 태그 | `rc1` 11/6(M5), `rc2` 11/13(M6), `v1.0.0` 11/19(리허설 전) |
-| 동결 | 11/13 이후 `fix/`만, 승인 1명 + 김종식 확인. **11/16~20 데모 주간은 승인된 fix 외 머지 금지** |
-| ⚠️AI 일정·머지 (ADR-87) | **rc1(11/6)**: gateway `/api/ai/**` 라우트(플래그 off)·gateway 분석 쿼리 `/ai` 제외 머지 완료. ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)**: AI 기능은 계속 머지할 수 있다 — 허용 경로는 `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai/**`·`overlays/staging/ai/**`만. gateway·booking·`libs/`·Terraform 변경은 이 기간 금지(부하·전환 테스트 환경 보호). **테스트 준비 예외(11/10 일정 변경)**: 4.2.1 부하 테스트 준비가 M6로 밀려 테스트 도구·문서는 M6에도 머지할 수 있다 — `tests/k6/**`, `docs/**`(런북·문서, `CLAUDE.md` 재생성 포함), gitops `base/*/networkpolicy.yaml`의 **테스트 Job 라벨 허용 규칙 추가만**(예: `k6-loadtest` → gateway. Rollout·Deployment 템플릿은 그대로라 블루/그린·재시작이 없다). 조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 4.2.1·4.2.2 테스트가 돌지 않는 시간에 머지. 서비스 코드·Terraform 금지는 그대로. **AI 화면 예외(11/12)**: 3.3.7 챗봇 화면도 M6에 머지할 수 있다 — 이 경로는 전체 허용: `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스), `frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음). 기존 파일은 **추가만**(기존 동작 그대로): `frontend/src/widgets/page-layout/ui/PageLayout.tsx`(Dock import·배치), `frontend/src/shared/ui/icon/Icon.tsx`(아이콘 경로), `frontend/src/shared/api/http.ts`(`Retry-After`를 `ApiError`에 담기 — 기존 오류 처리 그대로, `http.test.ts` 포함), `frontend/src/app/routes/router.tsx`(주석만). `http.ts`는 모든 화면이 쓰는 클라이언트라 `pr-check` `frontend`(vitest) 통과를 조건에 넣는다. frontend는 S3 + CloudFront 배포라 클러스터 파드·블루/그린·노드와 무관하고, 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5) → 로그인·메인 진입 때 ai 트래픽이 없어 4.2.1·4.2.2·좌석 데모 측정에 섞이지 않는다. 조건: PR 본문에 「M6 예외(AI 화면)」와 이유, 스크럼 공유, 테스트가 돌지 않는 시간에 머지(`frontend-deploy`는 S3 업로드·CloudFront 무효화만). 그 밖의 `frontend/**`는 금지 그대로. 테스트(4.2.1·4.2.2)는 `ng-ai` desired 0·플래그 off. ai 검증은 로컬 Compose + **개발 전용 Claude API 키**(`.env`), staging 확인은 테스트가 돌지 않는 시간에 `kubectl port-forward svc/ai`(스크럼에서 시간 공유) · **rc2(11/13)**: ai 코드도 동결, 이후 ai는 `fix/`만. M6 테스트가 끝난 뒤 gateway `APP_AI_ENABLED=true` gitops PR 1회 · **데모 주간(11/16~20)**: ai `fix/`도 머지 금지(ADR-64 그대로). 11/17 AI 데모는 `ng-ai` 수동 기동(머지 아님) |
+| 릴리스 태그 | `rc1` 11/6(M5), `rc2` 11/13(M6), `v1.0.0` 11/20 07:00 머지 마감 뒤 main 마지막 커밋 |
+| 동결 | rc2 동결·데모 주간 머지 금지는 **없음**(11/14 — QA·피드백 반영이 남아 뺐다). 평소 PR 규칙(승인 1명) 그대로. 단 main 머지 = 배포이므로 데모 시연·측정이 진행 중인 시간에는 머지하지 않는다(스크럼에서 시간 공유). **발표(11/20 10시 시작, 우리 순서 약 11시) 머지 마감**: booking·gateway(블루/그린 — 분석 약 6분, 실패 시 abort·revert까지 30분 이상)는 **11/20 05:00**, 그 밖의 변경은 **11/20 07:00**까지 머지. 마감 뒤에는 기능·수정 머지를 하지 않는다. 복구 목적의 revert만 예외로 머지한다(승인 1명, 스크럼 공유): 서비스는 `SeatSAC-gitops` 태그 revert PR(4장 롤백), frontend는 SeatSAC main revert PR → `frontend-deploy`가 자동으로 돌고 안 돌면 수동 실행, Terraform은 revert PR 뒤 김종식(또는 백업 관리자)이 로컬에서 `cinema-admin`으로 apply. tfstate 버전 복원은 최후 수단 |
+| ⚠️AI 일정·머지 (ADR-87) | **rc1(11/6)**: gateway `/api/ai/**` 라우트(플래그 off)·gateway 분석 쿼리 `/ai` 제외 머지 완료. ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)**: AI 기능은 계속 머지할 수 있다 — 허용 경로는 `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai/**`·`overlays/staging/ai/**`만. gateway·booking·`libs/`·Terraform 변경은 이 기간 금지(부하·전환 테스트 환경 보호). **테스트 준비 예외(11/10 일정 변경)**: 4.2.1 부하 테스트 준비가 M6로 밀려 테스트 도구·문서는 M6에도 머지할 수 있다 — `tests/k6/**`, `docs/**`(런북·문서, `CLAUDE.md` 재생성 포함), gitops `base/*/networkpolicy.yaml`의 **테스트 Job 라벨 허용 규칙 추가만**(예: `k6-loadtest` → gateway. Rollout·Deployment 템플릿은 그대로라 블루/그린·재시작이 없다). 조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 4.2.1·4.2.2 테스트가 돌지 않는 시간에 머지. 서비스 코드·Terraform 금지는 그대로. **AI 화면 예외(11/12)**: 3.3.7 챗봇 화면도 M6에 머지할 수 있다 — 이 경로는 전체 허용: `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스), `frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음). 기존 파일은 **추가만**(기존 동작 그대로): `frontend/src/widgets/page-layout/ui/PageLayout.tsx`(Dock import·배치), `frontend/src/shared/ui/icon/Icon.tsx`(아이콘 경로), `frontend/src/shared/api/http.ts`(`Retry-After`를 `ApiError`에 담기 — 기존 오류 처리 그대로, `http.test.ts` 포함), `frontend/src/app/routes/router.tsx`(주석만). `http.ts`는 모든 화면이 쓰는 클라이언트라 `pr-check` `frontend`(vitest) 통과를 조건에 넣는다. frontend는 S3 + CloudFront 배포라 클러스터 파드·블루/그린·노드와 무관하고, 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5) → 로그인·메인 진입 때 ai 트래픽이 없어 4.2.1·4.2.2·좌석 데모 측정에 섞이지 않는다. 조건: PR 본문에 「M6 예외(AI 화면)」와 이유, 스크럼 공유, 테스트가 돌지 않는 시간에 머지(`frontend-deploy`는 S3 업로드·CloudFront 무효화만). 그 밖의 `frontend/**`는 금지 그대로. 테스트(4.2.1·4.2.2)는 `ng-ai` desired 0·플래그 off. ai 검증은 로컬 Compose + **개발 전용 Claude API 키**(`.env`), staging 확인은 테스트가 돌지 않는 시간에 `kubectl port-forward svc/ai`(스크럼에서 시간 공유) · **rc2(11/13)**: M6 테스트가 끝난 뒤 gateway `APP_AI_ENABLED=true` gitops PR 1회. ai 코드 동결은 없다(11/14 삭제) · **데모 주간(11/16~20)**: 시연·측정 중이 아닐 때 머지, 발표 당일 마감 11/20 07:00(ADR-64 — ai는 롤링이라 07:00, gateway 플래그 변경은 블루/그린이라 05:00). 11/17 AI 데모는 `ng-ai` 수동 기동(머지 아님) |
 
 ### 3. PR
 

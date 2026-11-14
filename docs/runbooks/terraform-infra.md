@@ -1248,7 +1248,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 
 #### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
 
-1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태)
+1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태). **전제: ai 「도구 강제」 수정 PR(김서현, 11/13)이 머지돼 staging ai 이미지에 들어간 뒤** — 그 전 이미지는 Sonnet 5.5가 도구 강제 옵션을 받지 않아 모든 질문이 503이다. ArgoCD `cinema-ai` 이미지 태그가 그 PR의 머지 커밋인지 확인하고 켠다
 2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
 3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
 4. 데모가 끝난 뒤에만 `cluster-scale.sh down ng-ai`
@@ -1391,6 +1391,49 @@ PY
 | `KeyError: 'AI_VALKEY_HOST'` | ai 파드에 `cinema-infra-endpoints`가 안 들어갔다 → 6-G-1 3단계 |
 | 연결 시간 초과 | ai Valkey 보안그룹(노드 SG → 6379)에 `ng-ai` 노드가 빠졌다 → `ai_valkey.tf` 인바운드 확인 |
 | `OOM command not allowed` | ai Valkey 메모리가 찼다(`noeviction`) → 메모리 경보·`INFO memory` 확인 |
+
+#### 6-G-7. ai Valkey 무응답 확인 (데모 전 1회, 김종식·김서현) — ⬜
+
+로컬에서 Valkey가 멈췄을 때 챗봇 답이 **63초** 걸렸다(연결 재시도 10회, 11/13 김서현). staging ai Valkey가 응답하지 않을 때도 시간 예산(9-1: ai 전체 기한 25초 < gateway 28초 < CloudFront 30초) 안에서 ai의 오류 형식으로 끝나는지 데모 전에 본다. ai 쪽 재시도 수정(김서현)이 staging에 들어간 뒤 한다.
+
+- 시간: 11/15까지 · 평일 노드 켜짐 시간 · 4.2.1·4.2.2·좌석 데모 리허설과 겹치지 않게(스크럼 공유) · `up ng-ai`(6-G-2 A) 상태
+- 방법: ai Valkey 노드를 재부팅해 몇 분간 응답이 없게 만든다(새 리소스를 만들지 않는다. ai 전용 클러스터라 좌석 선점·기존 Valkey와 무관). 그동안 챗봇 질문을 보낸다
+- ⚠️ 재부팅하면 ai Valkey의 **데이터가 모두 사라진다**(복제본·영속화 없음): 캐시·세션·한도 카운터와 의미 캐시 인덱스 `ai_semcache_idx`. 캐시·세션·한도는 TTL 데이터라 괜찮다. 하지만 지금 ai 코드(`cache/store.py`)는 인덱스를 **기동 때 한 번만** 만들고, 검색이 실패해도 「놓침」으로만 처리한다 → 재부팅 뒤에는 파드를 다시 띄울 때까지 **의미 캐시가 계속 적중하지 않는다**(2차 데모 「의미 캐시 적중」이 안 됨). 그래서 확인 끝에 반드시 아래 「복구」를 한다. AI 데모 당일(11/17)에는 하지 않는다
+
+```bash
+export AWS_PROFILE=cinema-admin
+CID=$(aws elasticache describe-replication-groups --replication-group-id cinema-staging-ai-valkey \
+      --query 'ReplicationGroups[0].MemberClusters[0]' --output text)
+aws elasticache reboot-cache-cluster --cache-cluster-id "$CID" --cache-node-ids-to-reboot 0001
+kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # 터미널 B — readiness가 빠지는지(PING 실패)
+# 터미널 A: 로그인한 화면(또는 토큰)으로 /api/ai/chat 질문 3번 — 응답 코드·걸린 시간·code·details[].reason을 적는다
+#   첫 질문은 Valkey가 응답을 멈춘 직후, 터미널 B에서 readiness가 빠지기 전(5초 × 3회 ≈ 15초 안)에 보낸다 — 그래야 ai까지 가서 25초 기한을 잰다
+for i in $(seq 1 40); do   # 재부팅 끝(available)까지 15초 × 40회 = 최대 10분
+  S=$(aws elasticache describe-cache-clusters --cache-cluster-id "$CID" --query 'CacheClusters[0].CacheClusterStatus' --output text)
+  echo "$S"; [ "$S" = available ] && break; sleep 15
+done
+# $S가 available이 아니면 여기서 멈추고 아래로 가지 않는다(AWS 콘솔 이벤트·김서현과 확인)
+
+# 복구 확인(파드 재시작 전) — available 뒤 1분 안에 기존 ai 파드가 스스로 돌아오는지 본다. 재시작하면 이 확인을 할 수 없다
+#   터미널 B에서 READY 1/1 → 터미널 A에서 질문 1번이 200(정확 일치 캐시·한도 정상). 결과를 아래 표 「복구(파드 재시작 전)」에 적는다
+
+# 복구 — 의미 캐시 인덱스를 다시 만들게 ai 파드를 새로 띄운다(kubectl delete 대신 노드를 내렸다 올린다, GitOps 규칙). 위 확인을 적은 뒤에
+infra/scripts/cluster-scale.sh down ng-ai && infra/scripts/cluster-scale.sh up ng-ai
+kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # Ready까지(startupProbe 최대 150초)
+# 같은 질문을 두 번 → 두 번째가 path CACHE_EXACT, 표현만 바꾼 질문 → CACHE_SEMANTIC 이면 의미 캐시 복구
+```
+
+| 확인 | 합격 |
+| --- | --- |
+| 무응답 중 챗봇 응답 시간 | **25초 이하**(ai 전체 기한). 28초에 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_TIMEOUT`)·30초에 CloudFront 504가 나면 ai 재시도가 기한을 넘는 것 → 김서현 |
+| 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_UNAVAILABLE`). 둘 다 합격. 같은 gateway 503이라도 `reason: UPSTREAM_TIMEOUT`이면 불합격(위 행) |
+| ai 도달 요청 | 3번 중 1번 이상은 ai가 직접 답한 503 `AI_LLM_UNAVAILABLE`이어야 한다. 3번 모두 gateway `UPSTREAM_UNAVAILABLE`(바로 끝남)이거나 200(Valkey가 아직 살아 있음)이면 25초 기한을 확인하지 못한 것이므로 다시 한다 |
+| Claude 호출 | 무응답 중 `ai_llm_call_seconds_count`가 늘지 않는다(한도 기록 실패 → 호출 안 함). 실패·타임아웃 호출도 이 히스토그램에 남는다(`llm/client.py`). `ai_tokens_total`은 성공 응답의 사용량만 세므로 보조 확인 |
+| 복구(파드 재시작 전) | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 질문 200 — 정확 일치 캐시·한도는 파드 재시작 없이 돌아와야 한다. 의미 캐시는 위 이유로 적중하지 않는 게 지금 코드의 동작이다 |
+| 복구(파드 재시작 뒤) | `CACHE_SEMANTIC` 적중 1회. 안 되면 2차 데모 전에 김서현 |
+
+- 김서현 님께 공유: 의미 캐시 검색이 `no such index`로 실패하면 `semantic_ready`를 내리고 `start()`를 다시 부르게 하면(연결 오류 때의 재시도와 같은 방식) 파드 재시작 없이 복구된다 — rc2 뒤라 `fix/`로, 데모 주간 전(11/15)까지만
+- 결과는 이 절 머리말(⬜ → ✅ + 날짜·응답 시간)과 스크럼에 남긴다. 25초를 넘으면 데모 Plan B: AI 데모 중 ai Valkey 경보(메모리 80%)·`SeatSAC AI` 대시보드를 보고, 무응답이면 `cluster-scale.sh down ng-ai`(6-G-4) 후 「일시 중지」 안내
 
 ### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)
 

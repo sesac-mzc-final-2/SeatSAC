@@ -2,7 +2,7 @@
 
 > 기준 2026-10-21. 개발(서비스 코드)과 인프라/데브옵스(Terraform·gitops·CI)가 **맞닿는 모든 약속**을 한곳에 둔다. 이름 규칙은 `docs/conventions.md`, API는 `contracts/`.
 > 이 표대로 만들면 서로 회의 없이 붙는다. 표를 바꿀 때는 PR에 양쪽(서비스 담당 + 김종식) 승인을 받는다.
-> 범위: 노드 t3.large 2대(ng-a 1 · ng-c 1, ADR-7·34) + ⚠️AI ai 전용 `ng-ai` 1대(평소 0대, ADR-86), 환경 staging 하나. 값은 10/22 확정(ADR-57·58·59·63), ⚠️AI 11/5 AI 재도입(ADR-82~87)은 각 장의 「ai」 항목과 9장.
+> 범위: 노드 t3.xlarge 2대(ng-a 1 · ng-c 1, ADR-7·34 — 11/14 t3.large에서 변경) + ⚠️AI ai 전용 `ng-ai` t3.large 1대(평소 0대, ADR-86 — 변수 `ai_node_instance_type`으로 따로), 환경 staging 하나. 값은 10/22 확정(ADR-57·58·59·63), ⚠️AI 11/5 AI 재도입(ADR-82~87)은 각 장의 「ai」 항목과 9장.
 
 ---
 

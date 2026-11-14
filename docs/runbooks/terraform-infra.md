@@ -206,7 +206,7 @@ terraform plan -var-file=staging.tfvars   # No changes
 | 항목 | 값 |
 | --- | --- |
 | 클러스터 | `cinema-staging-eks`, Kubernetes 1.36, 인증 모드 `API`(Access Entry만), 공개+프라이빗 엔드포인트 |
-| 노드그룹 | `ng-a`(app 서브넷 a) · `ng-c`(app 서브넷 c), t3.large On-Demand, AL2023, min 0 · max 2 · desired 1. 실제 이름은 접두사 + 랜덤(출력 `eks_node_group_names`) |
+| 노드그룹 | `ng-a`(app 서브넷 a) · `ng-c`(app 서브넷 c), t3.xlarge On-Demand(11/14 t3.large에서 변경, `node_instance_type`. `ng-ai`는 `ai_node_instance_type` t3.large로 따로 — 4-7), AL2023, min 0 · max 2 · desired 1. 실제 이름은 접두사 + 랜덤(출력 `eks_node_group_names`) |
 | 애드온 | vpc-cni(`enableNetworkPolicy=true`) · eks-pod-identity-agent · kube-proxy · coredns · metrics-server. **EBS CSI 없음**(PV 안 씀 — Prometheus도 emptyDir, 밤에 노드 0대라 보존 의미 없음) |
 | 접근 | `cinema-admin` → ClusterAdmin(cluster) / `cinema-developer` → View(namespace `cinema-staging`·`monitoring`) + 그룹 `cinema-developers`(port-forward Role) |
 | 로그 | 컨트롤 플레인 audit·authenticator, CloudWatch 7일 |
@@ -312,6 +312,32 @@ EKS API(kubectl·helm)는 팀 공인 IP 대역에서만 열린다(`eks_public_ac
 - IP가 바뀌거나 팀원이 다른 곳에서 접속할 때: 두 곳을 같이 고치고 `terraform apply`(1~2분, 엔드포인트 재생성 없음). 증상은 `kubectl` 타임아웃(`dial tcp ... i/o timeout`)
 - plan 출력에는 `(sensitive value)`로 가려진다 → PR 코멘트에 IP가 남지 않는다
 - GitHub Actions 대역은 열지 않는다: `infra-plan`(AWS API)·`cluster-schedule`(EKS 관리 API)은 클러스터 API를 부르지 않는다. 나중에 Actions에서 kubectl이 필요해지면 그때 다시 결정
+
+### 4-7. 노드 인스턴스 타입 바꾸기 (11/14 t3.large → t3.xlarge, 4.2.1 후속)
+
+기본 노드(ng-a·ng-c)는 `node_instance_type`, ai 노드(ng-ai)는 `ai_node_instance_type` — 변수가 따로라 한쪽만 바꿀 수 있다. 값은 `envs/staging/staging.tfvars`.
+
+```bash
+# 0) 조건: 블루/그린·부하 테스트 진행 중 아님 · ng-ai 0 · 스크럼 공유. 데모 주간(11/16~20) 금지
+# 1) 노드 켜기 (주말·밤이면) — 교체는 desired 1인 그룹에서 확인한다
+infra/scripts/cluster-scale.sh up
+# 2) plan — 기본 노드그룹 2개만 교체여야 한다
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: module.eks.module.eks_managed_node_group["ng-a"]·["ng-c"]의 aws_eks_node_group(+ 시작 템플릿) 교체(create_before_destroy)
+#         · EventBridge Scheduler 일정의 노드그룹 이름 변경(이름 접두사 + 랜덤이 바뀜). ng-ai·RDS·Valkey·클러스터 변경이 있으면 멈춘다
+terraform apply plan.out     # 새 그룹 생성 → 이전 그룹 드레인·삭제 (약 10~20분, 파드가 새 노드로 다시 뜬다)
+# 3) 확인
+kubectl get nodes -L node.kubernetes.io/instance-type,cinema/az        # 새 타입 2대 Ready
+kubectl -n argocd get applications                                     # 전부 Synced·Healthy
+kubectl -n cinema-staging get pods                                      # 전부 Running (booking·gateway Rollout 포함)
+terraform plan -var-file=staging.tfvars                                 # No changes
+```
+
+- 노드 교체는 블루/그린이 아니다: 파드가 드레인되며 다시 뜨므로 그 사이 요청이 실패할 수 있다(데모·측정 중 금지). 교체 뒤 재측정(4.2.1 contention·deploy)을 한 번 더 한다
+- 부족하면 한 단계씩 올린다(t3.xlarge → t3.2xlarge). 같은 순서
+- 비용: t3.xlarge는 t3.large의 2배 — global `budget_daily_usd`·`budget_monthly_usd`를 다시 정한다(`envs/global`, 김종식)
+- `<노션 반영 필요>` ADR-7 제목·본문 "t3.large 2대" → "t3.xlarge 2대(11/14)"
 
 ## 5. staging 3) RDS·Valkey (3.1.3)
 

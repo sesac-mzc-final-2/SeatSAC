@@ -8,6 +8,8 @@
 //   SEAT_ID_FROM    쓸 좌석 ID 시작값 — VU마다 서로 다른 좌석을 잡아 좌석 경쟁을 피한다
 //                   (경쟁 테스트는 seat-hold-contention.js가 따로 한다)
 //   PAY_CARD        결제에 쓸 카드 번호 (기본 4111111111111112 = 승인)
+//   PAYMENT_MOCK_KEY 모의 결제(CARD) 허용 키 — run-in-cluster.sh가 booking-secrets에서 넣는다(ADR-112).
+//                   없으면 결제가 400 MOCK_NOT_ALLOWED로 끝난다
 //
 // 왜 좌석을 VU마다 나누나: 이 시나리오가 재는 것은 「배포 중에 오류가 나는가」다.
 // 같은 좌석을 다투면 409가 섞여 그 신호가 가려진다.
@@ -23,6 +25,7 @@ import { BASE, authHeaders, intEnv, reasonOf, requireDistinctTokens, tokenForVu 
 const VUS = Number(__ENV.VUS || 10);
 const SEATS_PER_VU = Number(__ENV.SEATS_PER_VU || 20);
 const CARD = __ENV.PAY_CARD || "4111111111111112";
+const MOCK_KEY = __ENV.PAYMENT_MOCK_KEY || "";
 
 const serverErrors = new Counter("server_errors");          // 5xx·연결 오류 — 0이어야 한다
 const resultUnknown = new Counter("payment_result_unknown"); // 503 PAYMENT_RESULT_UNKNOWN (지연 카드 경로)
@@ -145,7 +148,7 @@ export default function (data) {
     const res = track(http.post(
       `${BASE}/bookings/${bookingId}/pay`,
       JSON.stringify({ method: "CARD", card: { number: CARD, expiry: "12/28", holder: "K6" } }),
-      { headers: authHeaders(token), tags: { name: "POST /bookings/{id}/pay" } }
+      { headers: { ...authHeaders(token), "X-Payment-Mock-Key": MOCK_KEY }, tags: { name: "POST /bookings/{id}/pay" } }
     ), { allowResultUnknown: true });
     // 409를 통과로 두면 안 된다. 이 흐름은 예매마다 결제를 한 번만 부르므로
     // PAYMENT_ALREADY_REQUESTED가 나올 수 없고, 남는 409는 BOOKING_STATE_CONFLICT

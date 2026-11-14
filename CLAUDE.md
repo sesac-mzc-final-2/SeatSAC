@@ -194,7 +194,7 @@
 | 프로필 | `local`, `staging` | `SPRING_PROFILES_ACTIVE=staging` |
 | ⚠️AI ai(Python) | `APP_AI_*`(pydantic-settings). **Python은 `${키}` 치환이 없으므로** `cinema-infra-endpoints`의 키(`AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`)를 이름 그대로 읽는다. 프로필은 `APP_ENV=local\|staging` | `APP_AI_MODEL=claude-sonnet-5-5` |
 | ⚠️AI gateway 플래그 | `APP_AI_ENABLED`(gateway `{svc}-config`, 기본 `false`) — `app.ai.enabled`. 꺼져 있으면 `/api/ai/**` 라우트가 없다 → 404 | — |
-| ⚠️AI Claude API 키 | staging: Secret `ai-secrets`의 `ANTHROPIC_API_KEY`(Terraform sensitive 변수 → K8s Secret, tfstate는 암호화 S3). **로컬: 개발 전용 키를 따로 발급해 `services/ai/.env`**(`.gitignore` 대상, Git·문서·PR 금지). 지출 한도는 Anthropic 콘솔에서 월 $20 | — |
+| ⚠️AI Claude API 키 | staging: Secret `ai-secrets`의 `ANTHROPIC_API_KEY`(Terraform sensitive 변수 → K8s Secret, tfstate는 암호화 S3). **로컬: 개발 전용 키를 따로 발급해 `services/ai/.env`**(`.gitignore` 대상, Git·문서·PR 금지). 지출 한도는 Anthropic 콘솔에서 월 $90(11/13 $20 → $90, 11/20 발표 뒤 키 폐기) | — |
 
 > `VITE_`에 비밀 값 금지. Secret 값은 Git·문서에 두지 않는다(Terraform 랜덤 생성 → K8s Secret, tfstate는 암호화 S3). ⚠️AI `.env`는 커밋 금지(gitleaks가 `sk-ant-` 형식을 막는다).
 
@@ -755,7 +755,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | --- | --- | --- |
 | 1 · 50 | ~~서비스 5개, AI 제외(10/22)~~ → **82로 대체**: 서비스 6개(ai 추가) | 26 → 83으로 대체 |
 | ⚠️AI 82 | AI 재도입: **Python(FastAPI) `services/ai`, 사용자 챗봇만**(로그인 필수, `/api/ai/**`). 질문 처리 정확 일치 캐시 → 의미 캐시 → 프리셋 → NL2SQL, "내 예매"는 공개 API. 담당 **김서현**. 데모는 1차 11/16(무중단·좌석) + **2차 11/17(AI)** | 1·50 대체, 52·53 보완. 관리자 NL2SQL·추천(AI-08) 제외 |
-| ⚠️AI 83 | LLM은 **Claude API(Anthropic 직접) `claude-sonnet-5-5`**, 도구 호출로 프리셋/SQL 선택, 프롬프트 캐싱. 키: staging `ai-secrets`(Terraform sensitive), 로컬 개발 전용 키 `.env`(커밋 금지). Anthropic 월 지출 한도 $20, 사용자당 동시 1·분당 10·하루 100 | 26 대체. Bedrock 안 씀(Pod Identity 불필요) |
+| ⚠️AI 83 | LLM은 **Claude API(Anthropic 직접) `claude-sonnet-5-5`**, 도구 호출로 프리셋/SQL 선택, 프롬프트 캐싱. 키: staging `ai-secrets`(Terraform sensitive), 로컬 개발 전용 키 `.env`(커밋 금지). Anthropic 월 지출 한도 $90(11/13 $20에서 상향 — 11/20 발표까지만 쓴다), 사용자당 동시 1·분당 10·하루 100 | 26 대체. Bedrock 안 씀(Pod Identity 불필요) |
 | 52 | (⚠️AI 82 보완: 11/17 AI 2차 데모 추가) 데모는 **무중단 배포 · 실시간 좌석** 2개로 확정. 실시간 좌석 데모에 동시성 테스트(같은 좌석 100명 → 성공 1명) 포함 | 선점 전략 비교는 여유 시 |
 | 45 | 선점 전략 비교(db-lock/redis): 지금은 3.2.2에 `SeatHoldStrategy` 인터페이스만, db-lock은 잠글 행·만료 처리 **설계 초안만**(남궁일). 구현·측정은 최후 순위(4.2 때 여유 시) | 새 노드 불필요 |
 | 53 | 김서현은 일정에서 제외. 필요하면 개발·인프라/DevOps의 WBS 하나씩 맡긴다 → ⚠️AI **82로 보완: AI는 김서현 고정 담당**(11/2) | 4.1.2 김서현·한채연, OPS-07 코드 김종식 |

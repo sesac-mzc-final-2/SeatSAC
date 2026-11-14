@@ -1185,7 +1185,7 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
      kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자 (0이면 다시 교체)
      unset TF_VAR_anthropic_api_key
      ```
-4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
+4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$90**(AWS Budgets 밖, 11/13 $20 → $90)
 
 #### 6-G-2. 확인 (적용 직후, 플래그 off)
 

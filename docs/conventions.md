@@ -160,7 +160,7 @@
 | 프로필 | `local`, `staging` | `SPRING_PROFILES_ACTIVE=staging` |
 | ⚠️AI ai(Python) | `APP_AI_*`(pydantic-settings). **Python은 `${키}` 치환이 없으므로** `cinema-infra-endpoints`의 키(`AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`)를 이름 그대로 읽는다. 프로필은 `APP_ENV=local\|staging` | `APP_AI_MODEL=claude-sonnet-5-5` |
 | ⚠️AI gateway 플래그 | `APP_AI_ENABLED`(gateway `{svc}-config`, 기본 `false`) — `app.ai.enabled`. 꺼져 있으면 `/api/ai/**` 라우트가 없다 → 404 | — |
-| ⚠️AI Claude API 키 | staging: Secret `ai-secrets`의 `ANTHROPIC_API_KEY`(Terraform sensitive 변수 → K8s Secret, tfstate는 암호화 S3). **로컬: 개발 전용 키를 따로 발급해 `services/ai/.env`**(`.gitignore` 대상, Git·문서·PR 금지). 지출 한도는 Anthropic 콘솔에서 월 $20 | — |
+| ⚠️AI Claude API 키 | staging: Secret `ai-secrets`의 `ANTHROPIC_API_KEY`(Terraform sensitive 변수 → K8s Secret, tfstate는 암호화 S3). **로컬: 개발 전용 키를 따로 발급해 `services/ai/.env`**(`.gitignore` 대상, Git·문서·PR 금지). 지출 한도는 Anthropic 콘솔에서 월 $90(11/13 $20 → $90, 11/20 발표 뒤 키 폐기) | — |
 
 > `VITE_`에 비밀 값 금지. Secret 값은 Git·문서에 두지 않는다(Terraform 랜덤 생성 → K8s Secret, tfstate는 암호화 S3). ⚠️AI `.env`는 커밋 금지(gitleaks가 `sk-ant-` 형식을 막는다).
 

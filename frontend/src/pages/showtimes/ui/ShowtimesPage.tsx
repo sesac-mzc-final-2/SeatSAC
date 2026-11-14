@@ -15,28 +15,33 @@ import { Button, EmptyState, ErrorState, Icon, LoadingBlock, PageHeading } from 
 import { ShowtimeBoard } from "@/widgets/showtime-board";
 import styles from "./ShowtimesPage.module.css";
 
+/** 선호 조회 제한 시간. 극장 선택이 이 응답을 기다리므로 짧게 둔다 */
+const PREFERENCES_TIMEOUT_MS = 3000;
+
+/**
+ * react-query 의 signal(화면 이탈 등)과 제한 시간 중 먼저 오는 쪽으로 요청을 끊는다.
+ * 요청이 끝나면(성공·실패 모두) 타이머와 리스너를 정리한다.
+ */
+async function withTimeout<T>(signal: AbortSignal, ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException("선호 조회 시간 초과", "TimeoutError")), ms);
+  const forward = () => controller.abort(signal.reason);
+  if (signal.aborted) forward();
+  else signal.addEventListener("abort", forward, { once: true });
+  try {
+    return await run(controller.signal);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", forward);
+  }
+}
+
 /**
  * W3 상영시간표 (CAT-03): 극장(배치 있는 4곳) → 날짜(7일) → 영화별·상영관별 회차.
  * 회차는 극장·날짜로 한 번 받아 두고 영화 필터는 화면에서 건다 (영화 드롭다운이 그날 편성에서 나온다).
  * 로그인 사용자는 마이페이지 선호(USR-05)가 반영된다: 1순위 선호 극장을 기본 선택, 선호 극장 탭·선호 시간대 회차에 하트.
  * 선호를 못 받으면(비로그인·실패) 선호 없이 그대로 보여 준다.
  */
-/** 선호 조회 제한 시간. 극장 선택이 이 응답을 기다리므로 짧게 둔다 */
-const PREFERENCES_TIMEOUT_MS = 3000;
-
-/** react-query 의 signal(화면 이탈 등)과 제한 시간 중 먼저 오는 쪽으로 요청을 끊는다 */
-function withTimeout(signal: AbortSignal, ms: number): AbortSignal {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new DOMException("선호 조회 시간 초과", "TimeoutError")), ms);
-  const abort = () => {
-    clearTimeout(timer);
-    controller.abort(signal.reason);
-  };
-  if (signal.aborted) abort();
-  else signal.addEventListener("abort", abort, { once: true });
-  return controller.signal;
-}
-
 export function ShowtimesPage() {
   useDocumentTitle("상영시간표");
 
@@ -45,7 +50,7 @@ export function ShowtimesPage() {
   // 선호는 보조 정보라 다시 시도하지 않고, 응답이 늦으면(PREFERENCES_TIMEOUT_MS) 끊고 선호 없이 연다
   const preferencesQuery = useQuery({
     ...myPreferencesQuery(),
-    queryFn: ({ signal }) => getMyPreferences(withTimeout(signal, PREFERENCES_TIMEOUT_MS)),
+    queryFn: ({ signal }) => withTimeout(signal, PREFERENCES_TIMEOUT_MS, getMyPreferences),
     enabled: loggedIn,
     retry: false,
   });

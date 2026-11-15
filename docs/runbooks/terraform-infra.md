@@ -1389,7 +1389,8 @@ done
 # $S가 available이 아니면 여기서 멈추고 아래로 가지 않는다(AWS 콘솔 이벤트·김서현과 확인)
 
 # 복구 확인(파드 재시작 전) — available 뒤 1분 안에 기존 ai 파드가 스스로 돌아오는지 본다. 재시작하면 이 확인을 할 수 없다
-#   터미널 B에서 READY 1/1 → 터미널 A에서 질문 1번이 200(정확 일치 캐시·한도 정상). 결과를 아래 표 「복구(파드 재시작 전)」에 적는다
+#   터미널 B에서 READY 1/1 → 터미널 A에서 같은 질문(개인 질문이 아닌 것)을 두 번: 첫 번째 200(재부팅으로 캐시가 비어 놓침이 정상),
+#   두 번째 응답의 path가 CACHE_EXACT여야 정확 일치 캐시 저장·조회가 돌아온 것이다(200만으로는 Claude 응답과 구분되지 않는다). 결과를 아래 표 「복구(파드 재시작 전)」에 적는다
 
 # 복구 — 의미 캐시 인덱스를 다시 만들게 ai 파드를 새로 띄운다(kubectl delete 대신 노드를 내렸다 올린다, GitOps 규칙). 위 확인을 적은 뒤에
 infra/scripts/cluster-scale.sh down ng-ai && infra/scripts/cluster-scale.sh up ng-ai
@@ -1403,7 +1404,7 @@ kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # Ready�
 | 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_UNAVAILABLE`). 둘 다 합격. 같은 gateway 503이라도 `reason: UPSTREAM_TIMEOUT`이면 불합격(위 행) |
 | ai 도달 요청 | 3번 중 1번 이상은 ai가 직접 답한 503 `AI_LLM_UNAVAILABLE`이어야 한다. 3번 모두 gateway `UPSTREAM_UNAVAILABLE`(바로 끝남)이거나 200(Valkey가 아직 살아 있음)이면 25초 기한을 확인하지 못한 것이므로 다시 한다 |
 | Claude 호출 | 무응답 중 `ai_llm_call_seconds_count`가 늘지 않는다(한도 기록 실패 → 호출 안 함). 실패·타임아웃 호출도 이 히스토그램에 남는다(`llm/client.py`). `ai_tokens_total`은 성공 응답의 사용량만 세므로 보조 확인 |
-| 복구(파드 재시작 전) | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 질문 200 — 정확 일치 캐시·한도는 파드 재시작 없이 돌아와야 한다. 의미 캐시는 위 이유로 적중하지 않는 게 지금 코드의 동작이다 |
+| 복구(파드 재시작 전) | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 같은 질문 두 번째가 `path: CACHE_EXACT` — 정확 일치 캐시·한도는 파드 재시작 없이 돌아와야 한다. 의미 캐시는 위 이유로 적중하지 않는 게 지금 코드의 동작이다 |
 | 복구(파드 재시작 뒤) | `CACHE_SEMANTIC` 적중 1회. 안 되면 2차 데모 전에 김서현 |
 
 - 김서현 님께 공유: 의미 캐시 검색이 `no such index`로 실패하면 `semantic_ready`를 내리고 `start()`를 다시 부르게 하면(연결 오류 때의 재시도와 같은 방식) 파드 재시작 없이 복구된다 — rc2 뒤라 `fix/`로, 데모 주간 전(11/15)까지만

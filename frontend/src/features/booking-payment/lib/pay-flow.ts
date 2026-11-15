@@ -17,6 +17,12 @@ export type PayOutcome =
   | { kind: "expired"; refunded: boolean }
   /** 2초 × 5회 확인에도 결과가 안 나왔다 — 예매 내역에서 다시 확인하게 안내 */
   | { kind: "unknown" }
+  /**
+   * 토스페이 결제창을 닫았는데(취소) 서버도 결과를 모른다 — 포트원에 결제 기록이 「준비」로 남은 경우.
+   * 재조회(「결과 다시 확인」)는 서버가 포트원에 다시 묻는다. 끝까지 결제가 없으면 좌석은 선점 만료 뒤 몇 분 안에
+   * 서버가 정리한다(booking 유예 2분 · payment 결제창 미완료 정리 = 준비 + 7분 중 늦은 쪽)
+   */
+  | { kind: "windowClosed"; message: string }
   | { kind: "error"; message: string };
 
 export interface PayFlowDeps {

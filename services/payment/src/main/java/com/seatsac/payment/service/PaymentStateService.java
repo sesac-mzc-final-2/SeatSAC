@@ -5,6 +5,7 @@ import com.seatsac.payment.enums.PaymentCancelReason;
 import com.seatsac.payment.enums.PaymentFailureCode;
 import com.seatsac.payment.enums.PaymentMethod;
 import com.seatsac.payment.enums.PaymentStatus;
+import com.seatsac.payment.enums.PgProvider;
 import com.seatsac.payment.repository.PaymentRepository;
 import java.time.Instant;
 import java.util.List;
@@ -60,8 +61,52 @@ public class PaymentStateService {
     @Transactional
     public boolean settle(String paymentId, PaymentStatus status, PaymentFailureCode failureCode,
                           Instant now) {
+        return settle(paymentId, status, failureCode, null, now);
+    }
+
+    /** PORTONE — 포트원 transactionId(돈이 잡힌 증거)를 함께 적는다. 승인·금액 불일치 FAILED가 쓴다 */
+    @Transactional
+    public boolean settle(String paymentId, PaymentStatus status, PaymentFailureCode failureCode,
+                          String pgTransactionId, Instant now) {
         Instant approvedAt = status == PaymentStatus.APPROVED ? now : null;
-        return paymentRepository.settleProcessing(paymentId, status, failureCode, approvedAt, now) == 1;
+        return paymentRepository.settleProcessing(paymentId, status, failureCode, pgTransactionId, approvedAt, now) == 1;
+    }
+
+    /**
+     * PORTONE 승인 — {@code approvedAt}은 포트원이 승인한 시각이다. 우리가 확인한 시각({@code now})을 쓰면
+     * 결제창을 끝낸 뒤 verify·웹훅·스윕이 늦게 올수록 승인 시각이 밀린다(로컬 테스트에서 3분 반).
+     */
+    @Transactional
+    public boolean approve(String paymentId, String pgTransactionId, Instant approvedAt, Instant now) {
+        return paymentRepository.settleProcessing(paymentId, PaymentStatus.APPROVED, null, pgTransactionId,
+            approvedAt, now) == 1;
+    }
+
+    /** 늦은 결제 — 끝난 FAILED 행에 돈이 잡혔다는 증거를 남겨 환불 미완료로 만든다(ADR-112) */
+    @Transactional
+    public boolean markRefundOwed(String paymentId, String pgTransactionId, Instant now) {
+        return paymentRepository.markRefundOwed(paymentId, pgTransactionId, now) == 1;
+    }
+
+    /** 환불 미완료 행의 환불이 포트원에서 확인됐다 */
+    @Transactional
+    public boolean confirmRefund(String paymentId, PaymentCancelReason reason, Instant now) {
+        return paymentRepository.confirmRefund(paymentId, reason, now) == 1;
+    }
+
+    @Transactional
+    public void touch(String paymentId, Instant now) {
+        paymentRepository.touch(paymentId, now);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Payment> findRefundOwed(Instant threshold, Pageable pageable) {
+        return paymentRepository.findRefundOwed(threshold, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Payment> findRecentlyFailedWithoutTransaction(Instant since, Pageable pageable) {
+        return paymentRepository.findRecentlyFailedWithoutTransaction(since, pageable);
     }
 
     /** PAY-03 — 승인된 결제만 취소한다. 0행이면 이미 취소됐거나 승인 상태가 아니다 */
@@ -71,7 +116,7 @@ public class PaymentStateService {
     }
 
     @Transactional(readOnly = true)
-    public List<String> findStaleProcessingIds(Instant threshold, Pageable pageable) {
-        return paymentRepository.findStaleProcessingIds(threshold, pageable);
+    public List<String> findStaleProcessingIds(PgProvider provider, Instant threshold, Pageable pageable) {
+        return paymentRepository.findStaleProcessingIds(provider, threshold, pageable);
     }
 }

@@ -1,5 +1,9 @@
 .header {
-  height: 88px;
+  /* 스크롤해도 항상 위에 붙는다. 챗봇(140)·토스트(150)보다는 아래 */
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: var(--header-h);
   border-bottom: 1px solid #22242c;
   background: var(--color-bg);
 }
@@ -49,9 +53,6 @@
   }
 }
 @media (max-width: 800px) {
-  .header {
-    height: 76px;
-  }
   .inner {
     gap: 34px;
   }
@@ -80,5 +81,12 @@
   }
   .actions {
     min-height: 44px;
+  }
+}
+@media (max-width: 360px) {
+  /* 로그인 상태에서 로고·주 메뉴·계정 메뉴가 한 줄에 안 들어가는 폭(약 352px 미만).
+     두 줄 헤더가 상단에 고정되면 화면을 너무 차지하므로 주 메뉴를 숨긴다 — 영화는 로고(홈), 상영시간표는 홈의 예매하기·배너로 간다 */
+  .header[data-authed] .nav {
+    display: none;
   }
 }

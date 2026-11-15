@@ -7,7 +7,7 @@ info:
     자연어로 묻는 챗봇. 처리는 비용이 낮은 경로부터 — 정확 일치 캐시 → 의미 캐시 → (Claude 1회 호출로) 프리셋
     또는 NL2SQL. 검색 대상은 ai 파드 메모리의 SQLite 스냅샷(공개 API로 채운 데이터)뿐이고 기존 MSA DB는 건드리지 않는다.
     외부 호출은 `/api` 접두사, Gateway가 StripPrefix=1 (`/api/ai/chat` → ai `/ai/chat`).
-    gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND** — 화면은 챗봇 창을 열 때 부른
+    gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND**(유효한 토큰으로 인증됐을 때. 토큰이 없거나 만료·서명 불일치면 gateway 인증이 라우팅보다 먼저라 401) — 화면은 챗봇 창을 열 때 부른
     `GET /ai/presets`가 404면 「준비 중」 안내 뒤 챗봇 버튼을 숨긴다(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5). 켜져 있을 때 `/api/ai/**` 라우트만 응답 타임아웃 28초(ai 요청 전체 기한 25초).
     조회 전용이라 `Idempotency-Key`는 받지 않는다. 오류 코드 4개(`AI_*`)는 `services/ai` 안에서 정의하고 형식은
     `contracts/schemas/error.v1.json` 그대로.
@@ -111,7 +111,8 @@ paths:
               기록하지 못함 — 한도 확인 없이 Claude를 부르지 않는다)
             AI_SNAPSHOT_NOT_READY — 기동 직후 SQLite 스냅샷 첫 적재 전(readiness가 막으므로 드묾). `details` 빈 배열
             SERVICE_UNAVAILABLE — "내 예매" 공개 API(`/users/me/bookings`) 실패(`details[{ field: "upstream", value: "user" }]`),
-              또는 gateway — ai 파드 없음(`ng-ai` 0대). 화면은 챗봇을 비활성 안내로 보여준다
+              또는 gateway — ai 파드 없음(`ng-ai` 0대, `details[{ field: "service", value: "ai", reason: "UPSTREAM_UNAVAILABLE" }]`)·
+              라우트 응답 28초 초과(같은 형식, reason `UPSTREAM_TIMEOUT`). 화면은 챗봇을 비활성 안내로 보여준다
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -149,7 +150,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFoundFlagOff" }
         "503":
-          description: SERVICE_UNAVAILABLE (gateway) — ai 파드 없음(`ng-ai` 0대·기동 중). 화면은 챗봇 비활성 안내
+          description: SERVICE_UNAVAILABLE (gateway) — ai 파드 없음(`ng-ai` 0대·기동 중, `details[].reason` `UPSTREAM_UNAVAILABLE`) 또는 라우트 응답 28초 초과(`UPSTREAM_TIMEOUT`). 화면은 챗봇 비활성 안내
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
 components:
@@ -164,7 +165,7 @@ components:
       description: UNAUTHORIZED (Gateway) — 토큰 없음(reason TOKEN_REQUIRED)·만료·서명 불일치
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     NotFoundFlagOff:
-      description: NOT_FOUND (Gateway) — 플래그 `APP_AI_ENABLED=false`라 `/api/ai/**` 라우트가 없음(`/api/internal/**` 처리와 같음). 화면은 챗봇 버튼을 숨긴다. ai 자체는 404를 내지 않는다
+      description: NOT_FOUND (Gateway) — 플래그 `APP_AI_ENABLED=false`라 `/api/ai/**` 라우트가 없음. 유효한 토큰으로 인증됐을 때만 이 404가 보이고, 토큰이 없거나 만료·서명 불일치면 gateway 인증이 라우팅보다 먼저라 401(`Unauthorized`). 화면은 챗봇을 숨긴다. ai 자체는 404를 내지 않는다
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   schemas:

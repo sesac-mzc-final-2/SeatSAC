@@ -206,7 +206,7 @@ terraform plan -var-file=staging.tfvars   # No changes
 | 항목 | 값 |
 | --- | --- |
 | 클러스터 | `cinema-staging-eks`, Kubernetes 1.36, 인증 모드 `API`(Access Entry만), 공개+프라이빗 엔드포인트 |
-| 노드그룹 | `ng-a`(app 서브넷 a) · `ng-c`(app 서브넷 c), t3.large On-Demand, AL2023, min 0 · max 2 · desired 1. 실제 이름은 접두사 + 랜덤(출력 `eks_node_group_names`) |
+| 노드그룹 | `ng-a`(app 서브넷 a) · `ng-c`(app 서브넷 c), t3.xlarge On-Demand(11/14 t3.large에서 변경, `node_instance_type`. `ng-ai`는 `ai_node_instance_type` t3.large로 따로 — 4-7), AL2023, min 0 · max 2 · desired 1. 실제 이름은 접두사 + 랜덤(출력 `eks_node_group_names`) |
 | 애드온 | vpc-cni(`enableNetworkPolicy=true`) · eks-pod-identity-agent · kube-proxy · coredns · metrics-server. **EBS CSI 없음**(PV 안 씀 — Prometheus도 emptyDir, 밤에 노드 0대라 보존 의미 없음) |
 | 접근 | `cinema-admin` → ClusterAdmin(cluster) / `cinema-developer` → View(namespace `cinema-staging`·`monitoring`) + 그룹 `cinema-developers`(port-forward Role) |
 | 로그 | 컨트롤 플레인 audit·authenticator, CloudWatch 7일 |
@@ -312,6 +312,32 @@ EKS API(kubectl·helm)는 팀 공인 IP 대역에서만 열린다(`eks_public_ac
 - IP가 바뀌거나 팀원이 다른 곳에서 접속할 때: 두 곳을 같이 고치고 `terraform apply`(1~2분, 엔드포인트 재생성 없음). 증상은 `kubectl` 타임아웃(`dial tcp ... i/o timeout`)
 - plan 출력에는 `(sensitive value)`로 가려진다 → PR 코멘트에 IP가 남지 않는다
 - GitHub Actions 대역은 열지 않는다: `infra-plan`(AWS API)·`cluster-schedule`(EKS 관리 API)은 클러스터 API를 부르지 않는다. 나중에 Actions에서 kubectl이 필요해지면 그때 다시 결정
+
+### 4-7. 노드 인스턴스 타입 바꾸기 (11/14 t3.large → t3.xlarge, 4.2.1 후속)
+
+기본 노드(ng-a·ng-c)는 `node_instance_type`, ai 노드(ng-ai)는 `ai_node_instance_type` — 변수가 따로라 한쪽만 바꿀 수 있다. 값은 `envs/staging/staging.tfvars`.
+
+```bash
+# 0) 조건: 블루/그린·부하 테스트 진행 중 아님 · ng-ai 0 · 스크럼 공유. 데모 주간(11/16~20) 금지
+# 1) 노드 켜기 (주말·밤이면) — 교체는 desired 1인 그룹에서 확인한다
+infra/scripts/cluster-scale.sh up
+# 2) plan — 기본 노드그룹 2개만 교체여야 한다
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+#   기대: module.eks.module.eks_managed_node_group["ng-a"]·["ng-c"]의 aws_eks_node_group(+ 시작 템플릿) 교체(create_before_destroy)
+#         · EventBridge Scheduler 일정의 노드그룹 이름 변경(이름 접두사 + 랜덤이 바뀜). ng-ai·RDS·Valkey·클러스터 변경이 있으면 멈춘다
+terraform apply plan.out     # 새 그룹 생성 → 이전 그룹 드레인·삭제 (약 10~20분, 파드가 새 노드로 다시 뜬다)
+# 3) 확인
+kubectl get nodes -L node.kubernetes.io/instance-type,cinema/az        # 새 타입 2대 Ready
+kubectl -n argocd get applications                                     # 전부 Synced·Healthy
+kubectl -n cinema-staging get pods                                      # 전부 Running (booking·gateway Rollout 포함)
+terraform plan -var-file=staging.tfvars                                 # No changes
+```
+
+- 노드 교체는 블루/그린이 아니다: 파드가 드레인되며 다시 뜨므로 그 사이 요청이 실패할 수 있다(데모·측정 중 금지). 교체 뒤 재측정(4.2.1 contention·deploy)을 한 번 더 한다
+- 부족하면 한 단계씩 올린다(t3.xlarge → t3.2xlarge). 같은 순서
+- 비용: t3.xlarge는 t3.large의 2배 — global `budget_daily_usd`·`budget_monthly_usd`를 다시 정한다(`envs/global`, 김종식)
+- `<노션 반영 필요>` ADR-7 제목·본문 "t3.large 2대" → "t3.xlarge 2대(11/14)"
 
 ## 5. staging 3) RDS·Valkey (3.1.3)
 
@@ -1185,7 +1211,7 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
      kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자 (0이면 다시 교체)
      unset TF_VAR_anthropic_api_key
      ```
-4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$20**(AWS Budgets 밖)
+4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$90**(AWS Budgets 밖, 11/13 $20 → $90)
 
 #### 6-G-2. 확인 (적용 직후, 플래그 off)
 
@@ -1222,7 +1248,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 
 #### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
 
-1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태)
+1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태). **전제: ai 「도구 강제」 수정 PR(김서현, 11/13)이 머지돼 staging ai 이미지에 들어간 뒤** — 그 전 이미지는 Sonnet 5.5가 도구 강제 옵션을 받지 않아 모든 질문이 503이다. ArgoCD `cinema-ai` 이미지 태그가 그 PR의 머지 커밋인지 확인하고 켠다
 2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
 3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
 4. 데모가 끝난 뒤에만 `cluster-scale.sh down ng-ai`
@@ -1230,7 +1256,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 #### 6-G-4. 끄기·되돌리기 (5분)
 
 1. `cluster-scale.sh down ng-ai` — ai 파드가 내려가면 `/api/ai/**`는 gateway 503(라우트가 켜져 있을 때). 화면은 챗봇 비활성 안내
-2. 데모 주간이 아니면 `APP_AI_ENABLED=false` PR로 404로 되돌림(데모 주간은 머지 금지라 1번만)
+2. AI 데모(11/17)·발표(11/20)가 모두 끝난 뒤에만 `APP_AI_ENABLED=false` PR로 404로 되돌림(gateway 블루/그린 1회). 그 전에 껐다면 gateway 머지 마감(11/20 05:00) 전에 6-G-3 1번(플래그 켜기 PR)을 다시 하고, 데모 전에 6-G-3 2·3번으로 `/api/ai/presets` 200을 확인한다
 3. 기존 서비스·RDS·Valkey는 바뀐 게 없으므로 추가 조치 없음
 
 #### 6-G-5. AI 질의 금지 구간
@@ -1238,7 +1264,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 | 구간 | 상태 | 이유 |
 | --- | --- | --- |
 | 부하 테스트 4.2.1 · 블루/그린 전환 테스트 4.2.2 | `ng-ai` 0 · 플래그 off | 테스트 환경 = 1차 데모 환경. 스냅샷 적재 호출이 catalog에 섞이지 않게 |
-| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 뒤 데모 주간은 머지 금지라 끌 수 없다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
+| 1차 데모(11/16) · 좌석 데모 리허설 | `ng-ai` 0 · 플래그는 **켜져 있다**(rc2에서 켠 상태 — 끄려면 gateway 블루/그린이 필요해 데모 직전에는 건드리지 않는다) · AI 질의 금지 | 좌석 데모 p95 측정 보호. ai 파드가 없으면 `/api/ai/**`는 gateway 503이지만 분석 쿼리가 `/ai`를 제외하므로 배포 롤백 판정에는 섞이지 않는다. **화면은 챗봇 창을 열 때만 `/api/ai/**`를 호출해야 한다**(로그인·메인 진입 때 자동 호출 금지 — 3.3.8에서 확인) |
 | 재생성 리허설 3.1.15 | `ng-ai` 0 · 플래그 off로 기록 | 소요 시간 비교 기준 유지 |
 | staging에서 ai 확인(M6 중) | 테스트가 돌지 않는 시간에만, 스크럼에서 시간 공유 | — |
 
@@ -1366,6 +1392,50 @@ PY
 | 연결 시간 초과 | ai Valkey 보안그룹(노드 SG → 6379)에 `ng-ai` 노드가 빠졌다 → `ai_valkey.tf` 인바운드 확인 |
 | `OOM command not allowed` | ai Valkey 메모리가 찼다(`noeviction`) → 메모리 경보·`INFO memory` 확인 |
 
+#### 6-G-7. ai Valkey 무응답 확인 (데모 전 1회, 김종식·김서현) — ⬜
+
+로컬에서 Valkey가 멈췄을 때 챗봇 답이 **63초** 걸렸다(연결 재시도 10회, 11/13 김서현). staging ai Valkey가 응답하지 않을 때도 시간 예산(9-1: ai 전체 기한 25초 < gateway 28초 < CloudFront 30초) 안에서 ai의 오류 형식으로 끝나는지 데모 전에 본다. ai 쪽 재시도 수정(김서현)이 staging에 들어간 뒤 한다.
+
+- 시간: 11/15까지 · 평일 노드 켜짐 시간 · 4.2.1·4.2.2·좌석 데모 리허설과 겹치지 않게(스크럼 공유) · `up ng-ai`(6-G-2 A) 상태
+- 방법: ai Valkey 노드를 재부팅해 몇 분간 응답이 없게 만든다(새 리소스를 만들지 않는다. ai 전용 클러스터라 좌석 선점·기존 Valkey와 무관). 그동안 챗봇 질문을 보낸다
+- ⚠️ 재부팅하면 ai Valkey의 **데이터가 모두 사라진다**(복제본·영속화 없음): 캐시·세션·한도 카운터와 의미 캐시 인덱스 `ai_semcache_idx`. 캐시·세션·한도는 TTL 데이터라 괜찮다. 하지만 지금 ai 코드(`cache/store.py`)는 인덱스를 **기동 때 한 번만** 만들고, 검색이 실패해도 「놓침」으로만 처리한다 → 재부팅 뒤에는 파드를 다시 띄울 때까지 **의미 캐시가 계속 적중하지 않는다**(2차 데모 「의미 캐시 적중」이 안 됨). 그래서 확인 끝에 반드시 아래 「복구」를 한다. AI 데모 당일(11/17)에는 하지 않는다
+
+```bash
+export AWS_PROFILE=cinema-admin
+CID=$(aws elasticache describe-replication-groups --replication-group-id cinema-staging-ai-valkey \
+      --query 'ReplicationGroups[0].MemberClusters[0]' --output text)
+aws elasticache reboot-cache-cluster --cache-cluster-id "$CID" --cache-node-ids-to-reboot 0001
+kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # 터미널 B — readiness가 빠지는지(PING 실패)
+# 터미널 A: 로그인한 화면(또는 토큰)으로 /api/ai/chat 질문 3번 — 응답 코드·걸린 시간·code·details[].reason을 적는다
+#   첫 질문은 Valkey가 응답을 멈춘 직후, 터미널 B에서 readiness가 빠지기 전(5초 × 3회 ≈ 15초 안)에 보낸다 — 그래야 ai까지 가서 25초 기한을 잰다
+for i in $(seq 1 40); do   # 재부팅 끝(available)까지 15초 × 40회 = 최대 10분
+  S=$(aws elasticache describe-cache-clusters --cache-cluster-id "$CID" --query 'CacheClusters[0].CacheClusterStatus' --output text)
+  echo "$S"; [ "$S" = available ] && break; sleep 15
+done
+# $S가 available이 아니면 여기서 멈추고 아래로 가지 않는다(AWS 콘솔 이벤트·김서현과 확인)
+
+# 복구 확인(파드 재시작 전) — available 뒤 1분 안에 기존 ai 파드가 스스로 돌아오는지 본다. 재시작하면 이 확인을 할 수 없다
+#   터미널 B에서 READY 1/1 → 터미널 A에서 같은 질문(개인 질문이 아닌 것)을 두 번: 첫 번째 200(재부팅으로 캐시가 비어 놓침이 정상),
+#   두 번째 응답의 path가 CACHE_EXACT여야 정확 일치 캐시 저장·조회가 돌아온 것이다(200만으로는 Claude 응답과 구분되지 않는다). 결과를 아래 표 「복구(파드 재시작 전)」에 적는다
+
+# 복구 — 의미 캐시 인덱스를 다시 만들게 ai 파드를 새로 띄운다(kubectl delete 대신 노드를 내렸다 올린다, GitOps 규칙). 위 확인을 적은 뒤에
+infra/scripts/cluster-scale.sh down ng-ai && infra/scripts/cluster-scale.sh up ng-ai
+kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # Ready까지(startupProbe 최대 150초)
+# 같은 질문을 두 번 → 두 번째가 path CACHE_EXACT, 표현만 바꾼 질문 → CACHE_SEMANTIC 이면 의미 캐시 복구
+```
+
+| 확인 | 합격 |
+| --- | --- |
+| 무응답 중 챗봇 응답 시간 | **25초 이하**(ai 전체 기한). 28초에 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_TIMEOUT`)·30초에 CloudFront 504가 나면 ai 재시도가 기한을 넘는 것 → 김서현 |
+| 무응답 중 응답 형식 | 503 + `error.v1.json` — ai가 받으면 `AI_LLM_UNAVAILABLE`(`QUOTA_STORE_UNAVAILABLE`, 한도 확인 없이 Claude를 부르지 않는다), readiness가 빠져 파드가 Ready가 아니면 gateway 503 `SERVICE_UNAVAILABLE`(`reason: UPSTREAM_UNAVAILABLE`). 둘 다 합격. 같은 gateway 503이라도 `reason: UPSTREAM_TIMEOUT`이면 불합격(위 행) |
+| ai 도달 요청 | 3번 중 1번 이상은 ai가 직접 답한 503 `AI_LLM_UNAVAILABLE`이어야 한다. 3번 모두 gateway `UPSTREAM_UNAVAILABLE`(바로 끝남)이거나 200(Valkey가 아직 살아 있음)이면 25초 기한을 확인하지 못한 것이므로 다시 한다 |
+| Claude 호출 | 무응답 중 `ai_llm_call_seconds_count`가 늘지 않는다(한도 기록 실패 → 호출 안 함). 실패·타임아웃 호출도 이 히스토그램에 남는다(`llm/client.py`). `ai_tokens_total`은 성공 응답의 사용량만 세므로 보조 확인 |
+| 복구(파드 재시작 전) | 재부팅이 끝나고(`available`) 1분 안에 readiness 200 · 같은 질문 두 번째가 `path: CACHE_EXACT` — 정확 일치 캐시·한도는 파드 재시작 없이 돌아와야 한다. 의미 캐시는 위 이유로 적중하지 않는 게 지금 코드의 동작이다 |
+| 복구(파드 재시작 뒤) | `CACHE_SEMANTIC` 적중 1회. 안 되면 2차 데모 전에 김서현 |
+
+- 김서현 님께 공유: 의미 캐시 검색이 `no such index`로 실패하면 `semantic_ready`를 내리고 `start()`를 다시 부르게 하면(연결 오류 때의 재시도와 같은 방식) 파드 재시작 없이 복구된다 — rc2 뒤라 `fix/`로, 데모 주간 전(11/15)까지만
+- 결과는 이 절 머리말(⬜ → ✅ + 날짜·응답 시간)과 스크럼에 남긴다. 25초를 넘으면 데모 Plan B: AI 데모 중 ai Valkey 경보(메모리 80%)·`SeatSAC AI` 대시보드를 보고, 무응답이면 `cluster-scale.sh down ng-ai`(6-G-4) 후 「일시 중지」 안내
+
 ### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)
 
 코드: SeatSAC `tests/k6/`(시나리오 4개 · `run-in-cluster.sh` · `tools/loadtest_users.py`·`pick_targets.py`·`sse_lag.py`) · SeatSAC-gitops `base/gateway/networkpolicy.yaml`(`k6-loadtest` → gateway 허용). Terraform 변경 없음. 시나리오·읽는 법은 `tests/k6/README.md`
@@ -1401,24 +1471,34 @@ export K6_TOKENS_FILE=~/.seatsac/k6-tokens.txt
 
 # 3) 대상 회차·좌석 (공개 조회 API만, 시작 60분 이상 남은 회차 · 시나리오마다 다른 회차)
 API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api"
-eval "$(python3 tests/k6/tools/pick_targets.py --base-url "$API")"  # 고른 회차 설명은 화면(stderr)에 나온다
+python3 tests/k6/tools/pick_targets.py --base-url "$API" > ~/.seatsac/k6-targets.env.tmp \
+  && mv ~/.seatsac/k6-targets.env.tmp ~/.seatsac/k6-targets.env \
+  && source ~/.seatsac/k6-targets.env    # 설명은 화면(stderr). 실패하면 기존 파일을 덮지 않는다 → --date로 다시 고른다. 터미널 B도 이 파일을 읽는다
 env | grep -E '^(CONTENTION|USERHOLD|DEPLOY|BROWSE)_|^THEATER_'      # 리포트에 적는다
 ```
 
+- 회차는 **파일(`~/.seatsac/k6-targets.env`)로 저장한다** — `eval`로만 넣으면 그 터미널에만 남아 터미널 B가 다른 회차를 보거나 빈 값이 된다(11/11 A 6042 · B 6043으로 이벤트를 못 받음)
 - `pick_targets.py`가 회차를 못 찾으면 `--date`로 다음 날을 고른다(예매 마감 = 상영 시작 5분 전)
 - 토큰 파일·`~/.seatsac/`은 레포 밖이다. 커밋·PR·노션에 붙이지 않는다
 
 #### 6-H-2. 실행 (이 순서로)
 
 ```bash
-R=tests/k6/run-in-cluster.sh       # 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
+R=tests/k6/run-in-cluster.sh       # 터미널 A (6-H-1을 실행한 터미널). 결과 로그: ~/.seatsac/k6-results/{실행 ID}.log
 
-# ① 사용자당 선점 1건 (토큰 1개, 30초)
+# 터미널 B 준비 (새 터미널은 변수가 비어 있다 — 레포 루트에서 한 번)
+export AWS_PROFILE=cinema-admin                                     # 없으면 terraform output이 실패한다
+API="https://$(cd infra/terraform/envs/staging && terraform output -raw cloudfront_domain_name)/api"
+source ~/.seatsac/k6-targets.env                                    # 6-H-1 3)에서 저장한 파일
+echo "$API" "$CONTENTION_SCREENING_ID" "$DEPLOY_SCREENING_ID"        # 모두 값이 나와야 하고, 회차가 터미널 A와 같아야 한다
+
+# ① 터미널 A — 사용자당 선점 1건 (토큰 1개, 30초)
 $R user-hold -e SCREENING_ID=$USERHOLD_SCREENING_ID -e SEAT_IDS=$USERHOLD_SEAT_IDS
 
 # ② 같은 좌석 100명 (1분 안에 끝난다) — 다른 터미널에서 SSE를 같이 연다(이벤트 HELD 1건, 300초 뒤 EXPIRED 1건)
 python3 tests/k6/tools/sse_lag.py --duration 360 --url "$API/screenings/$CONTENTION_SCREENING_ID/seats/stream"   # 터미널 B
 $R contention -e SCREENING_ID=$CONTENTION_SCREENING_ID -e SEAT_ID=$CONTENTION_SEAT_ID                         # 터미널 A
+#    → 터미널 B에 「연결됨」이 찍힌 뒤 A를 실행한다
 #    → 「성공 1 · 사용자 제한 0 · p95 …ms」 확인. 300초 뒤 터미널 B에 EXPIRED → 만료 반영(6-H-3)
 
 # ③ 조회 캐시 (토큰 없음, 약 2분)
@@ -1430,7 +1510,7 @@ $R deploy -e SCREENING_ID=$DEPLOY_SCREENING_ID -e SEAT_ID_FROM=$DEPLOY_SEAT_ID_F
 kubectl -n cinema-staging get hpa booking -w                                                                    # 터미널 C — 증설되면 리포트에
 ```
 
-- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 `pick_targets.py`로 새로 고른다), user-hold는 바로 다시 된다(스스로 해제)
+- 다시 돌리려면: contention은 좌석이 300초 뒤 풀린 다음(또는 터미널 A에서 6-H-1 3)으로 새로 고른 뒤 **터미널 B에서도 `source ~/.seatsac/k6-targets.env`를 다시** 실행한다), user-hold는 바로 다시 된다(스스로 해제)
 - 같은 시각에 k6 Job은 하나만 돈다(스크립트가 막는다 — 결과가 섞인다)
 - 블루/그린 중 무중단 확인(`deploy` + 실제 배포)은 4.2.2(6-D)
 
@@ -1478,12 +1558,51 @@ rm -f ~/.seatsac/k6-tokens.txt                                      # 토큰 파
 | --- | --- |
 | 요청이 전부 타임아웃(`status 0`, `server_errors`) | gateway NetworkPolicy에 `k6-loadtest` 허용이 없다 → gitops `base/gateway/networkpolicy.yaml` 확인(6-E 표) |
 | 요청이 전부 404 `NOT_FOUND` | `BASE_URL`에 `/api`가 빠졌다 — gateway 라우트가 `/api/...`로 받고 gateway가 직접 뗀다(StripPrefix=1). `-e BASE_URL=`을 따로 넘기지 않는다(기본값 `http://gateway:8080/api`) |
+| `sse_lag.py`가 `ValueError: unknown url type: '/screenings//seats/stream'` | 그 터미널에 `$API`·`$CONTENTION_SCREENING_ID`가 비어 있다(변수는 만든 터미널에만 있다) → 6-H-2 「터미널 B 준비」. `k6-targets.env`가 없으면 터미널 A에서 `echo $CONTENTION_SCREENING_ID`로 회차를 확인해 URL에 숫자를 직접 넣는다 |
 | 401 | 토큰 만료 — `loadtest_users.py refresh` → `tokens --out` 다시 |
 | `hold_active_hold > 0` | 토큰이 VU보다 적거나 같은 사용자가 그 회차에 선점을 남겼다 → 300초 기다리거나 다른 회차(`pick_targets.py`) |
 | 400 `SCREENING_STARTED`(`BOOKING_CLOSED`) | 회차 시작 5분 전부터 마감 → `pick_targets.py`로 다시 고른다 |
 | 파드 Pending(180초) | 노드 부족 — `cluster-scale.sh up 2`. 이벤트는 스크립트가 출력한다 |
 | ai 파드 때문에 멈춤 | `cluster-scale.sh down ng-ai`(6-G-5). 정말 필요할 때만 `ALLOW_AI=1` |
 | p95만 넘는다 | 리포트에 그대로 적는다. booking CPU·`hikaricp_connections_pending`·노드 배치(k6 파드가 booking과 같은 노드인지 — 로그 머리말)를 같이 본다 |
+
+### 6-I. 포트원 토스페이 결제 — Secret·설정·웹훅 (ADR-112) — ⬜
+
+코드: SeatSAC `envs/staging-k8s/portone.tf`(Secret 키 3개·ConfigMap 키 2개) · `infra/scripts/np-check.sh`(gateway → payment ALLOWED) · `tests/k6/run-in-cluster.sh`(모의 결제 키) · SeatSAC-gitops `base/payment/networkpolicy.yaml`·`overlays/staging/{payment,booking,gateway}`. 이름은 런타임 계약 3장·6장
+
+| 순서 | 할 일 | 누가 |
+| --- | --- | --- |
+| 0 | 앱 PR 머지: 계약 #115 → payment #117 → booking #122 (gateway #123은 머지됨). 기본값이 꺼짐이라 머지만으로는 동작이 바뀌지 않는다 | 남궁일 |
+| 1 | 포트원 콘솔: 토스페이 **테스트** 채널 → Store ID·채널 키 확인 · API Secret(V2) 발급 · 웹훅 URL `https://{배포ID}.cloudfront.net/api/webhooks/portone`(이벤트 `Transaction.Paid` 등) 등록 → 웹훅 시크릿 발급. 비밀 값 2개는 1:1로만 전달(노션·PR·단톡방 금지) | 남궁일 → 김종식 |
+| 2 | 아래 apply (Secret 3키 · ConfigMap 2키) | 김종식 |
+| 3 | gitops 한 번에 한 서비스씩 머지: payment(NetworkPolicy + `APP_PORTONE_ENABLED=true`) → booking(블루/그린 1회). gateway는 웹훅 라우트 대상 `payment-url`이 앱 기본값(`http://payment:8080`)이라 설정 변경 없음 | 김종식 |
+| 4 | `REQUIRE_GATEWAY=1 infra/scripts/np-check.sh` — gateway → payment ALLOWED | 김종식 |
+| 5 | 4.1.1 통합 확인(테스트 채널로 결제 1건, 웹훅 수신 `http_server_requests{uri="/webhooks/portone"}`) | 남궁일 |
+
+```bash
+cd infra/terraform/envs/staging-k8s
+export AWS_PROFILE=cinema-admin
+read -s TF_VAR_portone_api_secret && export TF_VAR_portone_api_secret         # 입력이 화면에 안 나온다
+read -s TF_VAR_portone_webhook_secret && export TF_VAR_portone_webhook_secret
+export TF_VAR_portone_store_id='store-…' TF_VAR_portone_channel_key_tosspay='channel-key-…'   # 공개 값. 커밋하지 않는다(레포가 발표 후 Public)
+terraform plan -var-file=staging-k8s.tfvars
+#   기대: kubernetes_secret_v1.app["booking"]·["payment"] update(값은 (sensitive)) · random_password.payment_mock_key create
+#         kubernetes_config_map_v1.infra_endpoints update(+ PORTONE_STORE_ID · PORTONE_CHANNEL_KEY_TOSSPAY). 그 밖의 변경 없음
+terraform apply -var-file=staging-k8s.tfvars
+unset TF_VAR_portone_api_secret TF_VAR_portone_webhook_secret TF_VAR_portone_store_id TF_VAR_portone_channel_key_tosspay
+terraform plan -var-file=staging-k8s.tfvars    # 변수 없이 두 번째 plan → No changes (지금 값을 그대로 쓴다, portone.tf)
+
+# 값이 들어갔는지(길이만 — 값은 출력하지 않는다)
+kubectl -n cinema-staging get secret payment-secrets -o json | jq -r '.data | to_entries[] | "\(.key) \(.value | @base64d | length)"'
+kubectl -n cinema-staging get secret booking-secrets -o json | jq -r '.data.APP_PAYMENT_MOCK_KEY | @base64d | length'   # 32
+```
+
+- 떠 있는 파드는 기동 때 값을 읽는다 → apply만으로는 반영되지 않는다. 3번 gitops PR로 ConfigMap이 바뀌면 새 파드가 새 값을 읽는다
+- 변수는 넣을 때·바꿀 때만 준다. 변수가 없으면 클러스터의 지금 값을 그대로 쓴다(백업 관리자가 값 없이 apply해도 덮이지 않음). 키 교체 = 포트원에서 새 키 발급 → 같은 명령 → payment Restart(ArgoCD)
+- `APP_PORTONE_ENABLED=true`인데 Secret이 비어 있으면 기동은 되고 verify·취소가 503 `PORTONE_UNAVAILABLE`, 웹훅은 전부 401 → 2번을 3번보다 먼저
+- CloudFront는 바꿀 것 없음(`/api` origin request policy가 모든 viewer 헤더 전달 → `webhook-*` 서명 헤더 통과, POST 허용). payment → `api.portone.io`는 NAT 경유(egress 막지 않음)
+- 모의 결제 키: k6 `deploy` 시나리오는 `run-in-cluster.sh`가 `booking-secrets`를 `secretKeyRef`로 넣는다(값을 꺼내지 않는다). 블루/그린 분석 Job은 지금 결제 경로가 없어 바꿀 것 없음 — 넣으려면 `SMOKE_PAY_SCREENING_ID`가 **미래 회차**여야 한다(시작 5분 전 마감 → 지나면 모든 booking 배포 abort)
+- 발표 후 Public 전환 전: 포트원 API Secret·웹훅 시크릿 폐기(포트원 콘솔)
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
@@ -1597,7 +1716,7 @@ aws s3api get-public-access-block --bucket "$(terraform output -raw frontend_buc
 | 사용자 풀 | `cinema-staging-users` · 이메일 로그인(대소문자 무시) · 가입 필수 email·name · 비밀번호 8자(소문자·숫자) · 삭제 보호 끔(재생성 리허설) |
 | 앱 클라이언트 | `cinema-staging-web` · 공개(시크릿 없음) · 코드 + PKCE · 범위 `openid email profile aws.cognito.signin.user.admin` · 콜백 `https://<배포 도메인>/callback`·`http://localhost:5173/callback` · 로그아웃 `…/` · Access·ID 60분, Refresh 7일 |
 | Hosted UI 도메인 | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` (클래식 Hosted UI) |
-| 그룹 | `ADMIN` → gateway `X-User-Role: ADMIN` |
+| 그룹 | `ADMIN` — **쓰지 않는다**(11/14 관리자 역할 제거, gateway는 그룹을 읽지 않고 `X-User-Role`은 항상 `USER`). 그룹 리소스 삭제는 Terraform 후속 |
 | Pre sign-up Lambda | `cinema-staging-cognito-presignup`(Python 3.12, arm64) — Hosted UI 가입을 자동 확인(메일 발송 없음). 로그 7일 |
 
 **순서** (gateway 이미지 태그가 `CHANGE_ME`라 Application보다 먼저 태그를 넣는다)
@@ -1647,14 +1766,12 @@ kubectl -n cinema-staging get ingress gateway -o jsonpath='{.status.loadBalancer
 - 다른 앱(catalog·booking·user·payment)은 ConfigMap이 바뀌어도 자동으로 다시 뜨지 않는다. **user**는 Cognito 값을 쓰지 않으니(엔드포인트 기본값) 그대로 둔다
 - gateway 파드가 `CreateContainerConfigError`·기동 실패면 ConfigMap `COGNITO_*`가 비었는지(apply 순서), `ImagePullBackOff`면 2번(build-push)을 안 한 것
 
-#### 7-6-3. 사용자·관리자
+#### 7-6-3. 사용자
 
 ```bash
 POOL=$(cd ../staging && terraform output -raw cognito_user_pool_id)
-# 가입은 화면(Hosted UI)에서. 관리자 지정: 가입한 이메일로
-aws cognito-idp admin-add-user-to-group --user-pool-id "$POOL" --username '<가입 이메일>' --group-name ADMIN
-aws cognito-idp list-users-in-group --user-pool-id "$POOL" --group-name ADMIN --query 'Users[].Username' --output text
-# 비밀번호 분실(메일 발송 없음): 관리자가 임시 비밀번호 설정 → 다음 로그인 때 변경
+# 가입은 화면(Hosted UI)에서. 앱 관리자 역할은 없다(11/14 제거) — ADMIN 그룹에 넣어도 달라지는 것이 없다
+# 비밀번호 분실(메일 발송 없음): cinema-admin이 임시 비밀번호 설정 → 다음 로그인 때 변경
 aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username '<이메일>' --password '<임시>' --no-permanent
 ```
 
@@ -1673,7 +1790,6 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 4
 
 - [ ] Hosted UI(`$HOSTED/login?client_id=…&response_type=code&scope=openid&redirect_uri=https://$DOMAIN/callback`)에서 가입 → 메일 확인 없이 바로 로그인
 - [ ] 화면 로그인 → `/api/users/me` 200(프로필 생성, email·name 채워짐). **503 `IDENTITY_UNAVAILABLE`**이면 화면이 `aws.cognito.signin.user.admin` 범위를 요청하지 않은 것(아래)
-- [ ] ADMIN 지정 후 다시 로그인 → `/api/admin/**` 403이 아님
 - [ ] 로그아웃 → Hosted UI 세션 종료 후 `/`로 돌아옴
 - [ ] Lambda 로그 그룹 `/aws/lambda/cinema-staging-cognito-presignup`에 가입 시각 기록
 
@@ -1683,7 +1799,6 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 4
 | 가입 후 "User is not confirmed" | Pre sign-up 연결 안 됨·Lambda 오류 | `aws cognito-idp describe-user-pool --user-pool-id $POOL --query 'UserPool.LambdaConfig'`, Lambda 로그 |
 | Hosted UI `redirect_mismatch` | 콜백 URL이 클라이언트 목록과 다름(끝 `/`·http/https) | `VITE_COGNITO_REDIRECT_URI` = `https://<배포 도메인>/callback` |
 | 모든 API 401 | gateway issuer·client_id와 토큰이 다름(풀을 다시 만들었는데 ConfigMap 그대로) | 7-6-2 다시 apply → ArgoCD gateway **Restart** |
-| `/api/admin/**` 403 | 그룹 지정 전 토큰 | 로그아웃 → 다시 로그인 |
 
 ## 8. staging 6) DB 스키마·계정·K8s Secret·시드 (3.1.12)
 

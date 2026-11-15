@@ -8,13 +8,12 @@ info:
     시각은 ISO-8601 +09:00, 날짜만은 YYYY-MM-DD. 응답은 Valkey TTL 10분 캐시(CAT-05), 잔여 좌석은 캐시하지 않는다.
 servers:
   - url: /api
-security: []   # 기본 인증 없음. 관리자 경로만 bearerAuth + x-required-role: ADMIN
+security: []   # 전부 공개 조회 (인증 없음). 관리자 API는 없다
 tags:
   - { name: movies, description: "영화 (CAT-01·02)" }
   - { name: screenings, description: "상영 회차 (CAT-03)" }
   - { name: theaters, description: "극장 (CAT-03)" }
   - { name: auditoriums, description: "상영관 배치도 (CAT-04)" }
-  - { name: admin, description: "관리자 (ADMIN, P3)" }
 
 paths:
 
@@ -135,7 +134,7 @@ paths:
       summary: CAT-04 상영관 좌석 배치도 (좌석 점유 상태는 BKG-01)
       description: |
         캐시 키 catalog:layout:{auditoriumId}:{version}, TTL 10분. booking도 이 응답을 (상영관, 배치 버전) 키로 파드 캐시한다.
-        좌석 active 변경(LAY-07)은 배치 버전을 올리지 않으므로 booking 파드 캐시에는 TTL 10분이 필요하다(updateSeatActive 참고).
+        좌석 active는 시드 값이고 바꾸는 API는 없다(관리자 기능 없음).
       x-feature-id: CAT-04
       parameters:
         - $ref: "#/components/parameters/AuditoriumId"
@@ -148,107 +147,7 @@ paths:
               schema: { $ref: "#/components/schemas/AuditoriumLayout" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /admin/movies:
-    post:
-      tags: [admin]
-      operationId: createMovie
-      summary: CAT-06 영화 등록 (P3)
-      x-feature-id: CAT-06
-      x-required-role: ADMIN
-      security: [ { bearerAuth: [] } ]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/MovieCreateRequest" }
-      responses:
-        "201":
-          description: 생성된 영화. 관련 캐시 삭제
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/MovieSummary" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-
-  /admin/screenings:
-    post:
-      tags: [admin]
-      operationId: createScreening
-      summary: CAT-06 회차 등록 (P3)
-      x-feature-id: CAT-06
-      x-required-role: ADMIN
-      security: [ { bearerAuth: [] } ]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ScreeningCreateRequest" }
-      responses:
-        "201":
-          description: 생성된 회차. 관련 캐시 삭제
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Screening" }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "409":
-          description: SCHEDULE_CONFLICT — 같은 상영관 시간 겹침
-          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
-
-  /admin/auditoriums/{auditoriumId}/seats:
-    patch:
-      tags: [admin]
-      operationId: updateSeatActive
-      summary: LAY-07 좌석 비활성화·재활성화 (P3)
-      description: |
-        캐시 무효화: active 변경은 layoutVersion을 올리지 않는다(좌표·좌석 수가 그대로라 새 버전을 만들 이유가 없다).
-        대신 반영 후 catalog:layout:{auditoriumId}:* 캐시를 삭제한다. booking 파드 캐시는 (상영관, 배치 버전) 키라
-        이 변경을 감지하지 못하므로 TTL 10분(catalog 캐시와 같음)을 둔다. 즉 비활성화는 최대 10분 뒤 booking에 반영된다.
-        이 PATCH의 409 SEAT_SOLD는 이미 판매된 좌석을 비활성화하려는 시도만 막고, 그 사이 비활성 좌석이 선점되는 것은 막지 못한다.
-        비활성 좌석 선점 거부(400 VALIDATION_FAILED)는 booking POST /seats/hold의 규칙이며, 파드 캐시가 오래됐을 때
-        최신 active를 어떻게 확인할지(선점 시 catalog 재조회 또는 캐시 TTL 단축)는 2.2.3에서 정한다.
-      x-feature-id: LAY-07
-      x-required-role: ADMIN
-      security: [ { bearerAuth: [] } ]
-      parameters:
-        - $ref: "#/components/parameters/AuditoriumId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [seatIds, active]
-              properties:
-                seatIds: { type: array, minItems: 1, items: { type: integer, format: int64 } }
-                active: { type: boolean }
-      responses:
-        "200":
-          description: 바뀐 좌석 수
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [updated]
-                properties:
-                  updated: { type: integer, minimum: 0 }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409":
-          description: SEAT_SOLD — 판매된 좌석 비활성화 시도
-          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
-
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT   # Cognito Access Token (ID 토큰 아님)
-
   parameters:
     Page: { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
     Size: { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
@@ -258,12 +157,6 @@ components:
   responses:
     ValidationFailed:
       description: "VALIDATION_FAILED — details[]에 { field, reason }"
-      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
-    Unauthorized:
-      description: UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치
-      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
-    Forbidden:
-      description: FORBIDDEN (Gateway) — ADMIN 아님
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     NotFound:
       description: NOT_FOUND
@@ -423,23 +316,3 @@ components:
         zoneNo: { type: [integer, "null"] }
         seatType: { $ref: "#/components/schemas/SeatType" }
         active: { type: boolean }
-
-    MovieCreateRequest:
-      type: object
-      required: [title, viewGrade, slotMinutes]
-      properties:
-        title: { type: string, minLength: 1, maxLength: 200 }
-        titleEn: { type: [string, "null"], maxLength: 200 }
-        viewGrade: { $ref: "#/components/schemas/ViewGrade" }
-        slotMinutes: { type: integer, minimum: 1 }
-
-    ScreeningCreateRequest:
-      type: object
-      required: [auditoriumId, movieId, businessDate, startsAt, endsAt]
-      properties:
-        auditoriumId: { type: integer, format: int64 }
-        movieId: { type: integer, format: int64 }
-        businessDate: { type: string, format: date }
-        startsAt: { type: string, format: date-time }
-        endsAt: { type: string, format: date-time }
-        filmFormat: { type: [string, "null"] }

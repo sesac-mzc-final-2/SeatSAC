@@ -141,7 +141,7 @@ class PaymentFlowTest {
         paymentService.pay(request);
 
         PaymentCreateRequest changed = new PaymentCreateRequest(request.paymentId(), BOOKING, 45_000,
-            PaymentMethod.CARD, request.card());
+            PaymentMethod.CARD, null, request.card());
 
         assertThatThrownBy(() -> paymentService.pay(changed))
             .isInstanceOf(BusinessException.class)
@@ -261,6 +261,6 @@ class PaymentFlowTest {
 
     private static PaymentCreateRequest request(Long bookingId, int amount, String cardNumber) {
         return new PaymentCreateRequest(UUID.randomUUID().toString(), bookingId, amount,
-            PaymentMethod.CARD, new PaymentCreateRequest.Card(cardNumber, "12/28", "KIM"));
+            PaymentMethod.CARD, null, new PaymentCreateRequest.Card(cardNumber, "12/28", "KIM"));
     }
 }

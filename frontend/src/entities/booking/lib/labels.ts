@@ -25,6 +25,9 @@ export const bookingStatusLabel = (status: BookingStatus): string => STATUS_LABE
 const FAILURE_MESSAGE: Record<Exclude<FailureCode, null>, string> = {
   CARD_DECLINED: "카드가 거절되었습니다. 다른 카드로 다시 예매해 주세요.",
   INSUFFICIENT_BALANCE: "카드 잔액이 부족합니다. 다른 카드로 다시 예매해 주세요.",
+  PG_DECLINED: "토스페이에서 결제가 승인되지 않았어요. 좌석을 다시 골라 주세요.",
+  USER_CANCELED: "결제를 취소했어요. 좌석을 다시 골라 주세요.",
+  AMOUNT_MISMATCH: "결제 금액이 맞지 않아 자동으로 환불했어요. 좌석을 다시 골라 주세요.",
 };
 
 /** 결제 실패 사유 — 모르는 코드는 공통 문구로 (계약에 값이 추가돼도 화면이 깨지지 않게) */

@@ -22,3 +22,6 @@ logging.level.org.hibernate.SQL: INFO
 app:
   expiry:
     enabled: false
+  payment:
+    mock-key: test-mock-key
+    pending-grace: 2m

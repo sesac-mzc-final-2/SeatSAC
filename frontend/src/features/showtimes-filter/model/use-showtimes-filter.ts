@@ -20,9 +20,10 @@ function parseId(value: string | null): number | null {
  * 새로고침·공유·W2 「예매하기」(movieId만 넘김)가 모두 같은 주소로 들어온다.
  *
  * @param selectableTheaterIds 선택할 수 있는 극장 ID 목록. 아직 못 받았으면(null) URL 값을 그대로 쓰지 않고 theaterId 를 null 로 둔다.
- *   URL 의 theaterId 가 목록에 없으면 첫 번째 극장으로 대체한다.
+ *   URL 의 theaterId 가 없거나 목록에 없으면 선호 극장(아래) 중 첫 번째, 그것도 없으면 목록의 첫 번째 극장으로 대체한다.
+ * @param preferredTheaterIds 마이페이지 선호 극장 ID (순위 순, USR-05). URL 값이 있으면 URL 이 우선한다(공유·새로고침).
  */
-export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
+export function useShowtimesFilter(selectableTheaterIds: number[] | null, preferredTheaterIds: readonly number[] = []) {
   const [params, setParams] = useSearchParams();
   // 자정이 지나면 바뀌는 값 — 열어 둔 화면의 「오늘」·지난 날짜 보정이 같이 따라온다
   const today = useTodayKst();
@@ -33,7 +34,7 @@ export function useShowtimesFilter(selectableTheaterIds: number[] | null) {
     theaterId =
       requestedTheaterId !== null && selectableTheaterIds.includes(requestedTheaterId)
         ? requestedTheaterId
-        : selectableTheaterIds[0];
+        : (preferredTheaterIds.find((id) => selectableTheaterIds.includes(id)) ?? selectableTheaterIds[0]);
   }
 
   // 지난 날짜(끝난 회차)는 고를 수 없으니 오늘로 보정한다 (ISO 날짜는 문자열 비교로 충분)

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Badge, Icon } from "@/shared/ui";
+import { Icon } from "@/shared/ui";
 import type { Profile } from "../model/types";
 import styles from "./ProfileSummary.module.css";
 
@@ -9,7 +9,7 @@ interface Props {
   aside?: ReactNode;
 }
 
-/** 프로필 영역 (W8): 이름 · 이메일 · 역할 */
+/** 프로필 영역 (W8): 이름 · 이메일 (역할은 표시하지 않는다 — 관리자 화면·기능이 없다) */
 export function ProfileSummary({ profile, aside }: Props) {
   const name = profile.name?.trim() || profile.email.split("@")[0];
   return (
@@ -22,12 +22,7 @@ export function ProfileSummary({ profile, aside }: Props) {
         <h2 className={styles.name}>{name}</h2>
         <p className={styles.email}>{profile.email}</p>
       </div>
-      <div className={styles.meta}>
-        <Badge tone="accent" className={styles.role}>
-          {profile.role === "ADMIN" ? "관리자" : "일반 회원"}
-        </Badge>
-        {aside}
-      </div>
+      {aside && <div className={styles.meta}>{aside}</div>}
     </section>
   );
 }

@@ -78,7 +78,7 @@ class BookingDtoJsonTest {
                 new SeatHoldRequest(42L, List.of(1L, 2L, 3L, 4L, 5L)))).hasSize(1);   // 5석
             assertThat(validator.validate(
                 new SeatHoldRequest(42L, List.of()))).hasSize(1);                     // 0석
-            assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
+            assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD, null,
                 new BookingPayRequest.Card("4111", "13/28", "KIM")))).hasSize(2);     // 자리수, 월
         }
     }
@@ -93,12 +93,12 @@ class BookingDtoJsonTest {
             Validator validator = factory.getValidator();
 
             for (String number : List.of("4".repeat(12), "4".repeat(16), "4".repeat(19))) {
-                assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
+                assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD, null,
                     new BookingPayRequest.Card(number, "12/28", "KIM"))))
                     .as("계약이 허용하는 자리수: %s자리", number.length()).isEmpty();
             }
             for (String number : List.of("4".repeat(11), "4".repeat(20), "4242-4242-4242-4242")) {
-                assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD,
+                assertThat(validator.validate(new BookingPayRequest(PaymentMethod.CARD, null,
                     new BookingPayRequest.Card(number, "12/28", "KIM"))))
                     .as("계약 밖: %s", number).hasSize(1);
             }
@@ -120,7 +120,7 @@ class BookingDtoJsonTest {
 
         String canceled = mapper.writeValueAsString(new BookingCancelResponse(5001L,
             BookingStatus.CANCELED, Times.toApi(NOW),
-            PaymentView.of("3f2b8a10-0000-4000-8000-000000000001", "CANCELED", "1111",
+            PaymentView.of("3f2b8a10-0000-4000-8000-000000000001", "CANCELED", "CARD", "1111",
                 null, NOW, NOW)));
 
         assertThat(canceled).contains("\"payment\":")

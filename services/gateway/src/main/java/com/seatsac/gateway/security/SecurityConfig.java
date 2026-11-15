@@ -14,6 +14,7 @@ import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.security.oauth2.server.resource.InvalidBearerTokenException;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.savedrequest.NoOpServerRequestCache;
+import org.springframework.security.web.server.util.matcher.OrServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers;
 import org.springframework.web.server.ServerWebExchange;
@@ -23,8 +24,9 @@ import reactor.core.publisher.Mono;
  * GW-02 인증·인가 (ADR-37). Cognito Access Token을 JWKS(RS256)로 검증한다 — 디코더·검증기는 {@link JwtDecoderConfig}.
  * <pre>
  * 공개(토큰 안 읽음)  GET /api/movies/**, /api/theaters/**, /api/screenings/**(좌석 현황·SSE 포함), /api/auditoriums/**
- * ADMIN             /api/admin/**
+ * 인증 없음(서명)    POST /api/webhooks/portone — 포트원 웹훅(ADR-112). Bearer 대신 payment가 Standard Webhooks 서명을 검증한다
  * 로그인            그 밖의 /api/** (/api/ai/** 포함 — 라우트는 플래그 app.ai.enabled 로 켜지며, 꺼져 있으면 토큰이 있어도 404)
+ *                   관리자 역할은 없다 — /api/admin/** 는 라우트가 없어 토큰이 있어도 404
  * 인증 없음          /actuator/health/**(ALB·kubelet), /actuator/prometheus(클러스터 안 수집. 외부는 CloudFront가 /api/*만 ALB로 보냄)
  * </pre>
  * 오류는 공통 형식으로 401 UNAUTHORIZED, 403 FORBIDDEN.
@@ -36,9 +38,15 @@ public class SecurityConfig {
         "/api/movies/**", "/api/theaters/**", "/api/screenings/**", "/api/auditoriums/**",
     };
 
+    /** 포트원 웹훅 (ADR-112). POST만 열고, 다른 메서드는 로그인 규칙을 그대로 받는다(라우트도 POST만) */
+    static final String PORTONE_WEBHOOK_PATH = "/api/webhooks/portone";
+
     @Bean
     SecurityWebFilterChain api(ServerHttpSecurity http, ReactiveJwtDecoder jwtDecoder, ErrorResponseWriter errorWriter) {
         ServerWebExchangeMatcher publicPaths = ServerWebExchangeMatchers.pathMatchers(HttpMethod.GET, PUBLIC_GET_PATHS);
+        ServerWebExchangeMatcher webhook = ServerWebExchangeMatchers.pathMatchers(HttpMethod.POST, PORTONE_WEBHOOK_PATH);
+        // 이 경로들에서는 Authorization 헤더를 읽지 않는다 — 잘못된 Bearer가 붙어 와도 401이 되지 않게
+        ServerWebExchangeMatcher noBearerPaths = new OrServerWebExchangeMatcher(publicPaths, webhook);
 
         return http
             .csrf(ServerHttpSecurity.CsrfSpec::disable)       // 쿠키 세션 없음, Bearer 토큰만
@@ -49,11 +57,11 @@ public class SecurityConfig {
             .authorizeExchange(ex -> ex
                 .pathMatchers("/actuator/health/**", "/actuator/prometheus").permitAll()
                 .matchers(publicPaths).permitAll()
-                .pathMatchers("/api/admin/**").hasRole("ADMIN")
+                .matchers(webhook).permitAll()
                 .pathMatchers("/api/**").authenticated()
                 .anyExchange().permitAll())                    // 라우트가 없으므로 404
             .oauth2ResourceServer(o -> o
-                .bearerTokenConverter(new PublicPathBearerTokenConverter(publicPaths))
+                .bearerTokenConverter(new PublicPathBearerTokenConverter(noBearerPaths))
                 .jwt(j -> j.jwtDecoder(jwtDecoder).jwtAuthenticationConverter(new CognitoGroupsConverter()))
                 .authenticationEntryPoint((exchange, e) -> unauthorized(errorWriter, exchange, e))
                 .accessDeniedHandler((exchange, e) -> forbidden(errorWriter, exchange)))
@@ -76,7 +84,7 @@ public class SecurityConfig {
     }
 
     private static Mono<Void> forbidden(ErrorResponseWriter writer, ServerWebExchange exchange) {
-        return writer.write(exchange, CommonResponseCode.FORBIDDEN, "권한이 없습니다.",
-            List.of(ErrorDetail.of("role", null, "ADMIN_REQUIRED")));
+        // 역할로 막는 경로는 없다(관리자 없음). 남겨 두는 것은 Security 가 거부했을 때도 공통 오류 형식을 지키기 위해서다
+        return writer.write(exchange, CommonResponseCode.FORBIDDEN, "권한이 없습니다.", List.of());
     }
 }

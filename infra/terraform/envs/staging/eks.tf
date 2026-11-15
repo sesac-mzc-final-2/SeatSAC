@@ -1,8 +1,9 @@
 # ------------------------------------------------------------------
 # 3.1.2 EKS 클러스터 · 노드그룹 · 애드온 · 팀 접근(Access Entry) · ALB 준비
 #   - Kubernetes 1.36 (표준 지원 ~2027-08), 인증 모드 API(Access Entry만, aws-auth ConfigMap 없음)
-#   - 노드: On-Demand t3.large × 2 = ng-a(AZ a) 1대 + ng-c(AZ c) 1대 (ADR-7·34)
-#   - ⚠️AI ng-ai: ai 전용 t3.large 1대, 평소 0대 (3.1.19, ADR-86). 라벨·taint cinema/workload=ai(NoSchedule) →
+#   - 노드: On-Demand var.node_instance_type(t3.xlarge, 11/14 t3.large에서 변경) × 2 = ng-a(AZ a) 1대 + ng-c(AZ c) 1대 (ADR-7·34)
+#     인스턴스 타입을 바꾸면 노드그룹이 교체된다(새 그룹 먼저 생성 → 이전 그룹 드레인·삭제, create_before_destroy). 파드가 모두 다시 뜬다
+#   - ⚠️AI ng-ai: ai 전용 var.ai_node_instance_type(t3.large) 1대 — 기본 노드와 변수를 나눠 기본 노드 크기를 바꿔도 교체되지 않는다, 평소 0대 (3.1.19, ADR-86). 라벨·taint cinema/workload=ai(NoSchedule) →
 #     ai 파드(nodeSelector + toleration)만 올라가고 기존 5개 서비스는 올라가지 않는다. 켜기는 cluster-scale.sh up ng-ai만
 #     밤·주말 0대는 EventBridge Scheduler(cluster_schedule.tf)·cluster-schedule 워크플로(백업·수동)가 desired_size만 바꾼다(3.1.14). 모듈이 desired_size 변경을 무시하므로 drift 없음
 #   - 애드온: vpc-cni(NetworkPolicy 켬) · coredns · kube-proxy · eks-pod-identity-agent · metrics-server(HPA)
@@ -88,10 +89,10 @@ module "eks" {
     "ng-ai" = {
       name           = "${var.name}-ng-ai"
       ami_type       = "AL2023_x86_64_STANDARD"
-      instance_types = [var.node_instance_type]
+      instance_types = [var.ai_node_instance_type]
       capacity_type  = "ON_DEMAND"
 
-      subnet_ids = module.vpc.private_subnets # 1대뿐이라 AZ를 고정하지 않는다 → 한 AZ에 t3.large 여유가 없어도 다른 AZ로 뜬다
+      subnet_ids = module.vpc.private_subnets # 1대뿐이라 AZ를 고정하지 않는다 → 한 AZ에 인스턴스 여유가 없어도 다른 AZ로 뜬다
 
       min_size     = 0
       max_size     = 1 # 2대 이상 필요 없음(ai replicas 1). 실수로 up 2를 해도 1대로 막힌다

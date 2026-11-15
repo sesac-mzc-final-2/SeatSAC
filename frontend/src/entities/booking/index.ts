@@ -7,17 +7,21 @@ export type {
   HoldResult,
   PayRequest,
   PayResult,
+  PaymentMethod,
+  PaymentPrepareResult,
   PaymentStatus,
   SeatEvent,
   SeatEventType,
   SeatSnapshot,
   SeatStatus,
+  TossPayRequest,
 } from "./model/types";
 export {
   getBooking,
   getSeatSnapshot,
   holdSeats,
   payBooking,
+  preparePayment,
   releaseHold,
   seatStreamUrl,
 } from "./api/booking-api";

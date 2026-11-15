@@ -136,6 +136,32 @@ variable "anthropic_api_key" {
   sensitive   = true
 }
 
+variable "portone_api_secret" {
+  description = "payment-secrets APP_PORTONE_API_SECRET (포트원 콘솔 V2 API Secret, ADR-112). 넣을 때·바꿀 때만 — 비어 있으면 지금 값 유지(portone.tf). 파일에 쓰지 않는다 — `read -s TF_VAR_portone_api_secret && export TF_VAR_portone_api_secret`"
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "portone_webhook_secret" {
+  description = "payment-secrets APP_PORTONE_WEBHOOK_SECRET (포트원 콘솔 웹훅 시크릿 whsec_…, ADR-112). 넣을 때·바꿀 때만 — 비어 있으면 지금 값 유지. 파일에 쓰지 않는다"
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "portone_store_id" {
+  description = "cinema-infra-endpoints PORTONE_STORE_ID (포트원 Store ID, 공개 값 — 결제창에 노출, ADR-112). 넣을 때·바꿀 때만 — 비어 있으면 지금 값 유지. 레포가 발표 후 Public이라 tfvars에 커밋하지 않고 TF_VAR로"
+  type        = string
+  default     = null
+}
+
+variable "portone_channel_key_tosspay" {
+  description = "cinema-infra-endpoints PORTONE_CHANNEL_KEY_TOSSPAY (포트원 토스페이 채널 키, 공개 값, ADR-112). portone_store_id와 같은 방식"
+  type        = string
+  default     = null
+}
+
 variable "argocd_namespace" {
   type    = string
   default = "argocd"

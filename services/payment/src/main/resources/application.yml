@@ -42,3 +42,26 @@ app:
     mock-delay: ${APP_PAYMENT_MOCK_DELAY:5s}             # 지연 카드가 승인될 때까지
     mock-delay-card: ${APP_PAYMENT_MOCK_DELAY_CARD:9999} # 끝 4자리가 이 값이면 지연 승인
     close-stale-on-startup: true                         # 기동 시 PROCESSING 30초 초과 행 정리
+  # 포트원 V2 (ADR-112) — 이름은 docs/service-runtime-contract.md 3장 그대로. 비밀 값은 Secret payment-secrets에서
+  portone:
+    enabled: ${APP_PORTONE_ENABLED:false}                 # false면 TOSSPAY 503 PORTONE_DISABLED, 스윕도 안 돈다
+    api-base-url: ${APP_PORTONE_API_BASE_URL:https://api.portone.io}   # 로컬·테스트는 Stub 주소
+    api-secret: ${APP_PORTONE_API_SECRET:}                # V2 API Secret — 로그·응답 금지
+    webhook-secret: ${APP_PORTONE_WEBHOOK_SECRET:}        # 웹훅 시크릿(whsec_…) — 비어 있으면 모든 웹훅 401
+    store-id: ${APP_PORTONE_STORE_ID:}                    # 공개 값(결제창에 노출)
+    channel-key-tosspay: ${APP_PORTONE_CHANNEL_KEY_TOSSPAY:}
+    pending-timeout: ${APP_PORTONE_PENDING_TIMEOUT:7m}    # 결제창 미완료 PROCESSING 정리 = 선점 300초 + 유예
+
+# 포트원 호출 서킷 — 응답을 못 받은 경우(PortOneUnavailableException)만 실패로 센다. 거절(4xx)·대조 필요는 가용성 문제가 아니다
+resilience4j:
+  circuitbreaker:
+    instances:
+      portone:
+        failure-rate-threshold: 50
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 3
+        record-exceptions:
+          - com.seatsac.payment.portone.PortOneUnavailableException

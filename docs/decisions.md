@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 1 · 50 | ~~서비스 5개, AI 제외(10/22)~~ → **82로 대체**: 서비스 6개(ai 추가) | 26 → 83으로 대체 |
 | ⚠️AI 82 | AI 재도입: **Python(FastAPI) `services/ai`, 사용자 챗봇만**(로그인 필수, `/api/ai/**`). 질문 처리 정확 일치 캐시 → 의미 캐시 → 프리셋 → NL2SQL, "내 예매"는 공개 API. 담당 **김서현**. 데모는 1차 11/16(무중단·좌석) + **2차 11/17(AI)** | 1·50 대체, 52·53 보완. 관리자 NL2SQL·추천(AI-08) 제외 |
-| ⚠️AI 83 | LLM은 **Claude API(Anthropic 직접) `claude-sonnet-5-5`**, 도구 호출로 프리셋/SQL 선택, 프롬프트 캐싱. 키: staging `ai-secrets`(Terraform sensitive), 로컬 개발 전용 키 `.env`(커밋 금지). Anthropic 월 지출 한도 $20, 사용자당 동시 1·분당 10·하루 100 | 26 대체. Bedrock 안 씀(Pod Identity 불필요) |
+| ⚠️AI 83 | LLM은 **Claude API(Anthropic 직접) `claude-sonnet-5-5`**, 도구 호출로 프리셋/SQL 선택, 프롬프트 캐싱. 키: staging `ai-secrets`(Terraform sensitive), 로컬 개발 전용 키 `.env`(커밋 금지). Anthropic 월 지출 한도 $90(11/13 $20에서 상향 — 11/20 발표까지만 쓴다), 사용자당 동시 1·분당 10·하루 100 | 26 대체. Bedrock 안 씀(Pod Identity 불필요) |
 | 52 | (⚠️AI 82 보완: 11/17 AI 2차 데모 추가) 데모는 **무중단 배포 · 실시간 좌석** 2개로 확정. 실시간 좌석 데모에 동시성 테스트(같은 좌석 100명 → 성공 1명) 포함 | 선점 전략 비교는 여유 시 |
 | 45 | 선점 전략 비교(db-lock/redis): 지금은 3.2.2에 `SeatHoldStrategy` 인터페이스만, db-lock은 잠글 행·만료 처리 **설계 초안만**(남궁일). 구현·측정은 최후 순위(4.2 때 여유 시) | 새 노드 불필요 |
 | 53 | 김서현은 일정에서 제외. 필요하면 개발·인프라/DevOps의 WBS 하나씩 맡긴다 → ⚠️AI **82로 보완: AI는 김서현 고정 담당**(11/2) | 4.1.2 김서현·한채연, OPS-07 코드 김종식 |
@@ -27,7 +27,7 @@
 | 3 · 33 · 61 | RDS **MySQL 8.4** 1대(**Single-AZ**, `db.t4g.small`, TLS 강제, 마스터 비밀번호는 RDS 관리 Secrets Manager) + 서비스별 스키마·계정 | Multi-AZ·AZ 장애 실험은 시간 남을 때 |
 | 33 · 59 | ElastiCache **Valkey 8.2 `cache.t4g.micro`**, `noeviction`, `notify-keyspace-events Ex`, 메모리 80%·Evictions 경보 | 부하 테스트에서 70% 넘으면 t4g.small |
 | 57 | DB 마이그레이션은 ArgoCD **Flyway 훅 Job**(`{svc}_migrator`, Sync 단계 wave -1 — ConfigMap 다음·앱 전, 실패 시 sync 중단), 앱은 Flyway 끔. 스키마·계정·Secret은 Terraform(`envs/staging-k8s`)이 클러스터 안 Job으로 생성(3.1.12) | 처음 "PreSync"였으나 첫 배포 때 ConfigMap보다 먼저 돌아 Sync wave -1로 변경(10/23) |
-| 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함, ⚠️AI 재도입 후에도 유지 — 84) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)` · `pg_provider`는 `MOCK`만 | |
+| 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함, ⚠️AI 재도입 후에도 유지 — 84) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)`(MOCK 행만) · ~~`pg_provider`는 `MOCK`만~~ → 112로 대체(`PORTONE` 추가) | |
 | 4 | 좌석 이벤트: Valkey Pub/Sub `seat-events:{회차}` → SSE, 놓치면 BKG-01 스냅샷 | 유실 허용 |
 | 5 | 선점: Valkey `SET NX EX {선점 TTL}`(`APP_SEAT_HOLD_TTL_SECONDS`, 기본 300초, 30~600)(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
 | 11 | 한 번에 최대 4석 | |
@@ -46,14 +46,15 @@
 | 55 | 계약 강화(구현 전 일괄): `booking.confirmed` 필드 3개 필수, traceId `^[0-9a-f]{32}$`, 오류 traceId null 불가. 첫 계약 PR만 `contract-break-ok`, 라벨은 구현 시작 엔드포인트·M3 이후 금지 | |
 | 62 | Gateway 요청 수 제한 미도입(`rl:` 키·429 없음) | |
 | 24 | 결제는 예매당 1회, 실패하면 PAYMENT_FAILED + 좌석 해제 | 20 폐기 |
-| 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외 |
+| 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외. **112로 부분 대체** — 화면은 토스페이, 모의는 테스트·분석 전용 |
+| 112 | 결제는 **포트원(PortOne) V2 + 토스페이**(간편결제, `payMethod EASY_PAY`). 화면은 토스페이만. 두 단계: `POST /bookings/{id}/payments`(준비, paymentId 발급) → 결제창 → `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(payment가 포트원 단건 조회로 PAID·금액 검증). 웹훅 `Transaction.Paid` 병행(본문 불신). 모의(`CARD`)는 테스트·분석 전용 — 헤더 `X-Payment-Mock-Key`가 맞을 때만(화면에는 없음). paymentId는 booking 발급 UUID 그대로. 결제창 미완료 정리: payment 7분, booking 만료+2분 | 11/13. 결제 경로 매트릭스 `docs/payment-paths.md`. 13 부분 대체·60 대체. 계약 PR #115는 `contract-break-ok`(55의 「M3 이후 금지」 예외 — 응답 enum 값 추가뿐이고 소비자인 화면·booking이 같은 기간에 함께 바뀐다). 일정은 #121(64 개정)로 동결 없음 |
 | 30 · 51 | 예매 완료 알림: booking만 SQS 발행(아웃박스 + 릴레이) → Lambda(로그), DLQ 3회. **OPS-08 일별 집계는 제외** | |
 
 ## 4. 인프라·배포
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 7 · 34 | (⚠️AI 86 보완: `ng-ai` 추가) EKS On-Demand **t3.large 2대**(ng-a 1 · ng-c 1). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14 — 실행은 EventBridge Scheduler, GitHub Actions는 백업·수동), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
+| 7 · 34 | (⚠️AI 86 보완: `ng-ai` 추가) EKS On-Demand **t3.xlarge 2대**(ng-a 1 · ng-c 1 — 11/14 t3.large에서 변경: 4.2.1 선점 p95가 파드 CPU에 묶여, 부족하면 한 단계씩 올림. `ng-ai`는 t3.large 그대로, 변수 분리). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14 — 실행은 EventBridge Scheduler, GitHub Actions는 백업·수동), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
 | 8 · 35 · 58 | Kustomize + ArgoCD. booking·gateway만 블루/그린(5xx 1%·결제 timeout/error 5% 롤백, scaleDown 60초), 나머지 롤링. 프로브·자원·HPA·메트릭·Secret·NetworkPolicy는 `docs/service-runtime-contract.md` | 동시 블루/그린 금지 |
 | 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음 | 31의 httpOnly 쿠키는 37·63으로 대체 |
 | 78 | (⚠️AI 86 보완: gateway 5xx 쿼리에 `uri!~"/ai.*"`) 블루/그린 분석 트래픽: 분석 중 AnalysisTemplate Job(k6, 조회만)이 `{svc}-preview`로 직접 요청, `/actuator` 제외 요청 ≥ 20건/분을 같이 판정(트래픽 0 = 실패). 실패하면 abort(전환 없음) → gitops 태그 revert PR. 실패 버전 시연은 gitops 설정 PR로 의존 서비스 주소를 깨뜨리는 방식 | ⏳ 남궁일 확인(결제 경로 트래픽·시연 방식) |
@@ -68,9 +69,9 @@
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | |
+| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | 11/14 관리자 역할 제거: `X-User-Role`은 항상 `USER`, `/api/admin/**`·관리자 API·화면 없음(Cognito `ADMIN` 그룹은 쓰지 않음). ADR 번호는 노션 등록 후 |
 | 63 | 화면 토큰 저장은 **메모리**(`InMemoryWebStorage`), localStorage 금지. 새로고침은 Cognito 세션으로 재발급 | |
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
-| 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, 데모 주간 11/16~20 머지 금지, 태그 rc1 11/6·rc2 11/13·v1.0.0 11/19, Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |
-| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), **테스트 준비 예외(11/10 일정 변경)** `tests/k6/**`·`docs/**`·gitops `base/*/networkpolicy.yaml` 테스트 Job 허용 규칙 추가는 M6에도 머지(조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 테스트 실행 중이 아닐 때), **AI 화면 예외(11/12)** 3.3.7 챗봇 화면(전체 허용 `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스)·`frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음) + 기존 파일 **추가만**: `frontend/src/widgets/page-layout/ui/PageLayout.tsx` Dock 배치·`frontend/src/shared/ui/icon/Icon.tsx` 아이콘 경로·`frontend/src/shared/api/http.ts` `Retry-After` 읽기(기존 오류 처리 그대로, 테스트 포함)·`frontend/src/app/routes/router.tsx` 주석)도 M6에 머지 — frontend는 S3 + CloudFront 배포라 클러스터·블루/그린과 무관하고 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5). 조건은 테스트 준비 예외와 같음(PR 본문 「M6 예외(AI 화면)」), 그 밖의 `frontend/**`는 금지 그대로, 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** ai 코드 동결(이후 `fix/`만), M6 테스트 뒤 플래그 켜기 · **데모 주간** ai `fix/`도 금지(64 그대로) | 64 보완 |
+| 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, ~~데모 주간 11/16~20 머지 금지~~(11/14 삭제 — QA·피드백 반영, 시연·측정 중에는 머지하지 않음. 발표 당일 마감 booking·gateway 11/20 05:00·그 밖 07:00), 태그 rc1 11/6·rc2 11/13·v1.0.0 11/20(마감 뒤), Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |
+| ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), **테스트 준비 예외(11/10 일정 변경)** `tests/k6/**`·`docs/**`·gitops `base/*/networkpolicy.yaml` 테스트 Job 허용 규칙 추가는 M6에도 머지(조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 테스트 실행 중이 아닐 때), **AI 화면 예외(11/12)** 3.3.7 챗봇 화면(전체 허용 `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스)·`frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음) + 기존 파일 **추가만**: `frontend/src/widgets/page-layout/ui/PageLayout.tsx` Dock 배치·`frontend/src/shared/ui/icon/Icon.tsx` 아이콘 경로·`frontend/src/shared/api/http.ts` `Retry-After` 읽기(기존 오류 처리 그대로, 테스트 포함)·`frontend/src/app/routes/router.tsx` 주석)도 M6에 머지 — frontend는 S3 + CloudFront 배포라 클러스터·블루/그린과 무관하고 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5). 조건은 테스트 준비 예외와 같음(PR 본문 「M6 예외(AI 화면)」), 그 밖의 `frontend/**`는 금지 그대로, 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** M6 테스트 뒤 플래그 켜기(ai 코드 동결·데모 주간 머지 금지는 11/14 삭제, 64와 같이) | 64 보완 |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |

@@ -1,5 +1,13 @@
 import { buildUrl, http } from "@/shared/api";
-import type { Booking, CancelResult, HoldResult, PayRequest, PayResult, SeatSnapshot } from "../model/types";
+import type {
+  Booking,
+  CancelResult,
+  HoldResult,
+  PaymentPrepareResult,
+  PayRequest,
+  PayResult,
+  SeatSnapshot,
+} from "../model/types";
 
 /** BKG-01 좌석 현황 스냅샷 + seq. 인증 없이 볼 수 있다 */
 export const getSeatSnapshot = (screeningId: number, signal?: AbortSignal) =>
@@ -28,6 +36,18 @@ export const releaseHold = (bookingId: number, idempotencyKey?: string, signal?:
   http<CancelResult>(`/bookings/${bookingId}/hold`, {
     method: "DELETE",
     headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+    signal,
+  });
+
+/**
+ * 토스페이 결제 준비 — paymentId를 예매에 붙이고 결제창 값을 받는다(예매당 1회). 완료(`/pay`)와 다른 멱등 키를 쓴다
+ * (본문이 달라 같은 키면 409 `IDEMPOTENCY_KEY_CONFLICT`)
+ */
+export const preparePayment = (bookingId: number, idempotencyKey: string, signal?: AbortSignal) =>
+  http<PaymentPrepareResult>(`/bookings/${bookingId}/payments`, {
+    method: "POST",
+    body: { method: "TOSSPAY" },
+    headers: { "Idempotency-Key": idempotencyKey },
     signal,
   });
 

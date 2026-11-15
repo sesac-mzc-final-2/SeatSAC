@@ -22,10 +22,15 @@ npm run build               # tsc -b && vite build → dist/
 `mock/server.mjs` 는 catalog·user 계약 모양으로 응답하는 가짜 데이터(영화 6편·극장 4곳·하루 편성·예매 내역 23건·선호, 롯데시네마 수집 데이터·포스터 없음)다.
 `/api/users/**`·`/api/bookings/**` 는 `Authorization: Bearer` 가 있으면 누구든 통과시킨다(JWT 검증 없음). 예매 취소(BKG-07)는 메모리 상태를 바꾼다.
 `DEV_SESSION=1` 은 Vite `define`(`__DEV_SESSION__`)으로만 들어가 `vite build` 결과에는 절대 켜지지 않는다 — Cognito 값이 비어 있을 때만 가짜 세션이 된다.
-`MOCK_ROLE=ADMIN` 으로 띄우면 프로필 `role` 이 ADMIN 이고, 예매 ID 9001 은 회차 정보 없음(`screening: null`) 카드다.
+예매 ID 9001 은 회차 정보 없음(`screening: null`) 카드다.
 오류 화면 재현: 영화 ID 999 는 404 라 `/movies/999` 로 들어가면 「영화를 찾을 수 없어요」가 보이고,
 `MOCK_FAIL_PATH=/api/screenings npm run dev:mock` 처럼 띄우면 그 경로가 항상 503(`MOCK_FAIL_STATUS` 로 500 도 가능)을 돌려줘
 상영시간표의 오류 블록·문의 코드·공통 토스트를 볼 수 있다. API 를 직접 부를 때는 `?fail=503` 을 붙여도 된다. 빌드에는 포함되지 않는다.
+
+결제 화면(BKG-10, 토스페이 — ADR-112): `DEV_SESSION=1 npm run dev:mock` 뒤 `/bookings/7001/pay`(7001~7999)로 들어가면 그 번호의
+PENDING 예매(선점 5분, J7·J8)가 처음 조회 때 생긴다. 다시 보려면 번호를 바꾼다. 결제 버튼은 개발용 가짜 토스페이 창을 띄우고
+결제하기·PG 거절·사용자 취소·창만 닫기(서버도 결과 모름 → 503) 중 고른 결과로 완료 확인(`/pay`)이 답한다. 가짜 창은 상점 ID가
+`store-mock`이고 개발 서버일 때만 뜬다(배포본은 포트원 SDK). 모의 카드 결제(CARD)는 화면에 없다 — k6·분석 Job 전용이라 목 서버도 400.
 
 AI 챗봇(3.3.7, `ai.openapi.yaml`)도 목이 응답한다: 추천 질문 5개, 같은 문장을 다시 물으면 `CACHE_EXACT`(토큰 0), "내 예매" → `MY_BOOKINGS`,
 "비율·매진" → `NL2SQL`, "테이블" → `REJECTED`, "날씨" → `OUT_OF_SCOPE`. 질문에 `#409`·`#429`·`#429day`·`#503`·`#timeout`·`#snapshot` 을 넣으면 그 오류로 답한다.

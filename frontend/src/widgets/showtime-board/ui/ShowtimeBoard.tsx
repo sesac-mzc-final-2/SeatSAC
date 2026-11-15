@@ -10,10 +10,12 @@ import styles from "./ShowtimeBoard.module.css";
 interface Props {
   screenings: Screening[];
   onSelect: (screening: Screening) => void;
+  /** 선호 시간대 회차인지 (USR-05). 없으면 강조하지 않는다 */
+  isPreferred?: (screening: Screening) => boolean;
 }
 
 /** W3 결과: 영화별 패널 → 상영관별 시작 시각 버튼. 영화 제목 옆에 러닝타임은 표시하지 않는다 (W-2) */
-export function ShowtimeBoard({ screenings, onSelect }: Props) {
+export function ShowtimeBoard({ screenings, onSelect, isPreferred }: Props) {
   const groups = useMemo(() => groupScreenings(screenings), [screenings]);
 
   return (
@@ -48,7 +50,12 @@ export function ShowtimeBoard({ screenings, onSelect }: Props) {
                 </div>
                 <div className={styles.grid}>
                   {hall.screenings.map((screening) => (
-                    <ScreeningTimeButton key={screening.screeningId} screening={screening} onSelect={onSelect} />
+                    <ScreeningTimeButton
+                      key={screening.screeningId}
+                      screening={screening}
+                      onSelect={onSelect}
+                      highlighted={isPreferred?.(screening) ?? false}
+                    />
                   ))}
                 </div>
               </div>

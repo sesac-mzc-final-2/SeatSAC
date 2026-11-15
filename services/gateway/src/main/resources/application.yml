@@ -16,6 +16,7 @@ spring:
             - StripPrefix=1                   # /api 제거 (ADR-9). X-User-* 제거·X-Trace-Id 부여는 TraceWebFilter
           # GW-01 라우팅. 위에서부터 먼저 맞는 라우트로 간다 — 좌석 현황·SSE(Booking)가 /screenings/**(Catalog)보다 먼저.
           # /payments·/auth·/internal/**·/actuator/** 라우트는 두지 않는다 (Payment 외부 비노출, 로그인은 Cognito Hosted UI)
+          # 예외: 포트원 웹훅 하나만 payment로 연다 (ADR-112)
           routes:
             - id: booking-seat-stream
               uri: ${app.services.booking-url}
@@ -35,20 +36,22 @@ spring:
               uri: ${app.services.catalog-url}
               predicates:
                 - Path=/api/movies/**,/api/screenings/**,/api/theaters/**,/api/auditoriums/**
-            - id: catalog-admin
-              uri: ${app.services.catalog-url}
-              predicates:
-                - Path=/api/admin/movies/**,/api/admin/screenings/**,/api/admin/auditoriums/**
             - id: user
               uri: ${app.services.user-url}
               predicates:
                 - Path=/api/users/**
+            - id: payment-webhook               # ADR-112 PAY-05. 호출자는 포트원 서버 — Bearer 없음, SecurityConfig permitAll
+              uri: ${app.services.payment-url}  # payment가 webhook-id·webhook-timestamp·webhook-signature 서명을 원본 본문 그대로 검증한다
+              predicates:
+                - Path=/api/webhooks/portone
+                - Method=POST
           # /api/ai/** (id: ai) 는 여기 없다 — 플래그 app.ai.enabled 가 true 일 때만 AiRouteConfig 가 등록한다 (3.3.8, ADR-86)
 app:
   services:                                   # 환경변수 APP_SERVICES_BOOKING_URL 등으로 바꾼다
     catalog-url: http://catalog:8080
     booking-url: http://booking:8080
     user-url: http://user:8080
+    payment-url: http://payment:8080          # APP_SERVICES_PAYMENT_URL. 포트원 웹훅 라우트만 쓴다 (ADR-112)
     ai-url: http://ai:8080                    # APP_SERVICES_AI_URL. app.ai.enabled 가 true 일 때만 쓴다
   ai:
     enabled: false                            # APP_AI_ENABLED. false(기본)면 /api/ai/** 라우트 자체가 없어 404 (rc2 M6 테스트 뒤 gitops 에서 true)

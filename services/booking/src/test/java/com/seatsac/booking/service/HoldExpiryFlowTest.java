@@ -1,7 +1,11 @@
 package com.seatsac.booking.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.BookingPolicy;
@@ -11,6 +15,9 @@ import com.seatsac.booking.component.CatalogClient;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout;
 import com.seatsac.booking.component.CatalogClient.AuditoriumLayout.LayoutSeat;
 import com.seatsac.booking.component.HoldExpirySweeper;
+import com.seatsac.booking.component.PaymentClient;
+import com.seatsac.booking.component.PaymentClient.PaymentCancelReason;
+import com.seatsac.booking.component.PaymentClient.PaymentResult;
 import com.seatsac.booking.component.ScreeningCache;
 import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.component.SeatHoldStrategy;
@@ -29,6 +36,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,9 +67,13 @@ class HoldExpiryFlowTest {
     private static final String USER = "11111111-1111-4111-8111-111111111111";
     private static final Long SCREENING = 42L;
     private static final Instant HELD_AT = Instant.parse("2026-10-23T03:00:00Z");
+    /** application-test.yml {@code app.payment.pending-grace} */
+    private static final long GRACE_SECONDS = 120;
 
     @MockitoBean
     CatalogClient catalogClient;
+    @MockitoBean
+    PaymentClient paymentClient;
 
     @Autowired
     SeatHoldProperties seatHoldProperties;
@@ -282,6 +294,93 @@ class HoldExpiryFlowTest {
         assertThat(redis.opsForZSet().size(RedisKeys.holdExpiry())).isEqualTo(3);
     }
 
+    // --- 결제 중 보류의 유예 (ADR-112) — 결제창을 띄운 채 떠난 사용자 ---
+
+    @Test
+    void paymentHoldIsDeferredUntilGracePasses() {
+        SeatHoldResponse hold = hold(101L);
+        String paymentId = startPayment(hold.bookingId());
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + 1);
+
+        assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.DEFERRED);
+        verify(paymentClient, never()).find(anyString());   // 유예 안에서는 묻지도 않는다
+
+        clock.advanceSeconds(GRACE_SECONDS);
+        given(paymentClient.find(paymentId)).willReturn(Optional.of(payment(paymentId, hold.bookingId(), "PROCESSING")));
+
+        assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.DEFERRED);
+        sweeper.sweepLedger();
+        assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.PENDING);
+        String holdId = bookingRepository.findById(hold.bookingId()).orElseThrow().getHoldId();
+        assertThat(redis.opsForZSet().score(RedisKeys.holdExpiry(),
+            RedisKeys.holdExpiryMember(SCREENING, holdId))).isNotNull();
+    }
+
+    @Test
+    void paymentHoldFailedAfterGraceReleasesSeats() {
+        SeatHoldResponse hold = hold(101L, 102L);
+        String holdId = bookingRepository.findById(hold.bookingId()).orElseThrow().getHoldId();
+        String paymentId = startPayment(hold.bookingId());
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + GRACE_SECONDS + 1);
+        given(paymentClient.find(paymentId)).willReturn(Optional.of(payment(paymentId, hold.bookingId(), "FAILED")));
+
+        sweeper.sweepLedger();
+
+        assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.PAYMENT_FAILED);
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(hold.bookingId())).isEmpty();
+        assertThat(redis.hasKey(RedisKeys.seat(SCREENING, 101L))).isFalse();
+        assertThat(redis.opsForZSet().score(RedisKeys.holdExpiry(),
+            RedisKeys.holdExpiryMember(SCREENING, holdId))).isNull();
+        // 선점 HELD(1) + 거절 RELEASED(2)
+        assertThat(redis.opsForValue().get(RedisKeys.seatSeq(SCREENING))).isEqualTo(seqAfter(2));
+    }
+
+    /** 결제창에서 승인됐지만 이미 만료 + 유예가 지났다 — 환불하고 만료로 끝낸다(확정하지 않는다) */
+    @Test
+    void paymentHoldApprovedAfterGraceRefundsAndExpires() {
+        SeatHoldResponse hold = hold(101L);
+        String paymentId = startPayment(hold.bookingId());
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + GRACE_SECONDS + 1);
+        given(paymentClient.find(paymentId)).willReturn(Optional.of(payment(paymentId, hold.bookingId(), "APPROVED")));
+        given(paymentClient.cancel(anyString(), any())).willReturn(payment(paymentId, hold.bookingId(), "CANCELED"));
+
+        assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.ALREADY_SETTLED);
+
+        assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.EXPIRED);
+        verify(paymentClient).cancel(paymentId, PaymentCancelReason.HOLD_EXPIRED);
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(hold.bookingId())).isEmpty();
+    }
+
+    /** 결제 준비가 payment에 닿지 않았다(행 없음) — 보통 만료로 끝낸다 */
+    @Test
+    void paymentHoldWithoutPaymentRowExpiresNormally() {
+        SeatHoldResponse hold = hold(101L);
+        String paymentId = startPayment(hold.bookingId());
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + GRACE_SECONDS + 1);
+        given(paymentClient.find(paymentId)).willReturn(Optional.empty());
+
+        assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.EXPIRED);
+        assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.EXPIRED);
+        assertThat(bookingSeatRepository.findSeatIdsByBookingId(hold.bookingId())).isEmpty();
+    }
+
+    /** 결제 상태를 모르면 좌석을 풀지 않는다 — 승인된 결제가 예매 없이 남을 수 있다 */
+    @Test
+    void paymentHoldDeferredWhilePaymentIsUnreachable() {
+        SeatHoldResponse hold = hold(101L);
+        String paymentId = startPayment(hold.bookingId());
+        clock.advanceSeconds(seatHoldProperties.holdTtl().toSeconds() + GRACE_SECONDS + 1);
+        given(paymentClient.find(paymentId)).willThrow(new IllegalStateException("서킷 열림"));
+
+        assertThat(holdExpiryService.expire(hold.bookingId())).isEqualTo(Outcome.DEFERRED);
+        assertThat(bookingRepository.findById(hold.bookingId()).orElseThrow().getStatus())
+            .isEqualTo(BookingStatus.PENDING);
+    }
+
     // --- 장기 중단 후 첫 스윕 (ADR-34 노드 0대) ---
 
     /**
@@ -342,13 +441,20 @@ class HoldExpiryFlowTest {
         return seatHoldService.hold(userId, new SeatHoldRequest(SCREENING, List.of(seatIds)));
     }
 
-    /** BKG-10(결제)은 3.2.6이라 current_payment_id만 직접 채워 「결제 중」 상태를 만든다 */
-    private void startPayment(Long bookingId) {
+    /** current_payment_id만 직접 채워 「결제 중」 상태를 만든다. 붙인 결제 ID를 돌려준다 */
+    private String startPayment(Long bookingId) {
+        String paymentId = UUID.randomUUID().toString();
         transactions.executeWithoutResult(status -> entityManager.createQuery(
                 "update Booking b set b.currentPaymentId = :paymentId where b.bookingId = :bookingId")
-            .setParameter("paymentId", UUID.randomUUID().toString())
+            .setParameter("paymentId", paymentId)
             .setParameter("bookingId", bookingId)
             .executeUpdate());
+        return paymentId;
+    }
+
+    private static PaymentResult payment(String paymentId, Long bookingId, String status) {
+        return new PaymentResult(paymentId, bookingId, 15_000, status, null, null, null, null, null,
+            "TOSSPAY", "PORTONE", null, null);
     }
 
     private void notifyExpired(String key) {

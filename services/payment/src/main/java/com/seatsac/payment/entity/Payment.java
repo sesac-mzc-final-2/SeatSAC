@@ -101,10 +101,32 @@ public class Payment {
         payment.method = Objects.requireNonNull(method, "method");
         payment.cardLast4 = cardLast4;
         payment.status = PaymentStatus.PROCESSING;
-        payment.pgProvider = PgProvider.MOCK;
+        // 수단이 제공자를 정한다(ADR-112). PORTONE은 결제창에서 돈이 움직이므로 pg_order_id = paymentId(가맹점 채번 ID)
+        payment.pgProvider = method.provider();
+        payment.pgOrderId = payment.pgProvider == PgProvider.PORTONE ? paymentId : null;
         payment.createdAt = Objects.requireNonNull(now, "now");
         payment.updatedAt = now;
         return payment;
+    }
+
+    public boolean isProcessing() {
+        return status == PaymentStatus.PROCESSING;
+    }
+
+    public boolean isFailed() {
+        return status == PaymentStatus.FAILED;
+    }
+
+    public boolean isPortOne() {
+        return pgProvider == PgProvider.PORTONE;
+    }
+
+    /**
+     * 환불 미완료 — 포트원에서 돈이 잡혔는데({@code pg_transaction_id} 있음) 우리가 쓰지 않기로 한 결제(FAILED)이고
+     * 아직 환불 확인({@code canceled_at})이 없다. 금액 불일치·늦은 결제가 여기로 온다. 스윕이 끝까지 처리한다(ADR-112)
+     */
+    public boolean isRefundOwed() {
+        return isPortOne() && isFailed() && pgTransactionId != null && canceledAt == null;
     }
 
     /** 재호출이 같은 요청인지 — 결제 ID가 같아도 예매·금액이 다르면 409다 (명세 4장) */

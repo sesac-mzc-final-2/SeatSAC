@@ -88,7 +88,7 @@ export function SeatBookingPanel({ screening, movie, seats, onRemove, onSubmit, 
         <Icon name="timer" size={13} />
         결제하기를 누르면 5분 동안 좌석을 지켜 드려요.
         <br />
-        모의 결제로 실제 청구되지 않아요.
+        토스페이 테스트 결제로 실제 청구되지 않아요.
       </p>
     </aside>
   );

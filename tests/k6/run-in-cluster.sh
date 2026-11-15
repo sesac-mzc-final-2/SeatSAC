@@ -106,7 +106,9 @@ job_manifest() {
             labelSelector: { matchExpressions: [ { key: "app.kubernetes.io/name", operator: "In", values: ["gateway","booking","catalog"] } ] } } } ] } },
           containers: [ {
             name: "k6", image: $image, args: $args,
-            env: ([ { name: "BASE_URL", value: "http://gateway:8080/api" } ]
+            env: ([ { name: "BASE_URL", value: "http://gateway:8080/api" },
+                    # 모의 결제(CARD) 허용 키 — booking-secrets에서 바로 받는다(값을 꺼내 복사하지 않는다, ADR-112). 없으면 빈 값
+                    { name: "PAYMENT_MOCK_KEY", valueFrom: { secretKeyRef: { name: "booking-secrets", key: "APP_PAYMENT_MOCK_KEY", optional: true } } } ]
                   + (if $tokens == "" then [] else [ { name: "K6_TOKENS_FILE", value: "/tokens/tokens.txt" } ] end)),
             resources: { requests: { cpu: "500m", memory: "256Mi" }, limits: { memory: "1Gi" } },
             securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } },

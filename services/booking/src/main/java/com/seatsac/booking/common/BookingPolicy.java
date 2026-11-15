@@ -101,8 +101,19 @@ public final class BookingPolicy {
     public static final Duration SSE_HEARTBEAT = Duration.ofSeconds(15);
     public static final long SSE_RETRY_MILLIS = 2_000L;
 
+    /** 모의 결제(CARD)를 부르는 기계 경로(k6·분석 Job)의 키 헤더 — 값은 {@code app.payment.mock-key} (ADR-112) */
+    public static final String MOCK_PAYMENT_KEY_HEADER = "X-Payment-Mock-Key";
+
+    /** 포트원 결제창에 보이는 주문명 접두사 — 「SeatSAC 영화 예매 2석」 */
+    private static final String ORDER_NAME_PREFIX = "SeatSAC 영화 예매 ";
+
     public static int amountOf(int seatCount) {
         return seatCount * SEAT_PRICE;
+    }
+
+    /** 결제 준비 응답과 payment에 보내는 값이 같아야 하므로 이곳 하나에서 만든다 */
+    public static String orderNameOf(int seatCount) {
+        return ORDER_NAME_PREFIX + seatCount + "석";
     }
 
     public static boolean isAllowedSeatCount(int seatCount) {

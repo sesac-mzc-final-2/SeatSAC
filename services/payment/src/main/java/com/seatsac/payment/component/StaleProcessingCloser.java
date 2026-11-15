@@ -3,6 +3,7 @@ package com.seatsac.payment.component;
 import com.seatsac.payment.common.PaymentPolicy;
 import com.seatsac.payment.enums.PaymentFailureCode;
 import com.seatsac.payment.enums.PaymentStatus;
+import com.seatsac.payment.enums.PgProvider;
 import com.seatsac.payment.service.PaymentStateService;
 import java.time.Clock;
 import java.time.Instant;
@@ -15,8 +16,8 @@ import org.springframework.stereotype.Component;
 /**
  * 기동 시 남은 {@code PROCESSING} 정리 — 명세 3·7장.
  *
- * <p>모의 판정 중에 파드가 죽으면 행이 {@code PROCESSING}으로 남는다. 외부 PG가 없어 결과를
- * 다시 물을 곳이 없으므로 {@code FAILED(PROCESSING_TIMEOUT)}으로 닫는다. Booking은 이것을
+ * <p>모의 판정 중에 파드가 죽으면 행이 {@code PROCESSING}으로 남는다. MOCK은 결과를
+ * 다시 물을 곳이 없으므로 {@code FAILED(PROCESSING_TIMEOUT)}으로 닫는다. <b>PORTONE 행은 보지 않는다</b>(ADR-112). Booking은 이것을
  * 「결제 실패」로 보고 좌석을 풀면 된다 — 승인되지 않은 결제라 돈이 빠져나간 적이 없다.
  *
  * <p>{@code created_at}이 30초 이전인 행만 본다. <b>방금 들어와 판정 중인(지연 카드 5초) 요청을
@@ -51,7 +52,8 @@ public class StaleProcessingCloser {
         // 한 번에 100건씩, 더 없을 때까지 돈다. 조회 한 번으로 끝내면 101건째부터 남는다.
         // 상한을 둬서 (조건부 UPDATE가 계속 0행을 내는) 예상 못 한 상황에 무한 반복하지 않는다
         for (int round = 0; round < MAX_ROUNDS; round++) {
-            List<String> stale = paymentState.findStaleProcessingIds(threshold,
+            // MOCK 행만 — PORTONE은 결제창이 열려 있을 수 있어 30초로 닫으면 안 된다(PortOneSweeper가 7분 뒤 포트원에 물어 닫는다)
+            List<String> stale = paymentState.findStaleProcessingIds(PgProvider.MOCK, threshold,
                 PageRequest.ofSize(BATCH_SIZE));
             if (stale.isEmpty()) {
                 break;

@@ -27,6 +27,7 @@ import org.springframework.stereotype.Component;
 public class StaleProcessingStartupRunner implements ApplicationRunner {
 
     private final StaleProcessingCloser closer;
+    private final PortOneSweeper portOneSweeper;
 
     /**
      * 기동 정리만 끄는 스위치. <b>주기 실행은 끄지 않는다</b> — 둘 다 꺼지면 돌고 있는 서비스에서
@@ -42,12 +43,14 @@ public class StaleProcessingStartupRunner implements ApplicationRunner {
             return;
         }
         withTraceId(closer::closeStale);
+        withTraceId(portOneSweeper::sweep);
     }
 
     /** 기동 뒤에도 주기적으로 — 30초 안에 죽어 남은 행을 다음 기동까지 끌지 않는다 */
     @Scheduled(fixedDelay = 60, initialDelay = 60, timeUnit = TimeUnit.SECONDS)
     public void sweep() {
         withTraceId(closer::closeStale);
+        withTraceId(portOneSweeper::sweep);   // PORTONE: 결제창 미완료(7분)·환불 미완료(ADR-112)
     }
 
     /**

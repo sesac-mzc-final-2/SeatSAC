@@ -9,14 +9,12 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import reactor.core.publisher.Mono;
 
-/** cognito:groups 클레임 → ROLE_ADMIN / ROLE_USER */
+/** 검증된 토큰 → ROLE_USER. 관리자 역할은 없다 — cognito:groups 클레임은 읽지 않는다 */
 public class CognitoGroupsConverter implements Converter<Jwt, Mono<AbstractAuthenticationToken>> {
 
     @Override
     public Mono<AbstractAuthenticationToken> convert(Jwt jwt) {
-        List<String> groups = jwt.getClaimAsStringList("cognito:groups");
-        String role = groups != null && groups.contains("ADMIN") ? "ROLE_ADMIN" : "ROLE_USER";
-        List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority(role));
+        List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_USER"));
         return Mono.just(new JwtAuthenticationToken(jwt, authorities, jwt.getSubject()));
     }
 }

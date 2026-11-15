@@ -45,9 +45,10 @@ resource "kubernetes_secret_v1" "app" {
     }
   }
 
-  data = {
+  # 서비스별 추가 키(포트원·모의 결제 키, ADR-112)는 portone.tf local.app_secret_extra
+  data = merge({
     SPRING_DATASOURCE_PASSWORD = random_password.db["${each.key}_app"].result
-  }
+  }, lookup(local.app_secret_extra, each.key, {}))
 }
 
 resource "kubernetes_secret_v1" "migrator" {

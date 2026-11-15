@@ -1,0 +1,154 @@
+.panel {
+  padding: 30px;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* 토스페이 표기 — 로고 이미지 대신 글자로 (브랜드 파랑) */
+.brand {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #3182f6;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.badge {
+  margin-left: auto;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.amount {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 24px;
+  padding: 20px 0;
+  border-top: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.amount span {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.amount strong {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+.steps {
+  display: grid;
+  gap: 12px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-muted-strong);
+  font-size: 13px;
+}
+
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.stepIcon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  color: #b4bdcc;
+}
+
+.stepNo {
+  color: var(--color-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.note {
+  display: flex;
+  gap: 12px;
+  margin: 24px 0 26px;
+  padding: 18px;
+  border: 1px solid #3c424f;
+  border-radius: var(--radius-sm);
+  background: #14161c;
+}
+
+.note > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #b4bdcc;
+}
+
+.note strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.note p {
+  margin-top: 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.cancel {
+  display: flex;
+  width: max-content;
+  margin: 15px auto 0;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cancel:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 540px) {
+  .panel {
+    padding: 22px 18px;
+  }
+
+  .badge {
+    display: none;
+  }
+}

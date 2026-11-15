@@ -38,12 +38,19 @@ locals {
     }
   }
 
+  # 끄기 일정은 데모 시작 전 마지막 실행(직전 금 23:07 KST)이 지나면 만들지 않는다.
+  #   end_date(데모 시작일 0시 KST) 전에 한 번도 실행되지 않을 일정은 AWS가 CreateSchedule에서 거절한다
+  #   (ValidationException "will never schedule an invocation" — 11/14 토요일 노드그룹 교체로 일정이 다시 만들어질 때 발생).
+  #   데모 시작일이 월요일이라 금 23:07 → 월 0:00은 48시간 53분 → 49시간 전부터 뺀다. 그 뒤 주말·데모 주간에는 예약 끄기가 원래 없다
+  down_schedules_active = timecmp(plantimestamp(), timeadd(local.cluster_schedule_actions.down.end_date, "-49h")) < 0
+
   cluster_schedules = merge([
     for ng_key, ng in local.schedule_node_groups : {
       for action, a in local.cluster_schedule_actions : "${ng_key}-${action}" => merge(a, {
         node_group = ng.name
         action     = action
-      }) if !(action == "up" && contains(local.optional_node_groups, ng_key)) # ng-ai는 끄기 일정만
+      }) if !(action == "up" && contains(local.optional_node_groups, ng_key)) && !(action == "down" && !local.down_schedules_active)
+      # 앞 조건: ng-ai는 끄기 일정만 · 뒤 조건: 데모 직전 주말부터 끄기 일정 없음
     }
   ]...)
 }

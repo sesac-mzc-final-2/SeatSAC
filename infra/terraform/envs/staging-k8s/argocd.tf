@@ -5,7 +5,7 @@
 #   - 관리자: admin / 초기 비밀번호는 Secret argocd-initial-admin-secret (김종식·백업 관리자만)
 #   - 팀원: 로그인 없이 읽기 전용(anonymous → role:readonly). port-forward 권한은 아래 Role
 #   - SeatSAC-gitops는 Public → 레포 자격 증명을 등록하지 않는다 (ADR-74)
-#   - dex·notifications 끔. 노드 2대(t3.large)라 requests를 작게
+#   - dex·notifications 끔. 노드 2대(t3.xlarge)라 requests를 작게
 #   - App of Apps 대기: Application 리소스 health를 계산하게 해서(argocd 1.8부터 기본 꺼짐)
 #     root 앱의 sync-wave(플랫폼 -10 → cinema-common -5)가 앞 앱이 Healthy가 될 때까지 기다리게 한다
 # ------------------------------------------------------------------

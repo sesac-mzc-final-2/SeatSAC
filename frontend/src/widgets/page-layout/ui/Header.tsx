@@ -1,13 +1,16 @@
 import { Link, NavLink } from "react-router";
 import { SessionControls } from "@/features/login";
+import { useSession } from "@/entities/session";
 import { routes } from "@/shared/config";
 import { Logo } from "./Logo";
 import styles from "./Header.module.css";
 
 /** 공통 헤더 (2.2.5 경계: 로그인 상태·메뉴는 모든 화면이 같은 컴포넌트를 쓴다). page-layout 의 일부 */
 export function Header() {
+  // 로그인하면 계정 메뉴가 길어져 아주 좁은 폭에서 두 줄이 된다 → 그 폭에서는 주 메뉴를 숨긴다 (Header.module.css)
+  const authed = useSession().status === "authenticated";
   return (
-    <header className={styles.header}>
+    <header className={styles.header} data-authed={authed || undefined}>
       <div className={`container ${styles.inner}`}>
         <Link to={routes.home()} aria-label="SeatSAC 홈">
           <Logo />

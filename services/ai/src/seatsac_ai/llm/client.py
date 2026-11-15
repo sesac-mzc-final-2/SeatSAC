@@ -1,6 +1,8 @@
 """Claude API 호출 (ADR-83 · claude-sonnet-5-5).
 
-- 한 번 부를 때마다 도구 하나를 반드시 고르게 한다(tool_choice=any)
+- 도구 선택은 tool_choice=auto. claude-sonnet-5-5 는 강제(any·tool)를 400으로 거절한다
+  (Anthropic 문서 "Forced tool use not supported"). "도구 하나를 반드시 호출"은
+  system 안내문이 시키고, 도구 없이 글로 답하면 NO_TOOL 로 돌려줘 오케스트레이터가 한 번 다시 시킨다
 - 시간 상한은 부르는 쪽이 정한다: min(15초, 요청 기한까지 남은 시간)
 - 실패는 계약의 503 AI_LLM_UNAVAILABLE 사유로 바꾼다
   (TIMEOUT·OVERLOADED·RATE_LIMITED·SPEND_LIMIT·CIRCUIT_OPEN)
@@ -23,6 +25,8 @@ import anthropic
 from seatsac_ai.common.metrics import AI_LLM_CALL_SECONDS
 
 log = logging.getLogger(__name__)
+
+NO_TOOL = "no_tool"  # Claude가 도구 없이 글로만 답했다(그 글은 사용자에게 보내지 않는다)
 
 _FAILURES_TO_OPEN = 5
 _OPEN_SECONDS = 30.0
@@ -92,7 +96,7 @@ class AnthropicClient:
                 max_tokens=self._max_tokens,
                 system=system,
                 tools=tools,
-                tool_choice={"type": "any"},
+                tool_choice={"type": "auto"},
                 messages=messages,
                 timeout=timeout,
             )
@@ -136,6 +140,6 @@ def _to_tool_call(response: Any) -> ToolCall:
     )
     content = [block.model_dump(exclude_none=True) for block in response.content]
     tool = next((b for b in response.content if b.type == "tool_use"), None)
-    if tool is None:  # tool_choice=any 라 거의 없지만, 오면 범위 밖으로 다룬다
-        return ToolCall("", "out_of_scope", {"reason": "no tool"}, content, usage)
+    if tool is None:  # auto 라 드물게 글로만 답한다 — 부르는 쪽이 한 번 다시 시킨다
+        return ToolCall("", NO_TOOL, {}, content, usage)
     return ToolCall(tool.id, tool.name, dict(tool.input), content, usage)

@@ -5,12 +5,13 @@
 #   (스냅샷 준비 전에는 계약 예시처럼 "영화 제목"). 실제 없는 제목이 버튼에 나가지 않게(#92 리뷰).
 #   버튼을 누르면 example 문장이 그대로 POST /ai/chat 의 message 로 간다.
 # - description 은 Claude가 읽는다. 질문이 이 프리셋에 맞으면 run_preset 도구를 고른다.
-# - params 는 질문에서 뽑는 슬롯 종류(time·date·theater·movie·n). SQL의 :이름 과 같다.
+# - params 는 질문에서 뽑는 슬롯 종류(time·date·theater·movie·n)와 등급(grade). SQL의 :이름 과 같다.
 #     time    'HH:MM'          (예 '20:00')
 #     date    'YYYY-MM-DD'     (예 '2026-11-18')
 #     theater 극장 이름        (스냅샷 theater.name 과 정확히 같은 값)
 #     movie   영화 제목        (스냅샷 movie.title 과 정확히 같은 값)
 #     n       개수 정수        (SQL에서 min(:n, 500) 으로 막힌다)
+#     grade   관람 등급        ('ALL'·'12'·'15'·'19'. 질문에서 뽑는 슬롯이 아니라 Claude가 고른다 → 캐시하지 않는다)
 # - :today('YYYY-MM-DD')·:now('YYYY-MM-DD HH:MM')는 서버가 항상 넣는다(KST). params 에 적지 않는다.
 # - screening 을 조회하는 SQL은 모두 starts_at > :now 를 붙인다(data-model 6-1).
 # - 모든 SQL은 test_presets.py 에서 검증기(16장)를 통과하고 실제 스냅샷에서 실행돼야 한다.
@@ -156,13 +157,13 @@ presets:
   - presetId: movies_by_view_grade
     title: 관람 등급별 영화
     example: 전체 관람가 영화 알려줘
-    description: 지금 상영 중인 영화를 관람 등급별로 묶은 목록
-    params: []
+    description: 지금 상영 중인 영화 중 관람 등급 하나에 해당하는 영화(전체 관람가·12세·15세·청소년 관람불가)
+    params: [grade]
     sql: |
       SELECT view_grade, title AS movie_title
       FROM movie
-      ORDER BY CASE view_grade WHEN 'ALL' THEN 0 WHEN '12' THEN 1 WHEN '15' THEN 2 ELSE 3 END,
-               title
+      WHERE view_grade = :grade
+      ORDER BY title
 
   - presetId: theater_counts_today
     title: 극장별 오늘 회차 수

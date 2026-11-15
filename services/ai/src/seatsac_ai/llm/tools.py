@@ -22,6 +22,11 @@ _SLOT_SCHEMA = {
     "theater": {"type": "string", "description": "극장 이름(스냅샷 theater.name 그대로)"},
     "movie": {"type": "string", "description": "영화 제목(스냅샷 movie.title 그대로)"},
     "n": {"type": "integer", "minimum": 1, "maximum": 50, "description": "개수"},
+    "grade": {
+        "type": "string",
+        "enum": ["ALL", "12", "15", "19"],
+        "description": "관람 등급. 전체 관람가=ALL, 12세=12, 15세=15, 청소년 관람불가=19",
+    },
 }
 
 

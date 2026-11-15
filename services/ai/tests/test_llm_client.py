@@ -58,11 +58,12 @@ def call(client):
     )
 
 
-def test_request_forces_a_tool_and_passes_timeout():
+def test_request_uses_auto_tool_choice_and_passes_timeout():
     client, messages = client_with(fake_response())
     result = call(client)
     assert messages.kwargs["model"] == "claude-sonnet-5-5"
-    assert messages.kwargs["tool_choice"] == {"type": "any"}
+    # claude-sonnet-5-5 는 any·tool 을 400으로 거절한다 — auto 만 보낸다
+    assert messages.kwargs["tool_choice"] == {"type": "auto"}
     assert messages.kwargs["timeout"] == 7
     assert result.name == "run_sql" and result.tool_use_id == "toolu_1"
     assert result.usage.cache_read == 3000
@@ -104,3 +105,14 @@ def test_preset_tool_lists_only_real_preset_ids():
     run_preset = tool_definitions()[0]
     ids = run_preset["input_schema"]["properties"]["presetId"]["enum"]
     assert len(ids) == 12 and "today_after_time" in ids
+
+
+def test_text_only_reply_is_reported_as_no_tool():
+    response = fake_response()
+    text = SimpleNamespace(type="text", text="20시 이후에는 세 편이 있어요")
+    text.model_dump = lambda exclude_none=True: {"type": "text", "text": text.text}
+    response.content = [text]
+    client, _ = client_with(response)
+    result = call(client)
+    assert result.name == "no_tool" and result.tool_use_id == ""
+    assert result.usage.input == 10  # 글로만 답해도 쓴 토큰은 센다

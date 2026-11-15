@@ -3,6 +3,8 @@ package com.seatsac.booking.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.seatsac.booking.config.SeatHoldProperties;
 import com.seatsac.booking.common.BookingErrorCode;
@@ -38,6 +40,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
@@ -59,6 +62,10 @@ class SeatHoldFlowTest {
 
     @MockitoBean
     CatalogClient catalogClient;
+    @MockitoSpyBean
+    BookingRepositoryReader bookingReader;
+    @MockitoSpyBean
+    BookingStateService bookingState;
 
     @Autowired
     SeatHoldProperties seatHoldProperties;
@@ -246,7 +253,7 @@ class SeatHoldFlowTest {
     }
 
     @Test
-    void takenSeatTellsWhetherItIsHeldOrReserved() {
+    void takenSeatIsReportedAsHeld() {
         seatHoldService.hold("22222222-2222-4222-8222-222222222222",
             new SeatHoldRequest(SCREENING, List.of(101L)));
 
@@ -260,6 +267,23 @@ class SeatHoldFlowTest {
                     assertThat(detail.reason()).isEqualTo(SeatStatus.HELD.name());
                 });
             });
+    }
+
+    /**
+     * 같은 좌석 경쟁에서 진 요청은 DB를 보지 않는다 — 409 사유를 RDS로 가려내면 진 요청 99건이 모두
+     * 읽기 트랜잭션과 DB 왕복을 한다(4.2.1, 11/11 풀 5에서 대기 최대 0.547초). Lua 판정만으로 답한다.
+     */
+    @Test
+    void losingHoldDoesNotTouchTheDatabase() {
+        seatHoldService.hold("22222222-2222-4222-8222-222222222222",
+            new SeatHoldRequest(SCREENING, List.of(101L)));
+        clearInvocations(bookingReader, bookingState);
+
+        assertThatThrownBy(() -> seatHoldService.hold(USER, new SeatHoldRequest(SCREENING, List.of(101L))))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode())
+            .isEqualTo(CommonResponseCode.SEAT_UNAVAILABLE.name());
+        verifyNoInteractions(bookingReader, bookingState);
     }
 
     /**

@@ -33,14 +33,6 @@ public class BookingRepositoryReader {
             .filter(booking -> !booking.isExpiredAt(now));
     }
 
-    /** 요청 좌석 중 해당 상태로 점유된 좌석 — SEAT_UNAVAILABLE의 reason(HELD·RESERVED) 판정 */
-    public List<Long> findSeatIdsByStatus(Long screeningId, List<Long> seatIds, BookingStatus status) {
-        if (seatIds.isEmpty()) {
-            return List.of();
-        }
-        return bookingSeatRepository.findSeatIdsByScreeningIdAndSeatIdInAndStatus(screeningId, seatIds, status);
-    }
-
     public Optional<Booking> findById(Long bookingId) {
         return bookingRepository.findById(bookingId);
     }

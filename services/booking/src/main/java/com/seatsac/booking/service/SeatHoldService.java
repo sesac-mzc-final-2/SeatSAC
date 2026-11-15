@@ -11,7 +11,6 @@ import com.seatsac.booking.component.SeatHoldStrategy.HoldOutcome;
 import com.seatsac.booking.dto.request.SeatHoldRequest;
 import com.seatsac.booking.dto.response.SeatHoldResponse;
 import com.seatsac.booking.entity.Booking;
-import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.enums.SeatEventType;
 import com.seatsac.booking.enums.SeatStatus;
 import com.seatsac.booking.service.BookingStateService.PendingBooking;
@@ -141,7 +140,7 @@ public class SeatHoldService {
 
         HoldOutcome outcome = seatHold.hold(screeningId, userId, holdId, seatIds, expiresAt);
         switch (outcome.status()) {
-            case SEAT_TAKEN -> throw seatUnavailable(screeningId, outcome.takenSeatIds());
+            case SEAT_TAKEN -> throw seatUnavailable(outcome.takenSeatIds());
             case ACTIVE_HOLD -> {
                 Optional<Booking> active = bookingReader.findPendingByHoldId(outcome.activeHoldId(), heldAt);
                 if (active.isPresent()) {
@@ -203,12 +202,21 @@ public class SeatHoldService {
             .isPresent();
     }
 
-    /** 좌석마다 왜 막혔는지 채운다 — RDS가 CONFIRMED면 RESERVED, 그 밖은 HELD (명세 3장 우선순위) */
-    private BusinessException seatUnavailable(Long screeningId, List<Long> takenSeatIds) {
-        List<Long> reserved = bookingReader.findSeatIdsByStatus(screeningId, takenSeatIds, BookingStatus.CONFIRMED);
+    /**
+     * {@code hold.lua}가 SEAT_TAKEN을 돌려준 좌석은 모두 HELD로 답한다 — <b>DB를 보지 않는다</b>.
+     *
+     * <p>확정(BKG-06)은 커밋 뒤 Valkey 좌석 키를 지우므로({@code BookingPaymentResultApplier.releaseKeys})
+     * Lua가 「키가 있다」고 답한 좌석은 선점 중이다. 확정된 좌석은 키가 없어 Lua를 지나고
+     * {@code booking_seat} 유일 제약에서 409가 된다. 예전에는 여기서 RDS로 RESERVED를 가려냈는데, 같은 좌석
+     * 100명 경쟁에서 진 99건이 모두 그 조회(읽기 트랜잭션 + 왕복)를 해 커넥션 풀 앞에 줄을 섰다(4.2.1, 11/11
+     * 풀 5에서 대기 최대 0.547초). 풀 15로 대기는 사라졌지만 선점 p95는 그대로여서(11/13) 주원인은 파드 CPU로
+     * 보고, 이 조회는 진 요청마다 드는 처리 비용으로서 없앤다.
+     * 확정 직후 키 삭제가 실패해 키가 남은 동안은 사유가 RESERVED 대신 HELD로 보이지만 막히는 결과는 같고,
+     * 화면은 이 사유를 쓰지 않는다(좌석 색은 BKG-01·SSE).
+     */
+    private static BusinessException seatUnavailable(List<Long> takenSeatIds) {
         return BookingErrorCode.SEAT_UNAVAILABLE.exception(takenSeatIds.stream()
-            .map(seatId -> ErrorDetail.of("seatIds", seatId,
-                (reserved.contains(seatId) ? SeatStatus.RESERVED : SeatStatus.HELD).name()))
+            .map(seatId -> ErrorDetail.of("seatIds", seatId, SeatStatus.HELD.name()))
             .toList());
     }
 

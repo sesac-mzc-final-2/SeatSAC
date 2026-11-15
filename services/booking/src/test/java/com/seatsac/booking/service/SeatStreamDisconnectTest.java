@@ -10,6 +10,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.seatsac.booking.component.CatalogClient;
 import com.seatsac.booking.component.ScreeningCache;
+import com.seatsac.booking.controller.SseDisconnectHandler;
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
 import com.seatsac.common.web.error.ErrorResponder;
@@ -35,8 +36,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
  * BKG-05 화면이 떠난 SSE 연결 — 실제 Tomcat에서 연결을 끊고 하트비트를 보낸다.
  *
  * <p>화면이 결제 페이지로 넘어가면 좌석 SSE 연결이 끊긴다. 이것은 정상 동작이라 서버 오류
- * (ERROR · 「status=500」)로 남기지 않고, 연결 수만 줄어야 한다. MockMvc는 소켓이 없어
- * 끊김을 흉내 낼 수 없으므로 실제 포트로 연다.
+ * (ERROR · 「status=500」)로 남기지 않고, 연결 수만 줄어야 한다. 처리하는 곳은
+ * {@link com.seatsac.booking.controller.SseDisconnectHandler}(공통 처리기보다 먼저 받는다).
+ * MockMvc는 소켓이 없어 끊김을 흉내 낼 수 없으므로 실제 포트로 연다.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -59,6 +61,9 @@ class SeatStreamDisconnectTest {
 
     private final ListAppender<ILoggingEvent> errorLogs = new ListAppender<>();
     private final Logger errorResponderLog = (Logger) LoggerFactory.getLogger(ErrorResponder.class);
+    private final ListAppender<ILoggingEvent> disconnectLogs = new ListAppender<>();
+    private final Logger disconnectLog = (Logger) LoggerFactory.getLogger(SseDisconnectHandler.class);
+    private Level disconnectLevel;
 
     @BeforeEach
     void setUp() {
@@ -68,11 +73,17 @@ class SeatStreamDisconnectTest {
             "승부", "건대입구", "1관"));
         errorLogs.start();
         errorResponderLog.addAppender(errorLogs);
+        disconnectLogs.start();
+        disconnectLevel = disconnectLog.getLevel();
+        disconnectLog.setLevel(Level.DEBUG);   // 처리기가 받았다는 신호(DEBUG 한 줄)를 기다리기 위해
+        disconnectLog.addAppender(disconnectLogs);
     }
 
     @AfterEach
     void tearDown() {
         errorResponderLog.detachAppender(errorLogs);
+        disconnectLog.detachAppender(disconnectLogs);
+        disconnectLog.setLevel(disconnectLevel);
         seatStreamService.closeAll();
     }
 
@@ -89,7 +100,10 @@ class SeatStreamDisconnectTest {
             assertThat(seatStreamService.connectionCount()).isZero();
         });
 
-        Thread.sleep(500);   // 컨테이너가 오류 디스패치를 마칠 시간
+        // 컨테이너의 오류 디스패치는 비동기다 — 고정 대기로 보면 디스패치 전에 검사해 거짓 통과할 수 있다.
+        // 처리기가 받았다는 DEBUG 한 줄이 찍힐 때까지 기다린 뒤 본다(수정 전 코드는 여기서 시간 초과로 실패)
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+            assertThat(disconnectLogs.list).as("끊김은 SseDisconnectHandler가 받는다").isNotEmpty());
         assertThat(errorLogs.list)
             .filteredOn(e -> e.getLevel().isGreaterOrEqual(Level.WARN))
             .as("끊긴 SSE 연결은 서버 오류로 남기지 않는다")

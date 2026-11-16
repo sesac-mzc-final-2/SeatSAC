@@ -27,7 +27,7 @@ from seatsac_ai.snapshot.mapper import KST
 
 log = logging.getLogger(__name__)
 
-VALKEY_RETRIES = 1  # 기다림 없이 1번 — connect_valkey 설명 참고
+VALKEY_RETRIES = 1  # 연결 오류만, 기다림 없이 1번 — connect_valkey 설명 참고
 INFLIGHT_TTL_MS = 40_000  # 요청 기한 25초 · gateway 28초보다 길게(처리 중 풀리지 않게)
 
 # 처음 증가할 때만 TTL을 단다 — 한 번에 원자적으로(INCR 뒤 죽어서 TTL 없는 키가 남지 않게)
@@ -97,11 +97,16 @@ def connect_valkey(host: str, port: int, tls: bool) -> Any:
 
     재시도는 기다림 없이 1번만 한다(끊긴 연결을 새로 맺는 용도). redis-py 기본값(8.x: 10번 +
     지수 백오프)은 Valkey가 멈췄을 때 명령 하나가 수십 초 걸려, 요청 기한 25초·gateway 28초를
-    넘긴다(11/13 로컬 실측 63초, 런북 6-G-7). 명령 하나의 상한 = 1초 × 2번 = 2초.
+    넘긴다(11/13 로컬 실측 63초, 런북 6-G-7).
+
+    다시 보내는 것은 연결 오류뿐이다. 시간 초과는 명령이 Valkey에서 이미 실행됐을 수 있어
+    다시 보내지 않는다 — 다시 보내면 동시 1건 잠금(SET NX)이 자기 자신에게 409를 내고 한도
+    숫자가 2씩 오른다(#129 리뷰). 그래서 멈춘 Valkey에서 명령 하나의 상한은 1초다.
     """
     from redis.asyncio import Redis
     from redis.asyncio.retry import Retry
     from redis.backoff import NoBackoff
+    from redis.exceptions import ConnectionError as ValkeyConnectionError
 
     return Redis(
         host=host,
@@ -110,5 +115,5 @@ def connect_valkey(host: str, port: int, tls: bool) -> Any:
         decode_responses=True,
         socket_timeout=1.0,
         socket_connect_timeout=1.0,
-        retry=Retry(NoBackoff(), VALKEY_RETRIES),
+        retry=Retry(NoBackoff(), VALKEY_RETRIES, supported_errors=(ValkeyConnectionError,)),
     )

@@ -385,6 +385,7 @@ class ChatService:
             )
             # 캐시에는 제목의 빈칸 모양으로 남긴다. 실제 시각("20시")으로 남기면 "오후 8시"처럼
             # 다르게 말한 질문에서 값이 빈칸으로 안 바뀌어 적중 답이 「조회 결과」가 된다(#111 리뷰)
+            # 전제: 제목의 빈칸 표기는 "○시" 하나뿐 — tests/test_presets.py 가 지킨다
             cached_subject = preset.title.replace("○시", "{time}")
             return body, _Made("PRESET", preset.sql, preset, slots, cached_subject, result)
         if call.name == RUN_SQL:

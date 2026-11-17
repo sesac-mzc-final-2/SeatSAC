@@ -193,10 +193,17 @@ components:
           oneOf:
             - type: "null"
             - type: object
-              required: [screeningId, movieTitle, theaterName, auditoriumName, startsAt, endsAt]
+              required: [screeningId, movieId, movieTitle, posterUrl, theaterName, auditoriumName, startsAt, endsAt]
               properties:
                 screeningId: { type: integer, format: int64 }
+                movieId:
+                  description: catalog 회차 요약의 movieId. 요약이 아직 이 필드를 주지 않으면 null
+                  type: [integer, "null"]
+                  format: int64
                 movieTitle: { type: string }
+                posterUrl:
+                  description: TMDB 포스터 URL(CAT-01 `posterUrl`과 같은 값). 포스터가 없거나 catalog 요약에 필드가 없으면 null → 화면은 제목 카드
+                  type: [string, "null"]
                 theaterName: { type: string }
                 auditoriumName: { type: string }
                 startsAt: { type: string, format: date-time }

@@ -7,6 +7,7 @@
 #     user-hold   사용자당 진행 중 선점 1건 (user-hold-limit.js)        토큰 1개
 #     browse      조회 캐시 (browse.js)                                토큰 없음
 #     deploy      배포 중 부하 (deploy-during-load.js)                 토큰 VUS(기본 10)개
+#     rush        오픈런 1,000명 (open-rush.js) — -e BASE_URL=CloudFront  토큰 USERS(기본 1000, MODE=rehearsal 100)개
 #   -e 값은 k6에 그대로 넘긴다(시나리오 환경변수는 tests/k6/README.md 「데이터」). 대상은 tools/pick_targets.py로 고른다
 #   토큰: K6_TOKENS_FILE(줄당 1개, tools/loadtest_users.py tokens --out) → 실행마다 Secret으로 만들어 파일로 마운트하고 끝나면 지운다
 #
@@ -29,7 +30,7 @@ LABEL_NAME="k6-loadtest"     # gitops base/gateway/networkpolicy.yaml이 이 라
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "❌ $*" >&2; exit 2; }
-usage() { sed -n '3,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '3,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 1 ] || usage
 SCENARIO="$1"; shift
@@ -45,6 +46,7 @@ case "$SCENARIO" in
   user-hold)  FILE=user-hold-limit.js;      TOKENS_NEEDED=1;   DEADLINE=180 ;;
   browse)     FILE=browse.js;               TOKENS_NEEDED=0;   DEADLINE=420 ;;
   deploy)     FILE=deploy-during-load.js;   TOKENS_NEEDED=10;  DEADLINE=1200 ;;
+  rush)       FILE=open-rush.js;            TOKENS_NEEDED=1000; DEADLINE=900 ;;   # 약 8분(입장 1분 + 만료 관찰 6분)
   *) echo "모르는 시나리오: $SCENARIO" >&2; usage ;;
 esac
 
@@ -56,10 +58,20 @@ while [ $# -gt 0 ]; do
   case "$2" in
     K6_TOKENS_FILE=*|K6_TOKENS=*) die "토큰은 -e로 넘기지 않는다 — K6_TOKENS_FILE 환경변수(파일)만 쓴다" ;;
     VUS=*) [[ "${2#VUS=}" =~ ^[1-9][0-9]*$ ]] || die "VUS는 양의 정수: $2"
-           [ "$SCENARIO" != "user-hold" ] && TOKENS_NEEDED="${2#VUS=}" ;;
+           [ "$SCENARIO" != "user-hold" ] && [ "$SCENARIO" != "rush" ] && TOKENS_NEEDED="${2#VUS=}" ;;
+    USERS=*) [[ "${2#USERS=}" =~ ^[1-9][0-9]*$ ]] || die "USERS는 양의 정수: $2"
+             [ "$SCENARIO" = "rush" ] && RUSH_USERS="${2#USERS=}" ;;
+    MODE=rehearsal) [ "$SCENARIO" = "rush" ] && RUSH_REHEARSAL=1 ;;
   esac
   K6_ENV+=("$2"); shift 2
 done
+
+# rush: 토큰 수 = 사는 사람 수. 자원은 VU 2,000개(보는 사람 + 사는 사람)용 — 로컬 2,000 VU 최고 메모리 약 1.6GB
+K6_CPU_REQ=500m; K6_MEM_REQ=256Mi; K6_MEM_LIM=1Gi
+if [ "$SCENARIO" = "rush" ]; then
+  if [ -n "${RUSH_USERS:-}" ]; then TOKENS_NEEDED="$RUSH_USERS"; elif [ "${RUSH_REHEARSAL:-0}" = "1" ]; then TOKENS_NEEDED=100; fi
+  K6_CPU_REQ=2; K6_MEM_REQ=2Gi; K6_MEM_LIM=4Gi
+fi
 
 TOKENS_FILE=""
 if [ "$TOKENS_NEEDED" -gt 0 ]; then
@@ -70,13 +82,19 @@ if [ "$TOKENS_NEEDED" -gt 0 ]; then
   have=$(grep -c '[^[:space:]]' "$TOKENS_FILE" || true)
   [ "$have" -ge "$TOKENS_NEEDED" ] || die "토큰 ${have}개 < 필요 ${TOKENS_NEEDED}개 (서로 다른 사용자가 VU 수만큼 필요 — README)"
 fi
+# rush: 토큰 1,000개(약 1.2MB)는 Secret 한도(1MiB)를 넘는다 → 400줄씩 Secret 여러 개로 나눠 한 폴더에 모은다(projected)
+TOKEN_CHUNK_LINES=400; TOKEN_CHUNKS=0
+if [ "$SCENARIO" = "rush" ] && [ -n "$TOKENS_FILE" ]; then
+  lines=$(wc -l <"$TOKENS_FILE" | tr -d ' '); [ "$(tail -c1 "$TOKENS_FILE" | wc -l)" -eq 1 ] || lines=$((lines + 1))
+  TOKEN_CHUNKS=$(( (lines + TOKEN_CHUNK_LINES - 1) / TOKEN_CHUNK_LINES ))
+fi
 
 RUN="k6-${SCENARIO}-$(date +%m%d-%H%M%S)"     # Job·ConfigMap·Secret 이름 = 실행 ID
 LABELS=$(jq -cn --arg n "$LABEL_NAME" --arg r "$RUN" --arg s "$SCENARIO" \
   '{"app.kubernetes.io/name":$n,"app.kubernetes.io/part-of":"cinema","app.kubernetes.io/instance":$r,"app.kubernetes.io/component":$s,"app.kubernetes.io/managed-by":"run-in-cluster"}')
 
 # ConfigMap 키에는 '/'를 못 쓴다 → lib/common.js는 키 common.js로 넣고 마운트할 때 lib/ 아래로 둔다
-SCRIPT_FILES=(seat-hold-contention.js user-hold-limit.js browse.js deploy-during-load.js)
+SCRIPT_FILES=(seat-hold-contention.js user-hold-limit.js browse.js deploy-during-load.js open-rush.js)
 ITEMS=$(printf '%s\n' "${SCRIPT_FILES[@]}" | jq -R '{key:., path:.}' | jq -cs '. + [{key:"common.js", path:"lib/common.js"}]')
 
 ARGS=$(jq -cn --arg f "/scripts/$FILE" '["run","--no-usage-report",$f]')
@@ -85,7 +103,8 @@ for kv in ${K6_ENV[@]+"${K6_ENV[@]}"}; do ARGS=$(jq -c --arg kv "$kv" '. + ["-e"
 
 job_manifest() {
   jq -n --arg run "$RUN" --argjson labels "$LABELS" --arg image "$K6_IMAGE" --argjson args "$ARGS" \
-    --argjson items "$ITEMS" --argjson deadline "$DEADLINE" --arg tokens "$TOKENS_FILE" '
+    --argjson items "$ITEMS" --argjson deadline "$DEADLINE" --arg tokens "$TOKENS_FILE" \
+    --argjson chunks "$TOKEN_CHUNKS" --arg cpu "$K6_CPU_REQ" --arg memreq "$K6_MEM_REQ" --arg memlim "$K6_MEM_LIM" '
   {
     apiVersion: "batch/v1", kind: "Job",
     metadata: { name: $run, labels: $labels },
@@ -109,14 +128,19 @@ job_manifest() {
             env: ([ { name: "BASE_URL", value: "http://gateway:8080/api" },
                     # 모의 결제(CARD) 허용 키 — booking-secrets에서 바로 받는다(값을 꺼내 복사하지 않는다, ADR-112). 없으면 빈 값
                     { name: "PAYMENT_MOCK_KEY", valueFrom: { secretKeyRef: { name: "booking-secrets", key: "APP_PAYMENT_MOCK_KEY", optional: true } } } ]
-                  + (if $tokens == "" then [] else [ { name: "K6_TOKENS_FILE", value: "/tokens/tokens.txt" } ] end)),
-            resources: { requests: { cpu: "500m", memory: "256Mi" }, limits: { memory: "1Gi" } },
+                  + (if $tokens == "" then []
+                     elif $chunks > 0 then [ { name: "K6_TOKENS_FILES", value: ([range(0; $chunks)] | map("/tokens/tokens-\(.).txt") | join(",")) } ]
+                     else [ { name: "K6_TOKENS_FILE", value: "/tokens/tokens.txt" } ] end)),
+            resources: { requests: { cpu: $cpu, memory: $memreq }, limits: { memory: $memlim } },
             securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } },
             volumeMounts: ([ { name: "scripts", mountPath: "/scripts", readOnly: true }, { name: "tmp", mountPath: "/tmp" } ]
                            + (if $tokens == "" then [] else [ { name: "tokens", mountPath: "/tokens", readOnly: true } ] end))
           } ],
           volumes: ([ { name: "scripts", configMap: { name: $run, items: $items } }, { name: "tmp", emptyDir: {} } ]
-                    + (if $tokens == "" then [] else [ { name: "tokens", secret: { secretName: $run, defaultMode: 288 } } ] end))
+                    + (if $tokens == "" then []
+                       elif $chunks > 0 then [ { name: "tokens", projected: { defaultMode: 288, sources: [range(0; $chunks)
+                           | { secret: { name: "\($run)-t\(.)", items: [ { key: "tokens.txt", path: "tokens-\(.).txt" } ] } }] } } ]
+                       else [ { name: "tokens", secret: { secretName: $run, defaultMode: 288 } } ] end))
         }
       }
     }
@@ -153,6 +177,7 @@ LOG="$RESULTS_DIR/$RUN.log"
 cleanup() {
   local rc=$?
   kubectl -n "$NS" delete secret "$RUN" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete secret -l "app.kubernetes.io/instance=$RUN" --ignore-not-found >/dev/null 2>&1 || true   # rush 토큰 조각
   if [ "${KEEP:-0}" != "1" ]; then
     kubectl -n "$NS" delete job "$RUN" --ignore-not-found --cascade=foreground --wait=false >/dev/null 2>&1 || true
     kubectl -n "$NS" delete configmap "$RUN" --ignore-not-found >/dev/null 2>&1 || true
@@ -185,7 +210,14 @@ cm_args=()
 for f in "${SCRIPT_FILES[@]}"; do cm_args+=(--from-file="$f=$HERE/$f"); done
 kubectl -n "$NS" create configmap "$RUN" "${cm_args[@]}" --from-file="common.js=$HERE/lib/common.js" --dry-run=client -o json \
   | with_meta | kubectl -n "$NS" create -f - >/dev/null
-if [ -n "$TOKENS_FILE" ]; then
+if [ -n "$TOKENS_FILE" ] && [ "$TOKEN_CHUNKS" -gt 0 ]; then
+  # rush: 400줄씩 잘라 파이프로만 넘긴다(조각 파일을 디스크에 만들지 않는다)
+  for c in $(seq 0 $((TOKEN_CHUNKS - 1))); do
+    sed -n "$((c * TOKEN_CHUNK_LINES + 1)),$(((c + 1) * TOKEN_CHUNK_LINES))p" "$TOKENS_FILE" \
+      | kubectl -n "$NS" create secret generic "$RUN-t$c" --from-file=tokens.txt=/dev/stdin --dry-run=client -o json \
+      | with_meta | kubectl -n "$NS" create -f - >/dev/null
+  done
+elif [ -n "$TOKENS_FILE" ]; then
   # 토큰은 파이프로만 지나간다(화면·파일에 남기지 않는다)
   kubectl -n "$NS" create secret generic "$RUN" --from-file="tokens.txt=$TOKENS_FILE" --dry-run=client -o json \
     | with_meta | kubectl -n "$NS" create -f - >/dev/null

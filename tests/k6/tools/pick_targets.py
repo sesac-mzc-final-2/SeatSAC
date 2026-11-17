@@ -9,6 +9,8 @@
   contention  활성 좌석이 전부 비어 있는 회차의 좌석 하나 → CONTENTION_SCREENING_ID·CONTENTION_SEAT_ID
   user-hold   비어 있는 좌석 2개가 있는 회차 → USERHOLD_SCREENING_ID·USERHOLD_SEAT_IDS
   browse      위 회차들(조회만) + 그 극장·날짜 → BROWSE_SCREENING_IDS·THEATER_ID·THEATER_DATE
+  --rush      오픈런 1,000명(open-rush.js)만: 활성 좌석이 전부 비어 있는 가장 큰 상영관 회차 → RUSH_SCREENING_ID
+              (다른 시나리오와 같이 돌리지 않으므로 따로 고른다. 위 출력은 내지 않는다)
 
 예매 마감(상영 시작 5분 전, BKG-02)과 선점 TTL 300초 때문에 **시작까지 --min-lead-minutes(기본 60분) 이상** 남은 회차만 쓴다.
 출력(stdout)은 셸 export 줄만, 설명은 stderr로 낸다.
@@ -169,6 +171,19 @@ def pick(api: Api, date: str, theater_id: int | None, now: datetime, lead: timed
     return {"env": picked, "notes": notes}
 
 
+def pick_rush(api: Api, date: str, theater_id: int | None, now: datetime, lead: timedelta) -> dict:
+    """오픈런: 활성 좌석이 전부 빈 회차 중 가장 큰 상영관(후보는 이미 큰 관부터 정렬돼 있다)"""
+    for c in load_candidates(api, date, theater_id, now, lead):
+        fill_seats(api, c)
+        if c.all_free():
+            notes = [
+                f"rush       {c.screening_id}  {c.label}  (활성 {len(c.seats)}석 전부 빈 상태)",
+                f"시작 {c.starts_at.astimezone(KST):%H:%M} KST — 오픈런은 약 8분이고 그 5분 전부터는 선점이 400이다",
+            ]
+            return {"env": {"RUSH_SCREENING_ID": c.screening_id, "RUSH_SEATS": len(c.seats)}, "notes": notes}
+    raise PickError("활성 좌석이 전부 비어 있는 회차를 찾지 못했다 — --date·--theater-id를 바꾸거나 지난 실행의 선점이 풀리길(300초) 기다린다")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--base-url", required=True, help="공개 API 주소: https://{CloudFront}/api 또는 port-forward http://localhost:8080")
@@ -177,13 +192,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-lead-minutes", type=int, default=60, help="시작까지 최소 남은 시간 (기본 60)")
     p.add_argument("--vus", type=int, default=10, help="deploy VU 수 (기본 10)")
     p.add_argument("--seats-per-vu", type=int, default=20, help="deploy VU당 좌석 수 (기본 20)")
+    p.add_argument("--rush", action="store_true", help="오픈런(open-rush.js) 회차만 고른다 → RUSH_SCREENING_ID·RUSH_SEATS")
     a = p.parse_args(argv)
 
     now = datetime.now(timezone.utc)
     date = a.date or now.astimezone(KST).strftime("%Y-%m-%d")
     api = Api(a.base_url)
     try:
-        result = pick(api, date, a.theater_id, now, timedelta(minutes=a.min_lead_minutes), a.vus * a.seats_per_vu)
+        lead = timedelta(minutes=a.min_lead_minutes)
+        if a.rush:
+            result = pick_rush(api, date, a.theater_id, now, lead)
+        else:
+            result = pick(api, date, a.theater_id, now, lead, a.vus * a.seats_per_vu)
     except PickError as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1

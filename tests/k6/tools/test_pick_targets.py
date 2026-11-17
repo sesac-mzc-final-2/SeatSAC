@@ -128,6 +128,18 @@ class PickTargetsTest(unittest.TestCase):
         with self.assertRaisesRegex(pt.PickError, "회차가 없다"):
             pt.pick(pt.Api(self.base), "2026-11-10", 1004, NOW + timedelta(hours=10), timedelta(minutes=60), 10)
 
+    def test_rush는_전부_빈_회차_중_가장_큰_관을_고른다(self):
+        # 2번(250석)은 비활성 1석뿐 전부 빈 상태 → 큰 관이라 먼저. 3번은 선점이 있어 제외
+        env = pt.pick_rush(pt.Api(self.base), "2026-11-10", None, NOW, timedelta(minutes=60))["env"]
+        self.assertEqual(env["RUSH_SCREENING_ID"], 2)
+        self.assertEqual(env["RUSH_SEATS"], 249)
+
+    def test_rush는_빈_회차가_없으면_이유를_말하고_멈춘다(self):
+        FakeApi.routes[("/screenings/2/seats", None)] = {"seats": seats(406, 250, taken={4060001: "HELD"})}
+        FakeApi.routes[("/screenings/4/seats", None)] = {"seats": seats(402, 100, taken={4020001: "RESERVED"})}
+        with self.assertRaisesRegex(pt.PickError, "전부 비어 있는 회차"):
+            pt.pick_rush(pt.Api(self.base), "2026-11-10", None, NOW, timedelta(minutes=60))
+
     def test_main은_export_줄만_stdout에_낸다(self):
         out, err = io.StringIO(), io.StringIO()
         real_now = pt.datetime

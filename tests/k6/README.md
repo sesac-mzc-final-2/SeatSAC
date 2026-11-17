@@ -8,6 +8,7 @@
 | `user-hold-limit.js` | 사용자당 진행 중 선점 **1건** (같은 회차 두 번째 선점 → 409 `ACTIVE_HOLD_EXISTS`, 해제 뒤 다시 201) | 체크 5개 전부 통과 |
 | `browse.js` | 조회 캐시 적중 | 영화·상영시간 p95 < 100ms, 좌석 현황 p95 < 200ms, 실패율 0 |
 | `deploy-during-load.js` | 블루/그린 전환 중 **오류율 0%** (결제 경로 포함) | 5xx·연결 오류 0, 확정 예매 > 0 |
+| `open-rush.js` | **오픈런 1,000명** — 인기 회차 예매가 정각에 열릴 때(SSE 1,000 유지 + 10초 안에 1,000명 선점) | 선점 p95 < 300ms, 5xx 0, 남은 HELD 0, SSE 먼저 끊김 0 (아래 「오픈런」) |
 
 임계값을 넘기면 k6가 **0이 아닌 코드로 끝난다** → Job 실패로 드러난다.
 
@@ -119,6 +120,38 @@ k6 run -e SCREENING_ID=5123 -e SEAT_ID_FROM=4060001 -e VUS=10 -e SEATS_PER_VU=20
 > k6 안에서만 쓰는 메트릭이다(위 `hold_*`·`browse_*`·`server_errors` 포함). Prometheus로 수집하지 않으므로 `docs/conventions.md` 7장의 서비스 메트릭 이름 규칙(`{service}_{대상}_{단위}`)과는 별개다 — k6 Job 로그와 임계값에서만 쓴다.
 
 503 `PAYMENT_RESULT_UNKNOWN`은 **실패로 세지 않는다** — 설계상 「결과 미확인」이고 화면이 단건 조회로 복구한다. 그 밖의 5xx는 전부 실패다 — 배포 중 gateway가 내는 503 `SERVICE_UNAVAILABLE`도 포함이다(면제는 결제 경로의 `PAYMENT_RESULT_UNKNOWN` 하나뿐이다).
+
+## 오픈런 1,000명 (`open-rush.js`, 4.2.1)
+
+무대인사·개봉일 첫 회차가 정각에 열리는 순간이다. 다른 시나리오와 **같이 돌리지 않는다**(같은 노드·Valkey·RDS를 쓴다).
+
+| 항목 | 값 (환경변수) |
+| --- | --- |
+| 경로 | CloudFront → ALB → gateway (`-e BASE_URL=https://{배포ID}.cloudfront.net/api`, 화면과 같은 경로). 클러스터 안 gateway 주소면 `setup()`에서 멈춘다 |
+| 회차 | 1회차 100% — `pick_targets.py --rush`가 활성 좌석이 전부 빈 가장 큰 관을 고른다(`RUSH_SCREENING_ID`) |
+| 보는 사람 | `USERS`명(기본 1,000)이 60초(`ENTRY_SECONDS`)에 걸쳐 SSE를 열고 끝까지 유지한다. 본문은 버린다 — 연결 부하만. 반영 지연은 `sse_lag.py`로 같은 회차를 열어 잰다 |
+| 사는 사람 | `USERS`명이 T0부터 10초(`RUSH_SECONDS`)에 고르게 첫 선점. 1석 15% · 2석 60% · 3석 10% · 4석 15%. 409 `SEAT_UNAVAILABLE`이면 스냅샷 다시 받아 최대 3번 더, 빈 좌석이 없으면 포기 |
+| 선점 뒤 | 5~20초 뒤 결제 70%(그중 5% 거절 카드 `…0000`, 지연 카드 `9999`는 안 씀) · 해제 15% · 방치 15%(300초 뒤 만료) |
+| 정합성 | T0 + 370초에 회차 스냅샷: **남은 HELD 0석**(임계값) · **RESERVED 증가 = 확정받은 좌석 수**(요약에 ✓/✗) |
+| 시간 | 약 7분 30초 (Job 한도 900초) |
+| 토큰 | 사는 사람 수만큼 서로 다른 계정(`loadtest_users.py create --count 1000`). 1,000개(약 1.2MB)는 Secret 한도 1MiB를 넘어 `run-in-cluster.sh`가 400줄씩 Secret 3개로 나눠 한 폴더에 모은다(`K6_TOKENS_FILES`). 스크립트는 `SharedArray`로 한 번만 읽는다 |
+| k6 파드 | 요청 CPU 2 · 메모리 2Gi, 상한 4Gi (rush만. VU 2,000개) |
+
+```bash
+eval "$(python3 tests/k6/tools/pick_targets.py --rush --base-url "https://{배포ID}.cloudfront.net/api")"   # → RUSH_SCREENING_ID·RUSH_SEATS
+R=tests/k6/run-in-cluster.sh
+# 1) 리허설: 100명, 결제 없이 전부 해제 → 60초 뒤 확인(약 2분 30초). 같은 회차를 바로 다시 쓸 수 있다
+$R rush -e MODE=rehearsal -e BASE_URL=https://{배포ID}.cloudfront.net/api -e RUSH_SCREENING_ID=$RUSH_SCREENING_ID
+# 2) 본 실행: 1,000명 — 다른 터미널에서 SSE 반영 지연을 같이 잰다
+python3 tests/k6/tools/sse_lag.py --duration 480 --url "https://{배포ID}.cloudfront.net/api/screenings/$RUSH_SCREENING_ID/seats/stream"
+$R rush -e BASE_URL=https://{배포ID}.cloudfront.net/api -e RUSH_SCREENING_ID=$RUSH_SCREENING_ID
+```
+
+- **돌리기 전**: `ng-ai` 0대(사전 점검이 막는다) · 블루/그린 진행 중 아님 · 리허설은 결제를 안 하므로 **결제 키(`X-Payment-Mock-Key`)가 CloudFront를 지나는지는 본 실행 첫 결제로 확인**한다 — `rush_unexpected`가 늘고 결제 확정이 0이면 400 `MOCK_NOT_ALLOWED`를 의심한다
+- **booking 파드 수를 같이 적는다**: HPA(최대 2)는 10초 스파이크에 늦다. 결과는 T0의 파드 수에 달려 있으니 `kubectl -n cinema-staging get pods -l app.kubernetes.io/name=booking`을 T0 직전에 남긴다
+- 같이 볼 것: Grafana **SeatSAC 신호등** ⑤ 실시간 좌석·⑥ Valkey 메모리, `booking_sse_connections`(USERS 근처까지 오르는지), RDS 연결 수
+- 다시 돌리려면: 본 실행은 확정 예매가 남는다 → `pick_targets.py --rush`가 다른 회차를 고르거나 `reset_demo_data.py`로 취소
+- 읽는 법: `hold_seat_taken`(경쟁에 진 409)·`hold_gave_up`(매진)은 **많아야 정상**이다(수요 약 2,300석 vs 한 관 100~300석). 0이어야 하는 것은 `server_errors`·`hold_active_hold`·`rush_unexpected`·`payment_unresolved`·`sse_ended_early`·`sse_errors`·남은 HELD
 
 ## SSE 반영 지연 — k6 밖에서 잰다
 

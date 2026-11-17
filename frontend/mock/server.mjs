@@ -114,6 +114,16 @@ const fail = (res, status, code, message, details = []) => {
   return json(res, status, { code, message, traceId: responseTraceId, details }, responseTraceId);
 };
 
+/** gateway application.yml 라우트 순서를 흉내 낸 라우트 ID (좌석 현황·SSE가 /screenings/** 보다 먼저) */
+const gatewayRouteIdOf = (path) => {
+  if (/^\/api\/screenings\/[^/]+\/seats\/stream$/.test(path)) return "booking-seat-stream";
+  if (/^\/api\/screenings\/[^/]+\/seats$/.test(path)) return "booking-seats";
+  if (/^\/api\/(seats|bookings)(\/|$)/.test(path)) return "booking";
+  if (/^\/api\/(movies|screenings|theaters|auditoriums)(\/|$)/.test(path)) return "catalog";
+  if (/^\/api\/users(\/|$)/.test(path)) return "user";
+  return null;
+};
+
 // ---------- 응답 조립 ----------
 
 const posterUrl = (m) => (m.hasPoster ? `http://localhost:${PORT}/mock-poster/${m.movieId}.svg` : null);
@@ -698,7 +708,12 @@ createServer(async (req, res) => {
   }
 
   const failStatus = FAIL_PATH && path === FAIL_PATH ? FAIL_STATUS : Number(q.get("fail") ?? 0);
-  if (failStatus === 503) return fail(res, 503, "SERVICE_UNAVAILABLE", "simulated by mock");
+  if (failStatus === 503) {
+    // gateway GatewayErrorHandler와 같은 모양: 멈춘 서비스의 라우트 ID를 details에 담는다 (화면이 서비스별 안내를 고른다)
+    const routeId = gatewayRouteIdOf(path);
+    const details = routeId ? [{ field: "service", value: routeId, reason: "UPSTREAM_UNAVAILABLE" }] : [];
+    return fail(res, 503, "SERVICE_UNAVAILABLE", "simulated by mock", details);
+  }
   if (failStatus === 500) return fail(res, 500, "INTERNAL_ERROR", "simulated by mock");
 
   // 인증이 필요한 경로: Authorization: Bearer 가 있으면 누구든 통과 (Gateway 의 JWT 검증은 흉내 내지 않는다)

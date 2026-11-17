@@ -15,6 +15,7 @@ spring:
             pool:
               # 하위 서비스(Tomcat)는 60초 쉰 keep-alive 연결을 닫는다. 풀에 유휴 제한이 없으면 이미 닫힌 연결을 꺼내 써서
               # PrematureCloseException → 503 UPSTREAM_UNAVAILABLE (11/17 4.2.2 gateway 전환 중 catalog 5xx 2건, 61초 간격)
+              # ai(uvicorn)는 keep-alive 기본 5초라 이 값으로는 덮지 못한다 — ai 쪽 --timeout-keep-alive 를 65초로 맞춘다(별도 PR)
               max-idle-time: 30s
           default-filters:
             - StripPrefix=1                   # /api 제거 (ADR-9). X-User-* 제거·X-Trace-Id 부여는 TraceWebFilter

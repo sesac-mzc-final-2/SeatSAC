@@ -3,9 +3,11 @@ package com.seatsac.gateway;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cloud.gateway.config.HttpClientProperties;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.reactive.server.EntityExchangeResult;
@@ -21,9 +23,13 @@ import reactor.netty.http.server.HttpServer;
 class GatewayUpstreamUnavailableTest {
 
     private static final int DEAD_PORT = deadPort();
+    private static final Duration UPSTREAM_KEEP_ALIVE = Duration.ofSeconds(60); // 하위 Tomcat keepAliveTimeout 기본값
 
     @Autowired
     WebTestClient client;
+
+    @Autowired
+    HttpClientProperties httpClient;
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
@@ -47,6 +53,16 @@ class GatewayUpstreamUnavailableTest {
         assertThat(detail.get("field").asText()).isEqualTo("service");
         assertThat(detail.get("value").asText()).isEqualTo("catalog"); // 라우트 ID
         assertThat(detail.get("reason").asText()).isEqualTo("UPSTREAM_UNAVAILABLE");
+    }
+
+    /**
+     * 하위 서비스(Tomcat)는 60초 쉰 keep-alive 연결을 닫는다. 풀이 그보다 오래 들고 있으면
+     * 닫힌 연결을 꺼내 써 503(PrematureClose)이 난다(11/17 catalog 5xx 2건). 61초를 기다리는 대신
+     * application.yml의 유휴 제한이 그보다 짧은지만 본다 — 이 클래스의 컨텍스트를 같이 써서 새로 띄우지 않는다.
+     */
+    @Test
+    void 유휴_연결은_하위_서비스_keepAlive보다_먼저_버린다() {
+        assertThat(httpClient.getPool().getMaxIdleTime()).isNotNull().isLessThan(UPSTREAM_KEEP_ALIVE);
     }
 
     /** 바인딩했다가 바로 닫아 아무도 듣지 않는 포트를 얻는다 */

@@ -111,10 +111,14 @@ components:
       $ref: "../../schemas/error.v1.json"
     ScreeningSummary:
       type: object
-      required: [screeningId, movieTitle, theaterName, auditoriumName, startsAt, endsAt]
+      required: [screeningId, movieId, movieTitle, posterUrl, theaterName, auditoriumName, startsAt, endsAt]
       properties:
         screeningId: { type: integer, format: int64 }
+        movieId: { type: integer, format: int64 }
         movieTitle: { type: string }
+        posterUrl:
+          description: TMDB 포스터 URL — CAT-01 `posterUrl`과 같은 값(롯데 이미지는 쓰지 않는다). 없으면 null. USR-04 예매 내역 카드 포스터용(필드 추가, 11/17)
+          type: [string, "null"]
         theaterName: { type: string }
         auditoriumName: { type: string }
         startsAt: { type: string, format: date-time }

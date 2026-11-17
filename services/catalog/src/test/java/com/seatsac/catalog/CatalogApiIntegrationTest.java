@@ -451,7 +451,9 @@ class CatalogApiIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.items", hasSize(2)))            // 없는 ID는 빠진다
             .andExpect(jsonPath("$.items[0].screeningId").value(5001))
+            .andExpect(jsonPath("$.items[0].movieId").value(1))
             .andExpect(jsonPath("$.items[0].movieTitle").value("첫 영화"))
+            .andExpect(jsonPath("$.items[0].posterUrl").value("https://image.tmdb.org/t/p/w500/poster1.jpg"))
             .andExpect(jsonPath("$.items[0].endsAt").value("2026-11-16T16:25:00+09:00"));
 
         mvc.perform(post("/internal/screenings/summaries").contentType(MediaType.APPLICATION_JSON)

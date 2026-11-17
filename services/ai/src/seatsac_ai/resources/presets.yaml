@@ -14,6 +14,9 @@
 #     grade   관람 등급        ('ALL'·'12'·'15'·'19'. 질문에서 뽑는 슬롯이 아니라 Claude가 고른다 → 캐시하지 않는다)
 # - :today('YYYY-MM-DD')·:now('YYYY-MM-DD HH:MM')는 서버가 항상 넣는다(KST). params 에 적지 않는다.
 # - screening 을 조회하는 SQL은 모두 starts_at > :now 를 붙인다(data-model 6-1).
+# - remaining_seats 는 그대로 내보내지 않는다. remaining_seats_source 가 'BOOKING' 이 아니면(TOTAL =
+#   예매 서비스가 늦어 전체 좌석 수로 대신 채운 값) NULL 로 낸다 → 화면은 '–'. 합계는 하나라도 불확실하면
+#   NULL. 잔여석으로 고르거나 줄 세우는 프리셋은 BOOKING 인 회차만 본다. test_presets_seat_source.py 가 지킨다.
 # - 모든 SQL은 test_presets.py 에서 검증기(16장)를 통과하고 실제 스냅샷에서 실행돼야 한다.
 
 presets:
@@ -24,7 +27,8 @@ presets:
     params: [time]
     sql: |
       SELECT m.title AS movie_title, t.name AS theater_name, s.auditorium_name,
-             s.starts_at, s.remaining_seats
+             s.starts_at,
+             CASE WHEN s.remaining_seats_source = 'BOOKING' THEN s.remaining_seats END AS remaining_seats
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -39,7 +43,7 @@ presets:
     params: [date, theater]
     sql: |
       SELECT m.title AS movie_title, s.auditorium_name, s.screen_type, s.starts_at, s.ends_at,
-             s.remaining_seats
+             CASE WHEN s.remaining_seats_source = 'BOOKING' THEN s.remaining_seats END AS remaining_seats
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -53,7 +57,7 @@ presets:
     params: [movie]
     sql: |
       SELECT t.name AS theater_name, s.business_date, s.starts_at, s.auditorium_name,
-             s.remaining_seats
+             CASE WHEN s.remaining_seats_source = 'BOOKING' THEN s.remaining_seats END AS remaining_seats
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -110,7 +114,9 @@ presets:
     description: 오늘 남은 회차를 상영관 종류(일반관·리클라이너관)별로 센 것
     params: []
     sql: |
-      SELECT s.screen_type, count(*) AS screening_count, sum(s.remaining_seats) AS remaining_seats
+      SELECT s.screen_type, count(*) AS screening_count,
+             CASE WHEN sum(s.remaining_seats_source <> 'BOOKING') = 0
+                  THEN sum(s.remaining_seats) END AS remaining_seats
       FROM screening s
       WHERE s.business_date = :today AND s.starts_at > :now
       GROUP BY s.screen_type
@@ -122,7 +128,8 @@ presets:
     description: 특정 영화의 가장 빠른 다음 회차 5개
     params: [movie]
     sql: |
-      SELECT s.starts_at, t.name AS theater_name, s.auditorium_name, s.remaining_seats
+      SELECT s.starts_at, t.name AS theater_name, s.auditorium_name,
+             CASE WHEN s.remaining_seats_source = 'BOOKING' THEN s.remaining_seats END AS remaining_seats
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -136,7 +143,8 @@ presets:
     description: 오늘 영업일의 22시 이후 시작 회차(자정 넘은 회차 포함)
     params: []
     sql: |
-      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats
+      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at,
+             CASE WHEN s.remaining_seats_source = 'BOOKING' THEN s.remaining_seats END AS remaining_seats
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id

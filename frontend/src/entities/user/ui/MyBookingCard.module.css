@@ -11,6 +11,11 @@
 .card[data-canceled] {
   opacity: 0.62;
 }
+/* MoviePoster 의 .frame(width 100%) 보다 우선하도록 .card 를 붙인다 */
+.card .poster {
+  width: 88px;
+  border-radius: 7px;
+}
 .stub {
   display: flex;
   flex-direction: column;
@@ -108,6 +113,9 @@
     grid-template-columns: 68px minmax(0, 1fr);
     gap: 13px;
     padding: 11px;
+  }
+  .card .poster {
+    width: 68px;
   }
   .stub {
     width: 68px;

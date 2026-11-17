@@ -4,7 +4,9 @@ import { bookingStatusLabel, bookingStatusTone, canCancelBooking, isRetryableBoo
 
 const screening: NonNullable<MyBooking["screening"]> = {
   screeningId: 5123,
+  movieId: 1,
   movieTitle: "별이 지는 항구",
+  posterUrl: null,
   theaterName: "건대입구",
   auditoriumName: "1관",
   startsAt: "2026-11-16T14:30:00+09:00",

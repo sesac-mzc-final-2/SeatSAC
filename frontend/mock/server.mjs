@@ -212,9 +212,12 @@ const toKstIso = (date) => {
   const k = new Date(date.getTime() + 9 * 3600 * 1000);
   return `${k.getUTCFullYear()}-${pad(k.getUTCMonth() + 1)}-${pad(k.getUTCDate())}T${pad(k.getUTCHours())}:${pad(k.getUTCMinutes())}:${pad(k.getUTCSeconds())}${KST}`;
 };
+/** USR-04 회차 요약 — 영화 3(고양이 탐정단)은 포스터가 없어 제목 카드가 보인다 */
 const summaryOf = (s) => ({
   screeningId: s.screeningId,
+  movieId: s.movie.movieId,
   movieTitle: s.movie.title,
+  posterUrl: posterUrl(movies.find((m) => m.movieId === s.movie.movieId)),
   theaterName: s.theater.name,
   auditoriumName: s.auditorium.name,
   startsAt: s.startsAt,

@@ -13,7 +13,11 @@ export type MyBookingStatus = "CONFIRMED" | "PAYMENT_FAILED" | "EXPIRED" | "CANC
 
 export interface MyBookingScreening {
   screeningId: number;
+  /** catalog 회차 요약이 아직 주지 않으면 null (11/17 추가 필드) */
+  movieId: number | null;
   movieTitle: string;
+  /** TMDB 포스터(CAT-01 posterUrl 과 같은 값). 없으면 null → 제목 카드 */
+  posterUrl: string | null;
   theaterName: string;
   auditoriumName: string;
   /** ISO-8601 +09:00 */

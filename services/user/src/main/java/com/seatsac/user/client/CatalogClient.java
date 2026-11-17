@@ -109,10 +109,15 @@ public class CatalogClient {
         return batches;
     }
 
-    /** POST /internal/screenings/summaries 원소. 시각은 응답 DTO에서 +09:00으로 다시 맞춘다 */
+    /**
+     * POST /internal/screenings/summaries 원소. 시각은 응답 DTO에서 +09:00으로 다시 맞춘다.
+     * {@code movieId}·{@code posterUrl}은 11/17 추가 — 이전 catalog가 주지 않으면 null로 둔다(그대로 화면에 null)
+     */
     public record ScreeningSummary(
         Long screeningId,
+        Long movieId,
         String movieTitle,
+        String posterUrl,
         String theaterName,
         String auditoriumName,
         OffsetDateTime startsAt,

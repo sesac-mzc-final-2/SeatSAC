@@ -9,7 +9,12 @@ import { BookingHistory } from "./BookingHistory";
 const FUTURE = "2999-01-01T14:30:00+09:00";
 const PAST = "2020-01-01T14:30:00+09:00";
 
-const booking = (id: number, status: MyBooking["status"], startsAt: string | null): MyBooking => ({
+const booking = (
+  id: number,
+  status: MyBooking["status"],
+  startsAt: string | null,
+  posterUrl: string | null = null,
+): MyBooking => ({
   bookingId: id,
   status,
   seatLabels: ["J7", "J8"],
@@ -23,7 +28,9 @@ const booking = (id: number, status: MyBooking["status"], startsAt: string | nul
       ? null
       : {
           screeningId: 5123,
+          movieId: 1,
           movieTitle: `영화 ${id}`,
+          posterUrl,
           theaterName: "건대입구",
           auditoriumName: "1관",
           startsAt,
@@ -87,6 +94,30 @@ describe("BookingHistory (W8 예매 내역)", () => {
     const missing = screen.getByRole("article", { name: "예매 5" });
     expect(within(missing).getByText("상영 정보를 불러오지 못했어요")).toBeInTheDocument();
     expect(within(missing).queryByRole("button", { name: "예매 취소" })).not.toBeInTheDocument();
+  });
+
+  it("포스터: posterUrl 이 있으면 이미지, null 이면 제목 카드, 회차 없음은 좌석 심볼", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        page([
+          booking(1, "CONFIRMED", FUTURE, "https://image.tmdb.org/t/p/w500/p1.jpg"),
+          booking(2, "CONFIRMED", PAST),
+          booking(3, "CONFIRMED", null),
+        ]),
+      ),
+    );
+    renderHistory();
+
+    const withPoster = await screen.findByRole("article", { name: "영화 1" });
+    expect(within(withPoster).getByRole("presentation")).toHaveAttribute("src", "https://image.tmdb.org/t/p/w500/p1.jpg");
+
+    const noPoster = screen.getByRole("article", { name: "영화 2" });
+    expect(within(noPoster).queryByRole("presentation")).not.toBeInTheDocument();
+    expect(within(noPoster).getAllByText("영화 2").length).toBeGreaterThanOrEqual(2); // 제목 카드 + 제목
+
+    const missing = screen.getByRole("article", { name: "예매 3" });
+    expect(within(missing).queryByRole("presentation")).not.toBeInTheDocument();
+    expect(within(missing).getByText("J7 J8")).toBeInTheDocument();
   });
 
   it("「예매 취소」→ 확인 대화상자 → POST /bookings/{id}/cancel → 목록 다시 조회", async () => {

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { MoviePoster } from "@/entities/movie/@x/user";
 import { dateOfIso, formatDateKo, formatWon, timeOfIso } from "@/shared/lib";
 import { Icon } from "@/shared/ui";
 import type { MyBooking } from "../model/types";
@@ -12,8 +13,8 @@ interface Props {
 }
 
 /**
- * 예매 내역 카드 (W8). 내역 응답에는 포스터가 없어(USR-04 summaries) 왼쪽은 좌석 심볼 자리로 둔다.
- * 회차 정보를 못 받으면(screening null) 상세 줄 대신 「상영 정보를 불러오지 못했어요」 한 줄
+ * 예매 내역 카드 (W8). 왼쪽은 회차 요약의 posterUrl 로 TMDB 포스터(없으면 제목 카드 — 예매 완료 화면과 같은 MoviePoster).
+ * 회차 정보를 못 받으면(screening null) 포스터 자리는 좌석 심볼, 상세 줄 대신 「상영 정보를 불러오지 못했어요」 한 줄
  */
 export function MyBookingCard({ booking, actions }: Props) {
   const { screening } = booking;
@@ -22,10 +23,18 @@ export function MyBookingCard({ booking, actions }: Props) {
 
   return (
     <article className={styles.card} data-canceled={canceled || undefined} aria-label={title}>
-      <div className={styles.stub} aria-hidden="true">
-        <Icon name="armchair" size={22} strokeWidth={1.4} />
-        <span>{booking.seatLabels.length > 0 ? booking.seatLabels.join(" ") : "SeatSAC"}</span>
-      </div>
+      {screening ? (
+        <MoviePoster
+          movie={{ title: screening.movieTitle, posterUrl: screening.posterUrl ?? null }}
+          compact
+          className={styles.poster}
+        />
+      ) : (
+        <div className={styles.stub} aria-hidden="true">
+          <Icon name="armchair" size={22} strokeWidth={1.4} />
+          <span>{booking.seatLabels.length > 0 ? booking.seatLabels.join(" ") : "SeatSAC"}</span>
+        </div>
+      )}
 
       <div className={styles.body}>
         <div className={styles.topline}>

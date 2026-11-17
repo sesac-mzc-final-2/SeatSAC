@@ -19,7 +19,8 @@ public record MovieSummary(
             ViewGrade.fromCode(movie.getViewGradeCode()), movie.getSlotMinutes(), posterUrl(movie.getPosterPath()));
     }
 
-    static String posterUrl(String posterPath) {
+    /** 목록·상세·내부 회차 요약(USR-04)이 같은 주소를 쓴다 */
+    public static String posterUrl(String posterPath) {
         return posterPath == null || posterPath.isBlank() ? null : TMDB_IMAGE_BASE + posterPath;
     }
 }

@@ -119,7 +119,8 @@ class UserApiIntegrationTest {
             if (request.path().equals("/internal/screenings/summaries")) {
                 // 회차 5001만 있다. 5002는 계약대로 결과에서 빠진다
                 return request.body().contains("5001")
-                    ? "{\"items\":[{\"screeningId\":5001,\"movieTitle\":\"첫 영화\",\"theaterName\":\"건대입구\","
+                    ? "{\"items\":[{\"screeningId\":5001,\"movieId\":1,\"movieTitle\":\"첫 영화\","
+                        + "\"posterUrl\":\"https://image.tmdb.org/t/p/w500/poster1.jpg\",\"theaterName\":\"건대입구\","
                         + "\"auditoriumName\":\"6관\",\"startsAt\":\"2026-11-16T14:30:00+09:00\",\"endsAt\":\"2026-11-16T16:25:00+09:00\"}]}"
                     : "{\"items\":[]}";
             }
@@ -283,7 +284,9 @@ class UserApiIntegrationTest {
             .andExpect(jsonPath("$.content[0].confirmedAt").value("2026-11-16T11:00:30+09:00"))
             .andExpect(jsonPath("$.content[0].canceledAt").isEmpty())
             .andExpect(jsonPath("$.content[0].screening.screeningId").value(5001))
+            .andExpect(jsonPath("$.content[0].screening.movieId").value(1))
             .andExpect(jsonPath("$.content[0].screening.movieTitle").value("첫 영화"))
+            .andExpect(jsonPath("$.content[0].screening.posterUrl").value("https://image.tmdb.org/t/p/w500/poster1.jpg"))
             .andExpect(jsonPath("$.content[0].screening.theaterName").value("건대입구"))
             .andExpect(jsonPath("$.content[0].screening.startsAt").value("2026-11-16T14:30:00+09:00"))
             .andExpect(jsonPath("$.content[1].bookingId").value(100))

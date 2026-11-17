@@ -32,17 +32,20 @@ public record MyBooking(
         return at == null ? null : Times.toApi(at.toInstant());
     }
 
+    /** {@code movieId}·{@code posterUrl}은 catalog 요약 그대로(없으면 null — 화면은 제목 카드) */
     public record Screening(
         Long screeningId,
+        Long movieId,
         String movieTitle,
+        String posterUrl,
         String theaterName,
         String auditoriumName,
         OffsetDateTime startsAt,
         OffsetDateTime endsAt
     ) {
         static Screening of(ScreeningSummary s) {
-            return new Screening(s.screeningId(), s.movieTitle(), s.theaterName(), s.auditoriumName(),
-                api(s.startsAt()), api(s.endsAt()));
+            return new Screening(s.screeningId(), s.movieId(), s.movieTitle(), s.posterUrl(),
+                s.theaterName(), s.auditoriumName(), api(s.startsAt()), api(s.endsAt()));
         }
     }
 }

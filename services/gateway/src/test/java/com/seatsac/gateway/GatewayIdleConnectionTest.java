@@ -7,9 +7,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,6 +60,7 @@ class GatewayIdleConnectionTest {
         client.mutate().responseTimeout(Duration.ofSeconds(10)).build()
             .get().uri("/api/movies").exchange().expectStatus().isOk();
         assertThat(CATALOG.connections()).as("쉰 연결을 버리고 새 연결로 갔다").isEqualTo(2);
+        CATALOG.assertNoError();
     }
 
     /** HTTP/1.1 keep-alive로 200을 주되, keepAlive보다 오래 쉰 연결로 온 다음 요청은 응답 없이 닫는다 */
@@ -69,6 +72,7 @@ class GatewayIdleConnectionTest {
         private final ServerSocket server;
         private final long keepAliveNanos;
         private final AtomicInteger connections = new AtomicInteger();
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
 
         StaleClosingServer(Duration keepAlive) {
             this.keepAliveNanos = keepAlive.toNanos();
@@ -88,6 +92,14 @@ class GatewayIdleConnectionTest {
             return connections.get();
         }
 
+        /** 서버가 열려 있는 동안 난 예상 밖 오류. 테스트 스레드가 {@link #assertNoError()}로 원인과 함께 실패시킨다 */
+        void assertNoError() {
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("가짜 catalog 서버 오류", error);
+            }
+        }
+
         private void acceptLoop() {
             while (!server.isClosed()) {
                 try {
@@ -95,7 +107,10 @@ class GatewayIdleConnectionTest {
                     connections.incrementAndGet();
                     Thread.ofVirtual().start(() -> serve(socket));
                 } catch (IOException e) {
-                    return; // 닫힘
+                    if (!server.isClosed()) {
+                        failure.compareAndSet(null, e); // 정상 종료(close)가 아닌데 accept 실패
+                    }
+                    return;
                 }
             }
         }
@@ -111,8 +126,12 @@ class GatewayIdleConnectionTest {
                     out.flush();
                     lastActive = System.nanoTime();
                 }
-            } catch (IOException ignored) {
-                // 연결 끊김
+            } catch (SocketException e) {
+                // gateway가 풀에서 버린 연결을 닫는 것(reset·closed)은 이 테스트가 기대하는 동작이다
+            } catch (IOException e) {
+                if (!server.isClosed()) {
+                    failure.compareAndSet(null, e);
+                }
             }
         }
 

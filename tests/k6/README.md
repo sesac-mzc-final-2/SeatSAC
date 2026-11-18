@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `seat-hold-contention.js` | 같은 좌석 100명 동시 → **성공 정확히 1명** | `hold_success == 1`, 선점 p95 < 300ms |
 | `user-hold-limit.js` | 사용자당 진행 중 선점 **1건** (같은 회차 두 번째 선점 → 409 `ACTIVE_HOLD_EXISTS`, 해제 뒤 다시 201) | 체크 5개 전부 통과 |
-| `browse.js` | 조회 캐시 적중 | 영화·상영시간 p95 < 100ms, 좌석 현황 p95 < 200ms, 실패율 0 |
+| `browse.js` | 조회 캐시 적중 · `TARGET=catalog`면 5.1.6 독립 확장(catalog만 HPA 1→N) | 영화·상영시간 p95 < 100ms, 좌석 현황 p95 < 200ms, 실패율 0 (`catalog`는 영화 목록·상세·극장 p95 < 100ms) |
 | `deploy-during-load.js` | 블루/그린 전환 중 **오류율 0%** (결제 경로 포함) | 5xx·연결 오류 0, 확정 예매 > 0 |
 
 임계값을 넘기면 k6가 **0이 아닌 코드로 끝난다** → Job 실패로 드러난다.
@@ -52,7 +52,7 @@ python3 $T delete
 | --- | --- | --- |
 | contention | `SCREENING_ID`, `SEAT_ID` | 아직 아무도 잡지 않은 회차의 활성 좌석 하나 |
 | user-hold | `SCREENING_ID`, `SEAT_IDS`(쉼표 2개) | 첫 번째 토큰 사용자가 선점하지 않은 회차(contention과 다른 회차)의 빈 좌석 2개 |
-| browse | `SCREENING_IDS`(쉼표), **`THEATER_ID`**, `THEATER_DATE`, `VUS`(기본 20), `DURATION`(유지 구간, 기본 `1m`) | 시드가 적재된 회차 여러 개 + 그 극장 ID (`/screenings`는 `date`·`theaterId` 둘 다 필수). 토큰 불필요 — `VUS`를 올려도 토큰을 요구하지 않는다 |
+| browse | `SCREENING_IDS`(쉼표), **`THEATER_ID`**, `THEATER_DATE`, `VUS`(기본 20), `DURATION`(유지 구간, 기본 `1m`), `TARGET`(`all` 기본 · `catalog` — booking을 부르는 좌석 현황·`/screenings`를 빼고 영화 목록·상세·극장만. 이때 `SCREENING_IDS`·`THEATER_ID`는 필요 없다) | 시드가 적재된 회차 여러 개 + 그 극장 ID (`/screenings`는 `date`·`theaterId` 둘 다 필수). 토큰 불필요 — `VUS`를 올려도 토큰을 요구하지 않는다 |
 | deploy | `SCREENING_ID`, `SEAT_ID_FROM`, `VUS`, `SEATS_PER_VU` | 좌석이 **VU × SEATS_PER_VU**개 이상 남은 회차 |
 
 `tools/pick_targets.py`가 공개 조회 API로 시나리오마다 **다른 회차**를 골라 환경변수로 내준다(시작 60분 이상 남은 회차 — 예매 마감이 시작 5분 전이다):
@@ -82,9 +82,10 @@ R=tests/k6/run-in-cluster.sh
 $R user-hold  -e SCREENING_ID=$USERHOLD_SCREENING_ID -e SEAT_IDS=$USERHOLD_SEAT_IDS
 $R contention -e SCREENING_ID=$CONTENTION_SCREENING_ID -e SEAT_ID=$CONTENTION_SEAT_ID
 $R browse     -e SCREENING_IDS=$BROWSE_SCREENING_IDS -e THEATER_ID=$THEATER_ID -e THEATER_DATE=$THEATER_DATE
-# 5.1.6 독립 확장 시연: catalog만 HPA 1→N. 유지 5분 이상이면 Job 한도도 그만큼 늘어난다.
+# 5.1.6 독립 확장 시연(TARGET=catalog): booking을 부르지 않아 catalog만 HPA 1→N. 유지 5분 이상이면 Job 한도도 그만큼 늘어난다.
+# 대본은 docs/runbooks/demo-isolation-scaling.md 2장
 # VU를 올리면 p95 임계값이 깨져 종료 코드 99가 나올 수 있다 — 이 실행은 HPA 장면이 목적이라 그대로 둔다
-$R browse     -e SCREENING_IDS=$BROWSE_SCREENING_IDS -e THEATER_ID=$THEATER_ID -e THEATER_DATE=$THEATER_DATE -e VUS=60 -e DURATION=6m
+$R browse     -e TARGET=catalog -e VUS=60 -e DURATION=6m
 $R deploy     -e SCREENING_ID=$DEPLOY_SCREENING_ID -e SEAT_ID_FROM=$DEPLOY_SEAT_ID_FROM -e DURATION=2m
 $R cleanup    # 남은 k6 리소스 지우기
 ```

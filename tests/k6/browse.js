@@ -4,12 +4,33 @@
 //   SCREENING_IDS  쉼표로 구분한 회차 ID 목록 (여러 개여야 캐시 적중률이 의미가 있다)
 //   THEATER_ID     /screenings 조회에 쓸 극장 ID — 계약에서 date와 함께 필수다
 //   THEATER_DATE   /screenings 조회에 쓸 영업일 (기본: 오늘, KST)
+//   VUS            유지 구간 VU 수 (기본 20). 5.1.6 독립 확장 시연은 50~80
+//   DURATION       유지 구간 길이 (기본 1m, k6 형식 30s·5m·1m30s). HPA가 늘어나는 걸 보려면 5m 이상
+//                  — 전체 실행 = 올리기 30초 + DURATION + 내리기 15초
 import http from "k6/http";
 import { check, group } from "k6";
 import { Trend } from "k6/metrics";
 import { BASE, intEnv, intListEnv } from "./lib/common.js";
 
 const DATE = __ENV.THEATER_DATE || new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+
+// options는 init 단계에서 정해지므로 setup()이 아니라 여기서 확인한다 — 잘못된 값이면 부하 전에 멈춘다
+const VUS = positiveInt(__ENV.VUS, 20, "VUS");
+const DURATION = k6Duration(__ENV.DURATION, "1m", "DURATION");
+
+function positiveInt(raw, fallback, name) {
+  const value = (raw || "").trim();
+  if (value === "") return fallback;
+  if (!/^[1-9]\d*$/.test(value)) throw new Error(`${name}는 양의 정수여야 한다: "${value}"`);
+  return Number(value);
+}
+
+function k6Duration(raw, fallback, name) {
+  const value = (raw || "").trim();
+  if (value === "") return fallback;
+  if (!/^(\d+h)?(\d+m)?(\d+s)?$/.test(value)) throw new Error(`${name}는 30s·5m·1m30s 형식이어야 한다: "${value}"`);
+  return value;
+}
 
 const movies = new Trend("browse_movies", true);
 const screenings = new Trend("browse_screenings", true);
@@ -21,8 +42,8 @@ export const options = {
       executor: "ramping-vus",
       startVUs: 1,
       stages: [
-        { duration: "30s", target: 20 },
-        { duration: "1m", target: 20 },
+        { duration: "30s", target: VUS },
+        { duration: DURATION, target: VUS },
         { duration: "15s", target: 0 },
       ],
     },

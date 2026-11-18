@@ -6,9 +6,10 @@ from datetime import datetime
 import fakeredis
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from seatsac_ai.common.errors import ApiError
-from seatsac_ai.quota.limiter import QuotaLimiter
+from seatsac_ai.quota.limiter import QuotaLimiter, connect_valkey
 from seatsac_ai.snapshot.mapper import KST
 
 NOW = datetime(2026, 11, 17, 19, 40, 15, tzinfo=KST)
@@ -138,3 +139,32 @@ def test_valkey_down_rejects_instead_of_calling_claude():
         "ai-valkey",
         "QUOTA_STORE_UNAVAILABLE",
     )
+
+
+def _attempts(error):
+    """connect_valkey 의 재시도 설정으로 늘 실패하는 명령을 돌려, 몇 번 보냈는지 센다."""
+    retry = connect_valkey("localhost", 6379, tls=False).get_connection_kwargs()["retry"]
+    sent = []
+
+    async def command():
+        sent.append(1)
+        raise error
+
+    async def on_fail(_exc):
+        return None
+
+    async def run():
+        with pytest.raises(type(error)):
+            await retry.call_with_retry(command, on_fail)
+
+    asyncio.run(run())
+    return len(sent)
+
+
+def test_timeout_is_not_sent_again():
+    # 응답만 늦은 명령은 이미 실행됐을 수 있다 — 다시 보내면 잠금·한도가 두 번 적용된다(#129 리뷰)
+    assert _attempts(RedisTimeoutError("느림")) == 1
+
+
+def test_broken_connection_is_sent_once_more():
+    assert _attempts(RedisConnectionError("끊김")) == 2

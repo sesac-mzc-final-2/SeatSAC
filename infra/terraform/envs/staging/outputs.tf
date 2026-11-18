@@ -156,3 +156,8 @@ output "booking_pod_role_arn" {
   description = "cinema-staging-booking-pod (Pod Identity, ServiceAccount cinema-staging/booking)"
   value       = module.booking_pod_identity.iam_role_arn
 }
+
+output "loki_bucket_name" {
+  description = "3.1.24 Loki 로그 버킷 (staging-k8s ConfigMap loki-storage와 같은 이름)"
+  value       = aws_s3_bucket.loki.bucket
+}

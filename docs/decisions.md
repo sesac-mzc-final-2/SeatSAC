@@ -58,12 +58,13 @@
 | 8 · 35 · 58 | Kustomize + ArgoCD. booking·gateway만 블루/그린(5xx 1%·결제 timeout/error 5% 롤백, scaleDown 60초), 나머지 롤링. 프로브·자원·HPA·메트릭·Secret·NetworkPolicy는 `docs/service-runtime-contract.md` | 동시 블루/그린 금지 |
 | 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음 | 31의 httpOnly 쿠키는 37·63으로 대체 |
 | 78 | (⚠️AI 86 보완: gateway 5xx 쿼리에 `uri!~"/ai.*"`) 블루/그린 분석 트래픽: 분석 중 AnalysisTemplate Job(k6, 조회만)이 `{svc}-preview`로 직접 요청, `/actuator` 제외 요청 ≥ 20건/분을 같이 판정(트래픽 0 = 실패). 실패하면 abort(전환 없음) → gitops 태그 revert PR. 실패 버전 시연은 gitops 설정 PR로 의존 서비스 주소를 깨뜨리는 방식 | ⏳ 남궁일 확인(결제 경로 트래픽·시연 방식) |
-| 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets·Loki는 확장 |
+| 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets는 확장. Loki는 113으로 보완 |
 | ⚠️AI 86 | AI 격리: 전용 노드그룹 **`ng-ai`**(t3.large 1대, 라벨·taint `cinema/workload=ai`, 평소 desired 0, 스케줄 대상 제외) · 별도 Application **`cinema-ai`**(`argocd_apps.tf`, 다른 Application 수정 없음) · gateway 플래그 `APP_AI_ENABLED`(꺼지면 `/api/ai/**` 404) · 분석 쿼리 `/ai` 제외 · `base/ai/networkpolicy.yaml`만 신규(gateway·monitoring → ai) · ai는 클러스터 안 gateway를 부르지 않고 CloudFront 공개 주소 사용 | 7·34·58·69·78 보완 |
 | 36 · 39 | AWS 아키텍처 = 위 결정들의 합. 노션 ADR-36(10/18 v3)은 이전 스냅샷 | |
 | 46 | GitHub Actions → AWS OIDC. 역할 `cinema-gha-ecr-push`·`cinema-gha-tf-plan`·`cinema-gha-frontend-deploy`·`cinema-gha-cluster-schedule`(3.1.14). CI는 apply 안 함 | `infra/terraform/global` |
 | 47 | 팀 접근: IAM 역할 + MFA(Identity Center 미사용). `cinema-admin` = 김종식 + **백업 남궁일**, `cinema-developer` = 전원. 프로필 `seatsac-user`·`cinema-dev`·`cinema-admin` | 회의록3 |
 | 74 | ⚠️ `SeatSAC-gitops` **Public**(GitHub 무료 플랜은 Private 레포에 ruleset을 적용하지 않음). 계정 ID·엔드포인트는 gitops에 두지 않는다: 엔드포인트 = Terraform ConfigMap `cinema-infra-endpoints` + `${키}`, ECR 레지스트리 = Terraform이 만드는 서비스 ArgoCD Application의 `kustomize.images`, gitops에는 태그만. ArgoCD는 HTTPS로 읽음(자격 증명 없음) | 10/25. 대안: Private + ruleset 없이 운영(직접 push 위험), 유료 플랜 |
+| 113 (가번호) | 로그 저장소 **Loki**(SingleBinary 1개, 청크·인덱스 S3 `cinema-staging-loki-{계정ID}` — EBS CSI가 없어 PVC 대신 S3, Pod Identity `cinema-staging-loki-pod`, 보존 7일·수명 주기 14일) + 수집 **Alloy**(파드 1개가 Kubernetes API로 `cinema-staging` 파드 로그만 읽음 — DaemonSet·hostPath 없음, Role 범위, gateway `clientIp`는 저장 전 `***`). 라벨은 `namespace`·`app`·`container`·`pod`만(traceId·userId는 `\| json`). 조회는 NetworkPolicy로 Grafana·Alloy만. 로컬 디스크가 emptyDir라 파드 교체 때 삭제 대기 청크는 S3 수명 주기(14일)가 지운다. 버킷 이름은 계정 ID가 들어가 Terraform ConfigMap `monitoring/loki-storage` → Loki `-config.expand-env`. Grafana 데이터소스 uid `loki`. 알림 Lambda 로그는 CloudWatch 그대로. **발표 전(11/18~19) 적용** — 시연·측정·녹화가 없는 시간에, 머지 마감(11/20 07:00) 전. 새 파드 2개는 requests 합 250m·640Mi로 작고 서비스 경로 밖이다. 이미 잰 p95·HPA는 Loki 없는 환경 기준으로 그대로 둔다(런북 6-J) | 10 보완. 노션 등록 후 번호 확정 |
 
 ## 5. 인증·화면·코드·프로세스
 

@@ -17,7 +17,8 @@ rules:
   - ○시 이후 질문은 starts_at >= '<날짜> HH:MM' 으로 비교한다. 자정 넘은 심야 회차도 올바르게 포함된다.
   - screening 을 조회하는 SQL에는 항상 starts_at > '<지금>' 을 붙인다. 스냅샷이 최대 1분 늦어 이미 시작한 회차가 남아 있을 수 있다(data-model 6-1).
   - 영화·극장 이름은 질문과 다를 수 있으니 정확히 같을 때는 =, 일부만 맞을 때는 LIKE '%이름%' 을 쓴다.
-  - 결과 칸에는 사람이 읽을 이름을 붙인다(AS movie_title 등). id만 돌려주지 않는다.
+  - 결과 칸 이름(AS)은 화면 표의 머리글로 그대로 보인다. 표에 있는 값은 표준 이름을 쓴다 - movie_title, theater_name, region, auditorium_name, screen_type, film_format, business_date, starts_at, ends_at, remaining_seats, total_seats, view_grade, genres, director, release_date, screening_count. 화면이 이 이름을 한국어로 바꿔 보여 준다. id만 돌려주지 않는다.
+  - 계산해서 만든 칸(가장 빠른 시작, 평균, 차이, 순위 등)은 영어 이름을 지어 붙이지 않는다. 큰따옴표로 감싼 짧은 한국어 이름을 쓴다(예 min(s.starts_at) AS "가장 빠른 시작", avg(s.remaining_seats) AS "평균 잔여석"). earliest_afternoon_start 같은 이름은 사용자가 읽을 수 없다.
   - 행 수는 최대 500이다. 많을 수 있는 목록은 ORDER BY 를 붙인다.
   - 문자열 값은 작은따옴표('건대입구')로 쓴다. 큰따옴표는 SQLite에서 칸 이름으로 읽힌다.
 

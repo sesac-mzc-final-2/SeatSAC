@@ -51,7 +51,8 @@ function Answer({ response, demo }: { response: ChatResponse; demo: boolean }) {
     <div className={styles.answer}>
       <p className={styles.text}>{response.answer}</p>
       {response.rejection && <p className={styles.note}>{response.rejection.message}</p>}
-      {table && response.columns && response.rows && (
+      {/* 0건이면 머리글만 남은 빈 표를 그리지 않는다 — 답 문장이 이유를 말한다 */}
+      {table && response.columns && response.rows && response.rows.length > 0 && (
         <ResultTable columns={response.columns} rows={response.rows} caption={`결과 ${response.rowCount}건`} />
       )}
       <p className={styles.meta}>

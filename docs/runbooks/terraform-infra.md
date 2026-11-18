@@ -1650,6 +1650,66 @@ kubectl -n cinema-staging get secret booking-secrets -o json | jq -r '.data.APP_
 - 모의 결제 키: k6 `deploy` 시나리오는 `run-in-cluster.sh`가 `booking-secrets`를 `secretKeyRef`로 넣는다(값을 꺼내지 않는다). 블루/그린 분석 Job은 지금 결제 경로가 없어 바꿀 것 없음 — 넣으려면 `SMOKE_PAY_SCREENING_ID`가 **미래 회차**여야 한다(시작 5분 전 마감 → 지나면 모든 booking 배포 abort)
 - 발표 후 Public 전환 전: 포트원 API Secret·웹훅 시크릿 폐기(포트원 콘솔)
 
+### 6-J. 로그 저장소 Loki · 수집 Alloy (3.1.24, ADR-113 가번호) — ⬜ 발표(11/20) 뒤 적용
+
+> **발표 전에는 적용하지 않는다.** monitoring에 파드 2개(Loki 200m·512Mi, Alloy 50m·128Mi)가 새로 떠 노드 자원이 바뀐다 — 이미 잰 p95·HPA 장면과 녹화 환경을 바꾸지 않게. 발표에서는 「개선 계획」으로 소개하고, 그때까지 traceId 조회는 `kubectl logs`(서비스별)로 한다.
+
+무엇이 좋아지나: 파드가 지워져도(블루/그린 전환·abort 뒤 이전 버전) 로그가 남는다 · Grafana Explore에서 traceId 한 줄로 모든 서비스 로그를 시각순으로 · 팀원이 kubectl 권한 없이 Grafana에서 조회 · 지표와 로그를 나란히(5xx가 튄 시각의 로그).
+
+| 구성 | 어디 | 내용 |
+| --- | --- | --- |
+| S3 버킷 `cinema-staging-loki-{계정ID}` | `envs/staging/loki.tf` | 비공개·SSE-S3·수명 주기 14일(안전망)·`force_destroy`(로그만) |
+| Pod Identity `cinema-staging-loki-pod` | 같은 파일 | 이 버킷 `ListBucket`·`Get/Put/DeleteObject`만 ↔ ServiceAccount `monitoring/loki` |
+| ConfigMap `monitoring/loki-storage` | `envs/staging-k8s/loki.tf` | `LOKI_S3_BUCKET`·`AWS_REGION` — 버킷 이름에 계정 ID가 있어 Public gitops에 쓰지 않는다 |
+| Application `loki`(wave 5) | gitops `apps/staging/platform-loki.yaml` · `platform/loki/values.yaml` | grafana/loki 7.5.0, SingleBinary 1개, 로컬 디스크 emptyDir, 보존 7일(compactor), RBAC 없음 |
+| Application `alloy`(wave 6) | gitops `apps/staging/platform-alloy.yaml` · `platform/alloy/values.yaml` | grafana/alloy 1.15.0, Deployment 1개, Kubernetes API로 `cinema-staging` 파드 로그 읽기(Role `pods`·`pods/log`만), `clientIp` → `***` |
+| Grafana 데이터소스 `loki` | gitops `platform/kube-prometheus-stack/values.yaml` | `http://loki.monitoring.svc.cluster.local:3100` |
+
+#### 6-J-1. 적용 (순서가 중요 — 권한 연결보다 먼저 뜬 Loki 파드는 S3에 쓰지 못한다)
+
+```bash
+export AWS_PROFILE=cinema-admin
+cd infra/terraform/envs/staging     && terraform plan -var-file=staging.tfvars      # 기대: 9 to add (버킷 5 + Pod Identity 4), 그 밖 변경 없음
+terraform apply -var-file=staging.tfvars
+cd ../staging-k8s                   && terraform plan -var-file=staging-k8s.tfvars  # 기대: 1 to add (ConfigMap loki-storage)
+terraform apply -var-file=staging-k8s.tfvars
+```
+
+3. SeatSAC-gitops PR(`infra/3.1.24-loki`) 머지 → root 앱이 `loki`(5) → `alloy`(6) 순서로 sync. kube-prometheus-stack도 데이터소스 추가로 sync된다(Grafana 재시작 없음 — 데이터소스 사이드카가 다시 읽는다)
+
+#### 6-J-2. 확인
+
+```bash
+kubectl -n argocd get application loki alloy                                   # Synced / Healthy
+kubectl -n monitoring get pods -l 'app.kubernetes.io/name in (loki,alloy)'      # Running, loki-0 1/1
+kubectl -n monitoring logs loki-0 -c loki | grep -iE 'AccessDenied|NoSuchBucket|level=error' | head   # 없어야 정상
+kubectl -n monitoring logs deploy/alloy -c alloy | grep -iE 'level=error|forbidden' | head            # 없어야 정상
+aws s3 ls "s3://$(terraform -chdir=infra/terraform/envs/staging output -raw loki_bucket_name)/" --recursive | head   # 몇 분 뒤 index/·fake/ 객체
+```
+
+Grafana(6-F-2와 같은 접속) → Explore → 데이터소스 **Loki**:
+
+| 확인 | 쿼리 | 기대 |
+| --- | --- | --- |
+| 수집 | `{namespace="cinema-staging"}` | 서비스별(`app`) 로그가 보인다 |
+| traceId 한 줄 | `{namespace="cinema-staging"} \| json \| traceId="<응답 헤더 X-Trace-Id>"` | gateway → catalog 등 한 요청의 로그가 시각순 |
+| 개인정보 가림 | `{app="gateway"} \|= "clientIp"` | `"clientIp":"***"` |
+| 지워진 파드 | 블루/그린 한 번 뒤 이전 `pod` 라벨로 조회 | 이전 버전 파드 로그가 남아 있다 |
+
+#### 6-J-3. 문제 해결
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| Loki 로그 `AccessDenied` | Pod Identity 연결보다 Loki 파드가 먼저 떴다 · ServiceAccount 이름 불일치 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace monitoring`에 `loki` 확인 → ArgoCD에서 `loki` StatefulSet Restart |
+| `NoSuchBucket`·버킷 이름이 `${LOKI_S3_BUCKET}` 그대로 | ConfigMap `loki-storage` 없음(6-J-1의 staging-k8s apply 전) | staging-k8s apply → Restart |
+| Alloy `forbidden … pods/log` | Role이 cinema-staging에 없음 | `kubectl -n cinema-staging get role,rolebinding -l app.kubernetes.io/name=alloy` → 없으면 `alloy` 앱 sync |
+| Grafana에 Loki 데이터소스 없음 | kube-prometheus-stack sync 전 | ArgoCD `kube-prometheus-stack` Synced 확인, 그래도 없으면 Grafana Deployment Restart |
+| 같은 줄이 두 번 | 컨테이너 포트가 8080 말고 더 있다 | Alloy `discovery.relabel`의 포트 필터(`\|8080`)에 맞게 고치는 gitops PR |
+
+- 되돌리기: gitops PR revert → `loki`·`alloy`가 prune된다(서비스·대시보드 영향 없음). 버킷은 남겨도 14일 뒤 비워진다. 지우려면 `loki.tf` 삭제 PR → apply
+- 비용: S3 수 GB·요청 수 수준(월 1달러 미만). 노드 추가 없음
+- 알림 Lambda 로그는 CloudWatch에 있다 — Loki로 옮기지 않는다
+
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
 코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito는 `cognito.tf`(3.1.16, 7-6).

@@ -1,4 +1,4 @@
-# 추천 질문 프리셋 12개 (WBS 3.4.4 · AI-04 · 기능명세서 v4 17-4)
+# 추천 질문 프리셋 13개 (WBS 3.4.4 · AI-04 · 기능명세서 v4 17-4 — 11/18 조조 회차 추가)
 #
 # - presetId·title·example 은 GET /ai/presets 로 화면 버튼에 나간다.
 #   example 의 {movie} 는 응답할 때 스냅샷에서 지금 상영 회차가 가장 많은 영화 제목으로 채운다
@@ -188,6 +188,26 @@ presets:
       WHERE s.business_date = :today AND (s.start_hour >= 22 OR s.start_hour < 6)
         AND s.starts_at > :now
       ORDER BY s.starts_at, t.name
+
+  - presetId: morning_today
+    title: 조조 회차
+    example: 조조 영화 뭐 있어?
+    description: 다가오는 조조 회차(아침 6시~10시 전에 시작). 오늘 조조가 지났으면 다음 날 것부터
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "조조 영화 뭐 있어"
+      - "조조 회차 알려줘"
+      - "조조 상영 뭐 해"
+    params: []
+    sql: |
+      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at,
+             CASE WHEN s.remaining_seats_source = 'BOOKING' THEN s.remaining_seats END AS remaining_seats
+      FROM screening s
+      JOIN movie m ON m.movie_id = s.movie_id
+      JOIN theater t ON t.theater_id = s.theater_id
+      WHERE s.business_date >= :today AND s.start_hour >= 6 AND s.start_hour < 10
+        AND s.starts_at > :now
+      ORDER BY s.starts_at, t.name
+      LIMIT 20
 
   - presetId: movie_runtime
     title: 영화 상영 시간

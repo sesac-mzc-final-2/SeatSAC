@@ -110,11 +110,11 @@ def test_chat_without_snapshot_returns_snapshot_not_ready(client, user_headers):
     assert_error_v1(r.json(), "AI_SNAPSHOT_NOT_READY")
 
 
-def test_presets_lists_twelve_buttons(client, user_headers):
+def test_presets_lists_thirteen_buttons(client, user_headers):
     r = client.get("/ai/presets", headers=user_headers)
     assert r.status_code == 200
     items = r.json()["items"]
-    assert len(items) == 12
+    assert len(items) == 13
     assert set(items[0]) == {"presetId", "title", "example"}
     # 스냅샷이 없으면 영화 예시는 계약 예시처럼 "영화 제목"
     examples = {i["presetId"]: i["example"] for i in items}
@@ -144,12 +144,12 @@ def test_presets_fill_movie_example_from_the_snapshot(client, user_headers):
     from .sql_fixtures import NOW
 
     examples = _presets_with_snapshot(client, user_headers, NOW)
-    assert len(examples) == 12
-    assert examples["movie_theaters"] == "철의 심장 어디서 몇 시에 해?"  # 이후 회차 3건으로 최다
+    assert len(examples) == 13
+    assert examples["movie_theaters"] == "철의 심장 어디서 몇 시에 해?"  # 이후 회차 4건으로 최다
 
 
 def test_presets_drop_movie_buttons_when_no_screening_is_left(client, user_headers):
     """스냅샷은 준비됐는데 이후 회차가 없으면 '영화 제목' 버튼을 내보내지 않는다(#92 리뷰)."""
     examples = _presets_with_snapshot(client, user_headers, "2027-01-01 00:00")
-    assert len(examples) == 9
+    assert len(examples) == 10
     assert {"movie_theaters", "movie_next_screening", "movie_runtime"}.isdisjoint(examples)

@@ -21,3 +21,6 @@ rds_engine_version    = "8.4"
 rds_instance_class    = "db.t4g.small"
 valkey_engine_version = "8.2"
 valkey_node_type      = "cache.t4g.micro"
+
+# 3.1.23 사용자 도메인(선택). Route 53에서 등록한 뒤에만 채운다(런북 7-7). 비우면 CloudFront 기본 도메인만
+custom_domain = ""

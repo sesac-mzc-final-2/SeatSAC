@@ -41,10 +41,9 @@ jobs:
           VITE_COGNITO_AUTHORITY: ${{ vars.VITE_COGNITO_AUTHORITY }}
           VITE_COGNITO_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID }}
           VITE_COGNITO_DOMAIN: ${{ vars.VITE_COGNITO_DOMAIN }}
-          VITE_COGNITO_REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI }}
         run: |
           missing=0
-          for v in FRONTEND_BUCKET CLOUDFRONT_DISTRIBUTION_ID VITE_COGNITO_AUTHORITY VITE_COGNITO_CLIENT_ID VITE_COGNITO_DOMAIN VITE_COGNITO_REDIRECT_URI; do
+          for v in FRONTEND_BUCKET CLOUDFRONT_DISTRIBUTION_ID VITE_COGNITO_AUTHORITY VITE_COGNITO_CLIENT_ID VITE_COGNITO_DOMAIN; do
             if [ -z "${!v}" ]; then echo "::error::레포 Variables에 $v 가 없다 (docs/runbooks/terraform-infra.md 7장)"; missing=1; fi
           done
           [ -f package-lock.json ] || { echo "::error::frontend/package-lock.json 이 없다 (npm ci 에 필요. 커밋한다)"; missing=1; }
@@ -64,7 +63,8 @@ jobs:
           VITE_COGNITO_AUTHORITY: ${{ vars.VITE_COGNITO_AUTHORITY }}
           VITE_COGNITO_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID }}
           VITE_COGNITO_DOMAIN: ${{ vars.VITE_COGNITO_DOMAIN }}
-          VITE_COGNITO_REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI }}
+          # VITE_COGNITO_REDIRECT_URI는 넘기지 않는다(3.1.23) — 비우면 화면이 지금 주소(origin) + /callback을 쓴다
+          # (frontend/src/shared/config/env.ts). 기본 도메인·사용자 도메인 어느 쪽으로 들어와도 같은 주소로 돌아온다
         run: |
           npm run build
           test -f dist/index.html || { echo "::error::dist/index.html 이 없다 (vite build outDir 확인)"; exit 1; }
@@ -97,7 +97,7 @@ jobs:
       - name: CloudFront 무효화
         env:
           DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
-          REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI }}
+          REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI }}   # 요약의 화면 주소 표시에만(빌드에는 넘기지 않는다, 3.1.23)
         run: |
           id=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" \
                  --query Invalidation.Id --output text)

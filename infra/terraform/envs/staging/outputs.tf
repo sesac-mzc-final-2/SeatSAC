@@ -161,3 +161,8 @@ output "loki_bucket_name" {
   description = "3.1.24 Loki 로그 버킷 (staging-k8s ConfigMap loki-storage와 같은 이름)"
   value       = aws_s3_bucket.loki.bucket
 }
+
+output "custom_domain_url" {
+  description = "3.1.23 사용자 도메인 주소(없으면 빈 값). 기본 도메인(cloudfront_domain_name)도 계속 동작한다"
+  value       = local.custom_domain_enabled ? "https://${var.custom_domain}" : ""
+}

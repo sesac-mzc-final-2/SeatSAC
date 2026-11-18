@@ -203,6 +203,7 @@ resource "aws_cloudfront_distribution" "frontend" {
   price_class         = var.cloudfront_price_class
   http_version        = "http2and3"
   is_ipv6_enabled     = true
+  aliases             = local.custom_domain_enabled ? [var.custom_domain] : [] # 3.1.23 사용자 도메인(없으면 기본 도메인만)
 
   origin {
     origin_id                = "s3-frontend"
@@ -281,8 +282,13 @@ resource "aws_cloudfront_distribution" "frontend" {
     geo_restriction { restriction_type = "none" }
   }
 
+  # 기본 도메인(*.cloudfront.net)은 사용자 도메인을 붙여도 그대로 동작한다(CloudFront 인증서로).
+  # 사용자 도메인이 있으면 그 도메인용 ACM 인증서(us-east-1, custom_domain.tf)를 SNI로 붙인다
   viewer_certificate {
-    cloudfront_default_certificate = true # *.cloudfront.net. 사용자 지정 도메인 없음(ADR-9)
+    cloudfront_default_certificate = !local.custom_domain_enabled
+    acm_certificate_arn            = local.custom_domain_enabled ? aws_acm_certificate_validation.custom[0].certificate_arn : null
+    ssl_support_method             = local.custom_domain_enabled ? "sni-only" : null
+    minimum_protocol_version       = local.custom_domain_enabled ? "TLSv1.2_2021" : null
   }
 
   tags = { Name = "${var.name}-frontend" }

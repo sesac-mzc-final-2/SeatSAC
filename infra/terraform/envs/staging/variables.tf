@@ -195,3 +195,13 @@ variable "cognito_domain_prefix" {
   type        = string
   default     = "cinema-staging"
 }
+
+variable "custom_domain" {
+  description = <<-EOT
+    3.1.23 사용자 도메인(예: seatsac.example). 비우면(기본) 아무것도 만들지 않고 CloudFront 기본 도메인만 쓴다.
+    도메인은 Route 53에서 먼저 등록해 둔다(등록 = 구매라 Terraform 밖, 런북 7-7). 등록 때 자동으로 생긴
+    퍼블릭 호스팅 영역을 이름으로 찾아 쓴다
+  EOT
+  type        = string
+  default     = ""
+}

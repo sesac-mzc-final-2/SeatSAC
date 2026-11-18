@@ -7,12 +7,12 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +60,11 @@ class GatewayIdleConnectionTest {
         client.mutate().responseTimeout(Duration.ofSeconds(10)).build()
             .get().uri("/api/movies").exchange().expectStatus().isOk();
         assertThat(CATALOG.connections()).as("쉰 연결을 버리고 새 연결로 갔다").isEqualTo(2);
+    }
+
+    /** 요청 단계에서 먼저 실패해도 가짜 서버 쪽 원인이 같이 보고되도록 테스트가 끝날 때마다 확인한다 */
+    @AfterEach
+    void 가짜_catalog_서버_오류_없음() {
         CATALOG.assertNoError();
     }
 
@@ -126,9 +131,8 @@ class GatewayIdleConnectionTest {
                     out.flush();
                     lastActive = System.nanoTime();
                 }
-            } catch (SocketException e) {
-                // gateway가 풀에서 버린 연결을 닫는 것(reset·closed)은 이 테스트가 기대하는 동작이다
             } catch (IOException e) {
+                // gateway가 연결을 닫으면 read가 -1을 돌려 위 while이 끝난다(예외 아님). 서버가 열린 채 난 예외는 모두 보고한다
                 if (!server.isClosed()) {
                     failure.compareAndSet(null, e);
                 }

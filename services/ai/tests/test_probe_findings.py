@@ -201,3 +201,21 @@ def test_korean_column_alias_goes_through_validator_and_cache():
     assert [c["name"] for c in first["columns"]] == ["theater_name", "가장 빠른 시작"]
     assert again["path"] == "CACHE_EXACT" and again["columns"] == first["columns"]
     assert again["rows"] == first["rows"]
+
+
+# --- 6. 답 문장에 영화 이름 --------------------------------------------------
+
+
+def test_answer_names_the_movies_and_asks_which_one():
+    # 19:40 이후 오늘 회차 5건 — 시작 순으로 고양이 탐정·별의 항해·한강의 밤·철의 심장(한 편은 두 번)
+    query = sql("s.business_date = '2026-11-17'") + " ORDER BY s.starts_at"
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=query, explanation="오늘 남은 회차")))
+    answer = ask(service, "오늘 남은 회차")["answer"]
+    assert "5건입니다. 영화는 고양이 탐정, 별의 항해, 한강의 밤 외 1편이 있습니다." in answer
+    assert "어떤 영화의 상영 정보를 안내해 드릴까요?" in answer
+
+
+def test_one_movie_is_not_asked_again():
+    query = sql("m.title = '철의 심장'")
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=query, explanation="철의 심장 회차")))
+    assert "어떤 영화" not in ask(service, "철의 심장 회차")["answer"]

@@ -16,10 +16,10 @@ TOKEN=$(python3 tests/k6/tools/loadtest_users.py tokens --count 1 --min-valid-mi
 
 | 확인 | 방법 | 기대 |
 | --- | --- | --- |
-| 플래그 켜짐 | `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" "$API/ai/presets"` | **503**(플래그 켜짐 · ai 파드 아직 없음). **404면 플래그 꺼짐** → 6-G-3 1번. 토큰 없이 부르면 플래그와 상관없이 401이라(인증이 라우팅보다 먼저) 확인이 안 된다 |
+| 플래그 켜짐 | `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" "$API/ai/presets"` | 플래그 켜짐이면 ai가 꺼진 상태(`ng-ai` 0)에서 **503**, 켜 둔 상태(2장 — 발표까지 켜 둠)에서 **200**. 어느 상태든 **404면 플래그 꺼짐** → 6-G-3 1번. 토큰 없이 부르면 플래그와 상관없이 401이라(인증이 라우팅보다 먼저) 확인이 안 된다 |
 | 질의 금지 구간 아님 | 런북 6-G-5 | 이 시간에 k6(4.2.x·browse·open-rush)·좌석 녹화·블루/그린이 돌지 않는다. 스크럼에 「AI 데모 ○시~○시」 공유 |
-| 배포 겹침 없음 | `kubectl -n cinema-staging get rollout` | booking·gateway Healthy. gateway PR(#132 등)은 데모 뒤에 머지 |
-| 노드 | `infra/scripts/cluster-scale.sh status` | 앱 노드 정상, `ng-ai` 0 |
+| 배포 겹침 없음 | `kubectl -n cinema-staging get rollout` | booking·gateway Healthy. gateway PR(#137 등)은 데모 뒤에 머지 |
+| 노드 | `infra/scripts/cluster-scale.sh status` | 앱 노드 정상. `ng-ai`는 꺼진 상태면 0(2장에서 켠다), 켜 둔 상태면 1 이상 + ai 파드 Ready |
 
 ## 1. 대시보드 (T-30분, 김종식)
 
@@ -74,7 +74,7 @@ unset TOKEN
 
 - 「기대」로 적은 4·5·6번은 캐시 상태·Claude 판단에 따라 다른 경로가 나올 수 있다. 틀린 답이 아니라 경로만 다른 것이니 그대로 설명한다. 6번은 5번 답이 캐시에 **저장됐을 때만** 적중한다(Claude가 쓴 SQL로 틀을 못 만들면 `캐시하지 않음`) — 4.2.3에서 재지 않은 쌍이라 리허설에서 한 번 확인한다
 - #143(11/18 머지) 전에는 1번이 PRESET(토큰 사용)이었다. 지금은 「토큰을 쓰는 장면」이 5번이고, 1~4번은 「자주·비슷하게 묻는 질문은 처음부터 토큰 0」을 보여 준다. 예열은 `ai_chat_total`에 세지 않으므로 ①의 숫자는 실제 질문만 센다
-- 대시보드에서 보여 줄 곳: ① 「캐시로 답한 건수」·「쓴 Claude 토큰」(5번 뒤에만 늘고 나머지는 그대로), ③ 「경로별 답 / 분」에 `cache_exact`·`cache_semantic` 선이 생긴다
+- 대시보드에서 보여 줄 곳: ① 「캐시로 답한 건수」·「쓴 Claude 토큰」(Claude를 부른 질문 뒤에만 는다 — 대본대로면 5번, 4·6번이 캐시를 놓치면 그 질문도), ③ 「경로별 답 / 분」에 `cache_exact`·`cache_semantic` 선이 생긴다
 - **오적중률은 지표로 알 수 없다**(캐시가 틀린 답을 줬는지 앱은 모른다). 3번 화면과 4장 평가 결과로 설명한다
 
 ## 4. 함께 보여 줄 측정 결과 (4.2.3, 11/13 · `claude-sonnet-5-5` · 스냅샷 고정 · 질문 28개)

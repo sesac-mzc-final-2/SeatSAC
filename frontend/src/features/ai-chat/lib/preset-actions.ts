@@ -1,5 +1,5 @@
 import type { ChatPreset, ChatResponse } from "@/entities/ai-chat";
-import type { MovieSummary } from "@/entities/movie";
+import { gradeTitle, type MovieSummary, type ViewGrade } from "@/entities/movie";
 import type { Theater } from "@/entities/theater";
 import { routes } from "@/shared/config";
 import { addDays, dayOfWeekKo } from "@/shared/lib";
@@ -145,13 +145,19 @@ export function dateChoices(today: string): PresetChoice[] {
   });
 }
 
-const GRADES = ["전체 관람가", "12세 관람가", "15세 관람가", "청소년 관람불가"];
+// 버튼 글자는 사이트의 다른 화면과 같은 표기(gradeTitle), 보내는 문장은 ai 프리셋 말투 그대로
+const GRADES: [ViewGrade, string][] = [
+  ["ALL", "전체 관람가"],
+  ["12", "12세 관람가"],
+  ["15", "15세 관람가"],
+  ["19", "청소년 관람불가"],
+];
 
 export function gradeChoices(): PresetChoice[] {
-  return GRADES.map((label) => ({
-    key: label,
-    label,
-    text: `${label} 영화 알려줘`,
+  return GRADES.map(([grade, phrase]) => ({
+    key: grade,
+    label: gradeTitle(grade),
+    text: `${phrase} 영화 알려줘`,
   }));
 }
 

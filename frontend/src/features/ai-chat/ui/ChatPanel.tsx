@@ -108,6 +108,12 @@ export function ChatPanel({
     }
   };
 
+  /** 고르는 말풍선을 고르지 않고 닫는다. 초점을 가진 버튼이 같이 사라지므로 입력창으로 옮긴다(#142 리뷰) */
+  const closePicker = () => {
+    setPicker(null);
+    inputRef.current?.focus();
+  };
+
   const choosePreset = (preset: ChatPreset) => {
     const action = presetAction(preset, kstHour());
     if (action.kind === "send") {
@@ -213,7 +219,7 @@ export function ChatPanel({
       onKeyDown={(event) => {
         if (event.key !== "Escape") return;
         // 고르는 말풍선이 열려 있으면 그것만 닫는다
-        if (picker) setPicker(null);
+        if (picker) closePicker();
         else onClose();
       }}
     >
@@ -293,7 +299,7 @@ export function ChatPanel({
               key={entry.id}
               entry={entry}
               demo={demo.enabled}
-              onRetry={blocked ? undefined : (question) => send(question)}
+              onRetry={blocked ? undefined : (question, link) => send(question, link)}
               onPickMovie={blocked ? undefined : pickMovie}
             />
           ))
@@ -305,7 +311,7 @@ export function ChatPanel({
             failed={choicesFailed}
             disabled={blocked}
             onPick={pick}
-            onCancel={() => setPicker(null)}
+            onCancel={closePicker}
           />
         )}
         {isPending && (

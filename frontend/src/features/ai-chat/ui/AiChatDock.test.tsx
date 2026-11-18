@@ -100,7 +100,7 @@ describe("AiChatDock (3.3.7)", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/ai/presets") return json(200, presets);
-      if (url.startsWith("/api/movies")) return json(200, { content: [], page: 0, size: 100, totalElements: 0, totalPages: 0 });
+      if (url.startsWith("/api/movies")) return json(200, { content: [], page: 0, size: 50, totalElements: 0, totalPages: 0 });
       return json(200, chatBodies(fetchMock).length <= 1 ? cacheSemantic.value : nl2sql.value);
     });
     renderDock();
@@ -201,6 +201,45 @@ describe("AiChatDock (3.3.7)", () => {
     expect(link.getAttribute("href")).toMatch(/^\/showtimes\?theaterId=7&date=\d{4}-\d{2}-\d{2}$/);
   });
 
+  it("고르는 말풍선을 Escape 로 닫으면 입력창에 초점이 가고, 한 번 더 누르면 창이 닫힌다", async () => {
+    const withTheater = {
+      items: [...presets.items, { presetId: "theater_schedule", title: "극장 편성표", example: "내일 건대입구 편성표 보여줘" }],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/ai/presets") return json(200, withTheater);
+      return json(200, { items: [{ theaterId: 7, name: "건대입구", region: "서울", hasLayout: true }] });
+    });
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "극장 편성표" }));
+    const name = "어느 극장의 편성표를 볼까요?";
+    await within(await screen.findByRole("group", { name })).findByRole("button", { name: "건대입구" });
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument(); // 말풍선만 닫힌다
+    expect(screen.getByRole("textbox", { name: "질문" })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("고를 목록이 비어 있으면 안내한다", async () => {
+    const withTheater = {
+      items: [...presets.items, { presetId: "theater_schedule", title: "극장 편성표", example: "내일 건대입구 편성표 보여줘" }],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/ai/presets") return json(200, withTheater);
+      return json(200, { items: [] });
+    });
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "극장 편성표" }));
+    expect(await screen.findByText("고를 수 있는 항목이 없어요. 입력창에 직접 물어봐 주세요.")).toBeInTheDocument();
+  });
+
   it("아래 추천 질문 줄은 3개와 「…」만 보이고, 「…」를 누르면 나머지를 고른다", async () => {
     const many = {
       items: ["a", "b", "c", "d", "e"].map((id) => ({ presetId: `x_${id}`, title: `질문 ${id}`, example: `예시 ${id}` })),
@@ -239,7 +278,7 @@ describe("AiChatDock (3.3.7)", () => {
         return json(200, {
           content: [{ movieId: 6, title: "영화6", titleEn: null, viewGrade: "12", slotMinutes: 130, posterUrl: null }],
           page: 0,
-          size: 100,
+          size: 50,
           totalElements: 1,
           totalPages: 1,
         });

@@ -9,7 +9,7 @@ export const MAX_MESSAGE_LENGTH = 300;
 export type ChatEntry =
   | { id: number; kind: "question"; text: string }
   | { id: number; kind: "answer"; response: ChatResponse; link?: ChatLink }
-  | { id: number; kind: "error"; question: string; info: ChatErrorInfo; traceId: string | null };
+  | { id: number; kind: "error"; question: string; link?: ChatLink; info: ChatErrorInfo; traceId: string | null };
 
 type NewEntry = { [K in ChatEntry["kind"]]: Omit<Extract<ChatEntry, { kind: K }>, "id"> }[ChatEntry["kind"]];
 
@@ -74,7 +74,8 @@ export function useAiChat() {
               setNow(Date.now());
               setCooldownUntil(until);
             }
-            append({ kind: "error", question: message, info, traceId: traceIdOf(error) });
+            // link 도 같이 둔다 — 「다시 묻기」로 답을 받았을 때 바로가기가 빠지지 않게
+            append({ kind: "error", question: message, link, info, traceId: traceIdOf(error) });
           },
         },
       );

@@ -11,7 +11,7 @@ interface Props {
   entry: ChatEntry;
   demo: boolean;
   /** 오류 항목의 「다시 묻기」 (보낼 수 없는 상태면 undefined) */
-  onRetry?: (question: string) => void;
+  onRetry?: (question: string, link?: ChatLink) => void;
   /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
   onPickMovie?: (title: string) => void;
 }
@@ -129,7 +129,7 @@ export function ChatEntryView({ entry, demo, onRetry, onPickMovie }: Props) {
       </p>
       <div className={styles.errorActions}>
         {entry.info.retryable && onRetry && (
-          <button type="button" className={styles.retry} onClick={() => onRetry(entry.question)}>
+          <button type="button" className={styles.retry} onClick={() => onRetry(entry.question, entry.link)}>
             <Icon name="rotate-cw" size={13} />
             다시 묻기
           </button>

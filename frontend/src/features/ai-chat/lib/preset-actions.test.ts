@@ -96,6 +96,13 @@ describe("선택지", () => {
 
   it("등급", () => {
     expect(gradeChoices().map((c) => c.text)).toContain("청소년 관람불가 영화 알려줘");
+    // 버튼 글자는 사이트의 다른 화면(등급 배지)과 같은 표기
+    expect(gradeChoices().map((c) => c.label)).toEqual([
+      "전체 관람가",
+      "12세 이상 관람가",
+      "15세 이상 관람가",
+      "청소년 관람 불가",
+    ]);
   });
 
   it("KST 시각", () => {

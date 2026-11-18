@@ -33,6 +33,8 @@ export function ChoicePicker({ prompt, options, failed, disabled, onPick, onCanc
         <p className={styles.note}>목록을 불러오지 못했어요. 입력창에 직접 물어봐 주세요.</p>
       ) : options === null ? (
         <p className={styles.note}>불러오는 중…</p>
+      ) : options.length === 0 ? (
+        <p className={styles.note}>고를 수 있는 항목이 없어요. 입력창에 직접 물어봐 주세요.</p>
       ) : (
         <div className={styles.options}>
           {options.map((option) => (

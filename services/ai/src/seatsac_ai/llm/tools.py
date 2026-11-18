@@ -1,6 +1,7 @@
 """Claude가 고를 수 있는 도구 3개 (기능명세서 v4 15-2 6단계).
 
-Claude는 답을 글로 쓰지 않고 반드시 이 중 하나를 "호출"한다(tool_choice=any).
+Claude는 답을 글로 쓰지 않고 이 중 하나를 "호출"한다. Sonnet 5.5는 도구 강제(tool_choice any)를
+받지 않아 auto로 부르고, 호출 없이 글로만 답하면 오케스트레이터가 한 번 다시 시킨다(#111).
   run_preset   미리 써 둔 SQL(presets.yaml) + 빈칸 값   → path PRESET
   run_sql      Claude가 직접 쓴 SQL                     → path NL2SQL (검증기 통과 시)
   out_of_scope 영화·극장·회차와 상관없는 질문            → path OUT_OF_SCOPE

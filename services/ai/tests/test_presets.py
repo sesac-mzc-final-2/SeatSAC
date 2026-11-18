@@ -107,3 +107,13 @@ def test_showing_movie_falls_back_when_the_query_is_interrupted():
         app=SimpleNamespace(state=SimpleNamespace(snapshot=SimpleNamespace(store=Store())))
     )
     assert showing_movie(request).ready is False
+
+
+def test_only_blank_in_titles_is_the_hour():
+    """제목의 빈칸 표기는 "○시"뿐이다 — 캐시용 문장이 이것만 {time}으로 바꾼다(#129 리뷰).
+
+    다른 빈칸("○○ 극장" 등)을 제목에 넣으려면 orchestrator 의 cached_subject 도 같이 고친다.
+    """
+    for p in presets():
+        assert "○" not in p.title.replace("○시", ""), p.preset_id
+        assert "{" not in p.title, p.preset_id

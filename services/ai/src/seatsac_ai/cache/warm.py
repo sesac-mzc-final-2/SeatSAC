@@ -97,14 +97,21 @@ def _rename_date(sql: str, name: str) -> str:
 
 
 async def warm(cache: ChatCache, items: list[WarmItem]) -> int:
-    """캐시에 넣는다. 임베딩이 되면 의미 캐시에도. 넣은 수(정확 일치 기준)."""
+    """캐시에 넣는다. 임베딩이 되면 의미 캐시에도. 넣은 수.
+
+    하나라도 저장에 실패하면(Valkey 멈춤 등) 이번 회차는 거기서 멈춘다 — 나머지도 실패할 테고
+    한 건마다 시간 초과를 기다리게 된다. 다음 회차에 다시 넣는다.
+    """
     semantic = cache.embedder is not None and await cache.semantic_available()
+    stored = 0
     for item in items:
         vector = None
         if semantic:
             vector = await asyncio.to_thread(cache.embedder.embed, item.template)
-        await cache.put(item.key_text, item.entry, vector)
-    return len(items)
+        if not await cache.put(item.key_text, item.entry, vector):
+            break
+        stored += 1
+    return stored
 
 
 async def refresh_forever(cache: ChatCache, items: list[WarmItem], every: float) -> None:
@@ -112,7 +119,10 @@ async def refresh_forever(cache: ChatCache, items: list[WarmItem], every: float)
     while True:
         try:
             n = await warm(cache, items)
-            log.info("버튼 질문 말투 %d개를 캐시에 넣었다", n)
+            if n == len(items):
+                log.info("버튼 질문 말투 %d개를 캐시에 넣었다", n)
+            else:
+                log.warning("버튼 질문 말투 %d/%d개만 넣었다(다음에 다시)", n, len(items))
         except Exception as exc:  # noqa: BLE001 — 예열 실패는 답에 영향 없음(놓친 것으로 처리)
             log.warning("캐시 예열 실패(다음에 다시): %s", exc)
         await asyncio.sleep(every)

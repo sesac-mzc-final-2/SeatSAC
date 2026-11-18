@@ -313,8 +313,12 @@ class ChatService:
         self, cache: ChatCache, ext: Extracted, system_params, deadline
     ) -> tuple[dict[str, Any] | None, list[float] | None]:
         entry = await cache.get_exact(ext.key_text)
-        if entry is not None and entry.kinds != ext.kinds:
-            entry = None  # 키는 같은데 슬롯 종류가 다르면 쓰지 않는다(hit로 세지 않음)
+        if entry is not None and (
+            entry.kinds != ext.kinds or tuple(entry.meaning) != meaning_signature(ext.question)
+        ):
+            # 키는 같은데 슬롯 종류나 뜻 묶음(이후/이전·많은/적은 …)이 다르면 쓰지 않는다
+            # (hit로 세지 않음)
+            entry = None
         AI_CACHE_REQUESTS.labels("exact", "hit" if entry else "miss").inc()
         path = "CACHE_EXACT"
         vector = None
@@ -498,7 +502,7 @@ class ChatService:
         시드가 며칠치뿐이면 "이번 주말(토·일)"이 토요일 하루치인데도 그렇게 보이지 않는다.
         """
         data = self._data_range()
-        asked = _DATE_LITERAL.findall(sql)
+        asked = _business_dates(sql)
         if not data or not asked or max(asked) <= data[1]:
             return ""
         last = datetime.fromisoformat(data[1])
@@ -527,10 +531,15 @@ class ChatService:
         with self._store.reader() as conn:
             theaters = conn.execute("SELECT name, region FROM theater ORDER BY name").fetchall()
             movies = conn.execute("SELECT title, title_en FROM movie").fetchall()
-        known_theater = [str(v) for row in theaters for v in row if v]
+        names = [str(row[0]) for row in theaters]
+        regions = {str(row[1]) for row in theaters if row[1]}
         known_movie = [_squash(str(v)) for row in movies for v in row if v]
+        # 지역은 그 글자 그대로일 때만 안다("서울숲"을 "서울"로 보지 않게).
+        # 극장 이름은 앞뒤 일부도 인정
         gone_theater = [
-            a for a in asked["theater"] if not any(a in k or k in a for k in known_theater)
+            a
+            for a in asked["theater"]
+            if a not in regions and not any(a in n or n in a for n in names)
         ]
         gone_movie = [a for a in asked["movie"] if not any(_squash(a) in k for k in known_movie)]
         if any(_HANGUL.search(a) for a in gone_movie):
@@ -662,6 +671,29 @@ def _hide_seat_source(result: QueryResult) -> QueryResult:
         rows.append(row)
     columns = [c for i, c in enumerate(result.columns) if i != src]
     return replace(result, columns=columns, rows=rows)
+
+
+def _business_dates(sql: str) -> list[str]:
+    """SQL이 business_date 와 비교한 날짜 값만 (starts_at 의 다음 날 경계 같은 값은 빼고)."""
+    try:
+        tree = sqlglot.parse_one(sql, read="sqlite")
+    except SqlglotError:
+        return []
+    dates: list[str] = []
+    for column in tree.find_all(exp.Column):
+        if column.name != "business_date":
+            continue
+        parent = column.parent
+        if isinstance(parent, exp.In):
+            values = parent.expressions
+        elif isinstance(parent, exp.Binary):
+            values = [parent.right if parent.left is column else parent.left]
+        else:
+            continue
+        for value in values:
+            if isinstance(value, exp.Literal) and value.is_string:
+                dates += _DATE_LITERAL.findall("'" + value.this)
+    return dates
 
 
 def _squash(text: str) -> str:

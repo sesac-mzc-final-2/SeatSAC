@@ -186,3 +186,18 @@ def test_seat_source_column_is_dropped_and_unsure_seats_are_blank():
     seats = dict(body["rows"])
     assert seats["2026-11-17 22:30"] is None  # 픽스처 5번 회차는 TOTAL
     assert seats["2026-11-17 20:00"] == 30
+
+
+def test_korean_column_alias_goes_through_validator_and_cache():
+    # 계산한 칸은 한국어 이름으로 쓰게 한다(schema.yaml). 검증·실행·캐시 저장·재실행이 다 돼야 한다
+    query = (
+        'SELECT t.name AS theater_name, min(s.starts_at) AS "가장 빠른 시작" FROM screening s '
+        "JOIN theater t ON t.theater_id = s.theater_id "
+        "WHERE s.business_date = '2026-11-17' AND s.starts_at > '2026-11-17 19:40' GROUP BY t.name"
+    )
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=query, explanation="극장별 가장 빠른 회차")))
+    first = ask(service, "오늘 극장별로 제일 빨리 시작하는 회차")
+    again = ask(service, "오늘 극장별로 제일 빨리 시작하는 회차")
+    assert [c["name"] for c in first["columns"]] == ["theater_name", "가장 빠른 시작"]
+    assert again["path"] == "CACHE_EXACT" and again["columns"] == first["columns"]
+    assert again["rows"] == first["rows"]

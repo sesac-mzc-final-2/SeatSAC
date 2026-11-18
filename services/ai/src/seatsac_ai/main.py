@@ -13,6 +13,7 @@ from seatsac_ai.api import actuator, chat, presets
 from seatsac_ai.bookings import MyBookingsClient
 from seatsac_ai.cache.embedder import FastEmbedder
 from seatsac_ai.cache.store import ChatCache, Embedder, ValkeySearchIndex
+from seatsac_ai.cache.warm import preset_items, refresh_forever
 from seatsac_ai.common.errors import install_exception_handlers
 from seatsac_ai.common.logging import configure_logging
 from seatsac_ai.common.metrics import init_label_series
@@ -22,6 +23,7 @@ from seatsac_ai.config import Settings, get_settings
 from seatsac_ai.llm.client import AnthropicClient, LlmClient
 from seatsac_ai.llm.orchestrator import ChatService
 from seatsac_ai.quota.limiter import QuotaLimiter, connect_valkey
+from seatsac_ai.resources import presets as all_presets
 from seatsac_ai.snapshot import Snapshot, build_snapshot
 
 log = logging.getLogger(__name__)
@@ -39,11 +41,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if cache.semantic_ready and isinstance(cache.embedder, FastEmbedder):
             # 임베딩 모델을 미리 읽는다(몇 초). 첫 질문이 기다리지 않게
             warm = asyncio.create_task(asyncio.to_thread(cache.embedder.load))
+    prewarm = None
+    if cache is not None and app.state.settings.cache_warm_presets:
+        # 버튼 질문 말투를 캐시에 미리 넣는다(③). 수명의 절반마다 다시
+        items = preset_items(all_presets())
+        every = max(60, app.state.settings.cache_ttl // 2)
+        prewarm = asyncio.create_task(refresh_forever(cache, items, every))
     try:
         yield
     finally:
         if warm is not None:
             warm.cancel()
+        if prewarm is not None:
+            prewarm.cancel()
         if snapshot is not None:
             await snapshot.stop()
         if app.state.valkey is not None:

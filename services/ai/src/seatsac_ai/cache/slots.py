@@ -81,6 +81,10 @@ _FOLLOW_UP = re.compile(
     # "이중섭"처럼 낱말 안의 "이중"은 빼려고 "이 중"(띄어 씀)·"이중에"만 본다
     r"그\s*중|이\s+중|이중에|거기|그거|그것|방금|아까|위\s*결과"
     r"|^\s*(그럼|그러면|그리고|그\s*영화|그\s*극장)"
+    # 직전 조건을 그대로 쓰겠다는 말("같은 조건으로 건대입구는?", "5개로 늘려서")
+    r"|같은\s*(조건|걸로|시간|날)|마찬가지|똑같이|동일|늘려|줄여|이번엔|이번에는"
+    # 값 하나만 바꾸는 짧은 말("부산은?", "영등포도 알려줘") — 혼자서는 뜻이 서지 않는다
+    r"|^\s*\S{1,8}(은|는|도)\s*(어때|요|알려\s*줘)?\s*[?？]*\s*$"
 )
 
 
@@ -100,6 +104,42 @@ _MEANING = {k: re.compile(v) for k, v in _MEANING_GROUPS.items()}
 
 def meaning_signature(question: str) -> tuple[str, ...]:
     return tuple(k for k, pattern in _MEANING.items() if pattern.search(question))
+
+
+_SLOT_TOKEN = re.compile(r"\{[a-z]+\}")
+_WORD_SPLIT = re.compile(r"[^0-9A-Za-z가-힣]+")
+_WORD_TAIL = re.compile(
+    r"(에서는|에서도|에서|으로|에는|에도|에|의|은|는|이|가|을|를|도|만|로|쪽|점|역|관|극장|지점)$"
+)
+# 뜻을 바꾸지 않는 말(부탁·물음 꼬리). 이것만 다르면 같은 질문으로 본다
+_FILLER = frozenset(
+    "알려줘 알려주세요 알려줄래 보여줘 보여주세요 말해줘 찾아줘 뭐 뭐야 뭐가 뭐있어 뭐해 "
+    "있어 있나 있나요 있니 있음 있을까 좀 해줘 줘 주세요 어떤 어느 무슨 혹시 것 거 걸 "
+    "하는 한 할 해 하나 돼 되나 인가 인지 궁금해 어때".split()
+)
+
+
+def extra_words(new_template: str, cached_template: str) -> tuple[str, ...]:
+    """새 질문에만 있는 낱말. 하나라도 있으면 의미 캐시를 쓰지 않는다(orchestrator).
+
+    슬롯은 스냅샷에 **있는** 극장·영화 이름만 뽑는다. 없는 지점("강남")·없는 영화("주토피아")·
+    새 조건("리클라이너관", "액션")은 템플릿 글자에 그대로 남는데, 임베딩은 낱말 하나 차이를
+    0.93~0.99로 본다(11/18 실측). 그래서 앞서 물은 질문의 SQL이 그 조건 없이 다시 쓰였다.
+    유사도 기준을 올려서는 못 막는다("잠실" 0.985). 낱말로 직접 본다.
+    """
+    base = normalize(_SLOT_TOKEN.sub(" ", cached_template))
+    extra: list[str] = []
+    for raw in _WORD_SPLIT.split(_SLOT_TOKEN.sub(" ", new_template)):
+        word = raw.lower()
+        stem = _WORD_TAIL.sub("", word)
+        if word in _FILLER or stem in _FILLER or len(stem) < 2:
+            continue
+        # 뜻 묶음에 드는 말("이후"↔"넘어서")은 meaning_signature 가 이미 같은지 본다
+        if any(pattern.search(word) for pattern in _MEANING.values()):
+            continue
+        if stem not in base:
+            extra.append(stem)
+    return tuple(extra)
 
 
 def is_followup(question: str) -> bool:

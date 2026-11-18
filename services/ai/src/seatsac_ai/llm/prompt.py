@@ -54,12 +54,22 @@ def system_blocks(cache: bool) -> list[dict[str, Any]]:
     return [block]
 
 
-def user_text(question: str, now: datetime, previous: dict[str, Any] | None = None) -> str:
+def user_text(
+    question: str,
+    now: datetime,
+    previous: dict[str, Any] | None = None,
+    data_range: tuple[str, str] | None = None,
+) -> str:
     """previous: 후속 질문일 때 직전 질문·SQL(세션).
 
     "그중 건대입구만"을 직전 SQL에 조건을 더해 풀게 한다.
+    data_range: 스냅샷에 회차가 있는 첫 영업일·마지막 영업일. 편성이 며칠치만 있을 때
+    Claude가 "주말(토·일)"처럼 없는 날짜까지 답한 것처럼 쓰지 않게 한다(system 이 아니라
+    여기에 두어 프롬프트 캐시는 그대로다).
     """
     head = f"오늘: {now:%Y-%m-%d}({_WEEKDAYS[now.weekday()]}) · 지금: {now:%Y-%m-%d %H:%M} (KST)\n"
+    if data_range:
+        head += f"회차 데이터: {data_range[0]} ~ {data_range[1]} (이 밖의 날짜는 회차가 없다)\n"
     if previous:
         head += f"직전 질문: {previous.get('question')}\n"
         if previous.get("sql"):

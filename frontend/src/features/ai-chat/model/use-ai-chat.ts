@@ -2,12 +2,13 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatErrorInfo, sendChatMessage, type ChatErrorInfo, type ChatResponse } from "@/entities/ai-chat";
 import { traceIdOf } from "@/shared/api";
+import type { ChatLink } from "../lib/preset-actions";
 
 export const MAX_MESSAGE_LENGTH = 300;
 
 export type ChatEntry =
   | { id: number; kind: "question"; text: string }
-  | { id: number; kind: "answer"; response: ChatResponse }
+  | { id: number; kind: "answer"; response: ChatResponse; link?: ChatLink }
   | { id: number; kind: "error"; question: string; info: ChatErrorInfo; traceId: string | null };
 
 type NewEntry = { [K in ChatEntry["kind"]]: Omit<Extract<ChatEntry, { kind: K }>, "id"> }[ChatEntry["kind"]];
@@ -52,7 +53,8 @@ export function useAiChat() {
   }, []);
 
   const ask = useCallback(
-    (raw: string): boolean => {
+    /** link: 추천 질문으로 보낸 경우 답 아래에 붙일 바로가기(상영시간표 등) */
+    (raw: string, link?: ChatLink): boolean => {
       const message = raw.trim();
       if (!message || message.length > MAX_MESSAGE_LENGTH || isPending || cooldownSeconds > 0) return false;
       append({ kind: "question", text: message });
@@ -62,7 +64,7 @@ export function useAiChat() {
         {
           onSuccess: (response) => {
             sessionId.current = response.sessionId;
-            append({ kind: "answer", response });
+            append({ kind: "answer", response, link });
           },
           onError: (error) => {
             if (controller.current?.signal.aborted) return;

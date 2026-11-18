@@ -140,9 +140,19 @@
 .presetBar .presets {
   flex-wrap: nowrap;
   justify-content: flex-start;
-  overflow-x: auto;
+  overflow: hidden;
   padding-bottom: 2px;
-  scrollbar-width: none;
+}
+/* 3개 + 「…」가 한 줄에 들어가게 — 긴 제목은 말줄임 */
+.presetBar .presets > * {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.presetBar .presets > *:last-child {
+  flex-shrink: 0;
 }
 .presetBar .presets::-webkit-scrollbar {
   display: none;

@@ -126,3 +126,17 @@
 .retry:hover {
   background: #ffffff10;
 }
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.link:hover {
+  color: var(--color-primary-hover);
+  text-decoration: underline;
+}

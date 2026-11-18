@@ -1,5 +1,7 @@
 import { asOfLabel, chatPathLabel, hasResultTable, isTokenFree, type ChatResponse } from "@/entities/ai-chat";
+import { Link } from "react-router";
 import { Badge, Icon, TraceCode } from "@/shared/ui";
+import type { ChatLink } from "../lib/preset-actions";
 import type { ChatEntry } from "../model/use-ai-chat";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
@@ -45,7 +47,7 @@ function DemoMeta({ response }: { response: ChatResponse }) {
   );
 }
 
-function Answer({ response, demo }: { response: ChatResponse; demo: boolean }) {
+function Answer({ response, demo, link }: { response: ChatResponse; demo: boolean; link?: ChatLink }) {
   const table = hasResultTable(response);
   return (
     <div className={styles.answer}>
@@ -61,6 +63,13 @@ function Answer({ response, demo }: { response: ChatResponse; demo: boolean }) {
         {table && ` · ${n(response.rowCount)}건`}
         {response.truncated && " · 500건까지만 보여요"}
       </p>
+      {/* 추천 질문으로 고른 극장·영화·날짜면 그 화면으로 바로 간다 */}
+      {link && response.path !== "OUT_OF_SCOPE" && response.path !== "REJECTED" && (
+        <Link className={styles.link} to={link.href}>
+          {link.label}
+          <Icon name="arrow-right" size={13} />
+        </Link>
+      )}
       {demo && <DemoMeta response={response} />}
     </div>
   );
@@ -75,7 +84,7 @@ export function ChatEntryView({ entry, demo, onRetry }: Props) {
       </div>
     );
   }
-  if (entry.kind === "answer") return <Answer response={entry.response} demo={demo} />;
+  if (entry.kind === "answer") return <Answer response={entry.response} demo={demo} link={entry.link} />;
   return (
     <div className={styles.error} role="alert">
       <p className={styles.errorText}>

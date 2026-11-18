@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionContext, unavailableSession, type Session } from "@/entities/session";
 import { AiChatDock } from "./AiChatDock";
@@ -25,7 +26,9 @@ function renderDock(session: Session = authenticated) {
   return render(
     <QueryClientProvider client={client}>
       <SessionContext.Provider value={session}>
-        <AiChatDock />
+        <MemoryRouter>
+          <AiChatDock />
+        </MemoryRouter>
       </SessionContext.Provider>
     </QueryClientProvider>,
   );
@@ -88,7 +91,7 @@ describe("AiChatDock (3.3.7)", () => {
     expect(screen.getByRole("textbox", { name: "질문" })).toBeDisabled();
   });
 
-  it("추천 질문을 누르면 example 을 보내고 답·결과 표·기준 시각을 보여 준다. 다음 질문엔 sessionId 를 붙인다", async () => {
+  it("시각 빈칸 추천 질문은 입력창에 채우기만 하고, 보내면 답·결과 표·기준 시각을 보여 준다. 다음 질문엔 sessionId 를 붙인다", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/ai/presets") return json(200, presets);
@@ -97,6 +100,13 @@ describe("AiChatDock (3.3.7)", () => {
     renderDock();
     await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
     await userEvent.click(await screen.findByRole("button", { name: "오늘 ○시 이후 회차" }));
+
+    // 바로 보내지 않는다 — 지금 시각 다음 정시로 채우고 사용자가 고쳐서 보낸다
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", { name: "질문" });
+    await waitFor(() => expect(input.value).toMatch(/^오늘 \d{1,2}시 이후에 시작하는 영화 알려줘$/));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await userEvent.clear(input);
+    await userEvent.type(input, "오늘 20시 이후에 시작하는 영화 알려줘{Enter}");
 
     expect(await screen.findByText(cacheSemantic.value.answer)).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "영화" })).toBeInTheDocument();
@@ -159,5 +169,52 @@ describe("AiChatDock (3.3.7)", () => {
     expect(await screen.findByText(/15초 뒤에 다시 물어봐 주세요/)).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "질문" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "다시 묻기" })).not.toBeInTheDocument();
+  });
+
+  it("극장 편성표는 극장을 고르게 하고, 고르면 묻고 상영시간표 바로가기를 붙인다", async () => {
+    const withTheater = {
+      items: [...presets.items, { presetId: "theater_schedule", title: "극장 편성표", example: "내일 건대입구 편성표 보여줘" }],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/ai/presets") return json(200, withTheater);
+      if (url.startsWith("/api/theaters")) {
+        return json(200, { items: [{ theaterId: 7, name: "건대입구", region: "서울", hasLayout: true }] });
+      }
+      return json(200, cacheSemantic.value);
+    });
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "극장 편성표" }));
+
+    const picker = await screen.findByRole("group", { name: "어느 극장의 편성표를 볼까요?" });
+    await userEvent.click(await within(picker).findByRole("button", { name: "건대입구" }));
+
+    expect(await screen.findByText(cacheSemantic.value.answer)).toBeInTheDocument();
+    const chat = fetchMock.mock.calls.find(([url]) => String(url) === "/api/ai/chat");
+    expect(JSON.parse(String(chat?.[1]?.body))).toEqual({ message: "오늘 건대입구 편성표 보여줘" });
+    const link = screen.getByRole("link", { name: /건대입구 상영시간표 바로가기/ });
+    expect(link.getAttribute("href")).toMatch(/^\/showtimes\?theaterId=7&date=\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("아래 추천 질문 줄은 3개와 「…」만 보이고, 「…」를 누르면 나머지를 고른다", async () => {
+    const many = {
+      items: ["a", "b", "c", "d", "e"].map((id) => ({ presetId: `x_${id}`, title: `질문 ${id}`, example: `예시 ${id}` })),
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/ai/presets" ? json(200, many) : json(200, cacheSemantic.value),
+    );
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "질문" }), "아무 질문{Enter}");
+    await screen.findByText(cacheSemantic.value.answer);
+
+    const bar = screen.getAllByRole("group", { name: "추천 질문" }).at(-1)!;
+    expect(within(bar).getAllByRole("button").map((b) => b.textContent)).toEqual(["질문 a", "질문 b", "질문 c", "…"]);
+    await userEvent.click(within(bar).getByRole("button", { name: "추천 질문 더 보기" }));
+    const more = await screen.findByRole("group", { name: "무엇을 물어볼까요?" });
+    await userEvent.click(within(more).getByRole("button", { name: "질문 e" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).message).toBe("예시 e");
   });
 });

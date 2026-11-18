@@ -9,6 +9,11 @@ import nl2sql from "../../../../../contracts/openapi/examples/ai/chat-nl2sql.jso
 import cacheSemantic from "../../../../../contracts/openapi/examples/ai/chat-cache-semantic.json";
 
 const TRACE = "0123456789abcdef0123456789abcdef";
+/** 챗봇 질문 요청 본문만 (영화 목록 등 다른 요청은 뺀다) */
+const chatBodies = (mock: { mock: { calls: unknown[][] } }) =>
+  mock.mock.calls
+    .filter(([url]) => String(url) === "/api/ai/chat")
+    .map(([, init]) => JSON.parse(String((init as RequestInit | undefined)?.body)));
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
 const presets = {
@@ -95,7 +100,8 @@ describe("AiChatDock (3.3.7)", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/ai/presets") return json(200, presets);
-      return json(200, fetchMock.mock.calls.length <= 2 ? cacheSemantic.value : nl2sql.value);
+      if (url.startsWith("/api/movies")) return json(200, { content: [], page: 0, size: 100, totalElements: 0, totalPages: 0 });
+      return json(200, chatBodies(fetchMock).length <= 1 ? cacheSemantic.value : nl2sql.value);
     });
     renderDock();
     await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
@@ -112,13 +118,11 @@ describe("AiChatDock (3.3.7)", () => {
     expect(screen.getByRole("columnheader", { name: "영화" })).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: "11/17 20:10" })).toBeInTheDocument();
     expect(screen.getByText(/19:42 기준/)).toBeInTheDocument();
-    const [, firstInit] = fetchMock.mock.calls[1];
-    expect(JSON.parse(String(firstInit?.body))).toEqual({ message: "오늘 20시 이후에 시작하는 영화 알려줘" });
+    expect(chatBodies(fetchMock)[0]).toEqual({ message: "오늘 20시 이후에 시작하는 영화 알려줘" });
 
     await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "매진 임박한 회차{Enter}");
     expect(await screen.findByText(nl2sql.value.answer)).toBeInTheDocument();
-    const [, secondInit] = fetchMock.mock.calls[2];
-    expect(JSON.parse(String(secondInit?.body))).toEqual({
+    expect(chatBodies(fetchMock)[1]).toEqual({
       message: "매진 임박한 회차",
       sessionId: cacheSemantic.value.sessionId,
     });
@@ -214,7 +218,51 @@ describe("AiChatDock (3.3.7)", () => {
     await userEvent.click(within(bar).getByRole("button", { name: "추천 질문 더 보기" }));
     const more = await screen.findByRole("group", { name: "무엇을 물어볼까요?" });
     await userEvent.click(within(more).getByRole("button", { name: "질문 e" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).message).toBe("예시 e");
+    await waitFor(() => expect(chatBodies(fetchMock)).toHaveLength(2));
+    expect(chatBodies(fetchMock)[1].message).toBe("예시 e");
+  });
+
+  it("답에 영화가 여럿이면 5개씩 고르는 버튼, 「더 보기」마다 5개씩 더, 고르면 그 영화 상영 정보를 묻는다", async () => {
+    const titles = Array.from({ length: 7 }, (_, i) => `영화${i + 1}`);
+    const many = {
+      ...cacheSemantic.value,
+      path: "NL2SQL",
+      answer: "런타임 2시간 이상 영화: 7건입니다. 영화는 영화1, 영화2, 영화3 외 4편이 있습니다.",
+      columns: [{ name: "movie_title", type: "text" }],
+      rows: titles.map((t) => [t]),
+      rowCount: 7,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/ai/presets") return json(200, presets);
+      if (url.startsWith("/api/movies")) {
+        return json(200, {
+          content: [{ movieId: 6, title: "영화6", titleEn: null, viewGrade: "12", slotMinutes: 130, posterUrl: null }],
+          page: 0,
+          size: 100,
+          totalElements: 1,
+          totalPages: 1,
+        });
+      }
+      return json(200, many);
+    });
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "질문" }), "런타임 2시간 이상인 영화는 뭐야{Enter}");
+
+    const group = await screen.findByRole("group", { name: "영화 고르기" });
+    const names = () => within(group).getAllByRole("button").map((b) => b.textContent);
+    expect(names()).toEqual(["영화1", "영화2", "영화3", "영화4", "영화5", "더 보기 (2)"]);
+    await userEvent.click(within(group).getByRole("button", { name: "더 보기 (2)" }));
+    expect(names()).toEqual(titles);
+
+    await userEvent.click(within(group).getByRole("button", { name: "영화6" }));
+    await waitFor(() => {
+      const chats = fetchMock.mock.calls.filter(([url]) => String(url) === "/api/ai/chat");
+      expect(JSON.parse(String(chats[1]?.[1]?.body)).message).toBe("영화6 어디서 몇 시에 해?");
+    });
+    expect((await screen.findAllByRole("link", { name: /영화6 상영시간표 보기/ }))[0].getAttribute("href")).toBe(
+      "/showtimes?movieId=6",
+    );
   });
 });

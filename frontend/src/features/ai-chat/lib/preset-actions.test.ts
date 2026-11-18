@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { dateChoices, gradeChoices, kstHour, movieChoices, presetAction, theaterChoices } from "./preset-actions";
+import {
+  answerMovieTitles,
+  dateChoices,
+  gradeChoices,
+  kstHour,
+  movieChoices,
+  presetAction,
+  theaterChoices,
+} from "./preset-actions";
 
 const preset = (presetId: string, example = "예시") => ({
   presetId,
@@ -92,5 +100,43 @@ describe("선택지", () => {
 
   it("KST 시각", () => {
     expect(kstHour(new Date("2026-11-18T03:30:00Z"))).toBe(12);
+  });
+});
+
+describe("answerMovieTitles", () => {
+  const cols = [
+    { name: "movie_title", type: "text" as const },
+    { name: "starts_at", type: "text" as const },
+  ];
+  it("두 편 이상이면 나온 순서대로 중복 없이", () => {
+    const rows = [
+      ["가", "1"],
+      ["나", "2"],
+      ["가", "3"],
+    ];
+    expect(answerMovieTitles({ path: "NL2SQL", columns: cols, rows })).toEqual(["가", "나"]);
+  });
+  it("한 편·영화 칸 없음·내 예매는 띄우지 않는다", () => {
+    expect(
+      answerMovieTitles({
+        path: "NL2SQL",
+        columns: cols,
+        rows: [
+          ["가", "1"],
+          ["가", "2"],
+        ],
+      }),
+    ).toEqual([]);
+    expect(answerMovieTitles({ path: "NL2SQL", columns: [cols[1]], rows: [["1"], ["2"]] })).toEqual([]);
+    expect(
+      answerMovieTitles({
+        path: "MY_BOOKINGS",
+        columns: cols,
+        rows: [
+          ["가", "1"],
+          ["나", "2"],
+        ],
+      }),
+    ).toEqual([]);
   });
 });

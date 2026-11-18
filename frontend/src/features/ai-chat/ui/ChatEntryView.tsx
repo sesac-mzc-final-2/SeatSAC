@@ -1,7 +1,8 @@
 import { asOfLabel, chatPathLabel, hasResultTable, isTokenFree, type ChatResponse } from "@/entities/ai-chat";
+import { useState } from "react";
 import { Link } from "react-router";
-import { Badge, Icon, TraceCode } from "@/shared/ui";
-import type { ChatLink } from "../lib/preset-actions";
+import { Badge, Chip, Icon, TraceCode } from "@/shared/ui";
+import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/preset-actions";
 import type { ChatEntry } from "../model/use-ai-chat";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
@@ -11,6 +12,8 @@ interface Props {
   demo: boolean;
   /** 오류 항목의 「다시 묻기」 (보낼 수 없는 상태면 undefined) */
   onRetry?: (question: string) => void;
+  /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
+  onPickMovie?: (title: string) => void;
 }
 
 const n = (value: number) => value.toLocaleString("ko-KR");
@@ -47,7 +50,37 @@ function DemoMeta({ response }: { response: ChatResponse }) {
   );
 }
 
-function Answer({ response, demo, link }: { response: ChatResponse; demo: boolean; link?: ChatLink }) {
+/** 답에 나온 영화 고르기. 5개씩 보여 주고 「더 보기」마다 5개씩 아래에 더 붙인다 */
+function MovieChoices({ titles, onPick }: { titles: string[]; onPick?: (title: string) => void }) {
+  const [shown, setShown] = useState(MOVIE_CHOICE_STEP);
+  return (
+    <div className={styles.movies} role="group" aria-label="영화 고르기">
+      {titles.slice(0, shown).map((title) => (
+        <Chip key={title} size="sm" disabled={!onPick} onClick={() => onPick?.(title)}>
+          {title}
+        </Chip>
+      ))}
+      {shown < titles.length && (
+        <Chip size="sm" className={styles.more} onClick={() => setShown((count) => count + MOVIE_CHOICE_STEP)}>
+          더 보기 ({titles.length - shown})
+        </Chip>
+      )}
+    </div>
+  );
+}
+
+function Answer({
+  response,
+  demo,
+  link,
+  onPickMovie,
+}: {
+  response: ChatResponse;
+  demo: boolean;
+  link?: ChatLink;
+  onPickMovie?: (title: string) => void;
+}) {
+  const movieTitles = answerMovieTitles(response);
   const table = hasResultTable(response);
   return (
     <div className={styles.answer}>
@@ -63,6 +96,7 @@ function Answer({ response, demo, link }: { response: ChatResponse; demo: boolea
         {table && ` · ${n(response.rowCount)}건`}
         {response.truncated && " · 500건까지만 보여요"}
       </p>
+      {movieTitles.length > 0 && <MovieChoices titles={movieTitles} onPick={onPickMovie} />}
       {/* 추천 질문으로 고른 극장·영화·날짜면 그 화면으로 바로 간다 */}
       {link && response.path !== "OUT_OF_SCOPE" && response.path !== "REJECTED" && (
         <Link className={styles.link} to={link.href}>
@@ -75,7 +109,7 @@ function Answer({ response, demo, link }: { response: ChatResponse; demo: boolea
   );
 }
 
-export function ChatEntryView({ entry, demo, onRetry }: Props) {
+export function ChatEntryView({ entry, demo, onRetry, onPickMovie }: Props) {
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
@@ -84,7 +118,9 @@ export function ChatEntryView({ entry, demo, onRetry }: Props) {
       </div>
     );
   }
-  if (entry.kind === "answer") return <Answer response={entry.response} demo={demo} link={entry.link} />;
+  if (entry.kind === "answer") {
+    return <Answer response={entry.response} demo={demo} link={entry.link} onPickMovie={onPickMovie} />;
+  }
   return (
     <div className={styles.error} role="alert">
       <p className={styles.errorText}>

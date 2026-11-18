@@ -140,3 +140,11 @@
   color: var(--color-primary-hover);
   text-decoration: underline;
 }
+.movies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.more {
+  color: var(--color-muted);
+}

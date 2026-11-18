@@ -1,4 +1,4 @@
-import type { ChatPreset } from "@/entities/ai-chat";
+import type { ChatPreset, ChatResponse } from "@/entities/ai-chat";
 import type { MovieSummary } from "@/entities/movie";
 import type { Theater } from "@/entities/theater";
 import { routes } from "@/shared/config";
@@ -153,4 +153,33 @@ export function gradeChoices(): PresetChoice[] {
     label,
     text: `${label} 영화 알려줘`,
   }));
+}
+
+/** 영화 고르는 버튼을 한 번에 몇 개씩 보여 줄지 (「더 보기」마다 이만큼 더) */
+export const MOVIE_CHOICE_STEP = 5;
+
+/**
+ * 답에 나온 영화 제목(나온 순서, 중복 없이). 두 편 이상일 때만 고르는 버튼을 띄운다 —
+ * ai 도 같은 조건으로 답 문장에 "어떤 영화의 상영 정보를 안내해 드릴까요?"를 붙인다(orchestrator `_movie_names`).
+ * 내 예매는 이미 고른 영화라 띄우지 않는다
+ */
+export function answerMovieTitles(response: Pick<ChatResponse, "path" | "columns" | "rows">): string[] {
+  if (response.path === "MY_BOOKINGS" || response.path === "REJECTED" || response.path === "OUT_OF_SCOPE") return [];
+  const index = response.columns?.findIndex((column) => column.name === "movie_title") ?? -1;
+  if (index < 0 || !response.rows) return [];
+  const titles = [
+    ...new Set(response.rows.map((row) => row[index]).filter((v): v is string => typeof v === "string" && v !== "")),
+  ];
+  return titles.length >= 2 ? titles : [];
+}
+
+/** 답에서 고른 영화 → 그 영화의 상영 극장·시간 질문 (movieId 를 알면 상영시간표 바로가기) */
+export function movieFromAnswer(title: string, movies: MovieSummary[] | undefined): PresetChoice {
+  const movie = movies?.find((m) => m.title === title);
+  return {
+    key: title,
+    label: title,
+    text: `${title} 어디서 몇 시에 해?`,
+    link: movie ? { label: `${title} 상영시간표 보기`, href: routes.showtimes({ movieId: movie.movieId }) } : undefined,
+  };
 }

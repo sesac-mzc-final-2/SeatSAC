@@ -7,6 +7,8 @@ import { todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
 import {
   PICK_PROMPTS,
+  answerMovieTitles,
+  movieFromAnswer,
   dateChoices,
   gradeChoices,
   kstHour,
@@ -70,7 +72,10 @@ export function ChatPanel({
   const movies = useQuery({
     queryKey: ["ai-chat", "now-showing-movies"],
     queryFn: ({ signal }) => listMovies({ status: "NOW_SHOWING", size: 100 }, signal),
-    enabled: picker?.kind === "movie",
+    // 영화 고르기 말풍선, 또는 답에 영화가 여럿 나와 고르는 버튼이 있을 때(상영시간표 바로가기에 movieId 가 필요)
+    enabled:
+      picker?.kind === "movie" ||
+      entries.some((entry) => entry.kind === "answer" && answerMovieTitles(entry.response).length > 0),
     staleTime: 10 * 60 * 1000,
   });
 
@@ -141,6 +146,11 @@ export function ChatPanel({
   } else if (picker?.kind === "grade") {
     choices = gradeChoices();
   }
+
+  const pickMovie = (title: string) => {
+    const choice = movieFromAnswer(title, movies.data?.content);
+    send(choice.text, choice.link);
+  };
 
   const pick = (key: string) => {
     if (picker?.kind === "more") {
@@ -279,6 +289,7 @@ export function ChatPanel({
               entry={entry}
               demo={demo.enabled}
               onRetry={blocked ? undefined : (question) => send(question)}
+              onPickMovie={blocked ? undefined : pickMovie}
             />
           ))
         )}

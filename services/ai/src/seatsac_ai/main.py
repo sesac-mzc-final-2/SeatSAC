@@ -143,6 +143,7 @@ def create_app(
             settings,
             cache=app.state.cache,
             bookings=app.state.bookings,
+            refresher=app.state.snapshot.refresher,
         )
 
     app.add_middleware(RequestContextMiddleware)

@@ -166,3 +166,25 @@ def test_movie_dropped_from_list_is_removed():
     client.movies = [movie_summary(1)]
     asyncio.run(loader.refresh_other())
     assert rows(store, "SELECT movie_id FROM movie") == [(1,)]
+
+
+def test_all_screenings_refresh_updates_every_day_and_as_of():
+    """질문 시점 갱신: 내일 회차의 잔여석도 새로 받고, 기준 시각(asOf)이 이번 갱신 시각이 된다."""
+    clock = {"now": NOW}
+    client = FakeClient()
+    store = SnapshotStore(clock=lambda: clock["now"])
+    loader = SnapshotLoader(client, store, days=3, clock=lambda: clock["now"])
+    tomorrow, END = "2026-11-07T10:00:00+09:00", "2026-11-07T12:00:00+09:00"
+    client.screenings[("2026-11-06", 10)] = [screening(1)]
+    client.screenings[("2026-11-07", 10)] = [screening(2, tomorrow, endsAt=END, remainingSeats=100)]
+    asyncio.run(refresh_all(loader))
+
+    clock["now"] = kst(2026, 11, 6, 12, 5)
+    client.screenings[("2026-11-07", 10)] = [screening(2, tomorrow, endsAt=END, remainingSeats=98)]
+    asyncio.run(loader.refresh_all_screenings())
+    assert rows(store, "SELECT screening_id, remaining_seats FROM screening ORDER BY 1") == [
+        (1, 40),
+        (2, 98),
+    ]
+    assert store.as_of() == clock["now"]
+    assert rows(store, "SELECT count(*) FROM movie") == [(2,)]  # 영화는 그대로

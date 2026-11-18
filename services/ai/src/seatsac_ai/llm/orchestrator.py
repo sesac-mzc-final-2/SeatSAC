@@ -41,6 +41,7 @@ from seatsac_ai.llm import prompt
 from seatsac_ai.llm.client import NO_TOOL, LlmClient, LlmUnavailable, ToolCall, Usage
 from seatsac_ai.llm.tools import OUT_OF_SCOPE, RUN_PRESET, RUN_SQL, tool_definitions
 from seatsac_ai.resources import Preset, presets
+from seatsac_ai.snapshot.fresh import SeatRefresher, reads_seats
 from seatsac_ai.snapshot.mapper import KST
 from seatsac_ai.snapshot.store import SnapshotNotReady, SnapshotStore
 from seatsac_ai.sql.executor import (
@@ -110,8 +111,10 @@ class ChatService:
         clock: Callable[[], datetime] = lambda: datetime.now(KST),
         cache: ChatCache | None = None,
         bookings: my_bookings.MyBookingsClient | None = None,
+        refresher: SeatRefresher | None = None,
     ) -> None:
         self._store = store
+        self._refresher = refresher  # 잔여석을 읽는 SQL 직전에 회차를 새로 받는다
         self._cache = cache
         self._bookings = bookings
         self._clock = clock  # 테스트가 "지금"을 고정할 때만 바꾼다
@@ -347,6 +350,7 @@ class ChatService:
                 system_params | ext.values(),
                 deadline,
                 claude_sql=made.origin == "NL2SQL",
+                refresh=False,  # 방금 실행한 결과와 같은 데이터로 비교해야 한다
             )
         except (_Retry, LlmUnavailable) as exc:
             log.info("캐시하지 않음(템플릿 실행 실패): %s", exc)
@@ -394,9 +398,18 @@ class ChatService:
         raise _Retry(f"알 수 없는 도구 {call.name}")
 
     async def _execute(
-        self, sql: str, params: dict[str, Any], deadline: float, claude_sql: bool = False
+        self,
+        sql: str,
+        params: dict[str, Any],
+        deadline: float,
+        claude_sql: bool = False,
+        refresh: bool = True,
     ) -> tuple[str, QueryResult]:
-        """검증 → 실행. (실제로 실행한 SQL, 결과)
+        """검증 → (잔여석을 읽으면 회차 새로 받기) → 실행. (실제로 실행한 SQL, 결과)
+
+        잔여석은 예매 때마다 바뀌어 1분 주기 갱신으로는 늦다. 그래서 SQL이 잔여석을 읽으면
+        실행 직전에 모든 날짜의 회차를 공개 API에서 새로 받는다(snapshot/fresh.py).
+        못 받아도 기존 스냅샷으로 실행한다. 프리셋·캐시·Claude SQL 모두 여기를 지난다.
 
         Claude가 쓴 SQL(claude_sql)은 screening 을 읽는 SELECT마다 `starts_at > :now` 를
         붙여 실행한다(data-model 6-1, #93 리뷰). 조건을 빼먹거나 지금보다 이른 시각과 비교해도
@@ -409,6 +422,8 @@ class ChatService:
             raise _Retry(f"SQL이 거부되었다({r.reason}): {r.message}", rejection) from r
         if claude_sql:
             validated = exclude_started(validated)
+        if refresh and self._refresher is not None and reads_seats(validated):
+            await self._refresher.ensure_fresh()
         timeout = min(self._s.sql_timeout_seconds, deadline - time.monotonic())
         if timeout <= 0:
             raise LlmUnavailable("TIMEOUT")

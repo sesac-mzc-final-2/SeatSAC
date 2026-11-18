@@ -105,16 +105,20 @@ class SnapshotStore:
     # --- 쓰기(적재기만) ---------------------------------------------------------
     def update(
         self,
-        scope: str,
+        scope: str | Sequence[str],
         tables: Sequence[str],
         mutate: Callable[[sqlite3.Connection], None],
     ) -> None:
         """현재 내용을 복사한 새 연결에 `mutate`로 바뀐 부분을 적재하고, 잠근 뒤 교체한다.
 
         `mutate`나 그 뒤 단계에서 예외가 나면 아무것도 바뀌지 않는다(이전 세대 유지).
+        `scope`를 여러 개 주면 그 범위들의 갱신 시각을 모두 이번 시각으로 적는다
+        (질문 시점 갱신이 모든 날짜의 회차를 한 번에 새로 받을 때).
         """
-        if scope not in SCOPES:
-            raise ValueError(f"unknown scope: {scope}")
+        scopes = (scope,) if isinstance(scope, str) else tuple(scope)
+        for name in scopes:
+            if name not in SCOPES:
+                raise ValueError(f"unknown scope: {name}")
         with self._write_lock:
             conn = sqlite3.connect(":memory:", check_same_thread=False)
             try:
@@ -129,18 +133,23 @@ class SnapshotStore:
                     mutate(conn)
                     conn.executemany(
                         schema.META_INSERT,
-                        [{"table_name": t, "scope": scope, "refreshed_at": stamp} for t in tables],
+                        [
+                            {"table_name": t, "scope": name, "refreshed_at": stamp}
+                            for t in tables
+                            for name in scopes
+                        ],
                     )
                 lock_connection(conn)
             except BaseException:
                 conn.close()
                 raise
-            self._publish(_Generation(conn), scope, moment)
+            self._publish(_Generation(conn), scopes, moment)
 
-    def _publish(self, new: _Generation, scope: str, moment: datetime) -> None:
+    def _publish(self, new: _Generation, scopes: tuple[str, ...], moment: datetime) -> None:
         with self._state_lock:
             old, self._current = self._current, new
-            self._refreshed[scope] = moment
+            for name in scopes:
+                self._refreshed[name] = moment
             if old is not None:
                 old.retired = True
                 if old.inflight == 0:

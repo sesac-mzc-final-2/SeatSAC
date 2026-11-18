@@ -304,3 +304,34 @@ def test_text_only_twice_falls_back_to_out_of_scope():
     body = ask(llm, "오늘 20시 이후 영화")
     assert body["path"] == "OUT_OF_SCOPE" and body["rows"] is None
     assert body["llm"]["calls"] == 2 and "세 편" not in body["answer"]
+
+
+class CountingRefresher:
+    def __init__(self):
+        self.calls = 0
+
+    async def ensure_fresh(self):
+        self.calls += 1
+        return True
+
+
+def _ask_with_refresher(llm, question):
+    refresher = CountingRefresher()
+    service = ChatService(loaded_store(), llm, Settings(_env_file=None), refresher=refresher)
+    body = asyncio.run(service.answer(question, now=NOW))
+    return body, refresher.calls
+
+
+def test_seat_sql_refreshes_screenings_first():
+    seats = "SELECT s.starts_at, s.remaining_seats FROM screening s ORDER BY s.remaining_seats DESC"
+    body, calls = _ask_with_refresher(
+        ScriptedLlm(tool("run_sql", sql=seats, explanation="x")), "잔여석 많은 회차"
+    )
+    assert body["path"] == "NL2SQL" and calls == 1
+
+
+def test_sql_without_seats_does_not_wait_for_refresh():
+    body, calls = _ask_with_refresher(
+        ScriptedLlm(tool("run_sql", sql=AFTER_20, explanation="x")), "오늘 20시 이후"
+    )
+    assert body["path"] == "NL2SQL" and calls == 0

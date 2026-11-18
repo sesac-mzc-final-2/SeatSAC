@@ -30,7 +30,7 @@ from seatsac_ai.snapshot.mapper import (
     screening_row,
     theater_row,
 )
-from seatsac_ai.snapshot.store import SnapshotStore
+from seatsac_ai.snapshot.store import SCOPES, SnapshotStore
 
 log = logging.getLogger(__name__)
 
@@ -158,12 +158,7 @@ class SnapshotLoader:
         today = now.date()
         fetched_at = format_minute(now)
 
-        theater_ids = self._theater_ids
-        if not theater_ids:  # other보다 먼저 돈 경우(기동 직후)
-            theaters = _map_rows(await self._client.list_theaters(), "theater", theater_row)
-            if not theaters:
-                raise SnapshotFetchError("theaters: 0건 — 비정상 응답으로 보고 이번 갱신을 버린다")
-            theater_ids = [t["theater_id"] for t in theaters]
+        theater_ids = await self._known_theater_ids()
         screenings = await self._fetch_screenings([today], theater_ids, fetched_at)
         today_text = today.isoformat()
 
@@ -178,7 +173,38 @@ class SnapshotLoader:
         await asyncio.to_thread(self._store.update, "today", ("screening",), mutate)
         log.info("snapshot today 갱신: 오늘 회차 %d", len(screenings))
 
+    # --- 질문 시점: 모든 날짜의 회차(잔여석) ------------------------------------------
+    async def refresh_all_screenings(self) -> None:
+        """오늘~(days-1)일 뒤 회차를 전부 새로 받아 screening 표를 통째로 바꾼다.
+
+        잔여석을 읽는 SQL을 실행하기 직전에 부른다(snapshot/fresh.py). 영화·극장은 시드라
+        바뀌지 않으므로 다시 받지 않는다. 두 범위(today·other)의 갱신 시각을 모두 지금으로 적어
+        답의 기준 시각(asOf)이 이번 갱신 시각이 되게 한다.
+        """
+        now = self._clock()
+        today = now.date()
+        fetched_at = format_minute(now)
+        theater_ids = await self._known_theater_ids()
+        days = [today + timedelta(days=i) for i in range(self._days)]
+        screenings = await self._fetch_screenings(days, theater_ids, fetched_at)
+
+        def mutate(conn):
+            conn.execute("DELETE FROM screening")
+            conn.executemany(schema.SCREENING_INSERT, screenings)
+
+        await asyncio.to_thread(self._store.update, SCOPES, ("screening",), mutate)
+        log.info("snapshot 질문 시점 갱신: %d일 회차 %d", len(days), len(screenings))
+
     # --- 공통 -----------------------------------------------------------------
+    async def _known_theater_ids(self) -> list[int]:
+        """10분 갱신이 받아 둔 극장 id. 아직 없으면(기동 직후) 극장 목록을 받는다."""
+        if self._theater_ids:
+            return self._theater_ids
+        theaters = _map_rows(await self._client.list_theaters(), "theater", theater_row)
+        if not theaters:
+            raise SnapshotFetchError("theaters: 0건 — 비정상 응답으로 보고 이번 갱신을 버린다")
+        return [t["theater_id"] for t in theaters]
+
     async def _fetch_screenings(
         self, days: list[date], theater_ids: list[int], fetched_at: str
     ) -> list[dict[str, Any]]:

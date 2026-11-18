@@ -41,9 +41,17 @@ class SeatRefresher:
         self._running: dict[_Key, asyncio.Task[Fresh]] = {}
 
     async def ensure_fresh(
-        self, days: Sequence[date] | None = None, theater_ids: Sequence[int] | None = None
+        self,
+        days: Sequence[date] | None = None,
+        theater_ids: Sequence[int] | None = None,
+        *,
+        timeout: float | None = None,
     ) -> Fresh:
-        """days·theater_ids 가 None 이면 그 축 전체."""
+        """days·theater_ids 가 None 이면 그 축 전체.
+
+        timeout = 이 질문이 기다릴 시간(요청 전체 기한까지 남은 시간). 없으면 설정값.
+        """
+        wait = self._timeout if timeout is None else min(self._timeout, timeout)
         key: _Key = (
             frozenset(days) if days is not None else None,
             frozenset(theater_ids) if theater_ids is not None else None,
@@ -55,11 +63,9 @@ class SeatRefresher:
             task.add_done_callback(lambda t, k=key: self._forget(k, t))
         try:
             # shield: 이 질문이 제한 시간으로 먼저 떠나도 갱신은 취소하지 않는다
-            return await asyncio.wait_for(asyncio.shield(task), self._timeout)
+            return await asyncio.wait_for(asyncio.shield(task), wait)
         except TimeoutError:
-            log.warning(
-                "질문 시점 갱신이 %.1f초 안에 끝나지 않아 기존 스냅샷으로 답한다", self._timeout
-            )
+            log.warning("질문 시점 갱신이 %.1f초 안에 끝나지 않아 기존 스냅샷으로 답한다", wait)
             return Fresh(ok=False)
 
     def _forget(self, key: _Key, task: asyncio.Task[Fresh]) -> None:

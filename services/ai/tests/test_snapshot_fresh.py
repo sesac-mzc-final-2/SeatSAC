@@ -81,6 +81,21 @@ def test_slow_refresh_gives_up_after_timeout_but_keeps_running():
     assert run(scenario()).ok is False  # 질문은 0.05초만 기다린다
 
 
+def test_question_waits_no_longer_than_its_remaining_deadline():
+    """설정은 2초여도 요청 기한까지 남은 시간(0.05초)만 기다린다."""
+
+    async def scenario():
+        refresher = SeatRefresher(FakeRefresh(delay=0.2), timeout=2)
+        started = asyncio.get_running_loop().time()
+        fresh = await refresher.ensure_fresh([TOMORROW], [4], timeout=0.05)
+        waited = asyncio.get_running_loop().time() - started
+        await next(iter(refresher._running.values()))
+        return fresh, waited
+
+    fresh, waited = run(scenario())
+    assert fresh.ok is False and waited < 0.2
+
+
 def test_concurrent_questions_on_the_same_range_share_one_refresh():
     async def scenario():
         refresh = FakeRefresh(delay=0.05)

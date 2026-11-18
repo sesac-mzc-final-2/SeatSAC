@@ -101,6 +101,11 @@ SEAT_UNKNOWN_NOTE = (
     " 일부 회차는 잔여석을 확인하지 못했습니다(확인 불가). 잠시 후 다시 물어봐 주세요."
 )
 SEAT_STALE_NOTE = " 잔여석을 지금 새로 확인하지 못해 마지막으로 받은 값입니다."
+SEAT_PARTIAL_NOTE = " 오늘이 아닌 날짜의 잔여석은 최대 10분 전 값일 수 있습니다."
+CLARIFY_CONFIRM_HINT = "날짜·극장·영화를 한 문장에 하나씩만 넣어 다시 물어봐 주세요."
+_REFRESH_MAX_DAYS = 2  # 질문 시점 갱신은 날짜 2개까지(× 극장 4 = catalog 최대 8번)
+_CHOICE_MESSAGE_MAX = 300  # 계약 Choice.message maxLength
+_CHOICES_MAX = 7  # 계약 ChatResponse.choices maxItems
 _RELATIVE_WORDS = ("오늘", "내일", "모레")
 _WEEKDAYS = "월화수목금토일"
 _CLARIFY_REPLY_MAX = 15  # 되묻기 뒤 이 길이 이하의 답("내일")은 원래 질문에 붙여 다시 처리한다
@@ -151,12 +156,14 @@ class _Ran:
     """실행 결과 + 잔여석 정보.
 
     seats = 잔여석을 읽은 SQL이면 그 조건, fresh = 질문 시점 갱신 결과.
+    partial = 갱신 범위를 줄였다(날짜를 읽지 못했거나 너무 많음).
     """
 
     sql: str
     result: QueryResult
     seats: Conditions | None = None
     fresh: Fresh | None = None
+    partial: bool = False  # 조회 범위 일부만 새로 받았다(나머지는 주기 갱신 값)
 
 
 @dataclass(frozen=True)
@@ -218,8 +225,13 @@ class ChatService:
         if cache is not None and user_id is not None:
             sid, previous = await cache.load_session(user_id, session_id)
         if previous is not None and previous.get("path") == "CLARIFY":
-            # 되묻기에 짧게 답했으면("내일") 원래 질문에 붙인다. 버튼은 완성된 질문을 보낸다
-            if len(question.strip()) <= _CLARIFY_REPLY_MAX and not is_followup(question):
+            # 되묻기에 짧게 답했으면("내일") 원래 질문에 붙인다. 버튼은 완성된 질문을 보내므로
+            # 원래 질문이 이미 들어 있으면 붙이지 않는다(짧은 질문의 버튼이 두 번 붙었다, #140 리뷰)
+            if (
+                len(question.strip()) <= _CLARIFY_REPLY_MAX
+                and not is_followup(question)
+                and previous["question"] not in question
+            ):
                 question = f"{question.strip()} {previous['question']}"
             previous = None
         follow_up = previous is not None and is_followup(question)
@@ -531,9 +543,15 @@ class ChatService:
         if ask is not None:
             self._check(conditions, ask)
         fresh: Fresh | None = None
+        partial = False
         if refresh and self._refresher is not None and conditions.reads_seats:
-            days, theater_ids = self._refresh_range(conditions)
-            fresh = await self._refresher.ensure_fresh(days, theater_ids)
+            days, theater_ids, partial = self._refresh_range(conditions, params)
+            # 갱신 대기도 요청 전체 기한 안에서만(실행 계약 9-1 시간 예산, #140 리뷰)
+            budget = min(self._s.snapshot_refresh_timeout_seconds, deadline - time.monotonic())
+            if budget > 0:
+                fresh = await self._refresher.ensure_fresh(days, theater_ids, timeout=budget)
+            else:
+                fresh = Fresh(ok=False)  # 남은 시간이 없으면 기존 스냅샷으로 답한다
         timeout = min(self._s.sql_timeout_seconds, deadline - time.monotonic())
         if timeout <= 0:
             raise LlmUnavailable("TIMEOUT")
@@ -547,7 +565,7 @@ class ChatService:
                 raise _Retry(e.message, {"reason": TIMEOUT, "final": True}) from e
             raise _Retry(f"SQL 실행 오류: {e.message}", {"reason": SQL_ERROR}) from e
         seats = conditions if conditions.reads_seats else None
-        return _Ran(validated.sql, _hide_seat_source(result), seats, fresh)
+        return _Ran(validated.sql, _hide_seat_source(result), seats, fresh, partial)
 
     # --- 의미 검사 · 되묻기 · 잔여석 범위 ----------------------------------------
 
@@ -583,14 +601,26 @@ class ChatService:
                 {"reason": CONDITION_MISMATCH, "message": "질문의 조건과 다른 조회입니다."},
             )
 
-    def _refresh_range(self, conditions: Conditions) -> tuple[list[date] | None, list[int] | None]:
-        """잔여석을 새로 받을 날짜 × 극장. 조건을 읽지 못한 축은 None(전체)."""
+    def _refresh_range(
+        self, conditions: Conditions, params: dict[str, Any]
+    ) -> tuple[list[date], list[int] | None, bool]:
+        """잔여석을 새로 받을 날짜 × 극장, 그리고 범위를 줄였는지(partial).
+
+        날짜는 항상 정한다 — 읽지 못했으면(범위 비교·OR) 오늘만, 많으면 앞의 2개만 새로 받고
+        나머지는 주기 갱신 값으로 답하며 답 문장에 알린다. 7일 × 극장 전부(28번)를 다시 받지
+        않는다(#140 리뷰). 극장 조건을 읽지 못하면 None(극장 전부).
+        """
         days: list[date] | None = None
         if conditions.dates is not None:
             try:
                 days = sorted(date.fromisoformat(d) for d in conditions.dates)
             except ValueError:
                 days = None
+        partial = False
+        if not days:
+            days, partial = [date.fromisoformat(params["today"])], True
+        elif len(days) > _REFRESH_MAX_DAYS:
+            days, partial = days[:_REFRESH_MAX_DAYS], True
         ids: set[int] = set(conditions.theater_ids or ())
         if conditions.theaters is not None:
             with self._store.reader() as conn:
@@ -598,7 +628,7 @@ class ChatService:
             for theater_id, name in theaters:
                 if any(m.accepts(name) for m in conditions.theaters):
                     ids.add(theater_id)
-        return days, (sorted(ids) or None)
+        return days, (sorted(ids) or None), partial
 
     def _theater_id(self, name: str) -> int | None:
         with self._store.reader() as conn:
@@ -606,9 +636,9 @@ class ChatService:
         return row[0] if row else None
 
     def _clarify_date(self, ask: _Ask) -> dict[str, Any]:
-        """날짜를 고르는 버튼. 누르면 「날짜 말 + 원래 질문」을 그대로 다시 보낸다."""
+        """날짜를 고르는 버튼(최대 7개). 누르면 「날짜 말 + 원래 질문」을 그대로 다시 보낸다."""
         choices = []
-        for offset in range(self._s.snapshot_days):
+        for offset in range(min(self._s.snapshot_days, _CHOICES_MAX)):
             day = ask.today + timedelta(days=offset)
             short = f"{day.month}/{day.day}({_WEEKDAYS[day.weekday()]})"
             if offset < len(_RELATIVE_WORDS):
@@ -617,11 +647,19 @@ class ChatService:
             else:
                 word = f"{day.month}월 {day.day}일"
                 label = short
-            choices.append({"label": label, "message": f"{word} {ask.question}"})
+            message = f"{word} {ask.question}"
+            if len(message) > _CHOICE_MESSAGE_MAX:
+                # 300자를 넘으면 날짜 말만 보낸다 — 서버가 원래 질문에 붙여 처리한다
+                message = word
+            choices.append({"label": label, "message": message})
         return _clarify(CLARIFY_DATE_ANSWER, choices, self._as_of())
 
     def _clarify_confirm(self, ask: _Ask) -> dict[str, Any]:
-        """조건을 반영한 SQL을 끝내 못 만들었다 — 이해한 조건을 보여 주고 다시 찾을지 묻는다."""
+        """조건을 반영한 SQL을 끝내 못 만들었다 — 이해한 조건을 보여 주고 다시 물어 달라고 한다.
+
+        버튼은 주지 않는다. 같은 질문을 다시 보내면 같은 이유로 또 걸려 Claude 3회만 더 쓴다
+        (#140 리뷰).
+        """
         parts = []
         for day in ask.days():
             d = date.fromisoformat(day)
@@ -630,11 +668,8 @@ class ChatService:
             if kind in ask.ext.slots:
                 parts.append(str(ask.ext.slots[kind].value))
         summary = " · ".join(parts) or "질문하신 조건"
-        answer = (
-            f"{summary} 조건을 정확히 반영한 조회를 만들지 못했어요. 이 조건으로 다시 찾아볼까요?"
-        )
-        choices = [{"label": "네, 다시 찾기", "message": ask.question}]
-        return _clarify(answer, choices, self._as_of())
+        answer = f"{summary} 조건을 정확히 반영한 조회를 만들지 못했어요. {CLARIFY_CONFIRM_HINT}"
+        return _clarify(answer, [], self._as_of())
 
     def _resolve_preset(self, raw: dict[str, Any]) -> tuple[Preset, dict[str, Any]]:
         preset = self._presets.get(str(raw.get("presetId")))
@@ -1014,6 +1049,8 @@ def _seat_note(ran: _Ran) -> str:
     if ran.seats is None:
         return ""
     note = SEAT_STALE_NOTE if ran.fresh is not None and not ran.fresh.ok else ""
+    if not note and ran.partial:
+        note = SEAT_PARTIAL_NOTE
     result = ran.result
     seat_index = [i for i, c in enumerate(result.columns) if c["name"] in ran.seats.seat_outputs]
     unknown_shown = any(row[i] is None for row in result.rows for i in seat_index)

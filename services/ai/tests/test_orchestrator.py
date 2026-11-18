@@ -318,10 +318,12 @@ class FakeRefresher:
 
     def __init__(self, fresh=None):
         self.calls = []
+        self.timeouts = []
         self.fresh = fresh or Fresh(ok=True, at=datetime(2026, 11, 17, 19, 41, tzinfo=KST))
 
-    async def ensure_fresh(self, days=None, theater_ids=None):
+    async def ensure_fresh(self, days=None, theater_ids=None, *, timeout=None):
         self.calls.append((days, theater_ids))
+        self.timeouts.append(timeout)
         return self.fresh
 
 
@@ -346,6 +348,7 @@ def test_seat_question_refreshes_only_that_day_and_theater():
     )
     assert body["path"] == "NL2SQL"
     assert refresher.calls == [([date(2026, 11, 17)], [10])]  # 호출 범위 1칸
+    assert 0 < refresher.timeouts[0] <= 2.0  # 설정값과 남은 기한 중 짧은 쪽
     assert body["asOf"] == "2026-11-17T19:41:00+09:00"  # 방금 받은 시각
     assert "(19시 41분 기준)" in body["answer"]
 
@@ -417,7 +420,8 @@ def test_condition_still_wrong_after_retries_asks_the_user_to_confirm():
     body, _ = _ask_with(llm, "내일 상영 영화")
     assert body["path"] == "CLARIFY" and body["llm"]["calls"] == 3
     assert body["answer"].startswith("11/18(수) 조건을 정확히 반영한 조회를 만들지 못했어요")
-    assert body["choices"] == [{"label": "네, 다시 찾기", "message": "내일 상영 영화"}]
+    # 같은 질문을 다시 보내는 버튼은 주지 않는다 — 같은 이유로 또 걸린다(#140 리뷰)
+    assert body["answer"].endswith("다시 물어봐 주세요.") and body["choices"] == []
 
 
 def test_unreadable_condition_is_not_blocked():
@@ -428,6 +432,39 @@ def test_unreadable_condition_is_not_blocked():
     )
     body, _ = _ask_with(ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), "내일 상영 영화")
     assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 1
+
+
+def test_seat_sql_with_a_date_range_refreshes_today_only():
+    """날짜를 범위로 쓰면 읽지 못한다 → 7일 × 극장 전부가 아니라 오늘만 새로 받고 알린다."""
+    sql = SEATS_JOINS + "WHERE s.business_date >= '2026-11-17' ORDER BY s.remaining_seats DESC"
+    body, refresher = _ask_with(
+        ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), "이번 주 자리 많은 회차"
+    )
+    assert body["path"] == "NL2SQL"
+    assert refresher.calls == [([date(2026, 11, 17)], None)]  # 오늘 × 극장 전부(4번)
+    assert "오늘이 아닌 날짜의 잔여석은 최대 10분 전 값" in body["answer"]
+
+
+def test_seat_sql_with_many_dates_refreshes_the_first_two():
+    days = "', '".join(f"2026-11-{d}" for d in (17, 18, 19, 20))
+    sql = SEATS_JOINS + f"WHERE s.business_date IN ('{days}') AND t.name = '건대입구'"
+    body, refresher = _ask_with(
+        ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), "건대입구 자리 많은 회차"
+    )
+    assert refresher.calls == [([date(2026, 11, 17), date(2026, 11, 18)], [10])]
+    assert "오늘이 아닌 날짜의 잔여석은 최대 10분 전 값" in body["answer"]
+
+
+def test_date_buttons_stay_within_the_contract():
+    """버튼은 최대 7개, message 는 300자 이하 — 넘으면 날짜 말만 보낸다."""
+    sql = SEATS_JOINS + "ORDER BY s.remaining_seats DESC LIMIT 3"
+    long_question = "잔여석 많은 회차 " + "아" * 289
+    body, _ = _ask_with(
+        ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), long_question, snapshot_days=9
+    )
+    assert body["path"] == "CLARIFY" and len(body["choices"]) == 7
+    assert [c["message"] for c in body["choices"][:2]] == ["오늘", "내일"]
+    assert all(len(c["message"]) <= 300 for c in body["choices"])
 
 
 def test_unknown_seats_are_marked_in_the_answer():

@@ -62,7 +62,7 @@ paths:
             답. `path`로 처리 경로를 구분하고 화면은 `answer` 문장 + `columns`/`rows` 표 + "`asOf` 기준"을 보여준다.
             `llm.calls`가 0이면 Claude API를 부르지 않은 것(캐시·내 예매) — 데모 화면에 그대로 표시.
             `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)·`CLARIFY`(되묻기)도 200이며 `columns`·`rows`는 null.
-            `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다.
+            `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다(버튼 없이 안내 문장만 올 수도 있다 — 빈 배열).
             `sql`은 `REJECTED`일 때 거부된 SQL(화면은 보여주지 않아도 됨), `OUT_OF_SCOPE`는 null.
           content:
             application/json:
@@ -277,7 +277,7 @@ components:
           type: [array, "null"]
           maxItems: 7
           items: { $ref: "#/components/schemas/Choice" }
-          description: "CLARIFY일 때만 버튼 목록. 그 밖은 null"
+          description: "CLARIFY일 때만 버튼 목록(날짜 고르기 최대 7개, 조건을 다시 말해 달라는 안내는 빈 배열). 그 밖은 null"
 
     Choice:
       type: object

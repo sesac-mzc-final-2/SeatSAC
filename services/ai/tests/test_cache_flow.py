@@ -416,3 +416,21 @@ def test_short_reply_to_a_date_question_is_joined_with_the_original():
     second = ask(service, "내일", session_id=first["sessionId"])
     assert "질문: 내일 잔여석 많은 회차" in llm.requests[1]["messages"][0]["content"]
     assert second["path"] == "NL2SQL"
+
+
+def test_date_button_for_a_short_question_is_not_joined_twice():
+    """버튼은 완성된 질문(12자)을 보낸다 — 원래 질문을 또 붙이지 않는다(#140 리뷰)."""
+    seats = (
+        "SELECT s.starts_at, s.remaining_seats FROM screening s "
+        "WHERE s.business_date = '2026-11-18' ORDER BY s.remaining_seats DESC"
+    )
+    llm = ScriptedLlm(tool("ask_user", missing="date"), tool("run_sql", sql=seats, explanation="x"))
+    service, _ = make(llm)
+    first = ask(service, "잔여석 많은 회차")
+    button = first["choices"][1]["message"]
+    assert button == "내일 잔여석 많은 회차"
+    second = ask(service, button, session_id=first["sessionId"])
+    sent = llm.requests[1]["messages"][0]["content"]
+    assert "질문: 내일 잔여석 많은 회차" in sent
+    assert "잔여석 많은 회차 잔여석 많은 회차" not in sent
+    assert second["path"] == "NL2SQL"

@@ -276,7 +276,7 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
-| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection}` — 모든 필드가 항상 있고 해당 없으면 null. `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖도 **200**(`REJECTED`는 `rejection {reason, message, object?}`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices}` — 모든 필드가 항상 있고 해당 없으면 null. `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖·되묻기도 **200**(`REJECTED`는 `rejection {reason, message, object?}`, `CLARIFY`는 `choices [{label, message}]` 버튼 0~7개 — 누르면 `message`를 같은 `sessionId`로 보낸다). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용) |
 | ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` — 버튼을 누르면 화면이 빈칸(시각·개수는 입력창에서 고치기, 극장·영화·날짜·등급은 고르는 버튼)을 사용자가 정하게 한 뒤 질문 문장을 `POST /ai/chat`의 `message`로 보낸다. 빈칸이 없는 질문과 화면이 모르는 프리셋은 `example`을 그대로. 화면은 **챗봇 창을 열 때** 이 API를 불러(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5) 404면 「준비 중」 안내 뒤 챗봇 버튼 숨김, 503이면 비활성 안내 |
 
 #### 내부 (`http://{service}:8080/internal/**`)
@@ -480,7 +480,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | `catalog_seat_counts_fallback_total` | counter | — | catalog | 300ms 초과 대체 횟수 |
 | `payment_request_total` | counter | `result`=`approved`·`declined`·`processing`·`canceled` | payment | 모의 결제 결과 분포(OPS-05). 자동 롤백은 booking 쪽 `booking_payment_call_total`을 쓴다 |
 | `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
-| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모** |
+| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다 |
 | ⚠️AI `ai_tokens_total` | counter | `kind`=`input`·`output`·`cache_read`·`cache_write`, `path` | ai | 토큰 사용량. 절감 그래프는 `input+output`(우리 캐시 효과), 프롬프트 캐싱은 `cache_read`로 **따로** 표시 |
 | ⚠️AI `ai_cache_requests_total` | counter | `layer`=`exact`·`semantic`, `result`=`hit`·`miss` | ai | 캐시 적중률 |
 | ⚠️AI `ai_llm_call_seconds` | histogram | `result`=`ok`·`timeout`·`overloaded`·`rate_limited`·`error` | ai | Claude API 지연·장애 |
@@ -593,6 +593,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `APP_AI_PROMPT_CACHE_ENABLED` | `true` | 스키마 설명(system)에 프롬프트 캐싱. 지표 `kind=cache_read`로 따로 |
 | `APP_AI_SQL_TIMEOUT_SECONDS` / `APP_AI_MAX_ROWS` | `5` / `500` | progress handler로 5초 중단(전체 기한이 더 짧으면 그쪽), `fetchmany(500)`. 읽기 전용 방식은 9-2 |
 | `APP_AI_SNAPSHOT_TODAY_INTERVAL` / `APP_AI_SNAPSHOT_OTHER_INTERVAL` / `APP_AI_SNAPSHOT_DAYS` | `60s` / `600s` / `7` | 오늘 회차 1분, 나머지 10분, 오늘~+6일 |
+| `APP_AI_SNAPSHOT_REFRESH_ON_CHAT` / `APP_AI_SNAPSHOT_REFRESH_TIMEOUT_SECONDS` | `true` / `2.0` | 질문 시점 잔여석 갱신: SQL이 `remaining_seats`를 읽으면 실행 직전에 **그 SQL의 날짜 × 극장** 회차만 새로 받는다(SQL 조건 분석기 `sql/conditions.py`, 극장 조건이 없으면 극장 전부). 날짜는 2개까지 — 날짜 조건을 읽지 못하면(범위 비교·OR) 오늘만, 3개 이상이면 앞의 2개만 새로 받고 나머지는 주기 갱신 값으로 답하며 답 문장에 알린다(catalog 호출 최대 8번). 같은 범위 동시 질문은 한 번만, 확인 불가(TOTAL)가 섞이면 한 번 더. 2초 안에 못 받거나 실패하면 기존 스냅샷으로 답하고 답 문장에 알린다. 잔여석은 물었을 때만 SELECT 하고, 날짜가 없으면 되묻는다(`CLARIFY`) |
 | `APP_AI_CACHE_TTL` / `APP_AI_SESSION_TTL` | `1h` / `30m` | |
 | `APP_AI_CACHE_WARM_PRESETS` | `true` | 프리셋 `phrasings`(버튼 질문 말투)를 기동 때·캐시 TTL 절반마다 정확 일치·의미 캐시에 넣는다(`cache/warm.py`). 버튼 질문은 첫 사용자부터 토큰 0. 끄면 첫 질문은 Claude. 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_SEMANTIC_CACHE_ENABLED` / `APP_AI_SEMANTIC_THRESHOLD` | `true` / `0.92` | rc2까지 의미 캐시가 안 되면 `false`로 정확 일치 캐시만(B1) |
@@ -607,6 +608,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | gateway `/api/ai/**` 라우트 `response-timeout` | **28초** (`28000`) | 503 `SERVICE_UNAVAILABLE`(`details[{field: service, value: ai, reason: UPSTREAM_TIMEOUT}]`) — gateway는 하위 서비스의 연결 실패·시간 초과를 모두 503으로 준다(3.3.1, `GatewayErrorHandler`). ai 파드가 없을 때는 같은 503에 `reason` `UPSTREAM_UNAVAILABLE` |
 | ai 요청 전체 기한 `APP_AI_REQUEST_DEADLINE_SECONDS` | **25초** | 503 `AI_LLM_UNAVAILABLE` `TIMEOUT` — 정상 경로에서는 여기서 먼저 끝나 화면이 ai의 오류 형식을 받는다 |
 | └ Claude 호출 1회 | min(15초, 남은 시간) × 최대 3회 | 다음 호출 없이 위 503 |
+| └ 잔여석 갱신 1회 | min(2초, 남은 시간) | 기존 스냅샷으로 답하고 답 문장에 알린다(남은 시간이 없으면 갱신하지 않는다) |
 | └ SQLite 실행 1회 | min(5초, 남은 시간) | `REJECTED` 또는 SQL 오류 재요청 |
 | `ai:inflight:{userId}` 잠금 | 40초 | 25초 기한보다 길어 처리 중 풀리지 않는다 |
 

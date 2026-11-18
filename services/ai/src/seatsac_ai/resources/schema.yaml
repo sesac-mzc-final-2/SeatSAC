@@ -45,7 +45,7 @@ tables:
       has_layout: 좌석 배치도 여부. 이 표에서는 항상 1이라 조건에 쓰지 않는다
 
   screening:
-    description: 상영 회차 한 번 = 한 줄. 오늘부터 6일 뒤까지, 아직 시작하지 않은 회차만 있다.
+    description: 상영 회차 한 번 = 한 줄. 아직 시작하지 않은 회차만 있다. 날짜는 길어야 오늘부터 6일 뒤까지이고, 실제로 있는 범위는 질문 위 '회차 데이터'에 주어진다. 그 밖의 날짜를 물으면 explanation 에 어느 날짜까지만 본 것인지 적는다.
     columns:
       screening_id: 회차 ID
       movie_id: 상영 영화 → movie.movie_id

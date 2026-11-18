@@ -1,4 +1,4 @@
-"""프리셋 12개: 모양·검증 통과·실제 실행 결과(값을 아는 스냅샷 기준)."""
+"""프리셋 13개: 모양·검증 통과·실제 실행 결과(값을 아는 스냅샷 기준)."""
 
 import re
 
@@ -14,22 +14,23 @@ from .sql_fixtures import SYSTEM, loaded_store
 CASES = {
     "today_after_time": ({"time": "20:00"}, 4),
     "theater_schedule": ({"date": "2026-11-18", "theater": "건대입구"}, 2),
-    "movie_theaters": ({"movie": "철의 심장"}, 3),
+    "movie_theaters": ({"movie": "철의 심장"}, 4),
     "most_remaining_today": ({"n": 2}, 2),
     "almost_sold_out_today": ({}, 1),
     "movies_on_date": ({"date": "2026-11-17"}, 4),
     "screen_type_today": ({}, 2),
     "movie_next_screening": ({"movie": "별의 항해"}, 1),
     "late_night_today": ({}, 2),
+    "morning_today": ({}, 1),  # 10번(11/19 09:30)만. 8번 11/18 10:00은 10시라 조조 아님
     "movie_runtime": ({"movie": "철의 심장"}, 1),
     "movies_by_view_grade": ({"grade": "ALL"}, 1),
     "theater_counts_today": ({}, 2),
 }
 
 
-def test_twelve_unique_presets():
+def test_thirteen_unique_presets():
     ids = [p.preset_id for p in presets()]
-    assert len(ids) == 12 and len(set(ids)) == 12
+    assert len(ids) == 13 and len(set(ids)) == 13
     assert set(ids) == set(CASES)
 
 

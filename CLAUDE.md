@@ -352,7 +352,7 @@
 | 헬스 | `management.endpoint.health.probes.enabled=true`. readiness 그룹 = `readinessState,db` (gateway는 `readinessState`만). liveness에 외부 의존 넣지 않음 | 프로브(아래 2장) |
 | 메트릭 | `micrometer-registry-prometheus`, `/actuator/prometheus` 노출, 공통 태그 `application={svc}`. `http.server.requests` 히스토그램 켜기(`management.metrics.distribution.percentiles-histogram.http.server.requests=true`) | PodMonitor `{svc}`(라벨 `app.kubernetes.io/name`, 포트 `http`, 15초, 파드 라벨 `rollouts-pod-template-hash`를 메트릭에 붙임). ServiceMonitor는 active·preview Service가 같은 파드를 두 번 수집해서 쓰지 않는다 |
 | 종료 | `server.shutdown=graceful`, `spring.lifecycle.timeout-per-shutdown-phase=20s`. booking은 SIGTERM 때 SSE 연결을 정상 종료 | `preStop: sleep 5`, `terminationGracePeriodSeconds: 35` |
-| 로그 | stdout JSON 한 줄(`libs/common-web` logback). 파일 로그 금지 | `kubectl logs`로 traceId 검색. 3.1.24(ADR-113 가번호, 런북 6-J — 발표 뒤 적용) 뒤에는 Grafana Explore(Loki)에서 `{namespace="cinema-staging"} \| json \| traceId="…"` 한 줄로 모든 서비스 로그를 시각순으로 본다(Alloy 수집, S3 7일 보존, 지워진 파드 로그도 남음, `clientIp`는 가림) |
+| 로그 | stdout JSON 한 줄(`libs/common-web` logback). 파일 로그 금지 | `kubectl logs`로 traceId 검색. 3.1.24(ADR-113 가번호, 런북 6-J) 적용 뒤에는 Grafana Explore(Loki)에서 `{namespace="cinema-staging"} \| json \| traceId="…"` 한 줄로 모든 서비스 로그를 시각순으로 본다(Alloy 수집, S3 7일 보존, 지워진 파드 로그도 남음, `clientIp`는 가림) |
 | 공통 코드 | `libs/common-core`·`common-web` 의존 → 오류 형식·traceId·`@CurrentUser`·내부 호출 클라이언트 자동 적용 | `libs/**` 변경 시 `pr-check`가 5개 전부 테스트, 배포는 안 함 |
 | 시간 | JDBC URL에 `connectionTimeZone=UTC`, `Clock.systemUTC()` 주입 | RDS 파라미터 그룹 `time_zone=UTC` |
 | 설정 주입 | 아래 3장 이름만 읽는다. 기본값은 `application-local.yml`에만. `${DB_HOST}` 같은 자리 표시는 Spring이 기동 때 치환한다(앱 코드 변경 없음) | `envFrom`: ConfigMap `cinema-infra-endpoints`(Terraform, 엔드포인트) + `{svc}-config`(gitops) + Secret `{svc}-secrets` |
@@ -566,7 +566,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] ⚠️AI gitops `base/ai`(Deployment·Service·NetworkPolicy·PodMonitor, HPA·Flyway Job 없음) · `overlays/staging/ai` · `np-check.sh` · 저장소 변수 `AI_BUILD_PUSH_ENABLED=true` (3.1.20). CI(`changed-services.sh`·`pr-check` `python`·`build-push` ai)는 #79에서 먼저
 - [ ] ⚠️AI gateway 분석 쿼리 `uri!~"/ai.*"` (3.1.21, **rc1 전**)
 - [ ] ⚠️AI AI 대시보드 `SeatSAC AI` + 런북 6-G(켜기·끄기·질의 금지 구간) (3.1.22, gitops `observability/dashboards/seatsac-ai.json` — 코드 11/17 · **런북 6-G-8 확인 후 체크**)
-- [ ] 로그 저장소 Loki·수집 Alloy·Grafana 데이터소스 `loki` · S3 `cinema-staging-loki-{계정ID}`(보존 7일·수명 주기 14일)·Pod Identity `cinema-staging-loki-pod`(monitoring/loki)·ConfigMap `monitoring/loki-storage` (3.1.24, ADR-113 가번호, `envs/staging/loki.tf`·`envs/staging-k8s/loki.tf`·gitops `platform/{loki,alloy}` — 코드 11/18 · **발표 뒤 런북 6-J 적용·확인 후 체크**)
+- [ ] 로그 저장소 Loki·수집 Alloy·Grafana 데이터소스 `loki` · S3 `cinema-staging-loki-{계정ID}`(보존 7일·수명 주기 14일)·Pod Identity `cinema-staging-loki-pod`(monitoring/loki)·ConfigMap `monitoring/loki-storage` (3.1.24, ADR-113 가번호, `envs/staging/loki.tf`·`envs/staging-k8s/loki.tf`·gitops `platform/{loki,alloy}` — 코드 11/18 · **런북 6-J 적용·확인 후 체크**)
 
 ### 9. ⚠️AI ai 서비스 (Python, ADR-82~87)
 
@@ -810,7 +810,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 46 | GitHub Actions → AWS OIDC. 역할 `cinema-gha-ecr-push`·`cinema-gha-tf-plan`·`cinema-gha-frontend-deploy`·`cinema-gha-cluster-schedule`(3.1.14). CI는 apply 안 함 | `infra/terraform/global` |
 | 47 | 팀 접근: IAM 역할 + MFA(Identity Center 미사용). `cinema-admin` = 김종식 + **백업 남궁일**, `cinema-developer` = 전원. 프로필 `seatsac-user`·`cinema-dev`·`cinema-admin` | 회의록3 |
 | 74 | ⚠️ `SeatSAC-gitops` **Public**(GitHub 무료 플랜은 Private 레포에 ruleset을 적용하지 않음). 계정 ID·엔드포인트는 gitops에 두지 않는다: 엔드포인트 = Terraform ConfigMap `cinema-infra-endpoints` + `${키}`, ECR 레지스트리 = Terraform이 만드는 서비스 ArgoCD Application의 `kustomize.images`, gitops에는 태그만. ArgoCD는 HTTPS로 읽음(자격 증명 없음) | 10/25. 대안: Private + ruleset 없이 운영(직접 push 위험), 유료 플랜 |
-| 113 (가번호) | 로그 저장소 **Loki**(SingleBinary 1개, 청크·인덱스 S3 `cinema-staging-loki-{계정ID}` — EBS CSI가 없어 PVC 대신 S3, Pod Identity `cinema-staging-loki-pod`, 보존 7일·수명 주기 14일) + 수집 **Alloy**(파드 1개가 Kubernetes API로 `cinema-staging` 파드 로그만 읽음 — DaemonSet·hostPath 없음, Role 범위, gateway `clientIp`는 저장 전 `***`). 라벨은 `namespace`·`app`·`container`·`pod`만(traceId·userId는 `| json`). 버킷 이름은 계정 ID가 들어가 Terraform ConfigMap `monitoring/loki-storage` → Loki `-config.expand-env`. Grafana 데이터소스 uid `loki`. 알림 Lambda 로그는 CloudWatch 그대로. **적용은 발표(11/20) 뒤** — 새 파드 2개가 측정·시연 환경을 바꾸지 않게(런북 6-J) | 10 보완. 노션 등록 후 번호 확정 |
+| 113 (가번호) | 로그 저장소 **Loki**(SingleBinary 1개, 청크·인덱스 S3 `cinema-staging-loki-{계정ID}` — EBS CSI가 없어 PVC 대신 S3, Pod Identity `cinema-staging-loki-pod`, 보존 7일·수명 주기 14일) + 수집 **Alloy**(파드 1개가 Kubernetes API로 `cinema-staging` 파드 로그만 읽음 — DaemonSet·hostPath 없음, Role 범위, gateway `clientIp`는 저장 전 `***`). 라벨은 `namespace`·`app`·`container`·`pod`만(traceId·userId는 `| json`). 버킷 이름은 계정 ID가 들어가 Terraform ConfigMap `monitoring/loki-storage` → Loki `-config.expand-env`. Grafana 데이터소스 uid `loki`. 알림 Lambda 로그는 CloudWatch 그대로. **발표 전(11/18~19) 적용** — 시연·측정·녹화가 없는 시간에, 머지 마감(11/20 07:00) 전. 새 파드 2개는 requests 합 250m·640Mi로 작고 서비스 경로 밖이다. 이미 잰 p95·HPA는 Loki 없는 환경 기준으로 그대로 둔다(런북 6-J) | 10 보완. 노션 등록 후 번호 확정 |
 
 ### 5. 인증·화면·코드·프로세스
 

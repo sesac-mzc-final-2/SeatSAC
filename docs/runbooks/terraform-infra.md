@@ -1650,9 +1650,11 @@ kubectl -n cinema-staging get secret booking-secrets -o json | jq -r '.data.APP_
 - 모의 결제 키: k6 `deploy` 시나리오는 `run-in-cluster.sh`가 `booking-secrets`를 `secretKeyRef`로 넣는다(값을 꺼내지 않는다). 블루/그린 분석 Job은 지금 결제 경로가 없어 바꿀 것 없음 — 넣으려면 `SMOKE_PAY_SCREENING_ID`가 **미래 회차**여야 한다(시작 5분 전 마감 → 지나면 모든 booking 배포 abort)
 - 발표 후 Public 전환 전: 포트원 API Secret·웹훅 시크릿 폐기(포트원 콘솔)
 
-### 6-J. 로그 저장소 Loki · 수집 Alloy (3.1.24, ADR-113 가번호) — ⬜ 발표(11/20) 뒤 적용
+### 6-J. 로그 저장소 Loki · 수집 Alloy (3.1.24, ADR-113 가번호) — ⬜ 발표 전(11/18~19) 적용
 
-> **발표 전에는 적용하지 않는다.** monitoring에 파드 2개(Loki 200m·512Mi, Alloy 50m·128Mi)가 새로 떠 노드 자원이 바뀐다 — 이미 잰 p95·HPA 장면과 녹화 환경을 바꾸지 않게. 발표에서는 「개선 계획」으로 소개하고, 그때까지 traceId 조회는 `kubectl logs`(서비스별)로 한다.
+> **언제**: 시연·측정·녹화(5.1.4~5.1.6·리허설, k6, 블루/그린)가 돌지 않는 시간에, 스크럼에 「Loki 적용 ○시」를 공유하고 한다. 머지 마감은 **11/20 07:00**(블루/그린 아님 — 그 밖의 변경). 적용 뒤 녹화가 남아 있으면 6-J-2 확인까지 끝낸 다음에 시작한다.
+> **영향**: monitoring에 파드 2개(Loki 200m·512Mi·한도 1Gi, Alloy 50m·128Mi·한도 256Mi — requests 합 250m·640Mi, t3.xlarge 2대 기준 약 3%·4%)가 새로 뜬다. 서비스 요청 경로 밖이라 앱 응답에는 끼지 않는다. Alloy는 Kubernetes API로 로그를 읽으므로 API 서버 요청이 조금 는다. 이미 잰 p95·HPA 장면은 Loki 없는 환경 기준으로 그대로 둔다(다시 재지 않는다).
+> **발표 중 문제가 생기면**: gitops PR revert 하나로 `loki`·`alloy`가 지워진다(서비스·대시보드·신호등 영향 없음, 6-J-3). Terraform 리소스(버킷·역할·ConfigMap)는 남겨도 아무것도 하지 않는다.
 
 무엇이 좋아지나: 파드가 지워져도(블루/그린 전환·abort 뒤 이전 버전) 로그가 남는다 · Grafana Explore에서 traceId 한 줄로 모든 서비스 로그를 시각순으로 · 팀원이 kubectl 권한 없이 Grafana에서 조회 · 지표와 로그를 나란히(5xx가 튄 시각의 로그).
 

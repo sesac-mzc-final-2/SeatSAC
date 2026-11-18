@@ -207,7 +207,7 @@ def test_korean_column_alias_goes_through_validator_and_cache():
 
 
 def test_answer_names_the_movies_and_asks_which_one():
-    # 19:40 이후 오늘 회차 5건 — 시작 순으로 고양이 탐정·별의 항해·한강의 밤·철의 심장(한 편은 두 번)
+    # 19:40 이후 오늘 회차 5건 — 시작 순 고양이 탐정·별의 항해·한강의 밤·철의 심장
     query = sql("s.business_date = '2026-11-17'") + " ORDER BY s.starts_at"
     service, _ = make(ScriptedLlm(tool("run_sql", sql=query, explanation="오늘 남은 회차")))
     answer = ask(service, "오늘 남은 회차")["answer"]

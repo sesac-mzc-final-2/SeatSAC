@@ -15,9 +15,12 @@ locals {
   custom_domain_enabled = var.custom_domain != ""
 }
 
+# 영역은 보통 이름으로 찾는다. 같은 이름의 퍼블릭 영역이 둘 이상이면(예전에 만든 영역 + 등록 때 자동 생성)
+# 이름 조회가 실패하므로 var.custom_domain_zone_id로 등록 도메인의 네임서버와 맞는 영역을 지정한다
 data "aws_route53_zone" "custom" {
   count        = local.custom_domain_enabled ? 1 : 0
-  name         = var.custom_domain
+  zone_id      = var.custom_domain_zone_id != "" ? var.custom_domain_zone_id : null
+  name         = var.custom_domain_zone_id != "" ? null : var.custom_domain
   private_zone = false
 }
 
@@ -55,8 +58,10 @@ resource "aws_acm_certificate_validation" "custom" {
   validation_record_fqdns = [for r in aws_route53_record.custom_validation : r.fqdn]
 }
 
+# DNS는 Cognito 콜백·로그아웃 URL 등록이 끝난 뒤에 공개한다 — 먼저 열리면 새 주소에서 로그인이 redirect_mismatch
 resource "aws_route53_record" "custom_alias" {
-  for_each = local.custom_domain_enabled ? toset(["A", "AAAA"]) : toset([])
+  for_each   = local.custom_domain_enabled ? toset(["A", "AAAA"]) : toset([])
+  depends_on = [aws_cognito_user_pool_client.web]
 
   zone_id = data.aws_route53_zone.custom[0].zone_id
   name    = var.custom_domain

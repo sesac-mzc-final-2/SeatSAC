@@ -205,3 +205,9 @@ variable "custom_domain" {
   type        = string
   default     = ""
 }
+
+variable "custom_domain_zone_id" {
+  description = "3.1.23 같은 이름의 퍼블릭 호스팅 영역이 둘 이상일 때만 — 등록 도메인의 네임서버와 맞는 영역 ID. 비우면 이름으로 찾는다"
+  type        = string
+  default     = ""
+}

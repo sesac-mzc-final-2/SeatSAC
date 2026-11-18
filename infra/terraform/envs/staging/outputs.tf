@@ -163,6 +163,6 @@ output "loki_bucket_name" {
 }
 
 output "custom_domain_url" {
-  description = "3.1.23 사용자 도메인 주소(없으면 빈 값). 기본 도메인(cloudfront_domain_name)도 계속 동작한다"
-  value       = local.custom_domain_enabled ? "https://${var.custom_domain}" : ""
+  description = "3.1.23 사용자 도메인 주소(없으면 null — 출력 변경으로 잡히지 않게). 기본 도메인(cloudfront_domain_name)도 계속 동작한다"
+  value       = local.custom_domain_enabled ? "https://${var.custom_domain}" : null
 }

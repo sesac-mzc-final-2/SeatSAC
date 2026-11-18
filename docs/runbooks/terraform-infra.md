@@ -1932,9 +1932,12 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
 
 **순서**
 
+0. **먼저 `frontend-deploy`를 한 번 돈다**(GitHub Actions 수동 실행) → 기본 도메인에서 로그인·로그아웃 확인. 이 PR 전에 만든 빌드는 콜백 주소(`VITE_COGNITO_REDIRECT_URI`)가 기본 도메인으로 고정돼 있어, 사용자 도메인으로 들어와도 로그인 뒤 기본 도메인으로 돌아간다
 1. Route 53 → 도메인 등록 → **자동 갱신 끔**. 등록 완료 메일(수 분~수십 분) → 호스팅 영역 생성 확인
    ```bash
-   aws route53 list-hosted-zones-by-name --dns-name <도메인> --query 'HostedZones[0].Name'
+   aws route53 list-hosted-zones-by-name --dns-name <도메인> --query 'HostedZones[?Name==`<도메인>.`].[Id,Name]'
+   # 같은 이름 영역이 둘 이상이면: 등록 도메인 네임서버와 맞는 영역 ID를 staging.tfvars custom_domain_zone_id에
+   aws route53domains get-domain-detail --region us-east-1 --domain-name <도메인> --query 'Nameservers[].Name'
    ```
 2. `envs/staging/staging.tfvars`에 `custom_domain = "<도메인>"` PR → `infra-plan` 확인(기대: **추가** 인증서 1·검증 레코드 1·검증 1·별칭 2, **변경** CloudFront 1(aliases·인증서)·Cognito 앱 클라이언트 1(콜백), 삭제 없음)
 3. 머지 뒤 `cinema-admin`으로 apply. 인증서 검증을 기다린다(보통 수 분). CloudFront 변경 배포는 10분 안팎 — **그동안에도 기본 도메인은 그대로 동작한다**
@@ -1949,6 +1952,7 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
 | 증상 | 원인·해결 |
 | --- | --- |
 | plan에서 `no matching Route 53 Hosted Zone` | 등록이 끝나지 않았거나 이름 철자 — 1번 확인 |
+| plan에서 `multiple Route 53 Hosted Zone matched` | 같은 이름 영역이 둘 — 네임서버가 맞는 쪽 ID를 `custom_domain_zone_id`에(1번) |
 | apply가 인증서 검증에서 오래 멈춤 | 등록 직후 네임서버 전파 중 — 기다린다(최대 수십 분). 등록 영역이 아닌 다른 영역에 검증 레코드가 들어갔는지 확인 |
 | 사용자 도메인에서 403·인증서 오류 | CloudFront 배포가 아직 진행 중(`aws cloudfront get-distribution --id <ID> --query Distribution.Status` → `Deployed`) |
 | 로그인 뒤 기본 도메인으로 튕김 | 화면이 아직 예전 빌드(`VITE_COGNITO_REDIRECT_URI` 포함) — `frontend-deploy` 수동 실행 |

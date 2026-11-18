@@ -46,6 +46,7 @@ const SEND: Record<string, string> = {
   screen_type_today: "오늘 상영관 종류별로 회차 몇 개야?",
   late_night_today: "오늘 심야 영화 뭐 있어?",
   theater_counts_today: "오늘 극장별로 남은 회차 몇 개야?",
+  morning_today: "조조 영화 뭐 있어?",
 };
 
 const PICK: Record<string, PickKind> = {

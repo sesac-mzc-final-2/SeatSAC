@@ -69,6 +69,20 @@ class SemanticIndex(Protocol):
     async def nearest(self, vector: Sequence[float], kinds: str) -> tuple[str, float] | None: ...
 
 
+def index_missing(exc: BaseException) -> bool:
+    """검색·저장이 「인덱스 없음」으로 실패했나.
+
+    ai Valkey는 복제본·영속화가 없어 재부팅하면 인덱스까지 지워진다(런북 6-G-7).
+    valkey-search 문구: "Index with name 'ai_semcache_idx' not found".
+    """
+    text = str(exc).lower()
+    return (
+        isinstance(exc, ResponseError)
+        and "index" in text
+        and any(word in text for word in ("not found", "no such", "unknown", "not exist"))
+    )
+
+
 def kinds_tag(kinds: Sequence[str]) -> str:
     return "_".join(sorted(kinds)) or "none"
 
@@ -183,6 +197,7 @@ class ChatCache:
 
         모듈 없음·문법 오류(ResponseError)는 파드 수명 동안 끈다. 기동 순간의 연결 오류는
         일시적이라 RETRY_SECONDS 뒤 다음 검색·저장 때 다시 시도한다(#94 리뷰 — ai는 1대 고정).
+        만든 뒤에 인덱스가 사라지면(Valkey 재부팅) 검색·저장이 _rebuild_index 로 여기를 다시 부른다.
         """
         if self.embedder is None or self._index is None:
             return
@@ -204,6 +219,18 @@ class ChatCache:
                 await self.start()
         return self.semantic_ready and self._index is not None
 
+    async def _rebuild_index(self, exc: BaseException) -> bool:
+        """인덱스가 사라졌으면 다시 만든다 — 파드를 다시 띄우지 않아도 의미 캐시가 돌아온다.
+
+        만들었으면 True.
+        """
+        if not index_missing(exc):
+            return False
+        log.warning("의미 캐시 인덱스가 없어 다시 만든다(ai Valkey 재부팅?): %s", exc)
+        self.semantic_ready = False
+        await self.start()
+        return self.semantic_ready
+
     # --- 정확 일치 -------------------------------------------------------------
     async def get_exact(self, key_text: str) -> CacheEntry | None:
         try:
@@ -222,7 +249,9 @@ class ChatCache:
         try:
             found = await self._index.nearest(vector, kinds_tag(kinds))
         except (RedisError, ValueError, IndexError) as exc:
-            log.warning("의미 캐시 검색 실패(놓친 것으로 처리): %s", exc)
+            # 인덱스가 없으면 지금 다시 만든다. 새 인덱스는 비어 있으니 이번 질문은 놓침이 맞다
+            if not await self._rebuild_index(exc):
+                log.warning("의미 캐시 검색 실패(놓친 것으로 처리): %s", exc)
             return None
         if found is None:
             return None
@@ -234,15 +263,23 @@ class ChatCache:
         try:
             await self._v.set(exact_key(key_text), payload, ex=self._ttl)
             if vector is not None and await self.semantic_available():
-                if await self._index.count() < SEMCACHE_MAX:
-                    doc_id = hashlib.sha256(key_text.encode()).hexdigest()[:24]
-                    await self._index.add(
-                        doc_id, vector, kinds_tag(entry.kinds), payload, self._ttl
-                    )
-                else:
-                    log.info("의미 캐시가 %d건이라 더 저장하지 않는다", SEMCACHE_MAX)
+                try:
+                    await self._put_semantic(key_text, entry, payload, vector)
+                except ResponseError as exc:
+                    if not await self._rebuild_index(exc):
+                        raise
+                    await self._put_semantic(key_text, entry, payload, vector)
         except (RedisError, ValueError, IndexError) as exc:
             log.warning("캐시 저장 실패(답은 그대로 나감): %s", exc)
+
+    async def _put_semantic(
+        self, key_text: str, entry: CacheEntry, payload: str, vector: Sequence[float]
+    ) -> None:
+        if await self._index.count() >= SEMCACHE_MAX:
+            log.info("의미 캐시가 %d건이라 더 저장하지 않는다", SEMCACHE_MAX)
+            return
+        doc_id = hashlib.sha256(key_text.encode()).hexdigest()[:24]
+        await self._index.add(doc_id, vector, kinds_tag(entry.kinds), payload, self._ttl)
 
     # --- 세션 ----------------------------------------------------------------
     async def load_session(self, user_id: str, session_id: str | None) -> tuple[str, dict | None]:

@@ -13,7 +13,9 @@ from typing import Any
 
 import yaml
 
-# 슬롯 종류(질문에서 뽑아 바꾸는 값). 기능명세서 v4 15-2 3단계와 같은 이름
+# 프리셋 빈칸 종류 = 질문에서 뽑는 슬롯(cache/slots.py 의 SLOT_KINDS, 기능명세서 v4 15-2 3단계)
+# + Claude가 고르는 grade. grade는 캐시 슬롯이 아니다 — preset_template 이 걸러서
+# 캐시하지 않는다(#111)
 SLOT_KINDS = ("time", "date", "theater", "movie", "n", "grade")
 # 서버가 항상 넣는 값. 프리셋 `params`에는 적지 않는다
 SYSTEM_PARAMS = ("today", "now")

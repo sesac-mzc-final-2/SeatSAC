@@ -34,9 +34,31 @@ const COLUMN_LABELS: Record<string, string> = {
   amount: "금액",
   count: "개수",
   screening_count: "회차 수",
+  // 스냅샷의 나머지 칸 — Claude 가 그대로 골랐을 때 영어 이름이 보이지 않게 (계산한 칸은 ai 가 한국어 별칭으로 준다)
+  runtime_minutes: "상영 시간(분)",
+  running_minutes: "상영 시간(분)",
+  slot_minutes: "회차 간격(분)",
+  synopsis: "줄거리",
+  movie_id: "영화 번호",
+  theater_id: "극장 번호",
+  auditorium_id: "상영관 번호",
+  screening_id: "회차 번호",
+  fetched_at: "확인 시각",
 };
 
 export const columnLabel = (column: Pick<ChatColumn, "name">): string => COLUMN_LABELS[column.name] ?? column.name;
+
+/** 값이 길어질 수 있는 글자 열 (영화 제목·장르 등) */
+const LONG_TEXT_COLUMNS = new Set(["movie_title", "title", "title_en", "genres", "director", "synopsis", "seat_labels"]);
+
+/**
+ * 줄바꿈을 허용할 열 하나. 나머지 열은 한 줄로 두고 이 열이 남는 폭을 쓴다 → 대화창 폭 안에서 가로 스크롤 없이 보인다.
+ * 긴 글자 열이 있으면 그 첫 번째, 없으면 첫 글자 열. 글자 열이 없으면(숫자뿐) -1
+ */
+export function wrapColumnIndex(columns: Pick<ChatColumn, "name" | "type">[]): number {
+  const long = columns.findIndex((column) => column.type === "text" && LONG_TEXT_COLUMNS.has(column.name));
+  return long >= 0 ? long : columns.findIndex((column) => column.type === "text");
+}
 
 /** 숫자 열은 오른쪽 정렬 */
 export const isNumericColumn = (column: Pick<ChatColumn, "type">): boolean => column.type !== "text";

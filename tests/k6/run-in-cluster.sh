@@ -56,7 +56,20 @@ while [ $# -gt 0 ]; do
   case "$2" in
     K6_TOKENS_FILE=*|K6_TOKENS=*) die "토큰은 -e로 넘기지 않는다 — K6_TOKENS_FILE 환경변수(파일)만 쓴다" ;;
     VUS=*) [[ "${2#VUS=}" =~ ^[1-9][0-9]*$ ]] || die "VUS는 양의 정수: $2"
-           [ "$SCENARIO" != "user-hold" ] && TOKENS_NEEDED="${2#VUS=}" ;;
+           # browse는 토큰 없이 돈다(5.1.6 독립 확장 시연에서 VUS 50~80)
+           [ "$SCENARIO" != "user-hold" ] && [ "$SCENARIO" != "browse" ] && TOKENS_NEEDED="${2#VUS=}" ;;
+    DURATION=*)
+      if [ "$SCENARIO" = "browse" ]; then
+        # browse 실행 = 올리기 30초 + DURATION + 내리기 15초. 한도를 그만큼 + 2분 여유로 늘린다(기본 1m이면 420초 그대로)
+        d="${2#DURATION=}"
+        [[ "$d" =~ ^([0-9]+h)?([0-9]+m)?([0-9]+s)?$ ]] && [ -n "$d" ] || die "DURATION은 30s·5m·1m30s 형식: $2"
+        secs=0; rest="$d"
+        [[ "$rest" =~ ([0-9]+)h ]] && secs=$((secs + BASH_REMATCH[1] * 3600))
+        [[ "$rest" =~ ([0-9]+)m ]] && secs=$((secs + BASH_REMATCH[1] * 60))
+        [[ "$rest" =~ ([0-9]+)s ]] && secs=$((secs + BASH_REMATCH[1]))
+        need=$((30 + secs + 15 + 120))
+        [ "$need" -gt "$DEADLINE" ] && DEADLINE="$need"
+      fi ;;
   esac
   K6_ENV+=("$2"); shift 2
 done

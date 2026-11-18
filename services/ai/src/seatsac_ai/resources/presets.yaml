@@ -1,4 +1,4 @@
-# 추천 질문 프리셋 12개 (WBS 3.4.4 · AI-04 · 기능명세서 v4 17-4)
+# 추천 질문 프리셋 13개 (WBS 3.4.4 · AI-04 · 기능명세서 v4 17-4 — 11/18 조조 회차 추가)
 #
 # - presetId·title·example 은 GET /ai/presets 로 화면 버튼에 나간다.
 #   example 의 {movie} 는 응답할 때 스냅샷에서 지금 상영 회차가 가장 많은 영화 제목으로 채운다
@@ -12,6 +12,8 @@
 #     movie   영화 제목        (스냅샷 movie.title 과 정확히 같은 값)
 #     n       개수 정수        (SQL에서 min(:n, 500) 으로 막힌다)
 #     grade   관람 등급        ('ALL'·'12'·'15'·'19'. 질문에서 뽑는 슬롯이 아니라 Claude가 고른다 → 캐시하지 않는다)
+# - phrasings 는 Claude 를 부르지 않고 캐시에 미리 넣는 말투다. 빈칸 종류가 params 와 같거나, date 하나만
+#   빠지고 '오늘·내일·모레' 중 하나가 있어야 한다(test_cache_warm.py). grade 프리셋은 넣지 않는다(캐시 안 함).
 # - :today('YYYY-MM-DD')·:now('YYYY-MM-DD HH:MM')는 서버가 항상 넣는다(KST). params 에 적지 않는다.
 # - screening 을 조회하는 SQL은 모두 starts_at > :now 를 붙인다(data-model 6-1).
 # - remaining_seats(잔여석)는 잔여석을 묻는 프리셋(most_remaining_today·almost_sold_out_today)에만 넣는다.
@@ -23,6 +25,12 @@ presets:
     title: 오늘 ○시 이후 회차
     example: 오늘 20시 이후에 시작하는 영화 알려줘
     description: 오늘 특정 시각 이후에 시작하는 모든 회차 목록
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "오늘 {time} 이후 영화"
+      - "오늘 {time} 이후에 시작하는 영화 알려줘"
+      - "오늘 {time} 넘어서 하는 영화 뭐 있어"
+      - "오늘 {time} 이후 회차"
+      - "{time} 이후에 하는 영화 뭐 있어"
     params: [time]
     sql: |
       SELECT m.title AS movie_title, t.name AS theater_name, s.auditorium_name, s.starts_at
@@ -37,6 +45,13 @@ presets:
     title: 극장 편성표
     example: 내일 건대입구 편성표 보여줘
     description: 특정 날짜·특정 극장의 전체 상영 시간표
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "{date} {theater} 편성표"
+      - "{date} {theater} 상영 시간표"
+      - "오늘 {theater} 편성표"
+      - "내일 {theater} 편성표"
+      - "내일 {theater} 상영 시간표"
+      - "모레 {theater} 편성표"
     params: [date, theater]
     sql: |
       SELECT m.title AS movie_title, s.auditorium_name, s.screen_type, s.starts_at, s.ends_at
@@ -50,6 +65,11 @@ presets:
     title: 영화별 상영 극장·시간
     example: "{movie} 어디서 몇 시에 해?"
     description: 특정 영화를 오늘부터 상영하는 극장과 시각
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "{movie} 어디서 몇 시에 해"
+      - "{movie} 어디서 해"
+      - "{movie} 상영하는 극장"
+      - "{movie} 어디서 볼 수 있어"
     params: [movie]
     sql: |
       SELECT t.name AS theater_name, s.business_date, s.starts_at, s.auditorium_name
@@ -63,6 +83,10 @@ presets:
     title: 잔여석 많은 오늘 회차
     example: 오늘 자리 많이 남은 회차 5개
     description: 오늘 남은 회차 중 잔여석이 많은 순서로 n개. 잔여석이 정확한 값(BOOKING)인 회차만
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "오늘 자리 많이 남은 회차 {n}개"
+      - "오늘 잔여석 많은 회차 {n}개"
+      - "오늘 좌석 여유 있는 회차 {n}개"
     params: [n]
     sql: |
       SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats
@@ -78,6 +102,10 @@ presets:
     title: 매진 임박 회차
     example: 오늘 곧 매진되는 회차 있어?
     description: 오늘 남은 회차 중 잔여석이 전체의 10% 이하(0석 제외)인 회차
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "오늘 곧 매진되는 회차 있어"
+      - "오늘 매진 임박 회차"
+      - "오늘 매진 직전 회차"
     params: []
     sql: |
       SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at,
@@ -94,6 +122,12 @@ presets:
     title: 날짜별 상영 영화
     example: 토요일에 상영하는 영화 뭐 있어?
     description: 특정 날짜에 상영하는 영화 목록과 회차 수
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "{date}에 상영하는 영화 뭐 있어"
+      - "{date} 상영작"
+      - "오늘 상영하는 영화 뭐 있어"
+      - "내일 상영하는 영화 뭐 있어"
+      - "모레 상영하는 영화 뭐 있어"
     params: [date]
     sql: |
       SELECT m.title AS movie_title, m.view_grade, count(*) AS screening_count
@@ -107,6 +141,9 @@ presets:
     title: 상영관 종류별 회차
     example: 오늘 리클라이너관 회차 몇 개야?
     description: 오늘 남은 회차를 상영관 종류(일반관·리클라이너관)별로 센 것
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "오늘 상영관 종류별 회차 수"
+      - "오늘 상영관 종류별로 회차 몇 개야"
     params: []
     sql: |
       SELECT s.screen_type, count(*) AS screening_count
@@ -119,6 +156,10 @@ presets:
     title: 영화 다음 회차
     example: "{movie} 다음 회차 언제야?"
     description: 특정 영화의 가장 빠른 다음 회차 5개
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "{movie} 다음 회차 언제야"
+      - "{movie} 다음 상영 언제야"
+      - "{movie} 제일 빠른 회차"
     params: [movie]
     sql: |
       SELECT s.starts_at, t.name AS theater_name, s.auditorium_name
@@ -133,6 +174,10 @@ presets:
     title: 심야 회차
     example: 오늘 심야 영화 뭐 있어?
     description: 오늘 영업일의 22시 이후 시작 회차(자정 넘은 회차 포함)
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "오늘 심야 영화 뭐 있어"
+      - "오늘 심야 회차"
+      - "오늘 심야 상영 뭐 해"
     params: []
     sql: |
       SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at
@@ -143,10 +188,33 @@ presets:
         AND s.starts_at > :now
       ORDER BY s.starts_at, t.name
 
+  - presetId: morning_today
+    title: 조조 회차
+    example: 조조 영화 뭐 있어?
+    description: 다가오는 조조 회차(아침 6시~10시 전에 시작). 오늘 조조가 지났으면 다음 날 것부터
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "조조 영화 뭐 있어"
+      - "조조 회차 알려줘"
+      - "조조 상영 뭐 해"
+    params: []
+    sql: |
+      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at
+      FROM screening s
+      JOIN movie m ON m.movie_id = s.movie_id
+      JOIN theater t ON t.theater_id = s.theater_id
+      WHERE s.business_date >= :today AND s.start_hour >= 6 AND s.start_hour < 10
+        AND s.starts_at > :now
+      ORDER BY s.starts_at, t.name
+      LIMIT 20
+
   - presetId: movie_runtime
     title: 영화 상영 시간
     example: "{movie} 몇 분짜리야?"
     description: 특정 영화의 상영 시간(분). 실제 러닝타임이 없는 영화는 회차 간격으로 대신한다
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "{movie} 몇 분짜리야"
+      - "{movie} 러닝타임"
+      - "{movie} 상영 시간 몇 분이야"
     params: [movie]
     sql: |
       SELECT title AS movie_title, coalesce(runtime_minutes, slot_minutes) AS running_minutes
@@ -168,6 +236,9 @@ presets:
     title: 극장별 오늘 회차 수
     example: 오늘 극장별로 남은 회차 몇 개야?
     description: 오늘 남은 회차 수를 극장별로 센 것
+    phrasings:  # 미리 넣어 두는 말투(서버 기동 때 캐시 예열, cache/warm.py). 빈칸은 {time}·{date}·{theater}·{movie}·{n}
+      - "오늘 극장별로 남은 회차 몇 개야"
+      - "오늘 극장별 회차 수"
     params: []
     sql: |
       SELECT t.name AS theater_name, count(*) AS screening_count

@@ -114,6 +114,16 @@ const fail = (res, status, code, message, details = []) => {
   return json(res, status, { code, message, traceId: responseTraceId, details }, responseTraceId);
 };
 
+/** gateway application.yml 라우트 순서를 흉내 낸 라우트 ID (좌석 현황·SSE가 /screenings/** 보다 먼저) */
+const gatewayRouteIdOf = (path) => {
+  if (/^\/api\/screenings\/[^/]+\/seats\/stream$/.test(path)) return "booking-seat-stream";
+  if (/^\/api\/screenings\/[^/]+\/seats$/.test(path)) return "booking-seats";
+  if (/^\/api\/(seats|bookings)(\/|$)/.test(path)) return "booking";
+  if (/^\/api\/(movies|screenings|theaters|auditoriums)(\/|$)/.test(path)) return "catalog";
+  if (/^\/api\/users(\/|$)/.test(path)) return "user";
+  return null;
+};
+
 // ---------- 응답 조립 ----------
 
 const posterUrl = (m) => (m.hasPoster ? `http://localhost:${PORT}/mock-poster/${m.movieId}.svg` : null);
@@ -341,12 +351,21 @@ const requiresAuth = (path) =>
 /** off: 라우트 없음(404) · down: ai 파드 없음(gateway 503) · 그 밖: 정상 */
 const MOCK_AI = process.env.MOCK_AI ?? "on";
 
+// ai presets.yaml 13개와 같은 목록 (화면 버튼 동작 확인용). "내 예매"는 프리셋이 아니라 입력창으로 묻는다
 const AI_PRESETS = [
   { presetId: "today_after_time", title: "오늘 ○시 이후 회차", example: "오늘 20시 이후에 시작하는 영화 알려줘" },
   { presetId: "theater_schedule", title: "극장 편성표", example: "내일 건대입구 편성표 보여줘" },
   { presetId: "movie_theaters", title: "영화별 상영 극장·시간", example: "별이 지는 항구 어디서 몇 시에 해?" },
   { presetId: "most_remaining_today", title: "잔여석 많은 오늘 회차", example: "오늘 자리 많이 남은 회차 5개" },
-  { presetId: "my_bookings", title: "내 예매", example: "내 예매 보여줘" },
+  { presetId: "almost_sold_out_today", title: "매진 임박 회차", example: "오늘 곧 매진되는 회차 있어?" },
+  { presetId: "movies_on_date", title: "날짜별 상영 영화", example: "토요일에 상영하는 영화 뭐 있어?" },
+  { presetId: "screen_type_today", title: "상영관 종류별 회차", example: "오늘 리클라이너관 회차 몇 개야?" },
+  { presetId: "movie_next_screening", title: "영화 다음 회차", example: "별이 지는 항구 다음 회차 언제야?" },
+  { presetId: "late_night_today", title: "심야 회차", example: "오늘 심야 영화 뭐 있어?" },
+  { presetId: "morning_today", title: "조조 회차", example: "조조 영화 뭐 있어?" },
+  { presetId: "movie_runtime", title: "영화 상영 시간", example: "별이 지는 항구 몇 분짜리야?" },
+  { presetId: "movies_by_view_grade", title: "관람 등급별 영화", example: "전체 관람가 영화 알려줘" },
+  { presetId: "theater_counts_today", title: "극장별 오늘 회차 수", example: "오늘 극장별로 남은 회차 몇 개야?" },
 ];
 
 /** 정확 일치 캐시 흉내: 같은 문장을 다시 물으면 CACHE_EXACT(토큰 0) */
@@ -698,7 +717,12 @@ createServer(async (req, res) => {
   }
 
   const failStatus = FAIL_PATH && path === FAIL_PATH ? FAIL_STATUS : Number(q.get("fail") ?? 0);
-  if (failStatus === 503) return fail(res, 503, "SERVICE_UNAVAILABLE", "simulated by mock");
+  if (failStatus === 503) {
+    // gateway GatewayErrorHandler와 같은 모양: 멈춘 서비스의 라우트 ID를 details에 담는다 (화면이 서비스별 안내를 고른다)
+    const routeId = gatewayRouteIdOf(path);
+    const details = routeId ? [{ field: "service", value: routeId, reason: "UPSTREAM_UNAVAILABLE" }] : [];
+    return fail(res, 503, "SERVICE_UNAVAILABLE", "simulated by mock", details);
+  }
   if (failStatus === 500) return fail(res, 500, "INTERNAL_ERROR", "simulated by mock");
 
   // 인증이 필요한 경로: Authorization: Bearer 가 있으면 누구든 통과 (Gateway 의 JWT 검증은 흉내 내지 않는다)

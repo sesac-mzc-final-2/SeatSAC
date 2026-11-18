@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     session_ttl: Seconds = Field(1800, alias="APP_AI_SESSION_TTL")
     semantic_cache_enabled: bool = Field(True, alias="APP_AI_SEMANTIC_CACHE_ENABLED")
     semantic_threshold: float = Field(0.92, alias="APP_AI_SEMANTIC_THRESHOLD")
+    # 버튼 질문(프리셋) 말투를 기동 때 캐시에 미리 넣는다 — 첫 사용자도 캐시로 답한다(cache/warm.py)
+    cache_warm_presets: bool = Field(True, alias="APP_AI_CACHE_WARM_PRESETS")
     limit_per_minute: int = Field(10, alias="APP_AI_LIMIT_PER_MINUTE")
     limit_per_day: int = Field(100, alias="APP_AI_LIMIT_PER_DAY")
 

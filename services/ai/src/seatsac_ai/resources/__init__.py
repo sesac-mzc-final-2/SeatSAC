@@ -1,7 +1,7 @@
 """Claude에게 주는 설명서·프리셋(코드가 아닌 데이터). 이미지에 함께 들어간다.
 
 - schema.yaml: 스냅샷 표·칸 설명, 값 뜻, 시간 규칙, 예시 SQL (3.4.1)
-- presets.yaml: 추천 질문 12개와 바인딩 SQL (3.4.4)
+- presets.yaml: 추천 질문 13개와 바인딩 SQL (3.4.4)
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ class Preset:
     description: str
     params: tuple[str, ...]
     sql: str
+    phrasings: tuple[str, ...] = ()  # 캐시 예열용 말투(템플릿 글자)
 
 
 MOVIE_PLACEHOLDER = "영화 제목"  # 계약 ai.openapi.yaml GET /ai/presets 예시와 같은 자리 표시
@@ -59,6 +60,7 @@ def presets() -> tuple[Preset, ...]:
             description=p["description"],
             params=tuple(p.get("params") or ()),
             sql=p["sql"].strip(),
+            phrasings=tuple(p.get("phrasings") or ()),
         )
         for p in raw
     )

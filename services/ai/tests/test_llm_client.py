@@ -104,7 +104,7 @@ def test_missing_key_never_calls_out():
 def test_preset_tool_lists_only_real_preset_ids():
     run_preset = tool_definitions()[0]
     ids = run_preset["input_schema"]["properties"]["presetId"]["enum"]
-    assert len(ids) == 12 and "today_after_time" in ids
+    assert len(ids) == 13 and "today_after_time" in ids
 
 
 def test_text_only_reply_is_reported_as_no_tool():

@@ -1,5 +1,8 @@
 import { asOfLabel, chatPathLabel, hasResultTable, isTokenFree, type ChatResponse } from "@/entities/ai-chat";
+import { useState } from "react";
+import { Link } from "react-router";
 import { Badge, Chip, Icon, TraceCode } from "@/shared/ui";
+import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/preset-actions";
 import type { ChatEntry } from "../model/use-ai-chat";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
@@ -8,7 +11,9 @@ interface Props {
   entry: ChatEntry;
   demo: boolean;
   /** 오류 항목의 「다시 묻기」 (보낼 수 없는 상태면 undefined) */
-  onRetry?: (question: string) => void;
+  onRetry?: (question: string, link?: ChatLink) => void;
+  /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
+  onPickMovie?: (title: string) => void;
   /** 되묻기(`CLARIFY`) 버튼 — 누르면 그 `message` 를 보낸다 (보낼 수 없는 상태면 undefined) */
   onChoose?: (message: string) => void;
 }
@@ -47,17 +52,41 @@ function DemoMeta({ response }: { response: ChatResponse }) {
   );
 }
 
+/** 답에 나온 영화 고르기. 5개씩 보여 주고 「더 보기」마다 5개씩 아래에 더 붙인다 */
+function MovieChoices({ titles, onPick }: { titles: string[]; onPick?: (title: string) => void }) {
+  const [shown, setShown] = useState(MOVIE_CHOICE_STEP);
+  return (
+    <div className={styles.movies} role="group" aria-label="영화 고르기">
+      {titles.slice(0, shown).map((title) => (
+        <Chip key={title} size="sm" disabled={!onPick} onClick={() => onPick?.(title)}>
+          {title}
+        </Chip>
+      ))}
+      {shown < titles.length && (
+        <Chip size="sm" className={styles.more} onClick={() => setShown((count) => count + MOVIE_CHOICE_STEP)}>
+          더 보기 ({titles.length - shown})
+        </Chip>
+      )}
+    </div>
+  );
+}
+
 function Answer({
   response,
   demo,
+  link,
+  onPickMovie,
   onChoose,
 }: {
   response: ChatResponse;
   demo: boolean;
+  link?: ChatLink;
+  onPickMovie?: (title: string) => void;
   onChoose?: (message: string) => void;
 }) {
-  const table = hasResultTable(response);
+  const movieTitles = answerMovieTitles(response);
   const choices = response.choices ?? [];
+  const table = hasResultTable(response);
   return (
     <div className={styles.answer}>
       <p className={styles.text}>{response.answer}</p>
@@ -77,7 +106,8 @@ function Answer({
           ))}
         </div>
       )}
-      {table && response.columns && response.rows && (
+      {/* 0건이면 머리글만 남은 빈 표를 그리지 않는다 — 답 문장이 이유를 말한다 */}
+      {table && response.columns && response.rows && response.rows.length > 0 && (
         <ResultTable columns={response.columns} rows={response.rows} caption={`결과 ${response.rowCount}건`} />
       )}
       <p className={styles.meta}>
@@ -86,12 +116,20 @@ function Answer({
         {table && ` · ${n(response.rowCount)}건`}
         {response.truncated && " · 500건까지만 보여요"}
       </p>
+      {movieTitles.length > 0 && <MovieChoices titles={movieTitles} onPick={onPickMovie} />}
+      {/* 추천 질문으로 고른 극장·영화·날짜면 그 화면으로 바로 간다 */}
+      {link && response.path !== "OUT_OF_SCOPE" && response.path !== "REJECTED" && (
+        <Link className={styles.link} to={link.href}>
+          {link.label}
+          <Icon name="arrow-right" size={13} />
+        </Link>
+      )}
       {demo && <DemoMeta response={response} />}
     </div>
   );
 }
 
-export function ChatEntryView({ entry, demo, onRetry, onChoose }: Props) {
+export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose }: Props) {
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
@@ -100,7 +138,17 @@ export function ChatEntryView({ entry, demo, onRetry, onChoose }: Props) {
       </div>
     );
   }
-  if (entry.kind === "answer") return <Answer response={entry.response} demo={demo} onChoose={onChoose} />;
+  if (entry.kind === "answer") {
+    return (
+      <Answer
+        response={entry.response}
+        demo={demo}
+        link={entry.link}
+        onPickMovie={onPickMovie}
+        onChoose={onChoose}
+      />
+    );
+  }
   return (
     <div className={styles.error} role="alert">
       <p className={styles.errorText}>
@@ -109,7 +157,7 @@ export function ChatEntryView({ entry, demo, onRetry, onChoose }: Props) {
       </p>
       <div className={styles.errorActions}>
         {entry.info.retryable && onRetry && (
-          <button type="button" className={styles.retry} onClick={() => onRetry(entry.question)}>
+          <button type="button" className={styles.retry} onClick={() => onRetry(entry.question, entry.link)}>
             <Icon name="rotate-cw" size={13} />
             다시 묻기
           </button>

@@ -26,6 +26,7 @@ npm run build               # tsc -b && vite build → dist/
 오류 화면 재현: 영화 ID 999 는 404 라 `/movies/999` 로 들어가면 「영화를 찾을 수 없어요」가 보이고,
 `MOCK_FAIL_PATH=/api/screenings npm run dev:mock` 처럼 띄우면 그 경로가 항상 503(`MOCK_FAIL_STATUS` 로 500 도 가능)을 돌려줘
 상영시간표의 오류 블록·문의 코드·공통 토스트를 볼 수 있다. API 를 직접 부를 때는 `?fail=503` 을 붙여도 된다. 빌드에는 포함되지 않는다.
+503 은 gateway 처럼 `details[{field: service, value: 라우트 ID}]` 를 담아 화면이 멈춘 서비스를 안내한다(5.1.5) — `/api/screenings` 는 catalog, `/api/users/me` 는 user.
 
 결제 화면(BKG-10, 토스페이 — ADR-112): `DEV_SESSION=1 npm run dev:mock` 뒤 `/bookings/7001/pay`(7001~7999)로 들어가면 그 번호의
 PENDING 예매(선점 5분, J7·J8)가 처음 조회 때 생긴다. 다시 보려면 번호를 바꾼다. 결제 버튼은 개발용 가짜 토스페이 창을 띄우고

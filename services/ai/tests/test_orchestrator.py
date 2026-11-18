@@ -238,7 +238,8 @@ def test_started_filter_goes_into_join_on_so_left_join_keeps_its_meaning():
     )
     body = ask(ScriptedLlm(tool("run_sql", sql=sql, explanation="영화별 남은 회차")))
     # 19:40 이후: 별의 항해 1(18:00 제외) · 한강의 밤 2 · 고양이 탐정 2 · 철의 심장 3
-    assert [row[1] for row in body["rows"]] == [1, 2, 2, 3]
+    # 철의 심장은 11/19 조조 회차(픽스처 10번)까지 4
+    assert [row[1] for row in body["rows"]] == [1, 2, 2, 4]
 
 
 def test_sql_without_screening_does_not_need_started_filter():

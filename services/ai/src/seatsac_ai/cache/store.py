@@ -272,7 +272,8 @@ class ChatCache:
         return CacheEntry.from_json(found[0]), found[1]
 
     # --- 저장 ----------------------------------------------------------------
-    async def put(self, key_text: str, entry: CacheEntry, vector: Sequence[float] | None) -> None:
+    async def put(self, key_text: str, entry: CacheEntry, vector: Sequence[float] | None) -> bool:
+        """저장했으면 True. 실패는 삼키고 False(답은 그대로 나간다)."""
         payload = entry.to_json()
         try:
             await self._v.set(exact_key(key_text), payload, ex=self._ttl)
@@ -285,6 +286,8 @@ class ChatCache:
                     await self._put_semantic(key_text, entry, payload, vector)
         except (RedisError, ValueError, IndexError) as exc:
             log.warning("캐시 저장 실패(답은 그대로 나감): %s", exc)
+            return False
+        return True
 
     async def _put_semantic(
         self, key_text: str, entry: CacheEntry, payload: str, vector: Sequence[float]

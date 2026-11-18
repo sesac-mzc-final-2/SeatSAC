@@ -229,7 +229,8 @@ class ChatCache:
         return CacheEntry.from_json(found[0]), found[1]
 
     # --- 저장 ----------------------------------------------------------------
-    async def put(self, key_text: str, entry: CacheEntry, vector: Sequence[float] | None) -> None:
+    async def put(self, key_text: str, entry: CacheEntry, vector: Sequence[float] | None) -> bool:
+        """저장했으면 True. 실패는 삼키고 False(답은 그대로 나간다)."""
         payload = entry.to_json()
         try:
             await self._v.set(exact_key(key_text), payload, ex=self._ttl)
@@ -243,6 +244,8 @@ class ChatCache:
                     log.info("의미 캐시가 %d건이라 더 저장하지 않는다", SEMCACHE_MAX)
         except (RedisError, ValueError, IndexError) as exc:
             log.warning("캐시 저장 실패(답은 그대로 나감): %s", exc)
+            return False
+        return True
 
     # --- 세션 ----------------------------------------------------------------
     async def load_session(self, user_id: str, session_id: str | None) -> tuple[str, dict | None]:

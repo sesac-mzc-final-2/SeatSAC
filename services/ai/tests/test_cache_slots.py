@@ -106,7 +106,6 @@ def test_meaning_signature_separates_opposites():
     assert meaning_signature("잔여석 많은 회차") != meaning_signature("매진 임박 회차")
 
 
-
 @pytest.mark.parametrize(
     ("a", "b"),
     [
@@ -128,7 +127,16 @@ def test_same_meaning_phrasing_gives_the_same_key(a, b):
         ("오늘 잔여석 많은 회차 3개", "오늘 잔여석 적은 회차 3개"),
         ("오늘 20시 이후 영화", "오늘 20시 이후 영화 말고 회차 수"),
         ("잔여석 많은 회차 3개", "리클라이너 잔여석 많은 회차 3개"),
+        # 시각 뒤가 아니면 '이후'로 맞추지 않는다(PR 전 검토): 길이 vs 지금부터 몇 시간 뒤
+        ("2시간 넘는 영화", "2시간 뒤에 하는 영화"),
+        ("150분 넘는 영화 알려줘", "150분 뒤에 시작하는 영화 알려줘"),
+        ("오늘 20시에 시작하는 영화", "오늘 20시에 끝나는 영화"),
     ],
 )
 def test_different_meaning_keeps_different_keys(a, b):
     assert ex(a).key_text != ex(b).key_text
+
+
+@pytest.mark.parametrize("question", ["같은 날 두 번 하는 영화", "동일 영화 다른 지점에서 해?"])
+def test_standalone_questions_with_same_words_are_not_followups(question):
+    assert not is_followup(question)

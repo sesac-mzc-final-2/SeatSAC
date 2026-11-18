@@ -219,3 +219,22 @@ def test_one_movie_is_not_asked_again():
     query = sql("m.title = '철의 심장'")
     service, _ = make(ScriptedLlm(tool("run_sql", sql=query, explanation="철의 심장 회차")))
     assert "어떤 영화" not in ask(service, "철의 심장 회차")["answer"]
+
+
+def test_exact_key_with_a_different_meaning_is_not_a_hit():
+    # 같은 키가 되더라도 뜻 묶음(이후/이전 …)이 다르면 캐시를 쓰지 않는다
+    runtime = "SELECT title AS movie_title FROM movie WHERE runtime_minutes > 120"
+    llm = ScriptedLlm(
+        tool("run_sql", sql=runtime, explanation="2시간 넘는 영화"),
+        tool("out_of_scope", reason="x"),
+    )
+    service, _ = make(llm)
+    ask(service, "2시간 넘는 영화")
+    assert ask(service, "2시간 뒤에 하는 영화")["path"] == "OUT_OF_SCOPE"
+
+
+def test_date_note_ignores_the_next_day_boundary_of_starts_at():
+    # 마지막 영업일(11/21)만 묻는데 starts_at 경계로 다음 날 날짜가 들어간 SQL
+    boundary = sql("s.business_date = '2026-11-21' AND s.starts_at < '2026-11-22 06:00'")
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=boundary, explanation="21일 회차")))
+    assert "까지만" not in ask(service, "21일 회차")["answer"]

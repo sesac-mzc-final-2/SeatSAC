@@ -82,7 +82,7 @@ _FOLLOW_UP = re.compile(
     r"그\s*중|이\s+중|이중에|거기|그거|그것|방금|아까|위\s*결과"
     r"|^\s*(그럼|그러면|그리고|그\s*영화|그\s*극장)"
     # 직전 조건을 그대로 쓰겠다는 말("같은 조건으로 건대입구는?", "5개로 늘려서")
-    r"|같은\s*(조건|걸로|시간|날)|마찬가지|똑같이|동일|늘려|줄여|이번엔|이번에는"
+    r"|^\s*(같은\s*(조건|걸로)|마찬가지로?|똑같이|동일하게|이번엔|이번에는)|늘려서|줄여서"
     # 값 하나만 바꾸는 짧은 말("부산은?", "영등포도 알려줘") — 혼자서는 뜻이 서지 않는다
     r"|^\s*\S{1,8}(은|는|도)\s*(어때|요|알려\s*줘)?\s*[?？]*\s*$"
 )
@@ -155,11 +155,16 @@ def normalize(text: str) -> str:
 # 값을 빈칸으로 바꾼 뒤에도 "넘어서 시작하는 … 뭐 있어"처럼 꾸미는 말이 다르면 임베딩 유사도가
 # 0.82까지 떨어진다(11/18 실측, 기준 0.92). 비교 전에 같은 뜻의 말은 한 낱말로 맞추고, 질문 뜻에
 # 보태지 않는 부탁·물음 꼬리는 지운다. 뜻을 바꾸는 말(이후↔이전, 많은↔적은, 말고 …)은 지우지 않는다.
-_CANON = {
+# 시각 뒤에서만 맞추는 말. "20시 넘어서"는 "20시 이후"지만
+# "2시간 넘는"(길이)·"2시간 뒤에"(지금부터)는 뜻이 달라 바꾸면 안 된다(11/18 PR 전 검토).
+# 그래서 바로 앞이 {time}·{date} 빈칸일 때만 바꾼다
+_AFTER_SLOT = {
     **dict.fromkeys(
         "이후 이후에 이후로 넘어서 넘어 넘은 넘는 지나서 뒤에 후에 부터 부터는".split(), "이후"
     ),
     **dict.fromkeys("이전 이전에 전에 전까지 전".split(), "이전"),
+}
+_CANON = {
     **dict.fromkeys("영화 영화들 영화는 영화가 영화를 영화도 작품 상영작".split(), "영화"),
     **dict.fromkeys("회차 회차들 회차는 회차가 회차를 상영회차 시간표 상영시간표".split(), "회차"),
 }
@@ -182,10 +187,15 @@ def canonical(template: str) -> str:
     for token in template.split():
         word = token.strip("?？!！.,~'\"")
         head = _SLOT_HEAD.match(word)
-        if head and (head.group(2) in _CANON or head.group(2) in _DROP):
+        tail = head.group(2) if head else ""
+        if head and (tail in _CANON or tail in _DROP or tail in _AFTER_SLOT):
             words.append(head.group(1))
-            word = head.group(2)
+            word = tail
         if not word or word in _DROP:
+            continue
+        after_slot = bool(words) and words[-1] in ("{time}", "{date}")
+        if after_slot and word in _AFTER_SLOT:
+            words.append(_AFTER_SLOT[word])
             continue
         words.append(_CANON.get(word, word))
     return " ".join(words)

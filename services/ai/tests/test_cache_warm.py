@@ -68,8 +68,32 @@ def test_first_user_gets_a_cached_answer_without_claude():
 
 
 def test_question_with_an_extra_condition_still_goes_to_claude():
-    from .llm_fakes import tool
+    from seatsac_ai.cache.slots import canonical
 
-    service, cache = make(ScriptedLlm(tool("out_of_scope", reason="x")))
+    from .llm_fakes import tool
+    from .test_cache_flow import FakeEmbedder
+
+    # 유사도를 일부러 0.99로 — 새 낱말("액션") 가드가 막는지 본다(임베딩 우연에 기대지 않게)
+    warm_t, new_t = canonical("오늘 {time} 이후 영화"), canonical("오늘 {time} 이후 액션 영화")
+    embedder = FakeEmbedder({warm_t: [1.0, 0.0], new_t: [0.99, 0.05]})
+    service, cache = make(ScriptedLlm(tool("out_of_scope", reason="x")), embedder)
     asyncio.run(warm(cache, ITEMS))
     assert ask(service, "오늘 21시 이후 액션 영화")["path"] == "OUT_OF_SCOPE"
+
+
+def test_warm_stops_when_the_store_fails():
+    class Broken:
+        embedder = None
+
+        def __init__(self):
+            self.calls = 0
+
+        async def semantic_available(self):
+            return False
+
+        async def put(self, *_):
+            self.calls += 1
+            return False
+
+    broken = Broken()
+    assert asyncio.run(warm(broken, ITEMS)) == 0 and broken.calls == 1

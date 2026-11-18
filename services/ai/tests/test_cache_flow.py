@@ -90,6 +90,18 @@ def test_different_slot_value_reuses_the_template_with_new_value():
     assert "'21:00'" in again["sql"] and ":time" not in again["sql"]
 
 
+def test_cached_preset_answer_keeps_the_way_the_time_was_said():
+    """「오후 8시」처럼 말해도 적중 답 문장이 「조회 결과」로 떨어지지 않는다(#111 리뷰)."""
+    service, _ = make(ScriptedLlm(preset_after("20:00")))
+    first = ask(service, "오늘 오후 8시 이후 영화 알려줘")
+    assert first["path"] == "PRESET" and first["answer"].startswith("오늘 20시 이후 회차: 4건")
+    hit = ask(service, "오늘 오후 8시 이후 영화 알려줘")
+    assert hit["path"] == "CACHE_EXACT"
+    assert hit["answer"].startswith("오늘 오후 8시 이후 회차: 4건")
+    other = ask(service, "오늘 21시 이후 영화 알려줘")
+    assert other["path"] == "CACHE_EXACT" and other["answer"].startswith("오늘 21시 이후 회차: 3건")
+
+
 def test_nl2sql_answer_is_cached_as_a_template():
     llm = ScriptedLlm(tool("run_sql", sql=AFTER_20_SQL, explanation="오늘 20시 이후 회차"))
     service, _ = make(llm)

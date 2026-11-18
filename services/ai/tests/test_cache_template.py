@@ -83,6 +83,17 @@ def test_preset_param_not_from_the_question_is_not_cacheable():
         preset_template("SELECT :time", {"time": "21:00"}, ex("오늘 20시 이후"), TODAY)
 
 
+def test_grade_preset_is_never_templated():
+    # 등급은 질문 슬롯이 아니라 Claude가 고르는 값 — 캐시하면 다른 등급 답을 재사용한다(#111)
+    with pytest.raises(TemplateError):
+        preset_template(
+            "SELECT title FROM movie WHERE view_grade = :grade",
+            {"grade": "ALL"},
+            ex("전체 관람가 영화 알려줘"),
+            TODAY,
+        )
+
+
 def test_render_fills_values_for_display():
     params = system_params(TODAY, NOW_TEXT) | {"time": "21:00"}
     sql = render("SELECT 1 WHERE a = :today AND b >= (:today || ' ' || :time)", params)

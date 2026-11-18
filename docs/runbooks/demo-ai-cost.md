@@ -18,16 +18,13 @@ TOKEN=$(python3 tests/k6/tools/loadtest_users.py tokens --count 1 --min-valid-mi
 | --- | --- | --- |
 | 플래그 켜짐 | `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" "$API/ai/presets"` | 플래그 켜짐이면 ai가 꺼진 상태(`ng-ai` 0)에서 **503**, 켜 둔 상태(2장 — 발표까지 켜 둠)에서 **200**. 어느 상태든 **404면 플래그 꺼짐** → 6-G-3 1번. 토큰 없이 부르면 플래그와 상관없이 401이라(인증이 라우팅보다 먼저) 확인이 안 된다 |
 | 질의 금지 구간 아님 | 런북 6-G-5 | 이 시간에 k6(4.2.x·browse·open-rush)·좌석 녹화·블루/그린이 돌지 않는다. 스크럼에 「AI 데모 ○시~○시」 공유 |
-| 배포 겹침 없음 | `kubectl -n cinema-staging get rollout` | booking·gateway Healthy. gateway PR(#137 등)은 데모 뒤에 머지 |
+| 배포 겹침 없음 | `kubectl -n cinema-staging get rollout` | booking·gateway Healthy. booking·gateway PR(블루/그린)은 데모 뒤에 머지 |
 | 노드 | `infra/scripts/cluster-scale.sh status` | 앱 노드 정상. `ng-ai`는 꺼진 상태면 0(2장에서 켠다), 켜 둔 상태면 1 이상 + ai 파드 Ready |
 
 ## 1. 대시보드 (T-30분, 김종식)
 
-`SeatSAC AI` 대시보드(3.1.22)는 SeatSAC-gitops #28 `observability/dashboards/seatsac-ai.json`이다.
-
-- **머지돼 있으면**: Grafana → Dashboards → **SeatSAC AI**. 없으면 런북 6-G-8 「목록에 SeatSAC AI가 없음」
-- **아직 안 됐으면 gitops #28을 머지**한다. `cinema-observability`만 sync되고(ConfigMap 하나) 서비스 배포·Grafana 재시작이 없어 1분 안에 뜬다
-- 머지할 시간이 없으면 Grafana → Dashboards → New → Import에 #28 브랜치의 같은 JSON을 붙여 넣는다. Grafana 파드가 재시작되면 사라진다(영속 저장소 없음). 데모 뒤 #28을 머지한다
+`SeatSAC AI` 대시보드(3.1.22, SeatSAC-gitops #28 — 11/18 머지)가 올라가 있다: Grafana → Dashboards → **SeatSAC AI**. 목록에 없으면 런북 6-G-8 「목록에 SeatSAC AI가 없음」.
+회색 「질문 없음」 = ai 지표는 수집되는데 질문이 없음, 「수집 없음」 = 그 범위에 ai 지표 자체가 없음(ai 파드 없음·수집 장애 — ② 행 확인).
 
 ```bash
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80   # http://localhost:3000
@@ -72,6 +69,9 @@ unset TOKEN
 | 9 | 내일 날씨 어때? | OUT_OF_SCOPE | 영화 밖 질문은 답하지 않는다 |
 | 10 | (선택) 1번 질문 다시 | CACHE_EXACT | 마무리: ① 「Claude 없이 답한 비율」·「토큰 절감률(추정)」이 오른 것 |
 
+- **머지 상태에 따라 달라지는 것**(데모 전에 `git log origin/main`으로 확인):
+  - #140(잔여석은 물었을 때만·되묻기)이 들어가 있으면 날짜 없이 잔여석을 물을 때 **CLARIFY**(날짜 버튼)로 답한다. 대본 질문에는 잔여석 질문이 없어 경로는 그대로다. 보여 주고 싶으면 (선택) 「잔여석 많은 회차 알려줘」 → 날짜 버튼 → 「오늘」 — 되묻기도 Claude를 부르므로 토큰이 는다. 배포 직후에는 캐시 키가 v2라 비어 있지만 1~4번은 예열(#143)이 다시 채운다
+  - #146(못 답한 요청 기록)이 들어가 있으면 8·9번이 `ai_unmet_demand_total{category}`와 Loki 로그 `unmet demand`에 남는다(5장 캡처 5) — 「답하지 못한 요청을 쌓아 다음 기능 후보로」 장면
 - 「기대」로 적은 4·5·6번은 캐시 상태·Claude 판단에 따라 다른 경로가 나올 수 있다. 틀린 답이 아니라 경로만 다른 것이니 그대로 설명한다. 6번은 5번 답이 캐시에 **저장됐을 때만** 적중한다(Claude가 쓴 SQL로 틀을 못 만들면 `캐시하지 않음`) — 4.2.3에서 재지 않은 쌍이라 리허설에서 한 번 확인한다
 - #143(11/18 머지) 전에는 1번이 PRESET(토큰 사용)이었다. 지금은 「토큰을 쓰는 장면」이 5번이고, 1~4번은 「자주·비슷하게 묻는 질문은 처음부터 토큰 0」을 보여 준다. 예열은 `ai_chat_total`에 세지 않으므로 ①의 숫자는 실제 질문만 센다
 - 대시보드에서 보여 줄 곳: ① 「캐시로 답한 건수」·「쓴 Claude 토큰」(Claude를 부른 질문 뒤에만 는다 — 대본대로면 5번, 4·6번이 캐시를 놓치면 그 질문도), ③ 「경로별 답 / 분」에 `cache_exact`·`cache_semantic` 선이 생긴다
@@ -96,6 +96,11 @@ Prometheus 저장소는 emptyDir라 파드가 옮겨지거나 노드가 내려�
 2. ③ 「경로별 답 / 분」 + 「Claude 토큰 / 분」을 한 화면에 — 캐시 경로가 늘어도 토큰 선은 그대로
 3. ③ 캐시 적중률(층별)
 4. **SeatSAC 신호등**(같은 시간 범위) — AI 데모 중에도 다른 서비스가 정상(격리)
+5. (#146 머지·Loki 적용 뒤, 런북 6-J) Grafana → Explore → 데이터소스 **Loki** — 못 답한 요청 분류·요약:
+   ```logql
+   sum by (category, reason) (count_over_time({namespace="cinema-staging", app="ai"} |= "unmet demand" | json | message="unmet demand" | reason!="" [1h]))
+   ```
+   질문 원문은 없고 Claude 요약(`reason`)만 있다. 그래도 캡처 전에 한 번 훑어 개인정보가 없는지 본다
 
 **ArgoCD** (`kubectl -n argocd port-forward svc/argocd-server 8080:80`)
 1. Applications 목록 — `cinema-ai`가 별도 Application

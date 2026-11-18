@@ -169,3 +169,20 @@ def test_english_guesses_for_an_unknown_movie_are_not_shown():
     service, _ = make(ScriptedLlm(tool("run_sql", sql=sql(where), explanation="주토피아 회차")))
     answer = ask(service, "주토피아 아직 해?")["answer"]
     assert answer.startswith("'주토피아'은(는) 지금 상영 정보에 없는 영화입니다.")
+
+
+# --- 5. 표에 내부 칸이 보이지 않게 --------------------------------------------
+
+
+def test_seat_source_column_is_dropped_and_unsure_seats_are_blank():
+    query = (
+        "SELECT s.starts_at, s.remaining_seats, s.remaining_seats_source FROM screening s "
+        "WHERE s.business_date = '2026-11-17' AND s.starts_at > '2026-11-17 19:40' "
+        "ORDER BY s.starts_at"
+    )
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=query, explanation="오늘 남은 회차")))
+    body = ask(service, "오늘 남은 회차 잔여석")
+    assert [c["name"] for c in body["columns"]] == ["starts_at", "remaining_seats"]
+    seats = dict(body["rows"])
+    assert seats["2026-11-17 22:30"] is None  # 픽스처 5번 회차는 TOTAL
+    assert seats["2026-11-17 20:00"] == 30

@@ -26,7 +26,7 @@ import re
 import secrets
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -436,7 +436,7 @@ class ChatService:
             result = await execute_async(
                 self._store, validated, params, timeout_seconds=timeout, max_rows=self._s.max_rows
             )
-            return validated.sql, result
+            return validated.sql, _hide_seat_source(result)
         except SqlExecutionError as e:
             if e.reason == TIMEOUT:
                 # 다시 물어도 같은 무거운 SQL일 가능성이 커서 바로 거부한다
@@ -633,6 +633,28 @@ def _count_tokens(usage: Usage, path: str) -> None:
 _NAME_COLUMNS = {"name": "theater", "region": "theater", "title": "movie", "title_en": "movie"}
 _DATE_LITERAL = re.compile(r"'(\d{4}-\d{2}-\d{2})")
 _HANGUL = re.compile(r"[가-힣]")
+
+
+def _hide_seat_source(result: QueryResult) -> QueryResult:
+    """결과 표에서 remaining_seats_source 칸을 뺀다(사용자에게는 뜻 없는 내부 값).
+
+    Claude가 이 칸을 SELECT에 넣을 때도 있고 안 넣을 때도 있어 답마다 표 모양이 달랐다.
+    빼기 전에 그 값을 쓴다: BOOKING 이 아닌 줄의 잔여석은 확인된 값이 아니므로 비운다(화면 '–').
+    """
+    names = [c["name"] for c in result.columns]
+    if "remaining_seats_source" not in names:
+        return result
+    src = names.index("remaining_seats_source")
+    seat = names.index("remaining_seats") if "remaining_seats" in names else None
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        if seat is not None and row[src] != "BOOKING":
+            row[seat] = None
+        del row[src]
+        rows.append(row)
+    columns = [c for i, c in enumerate(result.columns) if i != src]
+    return replace(result, columns=columns, rows=rows)
 
 
 def _squash(text: str) -> str:

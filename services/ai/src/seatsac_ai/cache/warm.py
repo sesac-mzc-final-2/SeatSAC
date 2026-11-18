@@ -82,7 +82,7 @@ def _item(preset: Preset, phrasing: str) -> WarmItem:
         relative_words=relative,
         anchors=(),
         template=template,
-        meaning=meaning_signature(phrasing),
+        meaning=meaning_signature(template),  # 질문 쪽과 같은 글자(다듬은 템플릿)로
     )
     return WarmItem(normalize(template), template, entry)
 

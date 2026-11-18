@@ -57,6 +57,25 @@ def test_extra_words(new, cached, extra):
     assert extra_words(new, cached) == extra
 
 
+@pytest.mark.parametrize(
+    ("new", "extra"),
+    [
+        # 꼬리("로"·"은")를 떼면 한 글자만 남는 낱말도 새 낱말이다(#143 리뷰)
+        ("종로 오늘 {time} 이후 영화", ("종로",)),
+        ("구로 오늘 {time} 이후 영화", ("구로",)),
+        ("오늘 {time} 이후 긴 영화", ("긴",)),
+        ("오늘 {time} 이후 짧은 영화", ("짧은",)),
+    ],
+)
+def test_one_letter_stems_still_count_as_new_words(new, extra):
+    assert extra_words(new, "오늘 {time} 이후 영화") == extra
+
+
+def test_filler_like_can_see_is_not_a_new_word():
+    """ "볼 수 있는"은 조건을 더하지 않는다 — 새 낱말로 보면 의미 캐시를 못 쓴다."""
+    assert extra_words("내일 볼 수 있는 영화 목록", "내일 영화 목록") == ()
+
+
 def test_question_with_a_new_word_does_not_reuse_the_cached_sql():
     cached = "내일 잔여석 많은 영화 {n}개"
     new = "내일 홍대 잔여석 많은 영화 {n}개"
@@ -134,6 +153,31 @@ def test_standalone_questions_are_not_followups(question):
     assert not is_followup(question)
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "영화는?",
+        "상영작은?",
+        "조조는?",
+        "심야도 알려줘",
+        "편성표는요",
+        "좌석을 늘려서 볼 수 있는 관",
+    ],
+)
+def test_short_questions_that_stand_alone_are_not_followups(question):
+    """무엇을 볼지 말하는 낱말은 혼자서도 질문이다 — 후속으로 잡으면 캐시를 못 쓴다(#143 리뷰)."""
+    assert not is_followup(question)
+
+
+def test_same_key_phrasings_share_the_exact_cache():
+    """ "20시 전"과 "20시 전에"는 키가 같다 → 뜻 묶음도 같아야 서로 쓴다(#143 리뷰)."""
+    before = sql("s.business_date = '2026-11-17' AND s.starts_at < '2026-11-17 20:00'")
+    llm = ScriptedLlm(tool("run_sql", sql=before, explanation="오늘 20시 전 회차"))
+    service, _ = make(llm)
+    assert ask(service, "오늘 20시 전 영화")["path"] == "NL2SQL"
+    assert ask(service, "오늘 20시 전에 하는 영화")["path"] == "CACHE_EXACT"
+
+
 # --- 4. 편성이 없는 날짜 ------------------------------------------------------
 
 
@@ -143,6 +187,19 @@ def test_asking_past_the_last_scheduled_day_says_so():
     service, _ = make(ScriptedLlm(tool("run_sql", sql=weekend, explanation="이번 주말 회차")))
     answer = ask(service, "이번 주말 회차")["answer"]
     assert "1건입니다. 회차 정보는 11월 21일까지만 있어 그 뒤 날짜는 빠져 있습니다." in answer
+
+
+def test_exclusive_end_date_is_not_counted_as_asked():
+    """business_date < '마지막 영업일 다음 날'은 범위 안만 물은 것이다(#143 리뷰)."""
+    inside = sql("s.business_date >= '2026-11-20' AND s.business_date < '2026-11-22'")
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=inside, explanation="20~21일 회차")))
+    assert "까지만" not in ask(service, "20일부터 21일까지 회차")["answer"]
+
+
+def test_between_past_the_last_day_says_so():
+    weekend = sql("s.business_date BETWEEN '2026-11-21' AND '2026-11-22'")
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=weekend, explanation="이번 주말 회차")))
+    assert "11월 21일까지만 있어" in ask(service, "이번 주말 회차")["answer"]
 
 
 def test_asking_inside_the_range_adds_nothing():
@@ -211,7 +268,7 @@ def test_answer_names_the_movies_and_asks_which_one():
     query = sql("s.business_date = '2026-11-17'") + " ORDER BY s.starts_at"
     service, _ = make(ScriptedLlm(tool("run_sql", sql=query, explanation="오늘 남은 회차")))
     answer = ask(service, "오늘 남은 회차")["answer"]
-    assert "5건입니다. 영화는 고양이 탐정, 별의 항해, 한강의 밤 외 1편이 있습니다." in answer
+    assert "5건입니다. 영화: 고양이 탐정, 별의 항해, 한강의 밤 외 1편." in answer
     assert "어떤 영화의 상영 정보를 안내해 드릴까요?" in answer
 
 

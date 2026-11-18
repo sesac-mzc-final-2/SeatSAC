@@ -27,7 +27,7 @@ import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import sqlglot
@@ -314,7 +314,7 @@ class ChatService:
     ) -> tuple[dict[str, Any] | None, list[float] | None]:
         entry = await cache.get_exact(ext.key_text)
         if entry is not None and (
-            entry.kinds != ext.kinds or tuple(entry.meaning) != meaning_signature(ext.question)
+            entry.kinds != ext.kinds or tuple(entry.meaning) != meaning_signature(ext.template)
         ):
             # 키는 같은데 슬롯 종류나 뜻 묶음(이후/이전·많은/적은 …)이 다르면 쓰지 않는다
             # (hit로 세지 않음)
@@ -380,7 +380,9 @@ class ChatService:
             relative_words=tuple(sorted(ext.relative_words)),
             anchors=template.anchors,
             template=ext.template,
-            meaning=meaning_signature(ext.question),
+            # 뜻 묶음은 키와 같은 글자(다듬은 템플릿)로 낸다. 원문으로 내면 "20시 전"과
+            # "20시 전에"가 키는 같은데 뜻 묶음이 달라 서로 못 쓰고 덮어쓴다(#143 리뷰)
+            meaning=meaning_signature(ext.template),
         )
         if vector is None:
             vector = await self._embed(cache, ext.template)
@@ -547,9 +549,9 @@ class ChatService:
             gone_movie = [a for a in gone_movie if _HANGUL.search(a)]
         parts = []
         if gone_theater:
-            names = "·".join(row[0] for row in theaters)
+            listed = "·".join(names)
             parts.append(
-                f"'{', '.join(gone_theater)}' 지점은 없습니다. 예매할 수 있는 지점: {names}."
+                f"'{', '.join(gone_theater)}' 지점은 없습니다. 예매할 수 있는 지점: {listed}."
             )
         if gone_movie:
             parts.append(f"'{', '.join(gone_movie)}'은(는) 지금 상영 정보에 없는 영화입니다.")
@@ -684,15 +686,25 @@ def _business_dates(sql: str) -> list[str]:
         if column.name != "business_date":
             continue
         parent = column.parent
+        exclusive_end = False
         if isinstance(parent, exp.In):
             values = parent.expressions
+        elif isinstance(parent, exp.Between):
+            # BETWEEN 은 Binary 가 아니다 — "이번 주말"을 BETWEEN 으로 써도 알림이 붙게(#143 리뷰)
+            values = [parent.args["low"], parent.args["high"]]
         elif isinstance(parent, exp.Binary):
-            values = [parent.right if parent.left is column else parent.left]
+            on_left = parent.left is column
+            values = [parent.right if on_left else parent.left]
+            # business_date < '다음 날'(끝 제외)은 그 날짜를 묻지 않은 것이다 → 하루 앞으로 본다
+            exclusive_end = isinstance(parent, exp.LT if on_left else exp.GT)
         else:
             continue
         for value in values:
             if isinstance(value, exp.Literal) and value.is_string:
-                dates += _DATE_LITERAL.findall("'" + value.this)
+                found = _DATE_LITERAL.findall("'" + value.this)
+                if exclusive_end:
+                    found = [(date.fromisoformat(d) - timedelta(days=1)).isoformat() for d in found]
+                dates += found
     return dates
 
 
@@ -715,7 +727,7 @@ def _semantic_match(entry: CacheEntry, similarity: float, ext: Extracted, thresh
         and entry.kinds == ext.kinds
         and set(entry.relative_words) == set(ext.relative_words)
         and tpl.anchors_present(entry.anchors, ext.question)
-        and tuple(entry.meaning) == meaning_signature(ext.question)
+        and tuple(entry.meaning) == meaning_signature(ext.template)
         and not extra_words(ext.template, entry.template)
     )
 
@@ -775,7 +787,8 @@ def _movie_names(result: QueryResult) -> str:
     shown = ", ".join(titles[:MOVIE_NAMES_IN_ANSWER])
     rest = len(titles) - MOVIE_NAMES_IN_ANSWER
     tail = f" 외 {rest}편" if rest > 0 else ""
-    return f" 영화는 {shown}{tail}이 있습니다. 어떤 영화의 상영 정보를 안내해 드릴까요?"
+    # 조사("이/가")에 기대지 않는 문장 — 받침 없는 제목 뒤에 "이"가 붙지 않게(#143 리뷰)
+    return f" 영화: {shown}{tail}. 어떤 영화의 상영 정보를 안내해 드릴까요?"
 
 
 def _clock(iso: str) -> str:

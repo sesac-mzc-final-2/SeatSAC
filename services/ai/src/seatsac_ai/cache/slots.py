@@ -82,9 +82,19 @@ _FOLLOW_UP = re.compile(
     r"그\s*중|이\s+중|이중에|거기|그거|그것|방금|아까|위\s*결과"
     r"|^\s*(그럼|그러면|그리고|그\s*영화|그\s*극장)"
     # 직전 조건을 그대로 쓰겠다는 말("같은 조건으로 건대입구는?", "5개로 늘려서")
-    r"|^\s*(같은\s*(조건|걸로)|마찬가지로?|똑같이|동일하게|이번엔|이번에는)|늘려서|줄여서"
-    # 값 하나만 바꾸는 짧은 말("부산은?", "영등포도 알려줘") — 혼자서는 뜻이 서지 않는다
-    r"|^\s*\S{1,8}(은|는|도)\s*(어때|요|알려\s*줘)?\s*[?？]*\s*$"
+    r"|^\s*(같은\s*(조건|걸로)|마찬가지로?|똑같이|동일하게|이번엔|이번에는)"
+    # 개수만 바꾸는 말. "좌석을 늘려서 볼 수 있는 관"은 아니다 — 숫자 뒤에 올 때만(#143 리뷰)
+    r"|\d+\s*(개|편|곳|건)?\s*(으로|로)\s*(늘려서|줄여서)"
+)
+# 값 하나만 바꾸는 짧은 말("부산은?", "영등포도 알려줘") — 혼자서는 뜻이 서지 않는다.
+# 단 "영화는?"·"조조는?"처럼 무엇을 볼지 말하는 낱말은 혼자서도 질문이다(#143 리뷰):
+# 후속으로 잡으면 세션이 없어도 캐시를 보지도 저장하지도 않고 매번 Claude로 간다
+_SHORT_FOLLOW_UP = re.compile(
+    r"^\s*(?P<word>\S{1,8})(은|는|도)\s*(어때|요|알려\s*줘)?\s*[?？]*\s*$"
+)
+_STANDALONE_WORDS = frozenset(
+    "영화 영화들 작품 상영작 회차 회차들 상영회차 시간표 상영시간표 상영표 편성표 "
+    "조조 심야 극장 지점 상영관 잔여석 좌석 자리 매진".split()
 )
 
 
@@ -115,7 +125,10 @@ _WORD_TAIL = re.compile(
 _FILLER = frozenset(
     "알려줘 알려주세요 알려줄래 보여줘 보여주세요 말해줘 찾아줘 뭐 뭐야 뭐가 뭐있어 뭐해 "
     "있어 있나 있나요 있니 있음 있을까 좀 해줘 줘 주세요 어떤 어느 무슨 혹시 것 거 걸 "
-    "하는 한 할 해 하나 돼 되나 인가 인지 궁금해 어때".split()
+    "하는 한 할 해 하나 돼 되나 인가 인지 궁금해 어때 "
+    # "볼 수 있는"처럼 조건을 더하지 않는 말 — 한 글자 낱말도 새 낱말로 보게 되면서(#143 리뷰)
+    # 빼 두지 않으면 "내일 볼 수 있는 영화 목록"이 의미 캐시를 못 쓴다(평가 세트 80% 시나리오)
+    "볼 수 있는".split()
 )
 
 
@@ -132,8 +145,13 @@ def extra_words(new_template: str, cached_template: str) -> tuple[str, ...]:
     for raw in _WORD_SPLIT.split(_SLOT_TOKEN.sub(" ", new_template)):
         word = raw.lower()
         stem = _WORD_TAIL.sub("", word)
-        if word in _FILLER or stem in _FILLER or len(stem) < 2:
+        if not word or word in _FILLER or stem in _FILLER:
             continue
+        if len(stem) < 2:
+            # "종로"→"종", "짧은"→"짧", "긴"처럼 한 글자만 남으면 원래 낱말로 본다(#143 리뷰).
+            # 건너뛰면 없는 지점·새 조건이 가드를 통과한다. "안"·"더"도 새 낱말이 되지만
+            # 오답보다는 미적중이 낫다
+            stem = word
         # 뜻 묶음에 드는 말("이후"↔"넘어서")은 meaning_signature 가 이미 같은지 본다
         if any(pattern.search(word) for pattern in _MEANING.values()):
             continue
@@ -144,7 +162,10 @@ def extra_words(new_template: str, cached_template: str) -> tuple[str, ...]:
 
 def is_followup(question: str) -> bool:
     """직전 답을 가리키는 질문인가("그중 건대입구만", "그럼 내일은?")."""
-    return bool(_FOLLOW_UP.search(question))
+    if _FOLLOW_UP.search(question):
+        return True
+    short = _SHORT_FOLLOW_UP.match(question)
+    return bool(short) and short.group("word") not in _STANDALONE_WORDS
 
 
 def normalize(text: str) -> str:

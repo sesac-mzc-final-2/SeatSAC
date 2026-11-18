@@ -34,6 +34,16 @@ const COLUMN_LABELS: Record<string, string> = {
   amount: "금액",
   count: "개수",
   screening_count: "회차 수",
+  // 스냅샷의 나머지 칸 — Claude 가 그대로 골랐을 때 영어 이름이 보이지 않게 (계산한 칸은 ai 가 한국어 별칭으로 준다)
+  runtime_minutes: "상영 시간(분)",
+  running_minutes: "상영 시간(분)",
+  slot_minutes: "회차 간격(분)",
+  synopsis: "줄거리",
+  movie_id: "영화 번호",
+  theater_id: "극장 번호",
+  auditorium_id: "상영관 번호",
+  screening_id: "회차 번호",
+  fetched_at: "확인 시각",
 };
 
 export const columnLabel = (column: Pick<ChatColumn, "name">): string => COLUMN_LABELS[column.name] ?? column.name;

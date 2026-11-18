@@ -710,11 +710,33 @@ def _fill_subject(subject: str, ext: Extracted) -> str:
     return subject
 
 
+MOVIE_NAMES_IN_ANSWER = 3  # 답 문장에 이름을 적는 영화 수. 나머지는 "외 N편"
+
+
 def _answer(subject: str, result: QueryResult) -> str:
     if result.row_count == 0:
         return f"{subject}: 조건에 맞는 결과가 없습니다."
     more = " (500건까지 표시)" if result.truncated else ""
-    return f"{subject}: {result.row_count}건입니다.{more}"
+    return f"{subject}: {result.row_count}건입니다.{more}" + _movie_names(result)
+
+
+def _movie_names(result: QueryResult) -> str:
+    """결과에 영화가 두 편 이상이면 이름을 문장에 넣고 어느 영화를 볼지 묻는다.
+
+    "런타임 2시간 이상 영화: 3건입니다"만으로는 표를 읽어야 무슨 영화인지 안다. 화면은 같은 조건
+    (movie_title 칸, 서로 다른 영화 2편 이상)일 때 영화 고르는 버튼을 띄운다(features/ai-chat).
+    """
+    names = [c["name"] for c in result.columns]
+    if "movie_title" not in names:
+        return ""
+    col = names.index("movie_title")
+    titles = list(dict.fromkeys(str(r[col]) for r in result.rows if r[col]))
+    if len(titles) < 2:
+        return ""
+    shown = ", ".join(titles[:MOVIE_NAMES_IN_ANSWER])
+    rest = len(titles) - MOVIE_NAMES_IN_ANSWER
+    tail = f" 외 {rest}편" if rest > 0 else ""
+    return f" 영화는 {shown}{tail}이 있습니다. 어떤 영화의 상영 정보를 안내해 드릴까요?"
 
 
 def _clock(iso: str) -> str:

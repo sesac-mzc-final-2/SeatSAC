@@ -143,16 +143,19 @@
   overflow: hidden;
   padding-bottom: 2px;
 }
-/* 3개 + 「…」가 한 줄에 들어가게 — 긴 제목은 말줄임 */
+/* 3개 + 「…」가 한 줄에 들어가게 — 긴 제목은 말줄임(Chip 이 flex 라 글자는 span 에서 자른다) */
 .presetBar .presets > * {
   min-width: 0;
   flex-shrink: 1;
+}
+.presetBar .presets > .moreChip {
+  flex-shrink: 0;
+}
+.presetBar .presetTitle {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.presetBar .presets > *:last-child {
-  flex-shrink: 0;
 }
 .presetBar .presets::-webkit-scrollbar {
   display: none;

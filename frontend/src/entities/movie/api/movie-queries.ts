@@ -23,3 +23,12 @@ export const movieDetailQuery = (movieId: number) =>
     queryKey: movieKeys.detail(movieId),
     queryFn: ({ signal }) => getMovie(movieId, signal),
   });
+
+/** 지금 상영 중인 영화 한 페이지 전부 (챗봇의 영화 고르기용). catalog `size` 상한이 50이라 50으로 — 상영작은 22편.
+ * 메인 목록(movieListQuery)은 infinite 쿼리라 같은 키를 쓰면 캐시 모양이 섞여 키를 따로 둔다 */
+export const nowShowingMoviesQuery = () =>
+  queryOptions({
+    queryKey: [...movieKeys.all, "now-showing-all"] as const,
+    queryFn: ({ signal }) => listMovies({ status: "NOW_SHOWING", size: 50 }, signal),
+    staleTime: 10 * 60 * 1000,
+  });

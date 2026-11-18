@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { ChatPreset } from "@/entities/ai-chat";
-import { listMovies } from "@/entities/movie";
+import { nowShowingMoviesQuery } from "@/entities/movie";
 import { theaterListQuery } from "@/entities/theater";
 import { todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
@@ -70,13 +70,11 @@ export function ChatPanel({
   // 고르는 목록은 그 버튼을 눌렀을 때만 부른다
   const theaters = useQuery({ ...theaterListQuery(), enabled: picker?.kind === "theater" });
   const movies = useQuery({
-    queryKey: ["ai-chat", "now-showing-movies"],
-    queryFn: ({ signal }) => listMovies({ status: "NOW_SHOWING", size: 100 }, signal),
+    ...nowShowingMoviesQuery(),
     // 영화 고르기 말풍선, 또는 답에 영화가 여럿 나와 고르는 버튼이 있을 때(상영시간표 바로가기에 movieId 가 필요)
     enabled:
       picker?.kind === "movie" ||
       entries.some((entry) => entry.kind === "answer" && answerMovieTitles(entry.response).length > 0),
-    staleTime: 10 * 60 * 1000,
   });
 
   const disabled = notReady || unavailable;
@@ -177,7 +175,7 @@ export function ChatPanel({
 
   const presetChip = (preset: ChatPreset) => (
     <Chip key={preset.presetId} size="sm" disabled={blocked} title={preset.title} onClick={() => choosePreset(preset)}>
-      {preset.title}
+      <span className={styles.presetTitle}>{preset.title}</span>
     </Chip>
   );
   const presetChips = (
@@ -193,6 +191,7 @@ export function ChatPanel({
           size="sm"
           disabled={blocked}
           selected={picker?.kind === "more"}
+          className={styles.moreChip}
           aria-label="추천 질문 더 보기"
           title="추천 질문 더 보기"
           onClick={() => setPicker(picker?.kind === "more" ? null : { kind: "more" })}
@@ -212,7 +211,10 @@ export function ChatPanel({
       aria-modal="false"
       aria-labelledby={titleId}
       onKeyDown={(event) => {
-        if (event.key === "Escape") onClose();
+        if (event.key !== "Escape") return;
+        // 고르는 말풍선이 열려 있으면 그것만 닫는다
+        if (picker) setPicker(null);
+        else onClose();
       }}
     >
       <header className={styles.header}>
@@ -234,7 +236,10 @@ export function ChatPanel({
           <button
             type="button"
             className={styles.iconButton}
-            onClick={restart}
+            onClick={() => {
+              restart();
+              setPicker(null);
+            }}
             disabled={entries.length === 0 && !isPending}
             aria-label="새 대화"
             title="새 대화"

@@ -261,6 +261,9 @@ describe("AiChatDock (3.3.7)", () => {
       const chats = fetchMock.mock.calls.filter(([url]) => String(url) === "/api/ai/chat");
       expect(JSON.parse(String(chats[1]?.[1]?.body)).message).toBe("영화6 어디서 몇 시에 해?");
     });
+    // catalog 는 size 1~50 만 받는다(MovieController @Max(50)) — 넘으면 400 이라 링크가 사라진다
+    const movieCall = fetchMock.mock.calls.find(([url]) => String(url).startsWith("/api/movies"));
+    expect(new URL(String(movieCall?.[0]), "http://x").searchParams.get("size")).toBe("50");
     expect((await screen.findAllByRole("link", { name: /영화6 상영시간표 보기/ }))[0].getAttribute("href")).toBe(
       "/showtimes?movieId=6",
     );

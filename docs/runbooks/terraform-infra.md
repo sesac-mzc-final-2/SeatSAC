@@ -1671,9 +1671,13 @@ kubectl -n cinema-staging get secret booking-secrets -o json | jq -r '.data.APP_
 
 ```bash
 export AWS_PROFILE=cinema-admin
-cd infra/terraform/envs/staging     && terraform plan -var-file=staging.tfvars      # 기대: 9 to add (버킷 5 + Pod Identity 4), 그 밖 변경 없음
+cd infra/terraform/envs/staging
+terraform init -backend-config=backend.hcl       # 새 모듈(loki_pod_identity) 설치 — 빼면 plan이 모듈을 못 찾아 멈춘다
+terraform plan -var-file=staging.tfvars          # 기대: 9 to add (버킷 5 + Pod Identity 4), 그 밖 변경 없음
 terraform apply -var-file=staging.tfvars
-cd ../staging-k8s                   && terraform plan -var-file=staging-k8s.tfvars  # 기대: 1 to add (ConfigMap loki-storage)
+cd ../staging-k8s
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=staging-k8s.tfvars      # 기대: 1 to add (ConfigMap loki-storage)
 terraform apply -var-file=staging-k8s.tfvars
 ```
 
@@ -1682,6 +1686,7 @@ terraform apply -var-file=staging-k8s.tfvars
 #### 6-J-2. 확인
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"                                        # 레포 루트에서 (6-J-1 뒤 셸은 staging-k8s에 있다)
 kubectl -n argocd get application loki alloy                                   # Synced / Healthy
 kubectl -n monitoring get pods -l 'app.kubernetes.io/name in (loki,alloy)'      # Running, loki-0 1/1
 kubectl -n monitoring logs loki-0 -c loki | grep -iE 'AccessDenied|NoSuchBucket|level=error' | head   # 없어야 정상
@@ -1708,7 +1713,8 @@ Grafana(6-F-2와 같은 접속) → Explore → 데이터소스 **Loki**:
 | Grafana에 Loki 데이터소스 없음 | kube-prometheus-stack sync 전 | ArgoCD `kube-prometheus-stack` Synced 확인, 그래도 없으면 Grafana Deployment Restart |
 | 같은 줄이 두 번 | 컨테이너 포트가 8080 말고 더 있다 | Alloy `discovery.relabel`의 포트 필터(`\|8080`)에 맞게 고치는 gitops PR |
 
-- 되돌리기: gitops PR revert → `loki`·`alloy`가 prune된다(서비스·대시보드 영향 없음). 버킷은 남겨도 14일 뒤 비워진다. 지우려면 `loki.tf` 삭제 PR → apply
+- 되돌리기: gitops PR revert → `cinema-root`가 `loki`·`alloy` Application을 prune하고, 두 Application의 finalizer(`resources-finalizer.argocd.argoproj.io`)가 StatefulSet·Deployment·Role·NetworkPolicy까지 지운다(서비스·대시보드 영향 없음). `kubectl -n monitoring get statefulset loki`·`kubectl -n cinema-staging get role alloy`가 NotFound면 끝. 버킷은 남겨도 청크가 14일 뒤 비워진다. 버킷까지 지우려면 **한 PR에서** `envs/staging/loki.tf`·`envs/staging/outputs.tf`의 `loki_bucket_name`·`envs/staging-k8s/loki.tf`를 함께 지우고 apply(출력만 남기면 plan이 없는 리소스를 참조해 실패한다)
+- Loki 파드가 다시 뜨면 compactor가 지우려고 표시해 둔 청크 목록(로컬 marker, emptyDir)이 사라진다 → 그 청크는 조회되지 않은 채 S3 수명 주기(`fake/` 14일)가 지울 때까지 남는다(보존이 최대 약 7일 늘어남). PVC가 없어(EBS CSI 없음) 받아들인 한계
 - 비용: S3 수 GB·요청 수 수준(월 1달러 미만). 노드 추가 없음
 - 알림 Lambda 로그는 CloudWatch에 있다 — Loki로 옮기지 않는다
 

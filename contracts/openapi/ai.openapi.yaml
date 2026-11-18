@@ -129,8 +129,10 @@ paths:
       summary: AI-04 추천 질문 목록 (화면 버튼)
       x-feature-id: AI-04
       description: |
-        `services/ai/src/seatsac_ai/resources/presets.yaml`의 프리셋 12개를 화면 버튼용으로 돌려준다(17-4).
-        버튼을 누르면 화면은 `example` 문장을 그대로 `POST /ai/chat`의 `message`로 보낸다(별도 프리셋 실행 API 없음).
+        `services/ai/src/seatsac_ai/resources/presets.yaml`의 프리셋 13개를 화면 버튼용으로 돌려준다(17-4).
+        버튼을 누르면 화면은 빈칸(시각·개수는 입력창에서 고치기, 극장·영화·날짜·등급은 고르는 버튼)을 사용자가 정하게 한 뒤
+        질문 문장을 `POST /ai/chat`의 `message`로 보낸다. 빈칸이 없는 질문과 화면이 모르는 프리셋은 `example`을 그대로 보낸다
+        (별도 프리셋 실행 API 없음).
         정적 목록이라 ai 자체는 503을 내지 않는다. 화면은 **챗봇 창을 열 때** 이 API를 부른다 — 로그인·메인 진입 때
         자동 호출은 하지 않는다(좌석 데모·부하 테스트 중 `ng-ai` 0대라도 ai 트래픽 0, 런북 6-G-5). 404(플래그 off)면
         「준비 중」 안내 뒤 챗봇 버튼을 숨기고, 503(ai 파드 없음)이면 비활성 안내를 보여준다.

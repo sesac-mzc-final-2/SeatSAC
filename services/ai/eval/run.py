@@ -171,6 +171,9 @@ def load_embedder(semantic: bool):
     return embedder
 
 
+PREWARM = False  # --warm: 시나리오마다 버튼 질문 말투를 미리 넣고 시작(cache/warm.py)
+
+
 async def make_cache(embedder) -> ChatCache:
     """시나리오마다 빈 캐시(fakeredis + 메모리 벡터 인덱스). 임베딩 모델은 한 번 읽은 것을 같이 쓴다."""
     cache = ChatCache(
@@ -179,6 +182,11 @@ async def make_cache(embedder) -> ChatCache:
         embedder=embedder, index=MemoryIndex() if embedder else None,
     )  # fmt: skip
     await cache.start()
+    if PREWARM:
+        from seatsac_ai.cache.warm import preset_items, warm
+        from seatsac_ai.resources import presets
+
+        await warm(cache, preset_items(presets()))
     return cache
 
 
@@ -334,7 +342,10 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--out", type=Path, default=HERE / "out")
     parser.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
+    parser.add_argument("--warm", action="store_true", help="버튼 질문 캐시 예열을 켜고 잰다")
     args = parser.parse_args()
+    global PREWARM
+    PREWARM = args.warm
     snapshot = args.snapshot.expanduser()
     if not snapshot.is_file():
         sys.exit(MISSING_SNAPSHOT.format(path=snapshot))

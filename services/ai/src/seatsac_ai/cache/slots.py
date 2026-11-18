@@ -81,6 +81,20 @@ _FOLLOW_UP = re.compile(
     # "이중섭"처럼 낱말 안의 "이중"은 빼려고 "이 중"(띄어 씀)·"이중에"만 본다
     r"그\s*중|이\s+중|이중에|거기|그거|그것|방금|아까|위\s*결과"
     r"|^\s*(그럼|그러면|그리고|그\s*영화|그\s*극장)"
+    # 직전 조건을 그대로 쓰겠다는 말("같은 조건으로 건대입구는?", "5개로 늘려서")
+    r"|^\s*(같은\s*(조건|걸로)|마찬가지로?|똑같이|동일하게|이번엔|이번에는)"
+    # 개수만 바꾸는 말. "좌석을 늘려서 볼 수 있는 관"은 아니다 — 숫자 뒤에 올 때만(#143 리뷰)
+    r"|\d+\s*(개|편|곳|건)?\s*(으로|로)\s*(늘려서|줄여서)"
+)
+# 값 하나만 바꾸는 짧은 말("부산은?", "영등포도 알려줘") — 혼자서는 뜻이 서지 않는다.
+# 단 "영화는?"·"조조는?"처럼 무엇을 볼지 말하는 낱말은 혼자서도 질문이다(#143 리뷰):
+# 후속으로 잡으면 세션이 없어도 캐시를 보지도 저장하지도 않고 매번 Claude로 간다
+_SHORT_FOLLOW_UP = re.compile(
+    r"^\s*(?P<word>\S{1,8})(은|는|도)\s*(어때|요|알려\s*줘)?\s*[?？]*\s*$"
+)
+_STANDALONE_WORDS = frozenset(
+    "영화 영화들 작품 상영작 회차 회차들 상영회차 시간표 상영시간표 상영표 편성표 "
+    "조조 심야 극장 지점 상영관 잔여석 좌석 자리 매진".split()
 )
 
 
@@ -102,13 +116,110 @@ def meaning_signature(question: str) -> tuple[str, ...]:
     return tuple(k for k, pattern in _MEANING.items() if pattern.search(question))
 
 
+_SLOT_TOKEN = re.compile(r"\{[a-z]+\}")
+_WORD_SPLIT = re.compile(r"[^0-9A-Za-z가-힣]+")
+_WORD_TAIL = re.compile(
+    r"(에서는|에서도|에서|으로|에는|에도|에|의|은|는|이|가|을|를|도|만|로|쪽|점|역|관|극장|지점)$"
+)
+# 뜻을 바꾸지 않는 말(부탁·물음 꼬리). 이것만 다르면 같은 질문으로 본다
+_FILLER = frozenset(
+    "알려줘 알려주세요 알려줄래 보여줘 보여주세요 말해줘 찾아줘 뭐 뭐야 뭐가 뭐있어 뭐해 "
+    "있어 있나 있나요 있니 있음 있을까 좀 해줘 줘 주세요 어떤 어느 무슨 혹시 것 거 걸 "
+    "하는 한 할 해 하나 돼 되나 인가 인지 궁금해 어때 "
+    # "볼 수 있는"처럼 조건을 더하지 않는 말 — 한 글자 낱말도 새 낱말로 보게 되면서(#143 리뷰)
+    # 빼 두지 않으면 "내일 볼 수 있는 영화 목록"이 의미 캐시를 못 쓴다(평가 세트 80% 시나리오)
+    "볼 수 있는".split()
+)
+
+
+def extra_words(new_template: str, cached_template: str) -> tuple[str, ...]:
+    """새 질문에만 있는 낱말. 하나라도 있으면 의미 캐시를 쓰지 않는다(orchestrator).
+
+    슬롯은 스냅샷에 **있는** 극장·영화 이름만 뽑는다. 없는 지점("강남")·없는 영화("주토피아")·
+    새 조건("리클라이너관", "액션")은 템플릿 글자에 그대로 남는데, 임베딩은 낱말 하나 차이를
+    0.93~0.99로 본다(11/18 실측). 그래서 앞서 물은 질문의 SQL이 그 조건 없이 다시 쓰였다.
+    유사도 기준을 올려서는 못 막는다("잠실" 0.985). 낱말로 직접 본다.
+    """
+    base = normalize(_SLOT_TOKEN.sub(" ", cached_template))
+    extra: list[str] = []
+    for raw in _WORD_SPLIT.split(_SLOT_TOKEN.sub(" ", new_template)):
+        word = raw.lower()
+        stem = _WORD_TAIL.sub("", word)
+        if not word or word in _FILLER or stem in _FILLER:
+            continue
+        if len(stem) < 2:
+            # "종로"→"종", "짧은"→"짧", "긴"처럼 한 글자만 남으면 원래 낱말로 본다(#143 리뷰).
+            # 건너뛰면 없는 지점·새 조건이 가드를 통과한다. "안"·"더"도 새 낱말이 되지만
+            # 오답보다는 미적중이 낫다
+            stem = word
+        # 뜻 묶음에 드는 말("이후"↔"넘어서")은 meaning_signature 가 이미 같은지 본다
+        if any(pattern.search(word) for pattern in _MEANING.values()):
+            continue
+        if stem not in base:
+            extra.append(stem)
+    return tuple(extra)
+
+
 def is_followup(question: str) -> bool:
     """직전 답을 가리키는 질문인가("그중 건대입구만", "그럼 내일은?")."""
-    return bool(_FOLLOW_UP.search(question))
+    if _FOLLOW_UP.search(question):
+        return True
+    short = _SHORT_FOLLOW_UP.match(question)
+    return bool(short) and short.group("word") not in _STANDALONE_WORDS
 
 
 def normalize(text: str) -> str:
     return _PUNCT.sub("", text).lower()
+
+
+# --- 템플릿 다듬기 (① 같은 뜻 말 맞추기) ---------------------------------------
+# 값을 빈칸으로 바꾼 뒤에도 "넘어서 시작하는 … 뭐 있어"처럼 꾸미는 말이 다르면 임베딩 유사도가
+# 0.82까지 떨어진다(11/18 실측, 기준 0.92). 비교 전에 같은 뜻의 말은 한 낱말로 맞추고, 질문 뜻에
+# 보태지 않는 부탁·물음 꼬리는 지운다. 뜻을 바꾸는 말(이후↔이전, 많은↔적은, 말고 …)은 지우지 않는다.
+# 시각 뒤에서만 맞추는 말. "20시 넘어서"는 "20시 이후"지만
+# "2시간 넘는"(길이)·"2시간 뒤에"(지금부터)는 뜻이 달라 바꾸면 안 된다(11/18 PR 전 검토).
+# 그래서 바로 앞이 {time}·{date} 빈칸일 때만 바꾼다
+_AFTER_SLOT = {
+    **dict.fromkeys(
+        "이후 이후에 이후로 넘어서 넘어 넘은 넘는 지나서 뒤에 후에 부터 부터는".split(), "이후"
+    ),
+    **dict.fromkeys("이전 이전에 전에 전까지 전".split(), "이전"),
+}
+_CANON = {
+    **dict.fromkeys("영화 영화들 영화는 영화가 영화를 영화도 작품 상영작".split(), "영화"),
+    **dict.fromkeys("회차 회차들 회차는 회차가 회차를 상영회차 시간표 상영시간표".split(), "회차"),
+}
+_DROP = frozenset(
+    "알려줘 알려주세요 알려줄래 알려줄수있어 보여줘 보여주세요 보여줄래 찾아줘 찾아주세요 말해줘 "
+    "뭐 뭐야 뭐가 뭐있어 뭐있나 뭐있음 무슨 어떤 어떤게 있어 있나 있나요 있니 있음 있을까 있어요 "
+    "좀 혹시 그냥 하는 시작하는 상영하는 상영되는 하는거 하는것 하는게 거 것 게 줘 주세요".split()
+)
+_SLOT_HEAD = re.compile(r"^(\{[a-z]+\})(.+)$")
+
+
+def canonical(template: str) -> str:
+    """템플릿 질문 → 비교용 글자.
+
+    "오늘 {time} 넘어서 시작하는 영화 뭐 있어" → "오늘 {time} 이후 영화".
+
+    "{time}부터"처럼 빈칸에 붙은 말도 본다("{time} 이후"). "{n}개"처럼 맞출 말이 아니면 그대로 둔다.
+    """
+    words: list[str] = []
+    for token in template.split():
+        word = token.strip("?？!！.,~'\"")
+        head = _SLOT_HEAD.match(word)
+        tail = head.group(2) if head else ""
+        if head and (tail in _CANON or tail in _DROP or tail in _AFTER_SLOT):
+            words.append(head.group(1))
+            word = tail
+        if not word or word in _DROP:
+            continue
+        after_slot = bool(words) and words[-1] in ("{time}", "{date}")
+        if after_slot and word in _AFTER_SLOT:
+            words.append(_AFTER_SLOT[word])
+            continue
+        words.append(_CANON.get(word, word))
+    return " ".join(words)
 
 
 def extract(
@@ -174,6 +285,7 @@ def extract(
     relative = frozenset(m.group(0) for m in _RELATIVE.finditer(text))
     # "오늘"과 "내일"이 같이 있으면 SQL의 날짜를 어느 쪽으로 바꿀지 모호하다
     many_days = len({RELATIVE_DAYS[w] for w in relative}) > 1
+    text = canonical(text)
     return Extracted(
         question=question,
         template=text,

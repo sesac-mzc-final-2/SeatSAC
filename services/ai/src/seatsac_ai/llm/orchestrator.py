@@ -26,13 +26,23 @@ import re
 import secrets
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from typing import Any
+
+import sqlglot
+from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from seatsac_ai import bookings as my_bookings
 from seatsac_ai.cache import template as tpl
-from seatsac_ai.cache.slots import Extracted, extract, is_followup, meaning_signature
+from seatsac_ai.cache.slots import (
+    Extracted,
+    extra_words,
+    extract,
+    is_followup,
+    meaning_signature,
+)
 from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
@@ -199,7 +209,10 @@ class ChatService:
         calls = 0
         system = prompt.system_blocks(self._s.prompt_cache_enabled)
         messages: list[dict[str, Any]] = [
-            {"role": "user", "content": prompt.user_text(question, now, previous)}
+            {
+                "role": "user",
+                "content": prompt.user_text(question, now, previous, self._data_range()),
+            }
         ]
         last_rejection: dict[str, Any] | None = None
         last_sql: str | None = None
@@ -300,8 +313,12 @@ class ChatService:
         self, cache: ChatCache, ext: Extracted, system_params, deadline
     ) -> tuple[dict[str, Any] | None, list[float] | None]:
         entry = await cache.get_exact(ext.key_text)
-        if entry is not None and entry.kinds != ext.kinds:
-            entry = None  # 키는 같은데 슬롯 종류가 다르면 쓰지 않는다(hit로 세지 않음)
+        if entry is not None and (
+            entry.kinds != ext.kinds or tuple(entry.meaning) != meaning_signature(ext.template)
+        ):
+            # 키는 같은데 슬롯 종류나 뜻 묶음(이후/이전·많은/적은 …)이 다르면 쓰지 않는다
+            # (hit로 세지 않음)
+            entry = None
         AI_CACHE_REQUESTS.labels("exact", "hit" if entry else "miss").inc()
         path = "CACHE_EXACT"
         vector = None
@@ -325,9 +342,9 @@ class ChatService:
             log.warning("캐시 SQL 실행 실패(Claude로 처리): %s", retry.message)
             return None, vector
         subject = _fill_subject(entry.subject, ext)
-        body = self._result_body(
-            path, _answer(subject, result), result, tpl.render(ran_sql, params), entry.preset_id
-        )
+        shown_sql = tpl.render(ran_sql, params)
+        answer = _answer(subject, result) + self._date_note(shown_sql)
+        body = self._result_body(path, answer, result, shown_sql, entry.preset_id)
         return body, vector
 
     async def _save(self, cache, ext: Extracted, made: _Made, system_params, deadline, vector):
@@ -363,7 +380,9 @@ class ChatService:
             relative_words=tuple(sorted(ext.relative_words)),
             anchors=template.anchors,
             template=ext.template,
-            meaning=meaning_signature(ext.question),
+            # 뜻 묶음은 키와 같은 글자(다듬은 템플릿)로 낸다. 원문으로 내면 "20시 전"과
+            # "20시 전에"가 키는 같은데 뜻 묶음이 달라 서로 못 쓰고 덮어쓴다(#143 리뷰)
+            meaning=meaning_signature(ext.template),
         )
         if vector is None:
             vector = await self._embed(cache, ext.template)
@@ -393,7 +412,14 @@ class ChatService:
             # maxLength 80은 도구 스키마의 힌트일 뿐 API가 강제하지 않는다
             explanation = str(call.input.get("explanation") or "조회 결과").strip()[:80]
             ran_sql, result = await self._execute(sql, system_params, deadline, claude_sql=True)
-            body = self._result_body("NL2SQL", _answer(explanation, result), result, ran_sql, None)
+            missing = self._missing_names(ran_sql) if result.row_count == 0 else None
+            if missing:
+                # "결과 없음"만으로는 지점이 없는 건지 회차가 없는 건지 알 수 없다
+                # (11/18 실사용 점검).
+                # 없는 이름에 대한 답은 캐시하지 않는다 — 편성이 바뀌면 답도 바뀐다
+                return self._result_body("NL2SQL", missing, result, ran_sql, None), None
+            answer = _answer(explanation, result) + self._date_note(ran_sql)
+            body = self._result_body("NL2SQL", answer, result, ran_sql, None)
             return body, _Made("NL2SQL", sql, None, {}, explanation, result)
         raise _Retry(f"알 수 없는 도구 {call.name}")
 
@@ -420,7 +446,7 @@ class ChatService:
             result = await execute_async(
                 self._store, validated, params, timeout_seconds=timeout, max_rows=self._s.max_rows
             )
-            return validated.sql, result
+            return validated.sql, _hide_seat_source(result)
         except SqlExecutionError as e:
             if e.reason == TIMEOUT:
                 # 다시 물어도 같은 무거운 SQL일 가능성이 커서 바로 거부한다
@@ -462,6 +488,74 @@ class ChatService:
         if len(close) == 1:
             return close[0]  # '건대' → '건대입구'
         raise _Retry(f"{kind} '{value}'이 스냅샷에 없다. 가능한 값: {', '.join(names[:30])}")
+
+    # --- 스냅샷에 없는 것 알리기 ---------------------------------------------
+
+    def _data_range(self) -> tuple[str, str] | None:
+        with self._store.reader() as conn:
+            first, last = conn.execute(
+                "SELECT min(business_date), max(business_date) FROM screening"
+            ).fetchone()
+        return (first, last) if first and last else None
+
+    def _date_note(self, sql: str) -> str:
+        """SQL이 편성이 있는 마지막 날 뒤의 날짜까지 물었으면 그 사실을 답에 붙인다.
+
+        시드가 며칠치뿐이면 "이번 주말(토·일)"이 토요일 하루치인데도 그렇게 보이지 않는다.
+        """
+        data = self._data_range()
+        asked = _business_dates(sql)
+        if not data or not asked or max(asked) <= data[1]:
+            return ""
+        last = datetime.fromisoformat(data[1])
+        return f" 회차 정보는 {last.month}월 {last.day}일까지만 있어 그 뒤 날짜는 빠져 있습니다."
+
+    def _missing_names(self, sql: str) -> str | None:
+        """결과가 0건일 때: SQL이 찾은 극장·영화 이름이 스냅샷에 아예 없으면 그렇게 말해 준다."""
+        try:
+            tree = sqlglot.parse_one(sql, read="sqlite")
+        except SqlglotError:
+            return None
+        asked: dict[str, list[str]] = {"theater": [], "movie": []}
+        for node in tree.find_all(exp.EQ, exp.Like, exp.In):
+            column = node.this
+            kind = _NAME_COLUMNS.get(column.name) if isinstance(column, exp.Column) else None
+            if kind is None:
+                continue
+            values = node.expressions if isinstance(node, exp.In) else [node.expression]
+            for value in values:
+                if isinstance(value, exp.Literal) and value.is_string:
+                    text = value.this.strip("% ").strip()
+                    if text and text not in asked[kind]:
+                        asked[kind].append(text)
+        if not any(asked.values()):
+            return None
+        with self._store.reader() as conn:
+            theaters = conn.execute("SELECT name, region FROM theater ORDER BY name").fetchall()
+            movies = conn.execute("SELECT title, title_en FROM movie").fetchall()
+        names = [str(row[0]) for row in theaters]
+        regions = {str(row[1]) for row in theaters if row[1]}
+        known_movie = [_squash(str(v)) for row in movies for v in row if v]
+        # 지역은 그 글자 그대로일 때만 안다("서울숲"을 "서울"로 보지 않게).
+        # 극장 이름은 앞뒤 일부도 인정
+        gone_theater = [
+            a
+            for a in asked["theater"]
+            if a not in regions and not any(a in n or n in a for n in names)
+        ]
+        gone_movie = [a for a in asked["movie"] if not any(_squash(a) in k for k in known_movie)]
+        if any(_HANGUL.search(a) for a in gone_movie):
+            # Claude가 영어 제목까지 같이 찾았을 때("Zootopia") 사용자가 쓴 한글 제목만 보여 준다
+            gone_movie = [a for a in gone_movie if _HANGUL.search(a)]
+        parts = []
+        if gone_theater:
+            listed = "·".join(names)
+            parts.append(
+                f"'{', '.join(gone_theater)}' 지점은 없습니다. 예매할 수 있는 지점: {listed}."
+            )
+        if gone_movie:
+            parts.append(f"'{', '.join(gone_movie)}'은(는) 지금 상영 정보에 없는 영화입니다.")
+        return " ".join(parts) or None
 
     # --- 응답·기록 -----------------------------------------------------------
 
@@ -553,6 +647,71 @@ def _count_tokens(usage: Usage, path: str) -> None:
             AI_TOKENS.labels(kind, path).inc(n)
 
 
+# 극장·영화를 이름으로 거르는 칸 → 종류
+_NAME_COLUMNS = {"name": "theater", "region": "theater", "title": "movie", "title_en": "movie"}
+_DATE_LITERAL = re.compile(r"'(\d{4}-\d{2}-\d{2})")
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _hide_seat_source(result: QueryResult) -> QueryResult:
+    """결과 표에서 remaining_seats_source 칸을 뺀다(사용자에게는 뜻 없는 내부 값).
+
+    Claude가 이 칸을 SELECT에 넣을 때도 있고 안 넣을 때도 있어 답마다 표 모양이 달랐다.
+    빼기 전에 그 값을 쓴다: BOOKING 이 아닌 줄의 잔여석은 확인된 값이 아니므로 비운다(화면 '–').
+    """
+    names = [c["name"] for c in result.columns]
+    if "remaining_seats_source" not in names:
+        return result
+    src = names.index("remaining_seats_source")
+    seat = names.index("remaining_seats") if "remaining_seats" in names else None
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        if seat is not None and row[src] != "BOOKING":
+            row[seat] = None
+        del row[src]
+        rows.append(row)
+    columns = [c for i, c in enumerate(result.columns) if i != src]
+    return replace(result, columns=columns, rows=rows)
+
+
+def _business_dates(sql: str) -> list[str]:
+    """SQL이 business_date 와 비교한 날짜 값만 (starts_at 의 다음 날 경계 같은 값은 빼고)."""
+    try:
+        tree = sqlglot.parse_one(sql, read="sqlite")
+    except SqlglotError:
+        return []
+    dates: list[str] = []
+    for column in tree.find_all(exp.Column):
+        if column.name != "business_date":
+            continue
+        parent = column.parent
+        exclusive_end = False
+        if isinstance(parent, exp.In):
+            values = parent.expressions
+        elif isinstance(parent, exp.Between):
+            # BETWEEN 은 Binary 가 아니다 — "이번 주말"을 BETWEEN 으로 써도 알림이 붙게(#143 리뷰)
+            values = [parent.args["low"], parent.args["high"]]
+        elif isinstance(parent, exp.Binary):
+            on_left = parent.left is column
+            values = [parent.right if on_left else parent.left]
+            # business_date < '다음 날'(끝 제외)은 그 날짜를 묻지 않은 것이다 → 하루 앞으로 본다
+            exclusive_end = isinstance(parent, exp.LT if on_left else exp.GT)
+        else:
+            continue
+        for value in values:
+            if isinstance(value, exp.Literal) and value.is_string:
+                found = _DATE_LITERAL.findall("'" + value.this)
+                if exclusive_end:
+                    found = [(date.fromisoformat(d) - timedelta(days=1)).isoformat() for d in found]
+                dates += found
+    return dates
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
 def _semantic_match(entry: CacheEntry, similarity: float, ext: Extracted, threshold: float) -> bool:
     """의미 캐시 적중 조건: 유사도 ≥ 기준 그리고 슬롯 종류 같음(계약 ⑤) + 오적중 막기 2가지.
 
@@ -560,13 +719,16 @@ def _semantic_match(entry: CacheEntry, similarity: float, ext: Extracted, thresh
     - SQL에 굳어 있는 말(리클라이너·15세 같은 값)이 새 질문에도 있다
     - 뜻을 뒤집는 말 묶음(이후/이전·많은/적은·첫/마지막·제외)이 같다
       — 임베딩은 "20시 이후"와 "20시 전에"를 0.93으로 본다(11/10 실측)
+    - 새 질문에만 있는 낱말이 없다 — 없는 지점("강남")·새 조건("리클라이너관")이 붙은 질문에
+      앞 질문의 SQL을 쓰지 않게(slots.extra_words, 11/18 실사용 점검)
     """
     return (
         similarity >= threshold
         and entry.kinds == ext.kinds
         and set(entry.relative_words) == set(ext.relative_words)
         and tpl.anchors_present(entry.anchors, ext.question)
-        and tuple(entry.meaning) == meaning_signature(ext.question)
+        and tuple(entry.meaning) == meaning_signature(ext.template)
+        and not extra_words(ext.template, entry.template)
     )
 
 
@@ -599,11 +761,34 @@ def _fill_subject(subject: str, ext: Extracted) -> str:
     return subject
 
 
+MOVIE_NAMES_IN_ANSWER = 3  # 답 문장에 이름을 적는 영화 수. 나머지는 "외 N편"
+
+
 def _answer(subject: str, result: QueryResult) -> str:
     if result.row_count == 0:
         return f"{subject}: 조건에 맞는 결과가 없습니다."
     more = " (500건까지 표시)" if result.truncated else ""
-    return f"{subject}: {result.row_count}건입니다.{more}"
+    return f"{subject}: {result.row_count}건입니다.{more}" + _movie_names(result)
+
+
+def _movie_names(result: QueryResult) -> str:
+    """결과에 영화가 두 편 이상이면 이름을 문장에 넣고 어느 영화를 볼지 묻는다.
+
+    "런타임 2시간 이상 영화: 3건입니다"만으로는 표를 읽어야 무슨 영화인지 안다. 화면은 같은 조건
+    (movie_title 칸, 서로 다른 영화 2편 이상)일 때 영화 고르는 버튼을 띄운다(features/ai-chat).
+    """
+    names = [c["name"] for c in result.columns]
+    if "movie_title" not in names:
+        return ""
+    col = names.index("movie_title")
+    titles = list(dict.fromkeys(str(r[col]) for r in result.rows if r[col]))
+    if len(titles) < 2:
+        return ""
+    shown = ", ".join(titles[:MOVIE_NAMES_IN_ANSWER])
+    rest = len(titles) - MOVIE_NAMES_IN_ANSWER
+    tail = f" 외 {rest}편" if rest > 0 else ""
+    # 조사("이/가")에 기대지 않는 문장 — 받침 없는 제목 뒤에 "이"가 붙지 않게(#143 리뷰)
+    return f" 영화: {shown}{tail}. 어떤 영화의 상영 정보를 안내해 드릴까요?"
 
 
 def _clock(iso: str) -> str:

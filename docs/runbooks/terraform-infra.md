@@ -1249,7 +1249,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 #### 6-G-3. 켜기 (rc2 11/13, M6 테스트 4.2.1·4.2.2가 **끝난 뒤** 1회)
 
 1. SeatSAC-gitops PR: `overlays/staging/gateway` `APP_AI_ENABLED=true` → gateway 블루/그린 1회(분석 쿼리는 `/ai` 제외 상태). **전제: ai 「도구 강제」 수정 PR(김서현, 11/13)이 머지돼 staging ai 이미지에 들어간 뒤** — 그 전 이미지는 Sonnet 5.5가 도구 강제 옵션을 받지 않아 모든 질문이 503이다. ArgoCD `cinema-ai` 이미지 태그가 그 PR의 머지 커밋인지 확인하고 켠다
-2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다
+2. AI 데모 당일(11/17) 30분 전: **6-G-2 A만** 실행(`up ng-ai` → 노드 배치·readiness·지표·NetworkPolicy). 6-G-2 B(404 확인·`down ng-ai`)는 하지 않는다 — 플래그가 켜져 있어 404가 아니고, 노드를 내리면 데모가 안 된다. 이어서 **6-G-8** `SeatSAC AI` 대시보드를 열어 둔다(파드 Ready 1·스냅샷 나이 초록)
 3. 로그인한 화면에서 `/api/ai/presets` 200 → 추천 질문 1개로 `/api/ai/chat` 200(`path`와 `asOf` 확인)
 4. 데모가 끝난 뒤에만 `cluster-scale.sh down ng-ai`
 
@@ -1435,6 +1435,52 @@ kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ai -w      # Ready�
 
 - 김서현 님께 공유: 의미 캐시 검색이 `no such index`로 실패하면 `semantic_ready`를 내리고 `start()`를 다시 부르게 하면(연결 오류 때의 재시도와 같은 방식) 파드 재시작 없이 복구된다 — rc2 뒤라 `fix/`로, 데모 주간 전(11/15)까지만
 - 결과는 이 절 머리말(⬜ → ✅ + 날짜·응답 시간)과 스크럼에 남긴다. 25초를 넘으면 데모 Plan B: AI 데모 중 ai Valkey 경보(메모리 80%)·`SeatSAC AI` 대시보드를 보고, 무응답이면 `cluster-scale.sh down ng-ai`(6-G-4) 후 「일시 중지」 안내
+
+#### 6-G-8. `SeatSAC AI` 대시보드 (3.1.22, 김종식) — ⬜
+
+ai 지표(계약 5장 `ai_*`)는 신호등이 아니라 이 대시보드에만 둔다(ADR-86). 식은 `services/ai/README.md` 「지표 읽는 법」(#95) 그대로다.
+
+- 코드: SeatSAC-gitops `observability/dashboards/seatsac-ai.json` · `observability/kustomization.yaml`(ConfigMap `dashboard-seatsac-ai`, 라벨 `grafana_dashboard=1`) · 검사 `observability/tests/check.py`(PromQL 문법 + 토큰 절감 카드 값을 합성 데이터로 검증 — `gitops-validate`가 돌린다)
+- **Terraform 변경 없음.** CloudWatch 데이터소스·Grafana Pod Identity는 6-F 그대로이고, 정책이 `cloudwatch:GetMetricData` `resources = "*"`라 ai Valkey(`cinema-staging-ai-valkey-001`) 지표도 읽힌다. 기록 규칙도 추가하지 않는다
+- 적용: gitops PR 머지 → `cinema-observability` 자동 sync → Grafana 사이드카가 1분 안에 올린다. Grafana 재시작·앱 재배포·블루/그린 없음 → 데모 주간에도 시연·측정 중이 아닐 때 머지할 수 있다
+
+| 행 | 패널 | 읽는 법 |
+| --- | --- | --- |
+| ① 토큰 절감 (선택한 시간 범위) | 답한 질문 · Claude 없이 답한 비율 · 캐시로 답한 건수 · 토큰 절감률(추정) · 쓴 Claude 토큰 · Claude 답 1건당 토큰 · 아낀 토큰(추정) · 프롬프트 캐싱 읽기 토큰 | 2차 데모 숫자. **시간 범위 합계**라 데모 시작 시각부터 잡는다. 절감률 = 캐시 답 / (캐시 답 + Claude 답) — 1건당 토큰이 같다고 본 추정. 프롬프트 캐싱(`cache_read`)은 우리 캐시 효과와 섞지 않는다 |
+| ② ai 상태 (지금) | ai 파드 Ready · 스냅샷 나이(오늘·나머지) · `/ai/chat` 5xx 비율 · `/ai/chat` p95 · ai Valkey 메모리 | 스냅샷 오늘 3분 주의·10분 장애, 나머지 30분·1시간. p95는 HTTP 버킷이 10초까지라 10초에서 멈춘다(Claude 지연은 ④). 메모리 70% 주의·80% 장애(경보와 같음) |
+| ③ 경로·캐시 | 경로별 답 / 분 · 캐시 적중률(층별) · Claude 토큰 / 분 | 같은 질문 반복 → 초록(`cache_exact`)이 늘고 토큰 선은 그대로 |
+| ④ Claude API | 호출 지연 p50·p95 · 호출 결과 / 분 · 프롬프트 캐싱 토큰 | `timeout`·`overloaded`·`rate_limited`가 보이면 503 `AI_LLM_UNAVAILABLE` |
+| ⑤ SQL·응답·한도 | SQL 실행 p95 · 검증 거부 · 응답 코드(`/ai/**`) · 한도 초과 | 409·429는 응답 코드에서 본다 |
+| ⑥ 스냅샷·ai Valkey | 스냅샷 나이 추이 · 메모리 % · Evictions | 스냅샷은 톱니 모양이 정상. `noeviction`이라 Evictions는 늘 0 |
+
+**오적중률은 지표로 알 수 없다**(캐시가 틀린 답을 줬는지는 앱이 모른다). 평가 세트(`services/ai` `eval.run`, 김서현) 결과를 발표 자료에 같이 둔다.
+
+확인(머지 뒤 1회, 6-F-2와 같은 접속):
+
+```bash
+kubectl -n argocd get application cinema-observability                 # Synced / Healthy
+kubectl -n monitoring get cm dashboard-seatsac-ai --show-labels         # grafana_dashboard=1
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80   # http://localhost:3000 → Dashboards → SeatSAC AI
+```
+
+| 확인 | 기대 |
+| --- | --- |
+| `ng-ai` 0대 | ② 「ai 파드 Ready」 0대(회색), ① 비율 카드 「질문 없음」, 나머지 「수집 없음」 — 정상. ai Valkey 메모리는 숫자(ElastiCache는 늘 켜져 있다) |
+| 6-G-2 A 뒤(`ng-ai` 1대) | 파드 Ready 1(초록), 스냅샷 나이 · 오늘 3분 미만 |
+| 추천 질문 1개를 두 번(로그인한 화면). **최근 1시간 안에 아무도 묻지 않은 추천 질문**을 고른다 — 정확 일치 캐시 TTL이 1시간이라, 이미 물은 질문은 첫 번째부터 `cache_exact`로 답한다. 뜻이 비슷한 질문이 의미 캐시에 있으면 `cache_semantic`으로 답할 수도 있다(둘 다 정상 — 이때는 첫 번째부터 「캐시로 답한 건수」가 늘고 토큰은 그대로) | 건수는 ①(선택한 시간 범위 합계)에서 **질문마다 늘어난 양**으로 본다. ③은 「/ 분」 처리율이라 건수로 읽지 않고 해당 경로 선이 올라오는지만 본다. 지표는 15초마다 수집되므로 질문 뒤 30초쯤 기다렸다 새로 고친다. 첫 번째 뒤: ① 「답한 질문」 +1 · 「캐시로 답한 건수」 그대로 · 「쓴 Claude 토큰」 증가, ③ `preset` 선이 올라온다. 두 번째 뒤: ① 「답한 질문」 +1 · 「캐시로 답한 건수」 +1 · 「쓴 Claude 토큰」 그대로, ③ `cache_exact` 선이 올라온다. 두 번째에도 「캐시로 답한 건수」가 그대로면 캐시에 저장되지 않은 것이다. ai 로그 `캐시하지 않음(…)`에서 이유를 본다 |
+
+데모에서 쓰는 법(2차 11/17):
+
+1. 데모 30분 전 6-G-3 2번 뒤 대시보드를 열어 ② 상태만 본다(시간 범위는 기본 「최근 30분」 그대로 — 상태 확인에는 충분하다). **데모를 시작할 때** 시간 범위를 **절대 범위(데모 시작 시각 ~ `now`)**로 바꾼다. 시작 시각이 아직 오지 않았을 때 바꾸면 범위가 비어 ①이 아무것도 세지 않는다. 데모 중에는 「최근 30분」 같은 상대 범위를 쓰지 않는다. 리허설 질문이 섞이고, 데모가 길어지면 앞쪽 질문이 빠진다
+2. 같은 질문 반복 → 「캐시로 답한 건수」·「Claude 없이 답한 비율」이 오르고 「쓴 Claude 토큰」은 그대로. 표현만 바꾼 질문 → ③에 `cache_semantic`
+3. ②가 빨강(스냅샷 10분 넘음·5xx 5%·메모리 80%)이거나 ④에 `timeout`이 이어지면 6-G-4 끄기 후 「일시 중지」 안내(6-G-7 Plan B)
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 목록에 **SeatSAC AI**가 없음 | ConfigMap 미sync·라벨 없음 | 6-F-4 첫 행과 같음 (`kubectl -n monitoring get cm -l grafana_dashboard=1`, 사이드카 로그) |
+| 파드 Ready 1인데 ai 지표가 전부 「수집 없음」 | 수집 실패 | Prometheus `/targets`에서 `podMonitor/cinema-staging/ai` 상태. down이면 PodMonitor·NetworkPolicy(`monitoring` → ai, 3.1.20) |
+| 「Claude 답 1건당 토큰」·「아낀 토큰」만 「수집 없음」 | 시간 범위 안에 Claude 답이 0건(전부 캐시) — 0으로 나누지 않게 비워 둔다 | 시간 범위를 넓힌다 |
+| ai Valkey 메모리 「No data」 | 노드 구성이 바뀌어 `CacheClusterId`가 다름 | `aws elasticache describe-replication-groups --replication-group-id cinema-staging-ai-valkey --query 'ReplicationGroups[0].MemberClusters'`의 값으로 대시보드 JSON을 고치는 PR |
 
 ### 6-H. 부하 테스트 — k6 클러스터 Job (4.2.1, OPS-10)
 

@@ -565,7 +565,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] ⚠️AI 노드그룹 `ng-ai`(t3.large 1대, min 0·max 1·desired 0, 라벨·taint `cinema/workload=ai`) · EventBridge Scheduler 켜기 대상에서 제외 · `cluster-scale.sh` 대상 지정(`up`은 `ng-ai` 제외, `up ng-ai`·`down ng-ai`, `down`은 전부) · Budgets 금액 재확정 (3.1.19, rc1)
 - [ ] ⚠️AI gitops `base/ai`(Deployment·Service·NetworkPolicy·PodMonitor, HPA·Flyway Job 없음) · `overlays/staging/ai` · `np-check.sh` · 저장소 변수 `AI_BUILD_PUSH_ENABLED=true` (3.1.20). CI(`changed-services.sh`·`pr-check` `python`·`build-push` ai)는 #79에서 먼저
 - [ ] ⚠️AI gateway 분석 쿼리 `uri!~"/ai.*"` (3.1.21, **rc1 전**)
-- [ ] ⚠️AI AI 대시보드 `SeatSAC AI` + 런북 6-G(켜기·끄기·질의 금지 구간) (3.1.22)
+- [ ] ⚠️AI AI 대시보드 `SeatSAC AI` + 런북 6-G(켜기·끄기·질의 금지 구간) (3.1.22, gitops `observability/dashboards/seatsac-ai.json` — 코드 11/17 · **런북 6-G-8 확인 후 체크**)
 
 ### 9. ⚠️AI ai 서비스 (Python, ADR-82~87)
 

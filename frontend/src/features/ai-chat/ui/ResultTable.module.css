@@ -18,9 +18,29 @@
 }
 .table th,
 .table td {
-  padding: 8px 10px;
+  padding: 8px 4px;
   text-align: left;
+  vertical-align: top;
   white-space: nowrap;
+}
+.table th:first-child,
+.table td:first-child {
+  padding-left: 6px;
+}
+.table th:last-child,
+.table td:last-child {
+  padding-right: 6px;
+}
+/* 글자 열은 띄어쓰기에서 줄을 바꿔 대화창 폭에 맞춘다(시각 "11/18 12:10" → 두 줄). 숫자 열은 한 줄 */
+.table th:not([data-numeric]),
+.table td:not([data-numeric]) {
+  white-space: normal;
+  word-break: keep-all;
+}
+/* 긴 글자 열 하나(영화 제목 등)는 최소 폭을 두어 찌그러지지 않게 하고, 띄어쓰기 없는 긴 제목은 글자에서 끊는다 */
+.table [data-wrap] {
+  min-width: 6em;
+  overflow-wrap: anywhere;
 }
 .table th {
   position: sticky;

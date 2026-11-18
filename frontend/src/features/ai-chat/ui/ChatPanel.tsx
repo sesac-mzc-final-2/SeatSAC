@@ -1,9 +1,28 @@
-import { useEffect, useId, useRef, type FormEvent, type KeyboardEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { ChatPreset } from "@/entities/ai-chat";
+import { nowShowingMoviesQuery } from "@/entities/movie";
+import { theaterListQuery } from "@/entities/theater";
+import { todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
+import {
+  PICK_PROMPTS,
+  answerMovieTitles,
+  movieFromAnswer,
+  dateChoices,
+  gradeChoices,
+  kstHour,
+  movieChoices,
+  presetAction,
+  theaterChoices,
+  type ChatLink,
+  type PickKind,
+  type PresetChoice,
+} from "../lib/preset-actions";
 import { MAX_MESSAGE_LENGTH, useAiChat } from "../model/use-ai-chat";
 import { useDemoMode } from "../model/use-demo-mode";
 import { ChatEntryView } from "./ChatEntryView";
+import { ChoicePicker } from "./ChoicePicker";
 import styles from "./ChatPanel.module.css";
 
 interface Props {
@@ -24,6 +43,11 @@ interface Props {
   onClose: () => void;
 }
 
+/** 아래 추천 질문 줄에 보이는 버튼 수. 나머지는 「…」로 연다(대화창 폭에서 잘리지 않게) */
+const BAR_PRESETS = 3;
+
+type Picker = { kind: PickKind; presetId: string } | { kind: "more" };
+
 /** 우하단 대화창 본문 (AI-01·AI-04). 열려 있는 동안만 마운트된다 */
 export function ChatPanel({
   chat,
@@ -42,6 +66,16 @@ export function ChatPanel({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const { entries, ask, restart, isPending, cooldownSeconds } = chat;
+  const [picker, setPicker] = useState<Picker | null>(null);
+  // 고르는 목록은 그 버튼을 눌렀을 때만 부른다
+  const theaters = useQuery({ ...theaterListQuery(), enabled: picker?.kind === "theater" });
+  const movies = useQuery({
+    ...nowShowingMoviesQuery(),
+    // 영화 고르기 말풍선, 또는 답에 영화가 여럿 나와 고르는 버튼이 있을 때(상영시간표 바로가기에 movieId 가 필요)
+    enabled:
+      picker?.kind === "movie" ||
+      entries.some((entry) => entry.kind === "answer" && answerMovieTitles(entry.response).length > 0),
+  });
 
   const disabled = notReady || unavailable;
   const blocked = disabled || checking || isPending || cooldownSeconds > 0;
@@ -61,11 +95,75 @@ export function ChatPanel({
     log.scrollTop = last ? Math.min(last.offsetTop - 12, log.scrollHeight) : log.scrollHeight;
   }, [entries.length, isPending]);
 
-  const send = (text: string) => {
-    if (ask(text)) {
+  // 고르는 말풍선이 뜨면 보이게 맨 아래로
+  useEffect(() => {
+    if (picker && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [picker, theaters.isSuccess, movies.isSuccess]);
+
+  const send = (text: string, link?: ChatLink) => {
+    if (ask(text, link)) {
       setDraft("");
+      setPicker(null);
       inputRef.current?.focus();
     }
+  };
+
+  /** 고르는 말풍선을 고르지 않고 닫는다. 초점을 가진 버튼이 같이 사라지므로 입력창으로 옮긴다(#142 리뷰) */
+  const closePicker = () => {
+    setPicker(null);
+    inputRef.current?.focus();
+  };
+
+  const choosePreset = (preset: ChatPreset) => {
+    const action = presetAction(preset, kstHour());
+    if (action.kind === "send") {
+      send(action.text);
+      return;
+    }
+    if (action.kind === "pick") {
+      setPicker({ kind: action.pick, presetId: preset.presetId });
+      return;
+    }
+    // 시각·개수는 입력창에 채우고 그 숫자를 선택해 둔다 — 고쳐서 보낸다
+    setPicker(null);
+    setDraft(action.text);
+    requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      const start = action.text.indexOf(action.select);
+      input.focus();
+      input.setSelectionRange(start, start + action.select.length);
+    });
+  };
+
+  // 고르는 말풍선에 보일 선택지 (null = 불러오는 중)
+  let choices: PresetChoice[] | null = [];
+  let choicesFailed = false;
+  if (picker?.kind === "theater") {
+    choices = theaters.data ? theaterChoices(theaters.data.items, todayKst()) : null;
+    choicesFailed = theaters.isError;
+  } else if (picker?.kind === "movie") {
+    choices = movies.data ? movieChoices(picker.presetId, movies.data.content) : null;
+    choicesFailed = movies.isError;
+  } else if (picker?.kind === "date") {
+    choices = dateChoices(todayKst());
+  } else if (picker?.kind === "grade") {
+    choices = gradeChoices();
+  }
+
+  const pickMovie = (title: string) => {
+    const choice = movieFromAnswer(title, movies.data?.content);
+    send(choice.text, choice.link);
+  };
+
+  const pick = (key: string) => {
+    if (picker?.kind === "more") {
+      const preset = presets.find((p) => p.presetId === key);
+      if (preset) choosePreset(preset);
+      return;
+    }
+    const choice = choices?.find((c) => c.key === key);
+    if (choice) send(choice.text, choice.link);
   };
 
   const onSubmit = (event: FormEvent) => {
@@ -81,21 +179,36 @@ export function ChatPanel({
     }
   };
 
+  const presetChip = (preset: ChatPreset) => (
+    <Chip key={preset.presetId} size="sm" disabled={blocked} title={preset.title} onClick={() => choosePreset(preset)}>
+      <span className={styles.presetTitle}>{preset.title}</span>
+    </Chip>
+  );
   const presetChips = (
     <div className={styles.presets} role="group" aria-label="추천 질문">
-      {presets.map((preset) => (
-        <Chip
-          key={preset.presetId}
-          size="sm"
-          disabled={blocked}
-          title={preset.example}
-          onClick={() => send(preset.example)}
-        >
-          {preset.title}
-        </Chip>
-      ))}
+      {presets.map(presetChip)}
     </div>
   );
+  const presetBar = (
+    <div className={styles.presets} role="group" aria-label="추천 질문">
+      {presets.slice(0, BAR_PRESETS).map(presetChip)}
+      {presets.length > BAR_PRESETS && (
+        <Chip
+          size="sm"
+          disabled={blocked}
+          selected={picker?.kind === "more"}
+          className={styles.moreChip}
+          aria-label="추천 질문 더 보기"
+          title="추천 질문 더 보기"
+          onClick={() => setPicker(picker?.kind === "more" ? null : { kind: "more" })}
+        >
+          …
+        </Chip>
+      )}
+    </div>
+  );
+  const pickerOptions =
+    picker?.kind === "more" ? presets.slice(BAR_PRESETS).map((p) => ({ key: p.presetId, label: p.title })) : choices;
 
   return (
     <section
@@ -104,7 +217,10 @@ export function ChatPanel({
       aria-modal="false"
       aria-labelledby={titleId}
       onKeyDown={(event) => {
-        if (event.key === "Escape") onClose();
+        if (event.key !== "Escape") return;
+        // 고르는 말풍선이 열려 있으면 그것만 닫는다
+        if (picker) closePicker();
+        else onClose();
       }}
     >
       <header className={styles.header}>
@@ -126,7 +242,10 @@ export function ChatPanel({
           <button
             type="button"
             className={styles.iconButton}
-            onClick={restart}
+            onClick={() => {
+              restart();
+              setPicker(null);
+            }}
             disabled={entries.length === 0 && !isPending}
             aria-label="새 대화"
             title="새 대화"
@@ -180,9 +299,20 @@ export function ChatPanel({
               key={entry.id}
               entry={entry}
               demo={demo.enabled}
-              onRetry={blocked ? undefined : (question) => send(question)}
+              onRetry={blocked ? undefined : (question, link) => send(question, link)}
+              onPickMovie={blocked ? undefined : pickMovie}
             />
           ))
+        )}
+        {picker && !disabled && (
+          <ChoicePicker
+            prompt={PICK_PROMPTS[picker.kind]}
+            options={pickerOptions}
+            failed={choicesFailed}
+            disabled={blocked}
+            onPick={pick}
+            onCancel={closePicker}
+          />
         )}
         {isPending && (
           <div className={styles.pending} role="status">
@@ -197,7 +327,7 @@ export function ChatPanel({
       </div>
 
       {!disabled && entries.length > 0 && presets.length > 0 && (
-        <div className={styles.presetBar}>{presetChips}</div>
+        <div className={styles.presetBar}>{presetBar}</div>
       )}
 
       <form className={styles.composer} onSubmit={onSubmit}>

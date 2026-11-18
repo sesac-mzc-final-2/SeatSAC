@@ -151,6 +151,46 @@ def normalize(text: str) -> str:
     return _PUNCT.sub("", text).lower()
 
 
+# --- 템플릿 다듬기 (① 같은 뜻 말 맞추기) ---------------------------------------
+# 값을 빈칸으로 바꾼 뒤에도 "넘어서 시작하는 … 뭐 있어"처럼 꾸미는 말이 다르면 임베딩 유사도가
+# 0.82까지 떨어진다(11/18 실측, 기준 0.92). 비교 전에 같은 뜻의 말은 한 낱말로 맞추고, 질문 뜻에
+# 보태지 않는 부탁·물음 꼬리는 지운다. 뜻을 바꾸는 말(이후↔이전, 많은↔적은, 말고 …)은 지우지 않는다.
+_CANON = {
+    **dict.fromkeys(
+        "이후 이후에 이후로 넘어서 넘어 넘은 넘는 지나서 뒤에 후에 부터 부터는".split(), "이후"
+    ),
+    **dict.fromkeys("이전 이전에 전에 전까지 전".split(), "이전"),
+    **dict.fromkeys("영화 영화들 영화는 영화가 영화를 영화도 작품 상영작".split(), "영화"),
+    **dict.fromkeys("회차 회차들 회차는 회차가 회차를 상영회차 시간표 상영시간표".split(), "회차"),
+}
+_DROP = frozenset(
+    "알려줘 알려주세요 알려줄래 알려줄수있어 보여줘 보여주세요 보여줄래 찾아줘 찾아주세요 말해줘 "
+    "뭐 뭐야 뭐가 뭐있어 뭐있나 뭐있음 무슨 어떤 어떤게 있어 있나 있나요 있니 있음 있을까 있어요 "
+    "좀 혹시 그냥 하는 시작하는 상영하는 상영되는 하는거 하는것 하는게 거 것 게 줘 주세요".split()
+)
+_SLOT_HEAD = re.compile(r"^(\{[a-z]+\})(.+)$")
+
+
+def canonical(template: str) -> str:
+    """템플릿 질문 → 비교용 글자.
+
+    "오늘 {time} 넘어서 시작하는 영화 뭐 있어" → "오늘 {time} 이후 영화".
+
+    "{time}부터"처럼 빈칸에 붙은 말도 본다("{time} 이후"). "{n}개"처럼 맞출 말이 아니면 그대로 둔다.
+    """
+    words: list[str] = []
+    for token in template.split():
+        word = token.strip("?？!！.,~'\"")
+        head = _SLOT_HEAD.match(word)
+        if head and (head.group(2) in _CANON or head.group(2) in _DROP):
+            words.append(head.group(1))
+            word = head.group(2)
+        if not word or word in _DROP:
+            continue
+        words.append(_CANON.get(word, word))
+    return " ".join(words)
+
+
 def extract(
     question: str,
     now: datetime,
@@ -214,6 +254,7 @@ def extract(
     relative = frozenset(m.group(0) for m in _RELATIVE.finditer(text))
     # "오늘"과 "내일"이 같이 있으면 SQL의 날짜를 어느 쪽으로 바꿀지 모호하다
     many_days = len({RELATIVE_DAYS[w] for w in relative}) > 1
+    text = canonical(text)
     return Extracted(
         question=question,
         template=text,

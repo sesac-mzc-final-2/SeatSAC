@@ -104,3 +104,31 @@ def test_meaning_signature_separates_opposites():
     assert meaning_signature("20시 이후 영화") == ("after",)
     assert meaning_signature("20시 전에 시작하는 영화") == ("before",)
     assert meaning_signature("잔여석 많은 회차") != meaning_signature("매진 임박 회차")
+
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("오늘 20시 이후 영화 알려줘", "오늘 밤 8시 넘어서 시작하는 영화 뭐 있어"),
+        ("오늘 20시 이후 영화 알려줘", "오늘 오후 8시 이후에 하는 영화 보여줘"),
+        ("오늘 20시부터 하는 영화", "오늘 20시 이후 영화"),
+        ("내일 건대입구 시간표 좀 보여줘", "내일 건대입구 회차 알려줘"),
+    ],
+)
+def test_same_meaning_phrasing_gives_the_same_key(a, b):
+    assert ex(a).key_text == ex(b).key_text
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("오늘 20시 이후 영화", "오늘 20시 전에 하는 영화"),
+        ("오늘 20시 이후 영화", "내일 20시 이후 영화"),
+        ("오늘 잔여석 많은 회차 3개", "오늘 잔여석 적은 회차 3개"),
+        ("오늘 20시 이후 영화", "오늘 20시 이후 영화 말고 회차 수"),
+        ("잔여석 많은 회차 3개", "리클라이너 잔여석 많은 회차 3개"),
+    ],
+)
+def test_different_meaning_keeps_different_keys(a, b):
+    assert ex(a).key_text != ex(b).key_text

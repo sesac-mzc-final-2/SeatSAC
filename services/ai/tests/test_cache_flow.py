@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import fakeredis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
+from seatsac_ai.cache.slots import canonical
 from seatsac_ai.cache.store import ChatCache, MemoryIndex
 from seatsac_ai.config import Settings
 from seatsac_ai.llm.orchestrator import ChatService
@@ -152,15 +153,18 @@ def test_rejected_and_out_of_scope_are_not_cached():
 
 # --- 의미 캐시 ---------------------------------------------------------------
 
-A = "오늘 {time} 이후에 시작하는 영화 알려줘"
-B = "오늘 {time} 넘어서 하는 영화 보여줘"
-C = "내일 {time} 넘어서 하는 영화 보여줘"
+# 템플릿은 canonical 을 거친 글자다("넘어서 하는 … 보여줘" → "이후 영화"). 의미 캐시를 보려면
+# 다듬은 뒤에도 글자가 달라야 해서 첫 질문에 "목록"을 붙였다(새 질문은 새 낱말이 없어야 한다)
+FIRST = "오늘 20시 이후에 시작하는 영화 목록 알려줘"
+A = canonical("오늘 {time} 이후에 시작하는 영화 목록 알려줘")
+B = canonical("오늘 {time} 넘어서 하는 영화 보여줘")
+C = canonical("내일 {time} 넘어서 하는 영화 보여줘")
 
 
 def test_similar_question_is_semantic_hit():
     embedder = FakeEmbedder({A: [1.0, 0.0, 0.0], B: [0.97, 0.2, 0.0]})  # 코사인 약 0.98
     service, _ = make(ScriptedLlm(preset_after("20:00")), embedder)
-    ask(service, "오늘 20시 이후에 시작하는 영화 알려줘")
+    ask(service, FIRST)
     hit = ask(service, "오늘 21시 넘어서 하는 영화 보여줘")
     assert hit["path"] == "CACHE_SEMANTIC" and hit["llm"]["calls"] == 0 and hit["rowCount"] == 3
 
@@ -169,7 +173,7 @@ def test_below_threshold_is_a_miss():
     embedder = FakeEmbedder({A: [1.0, 0.0, 0.0], B: [0.6, 0.8, 0.0]})  # 0.6
     llm = ScriptedLlm(preset_after("20:00"), preset_after("21:00"))
     service, _ = make(llm, embedder)
-    ask(service, "오늘 20시 이후에 시작하는 영화 알려줘")
+    ask(service, FIRST)
     assert ask(service, "오늘 21시 넘어서 하는 영화 보여줘")["path"] == "PRESET"
 
 
@@ -177,7 +181,7 @@ def test_today_answer_is_not_reused_for_tomorrow_even_if_similar():
     embedder = FakeEmbedder({A: [1.0, 0.0, 0.0], C: [0.99, 0.1, 0.0]})
     llm = ScriptedLlm(preset_after("20:00"), tool("out_of_scope", reason="x"))
     service, _ = make(llm, embedder)
-    ask(service, "오늘 20시 이후에 시작하는 영화 알려줘")
+    ask(service, FIRST)
     assert ask(service, "내일 21시 넘어서 하는 영화 보여줘")["path"] == "OUT_OF_SCOPE"
 
 
@@ -187,7 +191,7 @@ def test_fixed_word_in_sql_must_be_in_the_new_question():
         "AND s.business_date = '2026-11-17' AND s.starts_at > '2026-11-17 19:40'"
     )
     q1, q2 = "오늘 리클라이너 회차", "오늘 일반관 회차"
-    embedder = FakeEmbedder({q1: [1.0, 0.0], q2: [0.99, 0.05]})
+    embedder = FakeEmbedder({canonical(q1): [1.0, 0.0], canonical(q2): [0.99, 0.05]})
     llm = ScriptedLlm(tool("run_sql", sql=recliner, explanation="오늘 리클라이너 회차"),
                       tool("out_of_scope", reason="x"))  # fmt: skip
     service, _ = make(llm, embedder)
@@ -199,7 +203,7 @@ def test_semantic_cache_off_by_setting():
     embedder = FakeEmbedder({A: [1.0, 0.0], B: [1.0, 0.0]})
     llm = ScriptedLlm(preset_after("20:00"), preset_after("21:00"))
     service, _ = make(llm, embedder, APP_AI_SEMANTIC_CACHE_ENABLED=False)
-    ask(service, "오늘 20시 이후에 시작하는 영화 알려줘")
+    ask(service, FIRST)
     assert ask(service, "오늘 21시 넘어서 하는 영화 보여줘")["path"] == "PRESET"
     assert embedder.calls == 0
 
@@ -255,11 +259,11 @@ def test_valkey_failure_falls_back_to_claude():
 
 def test_opposite_meaning_is_not_a_semantic_hit():
     """실측: 임베딩은 "이후"와 "전에"를 0.935로 본다. 뜻 묶음 검사로 막는다."""
-    before = "오늘 {time} 전에 시작하는 영화 알려줘"
+    before = canonical("오늘 {time} 전에 시작하는 영화 알려줘")
     embedder = FakeEmbedder({A: [1.0, 0.0, 0.0], before: [0.99, 0.1, 0.0]})
     llm = ScriptedLlm(preset_after("20:00"), tool("out_of_scope", reason="x"))
     service, _ = make(llm, embedder)
-    ask(service, "오늘 20시 이후에 시작하는 영화 알려줘")
+    ask(service, FIRST)
     assert ask(service, "오늘 21시 전에 시작하는 영화 알려줘")["path"] == "OUT_OF_SCOPE"
 
 

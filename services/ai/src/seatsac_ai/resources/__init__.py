@@ -36,6 +36,7 @@ class Preset:
     description: str
     params: tuple[str, ...]
     sql: str
+    phrasings: tuple[str, ...] = ()  # 캐시 예열용 말투(템플릿 글자)
 
 
 MOVIE_PLACEHOLDER = "영화 제목"  # 계약 ai.openapi.yaml GET /ai/presets 예시와 같은 자리 표시
@@ -57,6 +58,7 @@ def presets() -> tuple[Preset, ...]:
             description=p["description"],
             params=tuple(p.get("params") or ()),
             sql=p["sql"].strip(),
+            phrasings=tuple(p.get("phrasings") or ()),
         )
         for p in raw
     )

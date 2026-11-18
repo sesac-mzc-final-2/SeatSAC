@@ -181,6 +181,7 @@ export function ChatPanel({
               entry={entry}
               demo={demo.enabled}
               onRetry={blocked ? undefined : (question) => send(question)}
+              onChoose={blocked ? undefined : (message) => send(message)}
             />
           ))
         )}

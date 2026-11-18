@@ -126,3 +126,11 @@
 .retry:hover {
   background: #ffffff10;
 }
+
+/* 되묻기(CLARIFY) 버튼 — 날짜 고르기 · 조건 확인 */
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}

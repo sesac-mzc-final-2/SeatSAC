@@ -1,7 +1,7 @@
 """질문 처리 순서: 가짜 Claude가 고른 도구에 따라 경로·재요청·거부가 맞게 나오는지."""
 
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
@@ -9,6 +9,7 @@ from seatsac_ai.common.errors import ApiError
 from seatsac_ai.config import Settings
 from seatsac_ai.llm.client import LlmUnavailable
 from seatsac_ai.llm.orchestrator import ChatService
+from seatsac_ai.snapshot.fresh import Fresh
 from seatsac_ai.snapshot.mapper import KST
 from seatsac_ai.snapshot.store import SnapshotNotReady, SnapshotStore
 
@@ -18,7 +19,7 @@ from .sql_fixtures import loaded_store
 NOW = datetime(2026, 11, 17, 19, 40, tzinfo=KST)
 CONTRACT_KEYS = {
     "answer", "path", "columns", "rows", "rowCount", "truncated", "sql",
-    "presetId", "asOf", "llm", "latencyMs", "rejection",
+    "presetId", "asOf", "llm", "latencyMs", "rejection", "choices",
 }  # fmt: skip
 AFTER_20 = (
     "SELECT m.title AS movie_title, s.starts_at FROM screening s "
@@ -152,7 +153,12 @@ def test_today_and_now_are_given_to_claude_outside_the_cached_system():
     assert "오늘: 2026-11-17(화) · 지금: 2026-11-17 19:40" in req["messages"][0]["content"]
     assert req["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert "2026-11-17 19:40 (KST)" not in req["system"][0]["text"]
-    assert [t["name"] for t in req["tools"]] == ["run_preset", "run_sql", "out_of_scope"]
+    assert [t["name"] for t in req["tools"]] == [
+        "run_preset",
+        "run_sql",
+        "ask_user",
+        "out_of_scope",
+    ]
 
 
 def test_prompt_cache_can_be_turned_off():
@@ -306,32 +312,137 @@ def test_text_only_twice_falls_back_to_out_of_scope():
     assert body["llm"]["calls"] == 2 and "세 편" not in body["answer"]
 
 
-class CountingRefresher:
-    def __init__(self):
-        self.calls = 0
+class FakeRefresher:
+    """질문 시점 갱신 가짜: 받은 범위를 적어 두고 정해 둔 결과를 돌려준다."""
 
-    async def ensure_fresh(self):
-        self.calls += 1
-        return True
+    def __init__(self, fresh=None):
+        self.calls = []
+        self.fresh = fresh or Fresh(ok=True, at=datetime(2026, 11, 17, 19, 41, tzinfo=KST))
 
-
-def _ask_with_refresher(llm, question):
-    refresher = CountingRefresher()
-    service = ChatService(loaded_store(), llm, Settings(_env_file=None), refresher=refresher)
-    body = asyncio.run(service.answer(question, now=NOW))
-    return body, refresher.calls
+    async def ensure_fresh(self, days=None, theater_ids=None):
+        self.calls.append((days, theater_ids))
+        return self.fresh
 
 
-def test_seat_sql_refreshes_screenings_first():
-    seats = "SELECT s.starts_at, s.remaining_seats FROM screening s ORDER BY s.remaining_seats DESC"
-    body, calls = _ask_with_refresher(
-        ScriptedLlm(tool("run_sql", sql=seats, explanation="x")), "잔여석 많은 회차"
+def _ask_with(llm, question, refresher=None, **settings):
+    refresher = refresher or FakeRefresher()
+    service = ChatService(
+        loaded_store(), llm, Settings(_env_file=None, **settings), refresher=refresher
     )
-    assert body["path"] == "NL2SQL" and calls == 1
+    return asyncio.run(service.answer(question, now=NOW)), refresher
 
 
-def test_sql_without_seats_does_not_wait_for_refresh():
-    body, calls = _ask_with_refresher(
+SEATS_JOINS = (
+    "SELECT m.title AS movie_title, s.starts_at, s.remaining_seats FROM screening s "
+    "JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id "
+)
+
+
+def test_seat_question_refreshes_only_that_day_and_theater():
+    sql = SEATS_JOINS + "WHERE s.business_date = '2026-11-17' AND t.name = '건대입구'"
+    body, refresher = _ask_with(
+        ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), "오늘 건대입구 잔여석"
+    )
+    assert body["path"] == "NL2SQL"
+    assert refresher.calls == [([date(2026, 11, 17)], [10])]  # 호출 범위 1칸
+    assert body["asOf"] == "2026-11-17T19:41:00+09:00"  # 방금 받은 시각
+    assert "(19시 41분 기준)" in body["answer"]
+
+
+def test_question_without_seats_does_not_refresh():
+    body, refresher = _ask_with(
         ScriptedLlm(tool("run_sql", sql=AFTER_20, explanation="x")), "오늘 20시 이후"
     )
-    assert body["path"] == "NL2SQL" and calls == 0
+    assert body["path"] == "NL2SQL" and refresher.calls == []
+
+
+def test_seat_sql_without_any_date_asks_for_the_date():
+    """Claude가 날짜 없이 잔여석 SQL을 써도 실행하지 않는다 — 짐작하지 않고 묻는다."""
+    sql = SEATS_JOINS + "ORDER BY s.remaining_seats DESC LIMIT 3"
+    body, refresher = _ask_with(
+        ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), "잔여석 많은 회차"
+    )
+    assert body["path"] == "CLARIFY" and body["rows"] is None and refresher.calls == []
+    assert body["answer"] == "언제 보실 건가요? 날짜를 골라 주세요."
+    choices = body["choices"]
+    assert len(choices) == 7
+    assert choices[0] == {"label": "오늘 11/17(화)", "message": "오늘 잔여석 많은 회차"}
+    assert choices[1]["message"] == "내일 잔여석 많은 회차"
+    assert choices[3] == {"label": "11/20(금)", "message": "11월 20일 잔여석 많은 회차"}
+
+
+def test_claude_can_ask_for_the_date():
+    body, _ = _ask_with(ScriptedLlm(tool("ask_user", missing="date")), "자리 남은 회차 있어?")
+    assert (
+        body["path"] == "CLARIFY" and body["choices"][0]["message"] == "오늘 자리 남은 회차 있어?"
+    )
+
+
+def test_wrong_date_is_sent_back_to_claude():
+    """의미 검사: 질문은 내일인데 SQL은 오늘 → 실행하지 않고 다시 쓰게 한다."""
+    wrong = (
+        "SELECT m.title AS movie_title FROM screening s JOIN movie m ON m.movie_id = s.movie_id "
+        "WHERE s.business_date = '2026-11-17'"
+    )
+    right = wrong.replace("2026-11-17", "2026-11-18")
+    llm = ScriptedLlm(
+        tool("run_sql", sql=wrong, explanation="x"), tool("run_sql", sql=right, explanation="x")
+    )
+    body, _ = _ask_with(llm, "내일 상영 영화")
+    assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 2
+    feedback = llm.requests[1]["messages"][-1]["content"][0]["content"]
+    assert "질문의 날짜는 2026-11-18" in feedback
+
+
+def test_missing_theater_is_sent_back_to_claude():
+    no_theater = (
+        SEATS_JOINS.replace(", s.remaining_seats", "") + "WHERE s.business_date = '2026-11-17'"
+    )
+    with_theater = no_theater + " AND t.name = '건대입구'"
+    llm = ScriptedLlm(
+        tool("run_sql", sql=no_theater, explanation="x"),
+        tool("run_sql", sql=with_theater, explanation="x"),
+    )
+    body, _ = _ask_with(llm, "오늘 건대 회차")
+    assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 2
+
+
+def test_condition_still_wrong_after_retries_asks_the_user_to_confirm():
+    wrong = (
+        "SELECT m.title AS movie_title FROM screening s JOIN movie m ON m.movie_id = s.movie_id "
+        "WHERE s.business_date = '2026-11-17'"
+    )
+    llm = ScriptedLlm(*[tool("run_sql", sql=wrong, explanation="x") for _ in range(3)])
+    body, _ = _ask_with(llm, "내일 상영 영화")
+    assert body["path"] == "CLARIFY" and body["llm"]["calls"] == 3
+    assert body["answer"].startswith("11/18(수) 조건을 정확히 반영한 조회를 만들지 못했어요")
+    assert body["choices"] == [{"label": "네, 다시 찾기", "message": "내일 상영 영화"}]
+
+
+def test_unreadable_condition_is_not_blocked():
+    """OR 로 쓴 날짜는 읽지 못한다 → 판단 보류(통과). 확실히 어긋난 것만 막는다."""
+    sql = (
+        "SELECT m.title AS movie_title FROM screening s JOIN movie m ON m.movie_id = s.movie_id "
+        "WHERE (s.business_date = '2026-11-18' OR s.business_date = '2026-11-21')"
+    )
+    body, _ = _ask_with(ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), "내일 상영 영화")
+    assert body["path"] == "NL2SQL" and body["llm"]["calls"] == 1
+
+
+def test_unknown_seats_are_marked_in_the_answer():
+    """강남 22:30 회차는 잔여석 확인 불가(NULL) — 숫자 대신 안내."""
+    sql = SEATS_JOINS + "WHERE s.business_date = '2026-11-17' AND t.name = '강남'"
+    body, _ = _ask_with(ScriptedLlm(tool("run_sql", sql=sql, explanation="x")), "오늘 강남 잔여석")
+    assert [None] == [row[2] for row in body["rows"] if row[2] is None]
+    assert "일부 회차는 잔여석을 확인하지 못했습니다(확인 불가)" in body["answer"]
+
+
+def test_failed_refresh_says_the_seats_are_old():
+    sql = SEATS_JOINS + "WHERE s.business_date = '2026-11-17' AND t.name = '건대입구'"
+    body, _ = _ask_with(
+        ScriptedLlm(tool("run_sql", sql=sql, explanation="x")),
+        "오늘 건대입구 잔여석",
+        refresher=FakeRefresher(Fresh(ok=False)),
+    )
+    assert "잔여석을 지금 새로 확인하지 못해 마지막으로 받은 값입니다" in body["answer"]
+    assert body["asOf"] != "2026-11-17T19:41:00+09:00"  # 주기 갱신 시각 그대로

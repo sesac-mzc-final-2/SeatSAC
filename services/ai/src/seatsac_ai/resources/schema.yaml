@@ -13,7 +13,11 @@ rules:
   - 조회할 수 있는 표는 movie, theater, screening 세 개뿐이다.
   - 시각은 모두 한국 시간(KST) 문자열 'YYYY-MM-DD HH:MM'이다. 시간대 변환을 하지 않는다.
   - 날짜를 SQL 함수(date('now') 등)로 계산하지 않는다. 질문 아래에 주어지는 "오늘"·"지금" 값을 문자열로 그대로 쓴다.
-  - 오늘·내일·토요일 같은 날짜 질문은 screening.business_date(영업일)로 거른다. starts_at의 날짜로 거르지 않는다.
+  - 오늘·내일·토요일 같은 날짜 질문은 screening.business_date(영업일)로 거른다. starts_at의 날짜로 거르지 않는다. 날짜 조건은 business_date = 'YYYY-MM-DD'(여러 날이면 IN (...))로 쓴다.
+  - 질문에 나온 날짜·극장·영화는 빠짐없이 WHERE 조건으로 넣는다. 서버가 질문과 SQL 조건을 비교해 다르면 실행하지 않는다.
+  - remaining_seats(잔여석)는 질문이 잔여석·자리·매진·여유를 물을 때만 SELECT 한다. 회차·시간표·영화 질문에는 넣지 않는다.
+  - 잔여석 질문은 날짜를 반드시 정한다. 어느 날짜인지 알 수 없으면 SQL을 쓰지 말고 ask_user 를 호출한다('지금·곧·오늘 밤'은 오늘).
+  - remaining_seats 가 NULL 이면 확인 불가(예매 서비스가 늦게 답함)다. 0으로 바꾸거나 다른 값으로 채우지 않는다.
   - ○시 이후 질문은 starts_at >= '<날짜> HH:MM' 으로 비교한다. 자정 넘은 심야 회차도 올바르게 포함된다.
   - screening 을 조회하는 SQL에는 항상 starts_at > '<지금>' 을 붙인다. 스냅샷이 최대 1분 늦어 이미 시작한 회차가 남아 있을 수 있다(data-model 6-1).
   - 영화·극장 이름은 질문과 다를 수 있으니 정확히 같을 때는 =, 일부만 맞을 때는 LIKE '%이름%' 을 쓴다.
@@ -60,7 +64,7 @@ tables:
       start_hour: 시작 시각의 '시'(0~23). 심야 질문(22시 이후)은 start_hour >= 22 OR start_hour < 6
       film_format: 상영 포맷(예 '2D'). 없을 수 있음
       total_seats: 전체 좌석 수
-      remaining_seats: 남은 좌석 수
+      remaining_seats: 남은 좌석 수. 확인하지 못한 회차는 NULL(확인 불가)
       remaining_seats_source: remaining_seats 가 어디서 왔는지. 값 뜻은 enums.remaining_seats_source
       fetched_at: 이 행을 가져온 시각(KST). 답에는 쓰지 않는다
 
@@ -79,12 +83,12 @@ enums:
     RECLINER: 리클라이너관
   remaining_seats_source:
     BOOKING: 예매 서비스의 실시간 값(정확)
-    TOTAL: 예매 서비스가 늦게 답해 전체 좌석 수로 대신 채운 값(실제 잔여석 아님). 잔여석·매진 질문에서는 빼거나 '확인 불가'로 다룬다
+    TOTAL: 예매 서비스가 늦게 답해 잔여석을 확인하지 못함. 이때 remaining_seats 는 NULL 이다
 
 examples:
   - question: 오늘 20시 이후에 시작하는 영화 알려줘
     sql: |
-      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats
+      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -94,7 +98,7 @@ examples:
 
   - question: 내일 건대입구 리클라이너관 회차 보여줘
     sql: |
-      SELECT m.title AS movie_title, s.auditorium_name, s.starts_at, s.remaining_seats
+      SELECT m.title AS movie_title, s.auditorium_name, s.starts_at
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -109,7 +113,7 @@ examples:
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
       WHERE s.business_date = '2026-11-17' AND s.starts_at > '2026-11-17 19:40'
-        AND s.remaining_seats_source = 'BOOKING'
+        AND s.remaining_seats IS NOT NULL
       ORDER BY s.remaining_seats DESC, s.starts_at
       LIMIT 3
 

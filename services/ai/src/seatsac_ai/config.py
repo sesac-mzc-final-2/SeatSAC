@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     snapshot_today_interval: Seconds = Field(60, alias="APP_AI_SNAPSHOT_TODAY_INTERVAL")
     snapshot_other_interval: Seconds = Field(600, alias="APP_AI_SNAPSHOT_OTHER_INTERVAL")
     snapshot_days: int = Field(7, alias="APP_AI_SNAPSHOT_DAYS")
-    # 잔여석을 읽는 SQL 직전에 모든 날짜의 회차를 새로 받는다(질문 시점 갱신).
+    # 잔여석을 읽는 SQL 직전에 그 SQL이 조회하는 날짜 × 극장 회차를 새로 받는다(질문 시점 갱신).
     # 제한 시간 안에 못 받으면 기존 스냅샷으로 답한다
     snapshot_refresh_on_chat: bool = Field(True, alias="APP_AI_SNAPSHOT_REFRESH_ON_CHAT")
     snapshot_refresh_timeout_seconds: float = Field(

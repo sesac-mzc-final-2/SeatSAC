@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -30,7 +31,7 @@ from seatsac_ai.snapshot.mapper import (
     screening_row,
     theater_row,
 )
-from seatsac_ai.snapshot.store import SCOPES, SnapshotStore
+from seatsac_ai.snapshot.store import SnapshotStore
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +73,15 @@ def _map_rows(items: Iterable[Any], what: str, mapper: Callable[[Any], dict[str,
     if skipped:
         log.warning("snapshot %s: %d/%d줄 건너뜀", what, skipped, total)
     return rows
+
+
+@dataclass(frozen=True)
+class SeatRefresh:
+    """질문 시점 갱신 한 번의 결과. unknown = 잔여석을 확인하지 못한(TOTAL) 회차 수."""
+
+    at: datetime
+    rows: int
+    unknown: int
 
 
 class SnapshotLoader:
@@ -173,27 +183,42 @@ class SnapshotLoader:
         await asyncio.to_thread(self._store.update, "today", ("screening",), mutate)
         log.info("snapshot today 갱신: 오늘 회차 %d", len(screenings))
 
-    # --- 질문 시점: 모든 날짜의 회차(잔여석) ------------------------------------------
-    async def refresh_all_screenings(self) -> None:
-        """오늘~(days-1)일 뒤 회차를 전부 새로 받아 screening 표를 통째로 바꾼다.
+    # --- 질문 시점: 필요한 날짜 × 극장의 회차(잔여석) --------------------------------
+    async def refresh_screenings(
+        self, days: Sequence[date] | None = None, theater_ids: Sequence[int] | None = None
+    ) -> SeatRefresh:
+        """날짜 × 극장 회차를 새로 받아 그 범위의 screening 행만 바꾼다(잔여석 질문 직전).
 
-        잔여석을 읽는 SQL을 실행하기 직전에 부른다(snapshot/fresh.py). 영화·극장은 시드라
-        바뀌지 않으므로 다시 받지 않는다. 두 범위(today·other)의 갱신 시각을 모두 지금으로 적어
-        답의 기준 시각(asOf)이 이번 갱신 시각이 되게 한다.
+        None 이면 그 축 전체(스냅샷 날짜 범위 · 아는 극장 전부). 영화·극장은 시드라 다시 받지 않고,
+        주기 갱신 시각(asOf)도 건드리지 않는다 — 이번 범위만 새것이기 때문이다(답의 asOf는
+        오케스트레이터가 이번 갱신 시각으로 따로 단다).
         """
         now = self._clock()
         today = now.date()
-        fetched_at = format_minute(now)
-        theater_ids = await self._known_theater_ids()
-        days = [today + timedelta(days=i) for i in range(self._days)]
-        screenings = await self._fetch_screenings(days, theater_ids, fetched_at)
+        window = [today + timedelta(days=i) for i in range(self._days)]
+        wanted_days = [d for d in (days if days is not None else window) if d in window]
+        ids = list(theater_ids) if theater_ids is not None else await self._known_theater_ids()
+        if not wanted_days or not ids:
+            return SeatRefresh(at=now, rows=0, unknown=0)
+        screenings = await self._fetch_screenings(wanted_days, ids, format_minute(now))
+        pairs = [(d.isoformat(), t) for d in wanted_days for t in ids]
 
         def mutate(conn):
-            conn.execute("DELETE FROM screening")
+            conn.executemany(
+                "DELETE FROM screening WHERE business_date = ? AND theater_id = ?", pairs
+            )
             conn.executemany(schema.SCREENING_INSERT, screenings)
 
-        await asyncio.to_thread(self._store.update, SCOPES, ("screening",), mutate)
-        log.info("snapshot 질문 시점 갱신: %d일 회차 %d", len(days), len(screenings))
+        await asyncio.to_thread(self._store.update, (), ("screening",), mutate)
+        unknown = sum(1 for row in screenings if row["remaining_seats"] is None)
+        log.info(
+            "snapshot 질문 시점 갱신: %d일 × 극장 %d → 회차 %d(확인 불가 %d)",
+            len(wanted_days),
+            len(ids),
+            len(screenings),
+            unknown,
+        )
+        return SeatRefresh(at=now, rows=len(screenings), unknown=unknown)
 
     # --- 공통 -----------------------------------------------------------------
     async def _known_theater_ids(self) -> list[int]:

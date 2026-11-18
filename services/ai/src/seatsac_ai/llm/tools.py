@@ -1,10 +1,11 @@
-"""Claude가 고를 수 있는 도구 3개 (기능명세서 v4 15-2 6단계).
+"""Claude가 고를 수 있는 도구 4개 (기능명세서 v4 15-2 6단계).
 
 Claude는 답을 글로 쓰지 않고 이 중 하나를 "호출"한다. Sonnet 5.5는 도구 강제(tool_choice any)를
 받지 않아 auto로 부르고, 호출 없이 글로만 답하면 오케스트레이터가 한 번 다시 시킨다(#111).
   run_preset   미리 써 둔 SQL(presets.yaml) + 빈칸 값   → path PRESET
   run_sql      Claude가 직접 쓴 SQL                     → path NL2SQL (검증기 통과 시)
   out_of_scope 영화·극장·회차와 상관없는 질문            → path OUT_OF_SCOPE
+  ask_user     잔여석을 묻는데 날짜를 알 수 없음          → path CLARIFY (서버가 날짜 버튼을 만든다)
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from seatsac_ai.resources import presets
 RUN_PRESET = "run_preset"
 RUN_SQL = "run_sql"
 OUT_OF_SCOPE = "out_of_scope"
+ASK_USER = "ask_user"
 
 _SLOT_SCHEMA = {
     "time": {"type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$", "description": "HH:MM"},
@@ -65,6 +67,20 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "explanation": {"type": "string", "maxLength": 80},
                 },
                 "required": ["sql", "explanation"],
+            },
+        },
+        {
+            "name": ASK_USER,
+            "description": (
+                "잔여석·자리·매진을 묻는데 어느 날짜인지 알 수 없을 때만 쓴다. "
+                "날짜를 짐작해 SQL을 쓰지 "
+                "말고 이 도구로 사용자에게 날짜를 묻는다. '지금·곧·오늘 밤'처럼 오늘을 뜻하는 말이 "
+                "있으면 쓰지 않는다."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {"missing": {"type": "string", "enum": ["date"]}},
+                "required": ["missing"],
             },
         },
         {

@@ -9,6 +9,7 @@ const PATH_LABELS: Record<ChatPath, string> = {
   MY_BOOKINGS: "내 예매",
   REJECTED: "SQL 거부",
   OUT_OF_SCOPE: "범위 밖",
+  CLARIFY: "되묻기",
 };
 
 /** 데모 모드의 처리 경로 표시 */
@@ -20,6 +21,6 @@ export const isTokenFree = (response: Pick<ChatResponse, "llm">): boolean => res
 /** `asOf`(+09:00) → `19:42 기준` */
 export const asOfLabel = (asOf: string): string => `${timeOfIso(asOf)} 기준`;
 
-/** 결과 표가 있는 답인지 (`REJECTED`·`OUT_OF_SCOPE` 는 columns·rows 가 null) */
+/** 결과 표가 있는 답인지 (`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY` 는 columns·rows 가 null) */
 export const hasResultTable = (response: Pick<ChatResponse, "columns" | "rows">): boolean =>
   !!response.columns && response.columns.length > 0 && !!response.rows;

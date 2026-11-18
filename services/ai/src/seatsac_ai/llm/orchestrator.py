@@ -12,7 +12,16 @@
 — 같은 글자라도 직전 질문에 따라 뜻이 달라서.
 
 재요청 규칙: Claude 호출은 질문당 최대 3회(설정 APP_AI_LLM_MAX_CALLS_PER_QUERY).
-검증 거부·SQL 오류·프리셋 빈칸 오류가 나면 사유를 붙여 다시 묻는다. 남은 호출이 없으면 REJECTED.
+검증 거부·SQL 오류·프리셋 빈칸 오류·조건 불일치가 나면 사유를 붙여 다시 묻는다. 남은 호출이 없으면
+REJECTED(조건 불일치였으면 CLARIFY — 사용자에게 조건을 확인한다).
+
+의미 검사(sql/conditions.py): Claude가 고른 SQL(프리셋 포함)이 질문에서 뽑은 날짜·극장·영화를
+조건으로 갖는지 실행 전에 본다. 빠졌거나 다르면 실행하지 않고 다시 쓰게 한다.
+읽지 못한 조건(OR·범위)은 통과.
+
+잔여석(질문 시점 갱신): SQL이 잔여석을 읽으면 그 SQL이 조회하는 날짜 × 극장만
+실행 직전에 공개 API에서 새로 받는다(snapshot/fresh.py).
+잔여석 질문인데 날짜가 없으면 실행하지 않고 날짜를 되묻는다(CLARIFY).
 전체 기한 25초(APP_AI_REQUEST_DEADLINE_SECONDS) 안에서만 — 매 단계 남은 시간으로 상한을 줄인다.
 """
 
@@ -27,23 +36,30 @@ import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from seatsac_ai import bookings as my_bookings
 from seatsac_ai.cache import template as tpl
-from seatsac_ai.cache.slots import Extracted, extract, is_followup, meaning_signature
+from seatsac_ai.cache.slots import (
+    RELATIVE_DAYS,
+    Extracted,
+    extract,
+    is_followup,
+    meaning_signature,
+)
 from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
 from seatsac_ai.llm.client import NO_TOOL, LlmClient, LlmUnavailable, ToolCall, Usage
-from seatsac_ai.llm.tools import OUT_OF_SCOPE, RUN_PRESET, RUN_SQL, tool_definitions
+from seatsac_ai.llm.tools import ASK_USER, OUT_OF_SCOPE, RUN_PRESET, RUN_SQL, tool_definitions
 from seatsac_ai.resources import Preset, presets
-from seatsac_ai.snapshot.fresh import SeatRefresher, reads_seats
+from seatsac_ai.snapshot.fresh import Fresh, SeatRefresher
 from seatsac_ai.snapshot.mapper import KST
 from seatsac_ai.snapshot.store import SnapshotNotReady, SnapshotStore
+from seatsac_ai.sql.conditions import Conditions, analyze
 from seatsac_ai.sql.executor import (
     SQL_ERROR,
     TIMEOUT,
@@ -74,6 +90,16 @@ _REJECTION_MESSAGE = {
     "SQL_ERROR": "SQL 실행에 실패했습니다.",
     "TIMEOUT": "조회가 너무 오래 걸려 중단했습니다.",
 }
+CLARIFY_DATE_ANSWER = "언제 보실 건가요? 날짜를 골라 주세요."
+CONDITION_MISMATCH = "CONDITION_MISMATCH"
+SEAT_UNKNOWN_NOTE = (
+    " 일부 회차는 잔여석을 확인하지 못했습니다(확인 불가). 잠시 후 다시 물어봐 주세요."
+)
+SEAT_STALE_NOTE = " 잔여석을 지금 새로 확인하지 못해 마지막으로 받은 값입니다."
+_RELATIVE_WORDS = ("오늘", "내일", "모레")
+_WEEKDAYS = "월화수목금토일"
+_CLARIFY_REPLY_MAX = 15  # 되묻기 뒤 이 길이 이하의 답("내일")은 원래 질문에 붙여 다시 처리한다
+
 _SLOT_FORMAT = {
     "time": re.compile(r"^([01]\d|2[0-3]):[0-5]\d$"),
     "date": re.compile(r"^\d{4}-\d{2}-\d{2}$"),
@@ -88,6 +114,44 @@ class _Retry(Exception):
         super().__init__(message)
         self.message = message
         self.rejection = rejection
+
+
+class _Clarify(Exception):
+    """실행하지 않고 사용자에게 되묻는다(body = CLARIFY 응답)."""
+
+    def __init__(self, body: dict[str, Any]) -> None:
+        super().__init__(body["answer"])
+        self.body = body
+
+
+@dataclass(frozen=True)
+class _Ask:
+    """의미 검사·되묻기에 쓰는 이번 질문. ext = 질문에서 뽑은 날짜·극장·영화."""
+
+    question: str
+    ext: Extracted
+    today: date
+
+    def days(self) -> list[str]:
+        """질문이 말한 날짜(YYYY-MM-DD). 없으면 빈 목록."""
+        days = {(self.today + timedelta(days=RELATIVE_DAYS[w])).isoformat()
+                for w in self.ext.relative_words}  # fmt: skip
+        if "date" in self.ext.slots:
+            days.add(str(self.ext.slots["date"].value))
+        return sorted(days)
+
+
+@dataclass(frozen=True)
+class _Ran:
+    """실행 결과 + 잔여석 정보.
+
+    seats = 잔여석을 읽은 SQL이면 그 조건, fresh = 질문 시점 갱신 결과.
+    """
+
+    sql: str
+    result: QueryResult
+    seats: Conditions | None = None
+    fresh: Fresh | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +212,11 @@ class ChatService:
         sid, previous = session_id, None
         if cache is not None and user_id is not None:
             sid, previous = await cache.load_session(user_id, session_id)
+        if previous is not None and previous.get("path") == "CLARIFY":
+            # 되묻기에 짧게 답했으면("내일") 원래 질문에 붙인다. 버튼은 완성된 질문을 보낸다
+            if len(question.strip()) <= _CLARIFY_REPLY_MAX and not is_followup(question):
+                question = f"{question.strip()} {previous['question']}"
+            previous = None
         follow_up = previous is not None and is_followup(question)
         # 문맥(세션)이 없어도 "그중 …" 말투는 캐시를 보지도 저장하지도 않는다(#94 리뷰)
         skip_cache = is_followup(question)
@@ -168,8 +237,9 @@ class ChatService:
                     body, vector = await self._from_cache(cache, ext, system_params, deadline)
             # ⑥⑦ Claude
             if body is None:
+                ask = _Ask(question, ext or self._extract(question, now), now.date())
                 body, made, calls = await self._ask_claude(
-                    question, now, system_params, deadline, usage, previous if follow_up else None
+                    ask, now, system_params, deadline, usage, previous if follow_up else None
                 )
                 # ⑧ 저장 (후속 질문은 직전 문맥에 기대므로 저장하지 않는다)
                 if made is not None and cache is not None and ext is not None and ext.cacheable:
@@ -197,12 +267,12 @@ class ChatService:
         return body
 
     async def _ask_claude(
-        self, question, now, system_params, deadline, usage, previous
+        self, ask: _Ask, now, system_params, deadline, usage, previous
     ) -> tuple[dict[str, Any], _Made | None, int]:
         calls = 0
         system = prompt.system_blocks(self._s.prompt_cache_enabled)
         messages: list[dict[str, Any]] = [
-            {"role": "user", "content": prompt.user_text(question, now, previous)}
+            {"role": "user", "content": prompt.user_text(ask.question, now, previous)}
         ]
         last_rejection: dict[str, Any] | None = None
         last_sql: str | None = None
@@ -229,8 +299,10 @@ class ChatService:
                     return _empty("OUT_OF_SCOPE", OUT_OF_SCOPE_ANSWER, self._as_of()), None, calls
                 failed_path = "preset" if call.name == RUN_PRESET else "nl2sql"
                 try:
-                    body, made = await self._run_tool(call, system_params, deadline)
+                    body, made = await self._run_tool(call, ask, system_params, deadline)
                     return body, made, calls
+                except _Clarify as clarify:
+                    return clarify.body, None, calls
                 except _Retry as retry:
                     last_rejection = retry.rejection or last_rejection
                     if call.name == RUN_SQL:
@@ -245,6 +317,9 @@ class ChatService:
             raise llm_unavailable(exc.reason) from exc  # type: ignore[arg-type]
         # 재요청을 다 쓰고도 실패
         last = last_rejection or {}
+        if last.get("reason") == CONDITION_MISMATCH:
+            # 틀린 조건으로 답하지 않는다 — 사용자에게 조건을 확인하고 다시 찾는다
+            return self._clarify_confirm(ask), None, calls
         rejected = _rejected(
             last.get("reason", "PARSE_ERROR"),
             last.get("object"),
@@ -278,6 +353,7 @@ class ChatService:
             "presetId": None,
             "asOf": as_of,
             "rejection": None,
+            "choices": None,
         }
 
     # --- 캐시 -----------------------------------------------------------------
@@ -321,16 +397,14 @@ class ChatService:
         params = system_params | ext.values()
         try:
             # Claude가 쓴 SQL에서 온 템플릿은 처음 답할 때처럼 시작한 회차 제외 조건을 붙인다
-            ran_sql, result = await self._execute(
+            ran = await self._execute(
                 entry.sql, params, deadline, claude_sql=entry.origin == "NL2SQL"
             )
         except _Retry as retry:  # 스냅샷 모양이 바뀌었거나 너무 오래 걸림 — Claude로
             log.warning("캐시 SQL 실행 실패(Claude로 처리): %s", retry.message)
             return None, vector
         subject = _fill_subject(entry.subject, ext)
-        body = self._result_body(
-            path, _answer(subject, result), result, tpl.render(ran_sql, params), entry.preset_id
-        )
+        body = self._result_body(path, subject, ran, tpl.render(ran.sql, params), entry.preset_id)
         return body, vector
 
     async def _save(self, cache, ext: Extracted, made: _Made, system_params, deadline, vector):
@@ -345,7 +419,7 @@ class ChatService:
             return
         # 같은 값으로 템플릿을 다시 실행해 결과가 같을 때만 저장한다(템플릿 실수 = 오적중을 막는다)
         try:
-            _, again = await self._execute(
+            again = await self._execute(
                 template.sql,
                 system_params | ext.values(),
                 deadline,
@@ -355,7 +429,7 @@ class ChatService:
         except (_Retry, LlmUnavailable) as exc:
             log.info("캐시하지 않음(템플릿 실행 실패): %s", exc)
             return
-        if again.rows != made.result.rows:
+        if again.result.rows != made.result.rows:
             log.info("캐시하지 않음(템플릿 결과가 원래 결과와 다름)")
             return
         entry = CacheEntry(
@@ -376,17 +450,19 @@ class ChatService:
     # --- 도구별 처리 ---------------------------------------------------------
 
     async def _run_tool(
-        self, call: ToolCall, system_params, deadline
+        self, call: ToolCall, ask: _Ask, system_params, deadline
     ) -> tuple[dict[str, Any], _Made | None]:
         if call.name == OUT_OF_SCOPE:
             return _empty("OUT_OF_SCOPE", OUT_OF_SCOPE_ANSWER, self._as_of()), None
+        if call.name == ASK_USER:
+            # Claude가 「잔여석을 묻는데 날짜를 알 수 없다」고 판단했다
+            return self._clarify_date(ask), None
         if call.name == RUN_PRESET:
             preset, slots = self._resolve_preset(call.input)
-            _, result = await self._execute(preset.sql, system_params | slots, deadline)
+            ran = await self._execute(preset.sql, system_params | slots, deadline, ask=ask)
+            result = ran.result
             subject = _preset_subject(preset.title, slots)
-            body = self._result_body(
-                "PRESET", _answer(subject, result), result, None, preset.preset_id
-            )
+            body = self._result_body("PRESET", subject, ran, None, preset.preset_id)
             # 캐시에는 제목의 빈칸 모양으로 남긴다. 실제 시각("20시")으로 남기면 "오후 8시"처럼
             # 다르게 말한 질문에서 값이 빈칸으로 안 바뀌어 적중 답이 「조회 결과」가 된다(#111 리뷰)
             # 전제: 제목의 빈칸 표기는 "○시" 하나뿐 — tests/test_presets.py 가 지킨다
@@ -396,9 +472,9 @@ class ChatService:
             sql = str(call.input.get("sql", ""))
             # maxLength 80은 도구 스키마의 힌트일 뿐 API가 강제하지 않는다
             explanation = str(call.input.get("explanation") or "조회 결과").strip()[:80]
-            ran_sql, result = await self._execute(sql, system_params, deadline, claude_sql=True)
-            body = self._result_body("NL2SQL", _answer(explanation, result), result, ran_sql, None)
-            return body, _Made("NL2SQL", sql, None, {}, explanation, result)
+            ran = await self._execute(sql, system_params, deadline, claude_sql=True, ask=ask)
+            body = self._result_body("NL2SQL", explanation, ran, ran.sql, None)
+            return body, _Made("NL2SQL", sql, None, {}, explanation, ran.result)
         raise _Retry(f"알 수 없는 도구 {call.name}")
 
     async def _execute(
@@ -408,12 +484,13 @@ class ChatService:
         deadline: float,
         claude_sql: bool = False,
         refresh: bool = True,
-    ) -> tuple[str, QueryResult]:
-        """검증 → (잔여석을 읽으면 회차 새로 받기) → 실행. (실제로 실행한 SQL, 결과)
+        ask: _Ask | None = None,
+    ) -> _Ran:
+        """검증 → 조건 분석 → (Claude 경로) 의미 검사·되묻기 → (잔여석) 질문 시점 갱신 → 실행.
 
-        잔여석은 예매 때마다 바뀌어 1분 주기 갱신으로는 늦다. 그래서 SQL이 잔여석을 읽으면
-        실행 직전에 모든 날짜의 회차를 공개 API에서 새로 받는다(snapshot/fresh.py).
-        못 받아도 기존 스냅샷으로 실행한다. 프리셋·캐시·Claude SQL 모두 여기를 지난다.
+        프리셋·캐시·Claude SQL 모두 여기를 지난다. 의미 검사는 Claude가 고른 SQL에만 한다(ask).
+        캐시 템플릿은 저장할 때 같은 결과가 나오는지 확인했고, 저장 전 검증 재실행(refresh=False)은
+        방금 결과와 같은 데이터로 비교해야 해서 갱신하지 않는다.
 
         Claude가 쓴 SQL(claude_sql)은 screening 을 읽는 SELECT마다 `starts_at > :now` 를
         붙여 실행한다(data-model 6-1, #93 리뷰). 조건을 빼먹거나 지금보다 이른 시각과 비교해도
@@ -426,8 +503,13 @@ class ChatService:
             raise _Retry(f"SQL이 거부되었다({r.reason}): {r.message}", rejection) from r
         if claude_sql:
             validated = exclude_started(validated)
-        if refresh and self._refresher is not None and reads_seats(validated):
-            await self._refresher.ensure_fresh()
+        conditions = analyze(validated, params)
+        if ask is not None:
+            self._check(conditions, ask)
+        fresh: Fresh | None = None
+        if refresh and self._refresher is not None and conditions.reads_seats:
+            days, theater_ids = self._refresh_range(conditions)
+            fresh = await self._refresher.ensure_fresh(days, theater_ids)
         timeout = min(self._s.sql_timeout_seconds, deadline - time.monotonic())
         if timeout <= 0:
             raise LlmUnavailable("TIMEOUT")
@@ -435,12 +517,100 @@ class ChatService:
             result = await execute_async(
                 self._store, validated, params, timeout_seconds=timeout, max_rows=self._s.max_rows
             )
-            return validated.sql, result
         except SqlExecutionError as e:
             if e.reason == TIMEOUT:
                 # 다시 물어도 같은 무거운 SQL일 가능성이 커서 바로 거부한다
                 raise _Retry(e.message, {"reason": TIMEOUT, "final": True}) from e
             raise _Retry(f"SQL 실행 오류: {e.message}", {"reason": SQL_ERROR}) from e
+        seats = conditions if conditions.reads_seats else None
+        return _Ran(validated.sql, result, seats, fresh)
+
+    # --- 의미 검사 · 되묻기 · 잔여석 범위 ----------------------------------------
+
+    def _check(self, conditions: Conditions, ask: _Ask) -> None:
+        """질문의 날짜·극장·영화가 SQL 조건에 있는지.
+
+        빠졌거나 다르면 _Retry, 날짜를 물어야 하면 _Clarify.
+
+        읽지 못한 조건(OR·범위 비교)은 판단을 보류하고 통과시킨다 — 확실히 어긋난 것만 막는다.
+        """
+        days = ask.days()
+        if conditions.reads_seats and not days and "date" not in conditions.referenced:
+            # 잔여석은 날짜가 정해져야 그 날짜만 새로 받을 수 있다(오늘로 짐작하지 않는다)
+            raise _Clarify(self._clarify_date(ask))
+        problems: list[str] = []
+        for day in days:
+            if conditions.has_date(day) is False:
+                problems.append(
+                    f"질문의 날짜는 {day}인데 SQL에 business_date = '{day}' 조건이 없다"
+                )
+        theater = ask.ext.slots.get("theater")
+        if theater is not None:
+            name = str(theater.value)
+            if conditions.has_theater(name, self._theater_id(name)) is False:
+                problems.append(f"질문의 극장은 '{name}'인데 SQL에 그 극장 조건이 없다")
+        movie = ask.ext.slots.get("movie")
+        if movie is not None and conditions.has_movie(str(movie.value)) is False:
+            problems.append(f"질문의 영화는 '{movie.value}'인데 SQL에 그 영화 조건이 없다")
+        if problems:
+            message = "; ".join(problems)
+            raise _Retry(
+                f"조건이 질문과 다르다: {message}",
+                {"reason": CONDITION_MISMATCH, "message": "질문의 조건과 다른 조회입니다."},
+            )
+
+    def _refresh_range(self, conditions: Conditions) -> tuple[list[date] | None, list[int] | None]:
+        """잔여석을 새로 받을 날짜 × 극장. 조건을 읽지 못한 축은 None(전체)."""
+        days: list[date] | None = None
+        if conditions.dates is not None:
+            try:
+                days = sorted(date.fromisoformat(d) for d in conditions.dates)
+            except ValueError:
+                days = None
+        ids: set[int] = set(conditions.theater_ids or ())
+        if conditions.theaters is not None:
+            with self._store.reader() as conn:
+                theaters = list(conn.execute("SELECT theater_id, name FROM theater"))
+            for theater_id, name in theaters:
+                if any(m.accepts(name) for m in conditions.theaters):
+                    ids.add(theater_id)
+        return days, (sorted(ids) or None)
+
+    def _theater_id(self, name: str) -> int | None:
+        with self._store.reader() as conn:
+            row = conn.execute("SELECT theater_id FROM theater WHERE name = ?", (name,)).fetchone()
+        return row[0] if row else None
+
+    def _clarify_date(self, ask: _Ask) -> dict[str, Any]:
+        """날짜를 고르는 버튼. 누르면 「날짜 말 + 원래 질문」을 그대로 다시 보낸다."""
+        choices = []
+        for offset in range(self._s.snapshot_days):
+            day = ask.today + timedelta(days=offset)
+            short = f"{day.month}/{day.day}({_WEEKDAYS[day.weekday()]})"
+            if offset < len(_RELATIVE_WORDS):
+                word = _RELATIVE_WORDS[offset]
+                label = f"{word} {short}"
+            else:
+                word = f"{day.month}월 {day.day}일"
+                label = short
+            choices.append({"label": label, "message": f"{word} {ask.question}"})
+        return _clarify(CLARIFY_DATE_ANSWER, choices, self._as_of())
+
+    def _clarify_confirm(self, ask: _Ask) -> dict[str, Any]:
+        """조건을 반영한 SQL을 끝내 못 만들었다 — 이해한 조건을 보여 주고 다시 찾을지 묻는다."""
+        parts = []
+        for day in ask.days():
+            d = date.fromisoformat(day)
+            parts.append(f"{d.month}/{d.day}({_WEEKDAYS[d.weekday()]})")
+        for kind in ("theater", "movie"):
+            if kind in ask.ext.slots:
+                parts.append(str(ask.ext.slots[kind].value))
+        summary = " · ".join(parts) or "질문하신 조건"
+        answer = (
+            f"{summary} 조건을 정확히 반영한 조회를 만들지 못했어요. 이 조건으로 다시 찾아볼까요?"
+        )
+        choices = [{"label": "네, 다시 찾기", "message": ask.question}]
+        return _clarify(answer, choices, self._as_of())
 
     def _resolve_preset(self, raw: dict[str, Any]) -> tuple[Preset, dict[str, Any]]:
         preset = self._presets.get(str(raw.get("presetId")))
@@ -484,10 +654,16 @@ class ChatService:
         as_of = self._store.as_of() or datetime.now(KST)
         return as_of.astimezone(KST).isoformat(timespec="seconds")
 
-    def _result_body(self, path, answer, result, sql, preset_id) -> dict[str, Any]:
-        as_of = self._as_of()
+    def _result_body(self, path, subject, ran: _Ran, sql, preset_id) -> dict[str, Any]:
+        result = ran.result
+        fresh = ran.fresh
+        if fresh is not None and fresh.ok and fresh.at is not None:
+            # 잔여석을 방금 새로 받았다 — 기준 시각은 그 시각(주기 갱신 시각이 아니라)
+            as_of = fresh.at.astimezone(KST).isoformat(timespec="seconds")
+        else:
+            as_of = self._as_of()
         return {
-            "answer": f"{answer} ({_clock(as_of)} 기준)",
+            "answer": f"{_answer(subject, result)} ({_clock(as_of)} 기준){_seat_note(ran)}",
             "path": path,
             "columns": result.columns,
             "rows": result.rows,
@@ -497,6 +673,7 @@ class ChatService:
             "presetId": preset_id,
             "asOf": as_of,
             "rejection": None,
+            "choices": None,
         }
 
     def _record(self, question: str, body: dict[str, Any], usage: Usage) -> None:
@@ -638,7 +815,30 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
         "presetId": None,
         "asOf": as_of,
         "rejection": None,
+        "choices": None,
     }
+
+
+def _clarify(answer: str, choices: list[dict[str, str]], as_of: str) -> dict[str, Any]:
+    """되묻기(CLARIFY). choices = 버튼 [{label, message}] — 누르면 message 를 그대로 보낸다."""
+    body = _empty("CLARIFY", answer, as_of)
+    body["choices"] = choices
+    return body
+
+
+def _seat_note(ran: _Ran) -> str:
+    """잔여석 답에 붙이는 안내. 새로 못 받았거나 확인 불가(NULL) 회차가 섞였을 때만."""
+    if ran.seats is None:
+        return ""
+    note = SEAT_STALE_NOTE if ran.fresh is not None and not ran.fresh.ok else ""
+    result = ran.result
+    seat_index = [i for i, c in enumerate(result.columns) if c["name"] in ran.seats.seat_outputs]
+    unknown_shown = any(row[i] is None for row in result.rows for i in seat_index)
+    # sum(remaining_seats) 같은 묶음 계산은 확인 불가 회차를 조용히 빼고 센다
+    unknown_summed = ran.seats.seat_aggregate and (ran.fresh is None or ran.fresh.unknown > 0)
+    if unknown_shown or unknown_summed:
+        note += SEAT_UNKNOWN_NOTE
+    return note
 
 
 def _rejected(

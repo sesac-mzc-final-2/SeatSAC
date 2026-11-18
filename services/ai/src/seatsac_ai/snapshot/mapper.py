@@ -104,7 +104,11 @@ def screening_row(data: Mapping[str, Any], fetched_at: str) -> dict[str, Any]:
         "start_hour": starts.hour,
         "film_format": data.get("filmFormat"),
         "total_seats": data.get("totalSeats"),
-        "remaining_seats": data.get("remainingSeats"),
+        # booking이 늦게 답하면 catalog는 전체 좌석 수(TOTAL)로 채운다. 실제 잔여석이 아니므로
+        # 저장할 때부터 NULL(확인 불가)로 둔다 — 정렬·필터·합계에 가짜 숫자가 섞이지 않게
+        "remaining_seats": (
+            data.get("remainingSeats") if data.get("remainingSeatsSource") == "BOOKING" else None
+        ),
         "remaining_seats_source": data.get("remainingSeatsSource"),
         "fetched_at": fetched_at,
     }

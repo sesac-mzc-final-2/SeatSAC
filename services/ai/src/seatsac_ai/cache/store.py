@@ -1,7 +1,12 @@
 """ai Valkey의 캐시·세션 (WBS 3.4.5 · conventions 4장 키 표).
 
-  ai:exact:{sha256(정규화 템플릿 질문)}   1시간  정확 일치: SQL 템플릿 + 슬롯 종류 + 경로
-  ai:semcache:{id} (HASH, ai_semcache_idx) 1시간  의미 캐시: 템플릿 질문 임베딩(384 FLOAT32, COSINE)
+  ai:exact:v2:{sha256(정규화 템플릿 질문)}       1시간  정확 일치: SQL 템플릿 + 슬롯 종류 + 경로
+  ai:semcache:v2:{id} (HASH, ai_semcache_v2_idx) 1시간  의미 캐시: 템플릿 질문 임베딩
+                                                        (384 FLOAT32, COSINE)
+
+키의 v2(CACHE_VERSION): 저장된 SQL 템플릿의 뜻이 바뀌면 올린다.
+옛 키는 보지 않고 1시간 TTL로 사라진다.
+  v2 (#140) 잔여석 칸은 잔여석을 물었을 때만 SELECT — v1 템플릿에는 묻지 않은 잔여석이 들어 있다
   ai:session:{userId}:{sessionId}          30분   후속 질문 문맥(직전 질문·SQL)
 
 캐시는 비용을 줄이는 장치일 뿐이다. Valkey가 실패하면 **놓친 것(miss)으로 보고** Claude로 답한다
@@ -24,8 +29,10 @@ from redis.exceptions import RedisError, ResponseError
 
 log = logging.getLogger(__name__)
 
-SEMCACHE_INDEX = "ai_semcache_idx"
-SEMCACHE_PREFIX = "ai:semcache:"
+CACHE_VERSION = "v2"
+SEMCACHE_INDEX = f"ai_semcache_{CACHE_VERSION}_idx"
+SEMCACHE_PREFIX = f"ai:semcache:{CACHE_VERSION}:"
+OLD_SEMCACHE_INDEXES = ("ai_semcache_idx",)  # 옛 버전 인덱스 — 기동 때 지운다(문서는 TTL로 사라짐)
 SEMCACHE_MAX = 5000  # conventions 4장: 넘으면 저장하지 않음(1건 약 2.5KB)
 DIM = 384
 
@@ -88,7 +95,7 @@ def kinds_tag(kinds: Sequence[str]) -> str:
 
 
 def exact_key(key_text: str) -> str:
-    return "ai:exact:" + hashlib.sha256(key_text.encode()).hexdigest()
+    return f"ai:exact:{CACHE_VERSION}:" + hashlib.sha256(key_text.encode()).hexdigest()
 
 
 def session_key(user_id: str, session_id: str) -> str:
@@ -115,6 +122,13 @@ class ValkeySearchIndex:
         except ResponseError as exc:
             if "already exists" not in str(exc).lower():
                 raise
+        for old in OLD_SEMCACHE_INDEXES:
+            # 옛 버전 인덱스는 새 문서를 받지 않는다(접두어가 다름).
+            # 인덱스만 지우고 문서는 TTL에 맡긴다
+            try:
+                await self._v.execute_command("FT.DROPINDEX", old)
+            except ResponseError:
+                pass  # 이미 없음
 
     async def count(self) -> int:
         info = await self._v.execute_command("FT.INFO", SEMCACHE_INDEX)

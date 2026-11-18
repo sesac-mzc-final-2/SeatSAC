@@ -6,6 +6,7 @@ import { SessionContext, unavailableSession, type Session } from "@/entities/ses
 import { AiChatDock } from "./AiChatDock";
 import nl2sql from "../../../../../contracts/openapi/examples/ai/chat-nl2sql.json";
 import cacheSemantic from "../../../../../contracts/openapi/examples/ai/chat-cache-semantic.json";
+import clarify from "../../../../../contracts/openapi/examples/ai/chat-clarify.json";
 
 const TRACE = "0123456789abcdef0123456789abcdef";
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -111,6 +112,28 @@ describe("AiChatDock (3.3.7)", () => {
     expect(JSON.parse(String(secondInit?.body))).toEqual({
       message: "매진 임박한 회차",
       sessionId: cacheSemantic.value.sessionId,
+    });
+  });
+
+  it("되묻기(CLARIFY)면 날짜 버튼을 보여 주고, 누르면 그 질문을 같은 sessionId 로 보낸다", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/ai/presets") return json(200, presets);
+      return json(200, fetchMock.mock.calls.length <= 2 ? clarify.value : nl2sql.value);
+    });
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "질문" }), "잔여석 많은 회차{Enter}");
+
+    expect(await screen.findByText(clarify.value.answer)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "내일 11/18(수)" }));
+
+    expect(await screen.findByText(nl2sql.value.answer)).toBeInTheDocument();
+    const [, init] = fetchMock.mock.calls[2];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      message: "내일 잔여석 많은 회차",
+      sessionId: clarify.value.sessionId,
     });
   });
 

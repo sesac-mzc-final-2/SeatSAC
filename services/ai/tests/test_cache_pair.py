@@ -5,15 +5,18 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
 
 import fakeredis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from seatsac_ai.cache.slots import normalize
-from seatsac_ai.cache.store import ChatCache, MemoryIndex, entry_id, exact_key
+from seatsac_ai.cache.store import ChatCache, MemoryIndex, exact_key
 from seatsac_ai.cache.warm import preset_items, warm
+from seatsac_ai.llm.orchestrator import entry_id
 from seatsac_ai.resources import presets
 
 from .llm_fakes import ScriptedLlm, tool
@@ -73,19 +76,43 @@ def test_semantic_hit_points_at_the_stored_entry_with_similarity():
     assert hit["path"] == "CACHE_SEMANTIC"
     # 새 질문의 키가 아니라 찾은 항목의 키 — 그래야 처음 답과 짝이 된다
     assert hit["cache"] == {
-        "entryId": first["cache"]["entryId"], "stored": False, "similarity": 0.979,
+        "entryId": first["cache"]["entryId"], "stored": False, "similarity": 0.98,
     }  # fmt: skip
     assert first["cache"]["stored"] is True and first["cache"]["similarity"] is None
 
 
-def test_entry_id_is_the_prefix_of_the_cache_key_hash():
-    """정확 일치 키(sha256 전체)·의미 캐시 문서 ID(앞 24자)와 같은 해시의 앞 12자."""
-    service, cache = make(ScriptedLlm(preset_after("20:00")), FakeEmbedder())
-    body = ask(service, QUESTION)
-    eid = body["cache"]["entryId"]
-    keys = asyncio.run(cache._v.keys("ai:exact:*"))
-    assert len(keys) == 1 and keys[0].rsplit(":", 1)[1].startswith(eid)
-    assert [doc_id[:12] for doc_id in cache._index.docs] == [eid]
+def test_entry_id_is_keyed_same_entry_same_value_other_entry_other_value():
+    """서버 비밀로 HMAC 한 값 — 캐시 키 해시에서 잘라 낸 글자가 아니라 틀 문장을 밖에서 맞혀 볼 수 없다."""
+    llm = ScriptedLlm(
+        preset_after("20:00"),
+        tool("run_preset", presetId="theater_schedule", params={"date": "2026-11-18", "theater": "건대입구"}),
+    )  # fmt: skip
+    service, cache = make(llm, FakeEmbedder())
+    after = ask(service, QUESTION)
+    schedule = ask(service, "내일 건대입구 편성표 보여줘")
+    assert after["cache"]["stored"] is True and schedule["cache"]["stored"] is True
+    assert after["cache"]["entryId"] != schedule["cache"]["entryId"]  # 다른 항목이면 다른 값
+    assert ask(service, QUESTION)["cache"]["entryId"] == after["cache"]["entryId"]  # 같은 항목
+    key_hashes = [k.rsplit(":", 1)[1] for k in asyncio.run(cache._v.keys("ai:exact:*"))]
+    assert len(key_hashes) == 2
+    for body in (after, schedule):
+        assert not any(body["cache"]["entryId"] in key_hash for key_hash in key_hashes)
+        assert not any(body["cache"]["entryId"] in doc_id for doc_id in cache._index.docs)
+    # 키 없이 틀 문장만으로는 같은 값을 만들 수 없다
+    assert (
+        after["cache"]["entryId"]
+        != hashlib.sha256("오늘 {time} 이후 영화".encode()).hexdigest()[:12]
+    )
+
+
+def test_another_users_hit_points_at_the_entry_the_first_user_stored():
+    service, _ = make(ScriptedLlm(preset_after("20:00")))
+    mine = ask(service, QUESTION, user="user-a")
+    theirs = ask(service, "오늘 21시 이후 영화 알려줘", user="user-b")
+    assert theirs["path"] == "CACHE_EXACT" and theirs["sessionId"] != mine["sessionId"]
+    assert theirs["cache"] == {
+        "entryId": mine["cache"]["entryId"], "stored": False, "similarity": None,
+    }  # fmt: skip
 
 
 def test_warmed_button_question_hit_carries_its_entry_id():
@@ -110,6 +137,50 @@ def test_warmed_entry_semantic_hit_points_at_the_warmed_entry():
     assert hit["cache"] == {
         "entryId": entry_id(warmed.key_text), "stored": False, "similarity": 1.0,
     }  # fmt: skip
+
+
+# --- 저장 판정 ------------------------------------------------------------------
+
+
+class NoAddIndex(MemoryIndex):
+    """의미 색인에 넣는 것만 실패한다(정확 일치 저장은 된다)."""
+
+    async def add(self, *_):
+        raise RedisConnectionError("down")
+
+
+def test_exact_stored_but_semantic_index_failed_is_still_stored():
+    """다음 같은 질문은 정확 일치 항목에서 나온다 — 짝이 맞으려면 처음 답이 stored 여야 한다."""
+    service, cache = make(ScriptedLlm(preset_after("20:00")), FakeEmbedder())
+    cache._index = NoAddIndex()
+    first = ask(service, QUESTION)
+    assert first["path"] == "PRESET" and cache._index.docs == {}  # 의미 색인에는 못 넣었다
+    assert first["cache"] == {
+        "entryId": first["cache"]["entryId"], "stored": True, "similarity": None,
+    }  # fmt: skip
+    second = ask(service, QUESTION)
+    assert second["path"] == "CACHE_EXACT"
+    assert second["cache"]["entryId"] == first["cache"]["entryId"]
+
+
+def test_broken_cached_sql_goes_to_claude_and_is_stored_again():
+    """캐시 SQL이 실행되지 않으면(스냅샷 모양이 바뀜) Claude가 답하고 같은 항목을 다시 저장한다."""
+    llm = ScriptedLlm(preset_after("20:00"), preset_after("20:00"))
+    service, cache = make(llm)
+    first = ask(service, QUESTION)
+    key = asyncio.run(cache._v.keys("ai:exact:*"))[0]
+    broken = json.loads(asyncio.run(cache._v.get(key))) | {
+        "sql": "SELECT no_such_column FROM screening"
+    }
+    asyncio.run(cache._v.set(key, json.dumps(broken, ensure_ascii=False)))
+    again = ask(service, QUESTION)
+    assert again["path"] == "PRESET" and len(llm.requests) == 2  # 캐시 답이 아니다
+    assert again["cache"] == {
+        "entryId": first["cache"]["entryId"], "stored": True, "similarity": None,
+    }  # fmt: skip
+    hit = ask(service, QUESTION)
+    assert hit["path"] == "CACHE_EXACT" and hit["cache"]["entryId"] == first["cache"]["entryId"]
+    assert hit["cache"]["stored"] is False
 
 
 # --- 저장하지 않은 답은 null ---------------------------------------------------
@@ -172,8 +243,10 @@ def test_response_keys_and_no_question_text_in_cache():
     service, _ = make(ScriptedLlm(preset_after("20:00")))
     for body in (ask(service, QUESTION), ask(service, QUESTION)):
         assert set(body) == CONTRACT_KEYS | {"sessionId"}
+        # 세 칸뿐이고 값은 식별자·참거짓·숫자다 — 질문·틀 문장을 실을 칸이 없다
         assert set(body["cache"]) == {"entryId", "stored", "similarity"}
-        assert "영화" not in json.dumps(body["cache"], ensure_ascii=False)  # 질문·틀 문장 없음
+        assert ENTRY_ID.match(body["cache"]["entryId"])
+        assert isinstance(body["cache"]["stored"], bool) and body["cache"]["similarity"] is None
 
 
 def test_cache_entry_session_and_log_are_unchanged(caplog):

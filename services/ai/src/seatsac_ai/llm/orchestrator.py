@@ -54,7 +54,7 @@ from seatsac_ai.cache.slots import (
     meaning_signature,
     normalize,
 )
-from seatsac_ai.cache.store import CacheEntry, ChatCache, entry_id
+from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
@@ -484,7 +484,11 @@ class ChatService:
         )
         if vector is None:
             vector = await self._embed(cache, ext.template)
-        return await cache.put(ext.key_text, entry, vector)
+        if await cache.put(ext.key_text, entry, vector):
+            return True
+        # put 은 의미 색인 추가만 실패해도 False 다(예열 warm.py 가 그 값으로 멈춘다 — 뜻을 바꾸지
+        # 않는다). 정확 일치 항목이 들어갔으면 다음 같은 질문은 이 항목에서 나오므로 저장한 것이다
+        return await cache.get_exact(ext.key_text) == entry
 
     # --- 도구별 처리 ---------------------------------------------------------
 
@@ -1051,11 +1055,22 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
 def _cache_info(key_text: str, *, stored: bool, similarity: float | None = None) -> dict[str, Any]:
     """계약 ChatResponse.cache. stored=True 는 이번 답을 저장함, False 는 그 항목에서 나온 답.
 
-    similarity 는 의미 캐시 적중일 때만(0~1, 소수 셋째 자리). 질문·틀 문장은 싣지 않는다.
+    similarity 는 의미 캐시 적중일 때만(0~1, 소수 둘째 자리). 질문·틀 문장은 싣지 않는다.
     """
     if similarity is not None:
-        similarity = round(min(1.0, max(0.0, similarity)), 3)
+        similarity = round(min(1.0, max(0.0, similarity)), 2)
     return {"entryId": entry_id(key_text), "stored": stored, "similarity": similarity}
+
+
+def entry_id(key_text: str) -> str:
+    """응답 `cache.entryId` — 캐시 항목 하나를 가리키는 값. 같은 항목이면 같은 값이다.
+
+    캐시 키 해시(sha256(key_text) — 정확 일치 키·의미 캐시 문서 ID가 쓰는 값)를 questionHash 와
+    같은 서버 비밀(_HASH_KEY)로 HMAC 한 앞 12자. 키 없는 해시면 남이 만든 항목의 틀 문장을
+    밖에서 맞혀 볼 수 있다. 파드가 다시 뜨면 값이 바뀐다 — 화면은 같은 대화 안의 짝만 찾는다.
+    """
+    key_hash = hashlib.sha256(key_text.encode()).hexdigest()
+    return hmac.new(_HASH_KEY, key_hash.encode(), hashlib.sha256).hexdigest()[:12]
 
 
 def _clarify(answer: str, choices: list[dict[str, str]], as_of: str) -> dict[str, Any]:

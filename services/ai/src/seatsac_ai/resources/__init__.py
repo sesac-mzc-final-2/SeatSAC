@@ -2,7 +2,7 @@
 
 - schema.yaml: 스냅샷 표·칸 설명, 값 뜻, 시간 규칙, 예시 SQL (3.4.1)
 - presets.yaml: 추천 질문 13개와 바인딩 SQL (3.4.4)
-- context_templates.yaml: 문맥 이어받기 내부 SQL 틀 3개 (3.4.22). Claude·화면 버튼에는 안 나간다
+- context_templates.yaml: 문맥 이어받기 내부 SQL 틀 7개 (3.4.22). Claude·화면 버튼에는 안 나간다
 """
 
 from __future__ import annotations
@@ -40,6 +40,9 @@ class Preset:
     params: tuple[str, ...]
     sql: str
     phrasings: tuple[str, ...] = ()  # 캐시 예열용 말투(템플릿 글자)
+    # 문맥 이어받기 내부 틀만: 시각 조건의 방향(after = starts_at >=, before = starts_at <=).
+    # 시각 빈칸(time)이 없는 틀과 presets.yaml 의 프리셋은 None
+    time_direction: str | None = None
 
 
 MOVIE_PLACEHOLDER = "영화 제목"  # 계약 ai.openapi.yaml GET /ai/presets 예시와 같은 자리 표시
@@ -85,6 +88,7 @@ def context_templates() -> tuple[Preset, ...]:
             params=tuple(t["params"]),
             sql=t["sql"].strip(),
             phrasings=tuple(t["phrasings"]),
+            time_direction=t.get("timeDirection"),
         )
         for t in raw
     )

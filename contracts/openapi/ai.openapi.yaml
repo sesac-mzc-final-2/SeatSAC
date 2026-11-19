@@ -40,18 +40,20 @@ paths:
            **잔여석**: 잔여석을 읽는 SQL은 실행 직전에 그 SQL의 날짜 × 극장 회차만 공개 API에서 새로 받는다(질문 시점 값).
            잔여석을 묻는데 날짜가 없으면 `CLARIFY`(날짜 버튼). booking이 늦어 확인 못 한 잔여석은 null + 답 문장 안내
         ⑦ SQLite 읽기 전용 실행(5초·최대 500행) ⑧ 성공한 PRESET·NL2SQL만 캐시 저장(1시간, 결과 행은 저장하지 않음).
-        **문맥 이어받기(`continueFrom`)**: 표가 있는 답마다 그 답이 실제로 조회한 날짜·극장·영화를 세션에 남기고 `context`로 돌려준다
+        **문맥 이어받기(`continueFrom`)**: 표가 있는 답마다 그 답이 실제로 조회한 날짜·극장·영화·시각(○시 이후/이전 하나)을 세션에 남기고 `context`로 돌려준다
         (실행한 SQL의 **맨 바깥 SELECT 하나**의 조건에서 뽑고 하나로 확정된 값만. 최근 답 5개까지). 「이 답은 이 조건만 조회했다」고
-        말할 수 없으면 남기지 않는다(`context` null) — SQL에 서브쿼리·UNION·CTE가 있거나, 날짜·극장·영화 말고 다른 걸러 내는 조건
-        (지역·상영관 종류·등급·시각 범위·잔여석·OR 등)이 있는 답. 그런 답의 영화 버튼은 예전처럼 독립 질문이다.
+        말할 수 없으면 남기지 않는다(`context` null) — SQL에 서브쿼리·UNION·CTE가 있거나, 날짜·극장·영화·「○시 이후/이전」 하나 말고 다른 걸러 내는 조건
+        (지역·상영관 종류·등급·시각 범위 두 개·`start_hour` 표현·잔여석·OR 등)이 있는 답. 시각 조건은 그 답의 날짜에 붙은 `starts_at` 비교 한 줄이고
+        질문에서 뽑은 시각·말뜻(이후/이전)과 같을 때만 읽는다 — 어긋나면 시각만 빼지 않고 `context` 전체를 남기지 않는다. 그런 답의 영화 버튼은 예전처럼 독립 질문이다.
         화면은 답 아래 「영화 고르기」 버튼을 누를 때 **그 답의** `context.id`를 `continueFrom`으로 같이 보낸다(`message`는 그대로).
-        ai는 그 조건에 `message`의 영화 제목을 더해 Claude 없이 바로 실행한다(②~⑥보다 먼저, 토큰 0. `message` 문장은 다시 해석하지 않고
+        ai는 그 조건(날짜·극장, 날짜를 이어받을 때는 시각도)에 `message`의 영화 제목을 더해 Claude 없이 바로 실행한다(②~⑥보다 먼저, 토큰 0. `message` 문장은 다시 해석하지 않고
         스냅샷에 있는 영화 제목만 읽는다. `message`에 날짜·극장이 있으면 그 값이 먼저). 예열된 캐시에 있으면 `CACHE_EXACT`, 없으면 `PRESET`.
         이 내부 틀은 `continueFrom` 요청만 쓴다 — 같은 말투("내일 건대입구 ○○ 회차")를 직접 쳐도 내부 틀로 답하지 않고 ③~⑥ 그대로 간다.
         이어받을 것이 없으면(모르는·만료된 `continueFrom`, 지난 날짜, 스냅샷에서 내려간 극장·영화) **오류 없이** 위 순서대로 독립 질문으로 답하고
         `context.inherited`가 빈 배열이다. `continueFrom`이 없는 요청(직접 친 질문)은 세션에 조건이 있어도 이어받지 않는다.
-        한계: 이어받는 것은 날짜·극장뿐이다. 지역·상영관 종류·등급·시각 조건이 있는 답은 위 규칙대로 `context`가 없어 이어받지 않는다
-        ("오늘 20시 이후" 답에서 영화를 고르면 독립 질문). 개수(LIMIT)·정렬은 조건으로 보지 않는다("자리 많은 회차 5개" 답에서 영화를
+        한계: 이어받는 것은 날짜·극장·시각(○시 이후/이전 하나)이다. ○시 이후/이전은 이어받는다("오늘 20시 이후" 답에서 영화를 고르면 오늘 20시 이후 그 영화).
+        시각 범위 두 개(20시~22시)·`start_hour` 표현·심야/조조 같은 고정 범위, 지역·상영관 종류·등급 조건이 있는 답은 위 규칙대로 `context`가 없어 이어받지 않는다.
+        시각은 날짜에 붙은 조건이라 날짜가 지났거나 `message`가 다른 날짜를 말하면 버린다. 이어받은 시각의 경계는 포함이다(이후 `>=`, 이전 `<=`). 개수(LIMIT)·정렬은 조건으로 보지 않는다("자리 많은 회차 5개" 답에서 영화를
         고르면 오늘 그 영화 전체). 날짜나 극장이 둘 이상인 답은 그 칸만 빼고 나머지 한 칸을 이어받는다(주말 이틀 · 건대입구 → 건대입구만).
         **`REJECTED`·`OUT_OF_SCOPE`도 200**(결제 거절 200과 같은 원칙). 사용자당 동시 1건 · 분당 10회 · 하루 100회.
         `sessionId`는 서버가 UUID로 발급한다. 생략·만료(30분)·다른 사용자의 것·위조면 **오류 없이 새 세션**으로 시작한다
@@ -118,6 +120,7 @@ paths:
                 cacheSemantic: { $ref: "./examples/ai/chat-cache-semantic.json" }
                 preset: { $ref: "./examples/ai/chat-preset.json" }
                 contextCarry: { $ref: "./examples/ai/chat-context-carry.json" }
+                contextCarryTime: { $ref: "./examples/ai/chat-context-carry-time.json" }
                 nl2sql: { $ref: "./examples/ai/chat-nl2sql.json" }
                 myBookings: { $ref: "./examples/ai/chat-my-bookings.json" }
                 rejected: { $ref: "./examples/ai/chat-rejected.json" }
@@ -304,10 +307,10 @@ components:
       type: object
       description: |
         이 답이 실제로 조회한 조건(3.4.22 문맥 이어받기). 실행한 SQL의 맨 바깥 SELECT 조건에서 뽑고 **하나로 확정된 값만** 채운다
-        (날짜·극장이 둘 이상이면 그 칸은 null). 세 값이 모두 없거나, SQL에 서브쿼리·UNION·CTE 또는 이어받지 못하는 조건
-        (지역·상영관 종류·등급·시각 범위 등)이 있으면 `context` 자체가 null.
-        공개 정보(날짜·극장명·영화 제목)뿐이고 세션(30분)에 최근 5개까지 둔다
-      required: [id, date, theater, movie, label, inherited]
+        (날짜·극장이 둘 이상이면 그 칸은 null). 날짜·극장·영화가 모두 없거나, SQL에 서브쿼리·UNION·CTE 또는 이어받지 못하는 조건
+        (지역·상영관 종류·등급·시각 범위 두 개·`start_hour` 표현 등)이 있으면 `context` 자체가 null.
+        공개 정보(날짜·극장명·영화 제목·시각)뿐이고 세션(30분)에 최근 5개까지 둔다
+      required: [id, date, theater, movie, time, timeDirection, label, inherited]
       properties:
         id:
           type: string
@@ -317,14 +320,22 @@ components:
         date: { type: [string, "null"], format: date, description: "조회한 영업일(절대 날짜 — 자정을 넘겨도 밀리지 않는다)" }
         theater: { type: [string, "null"], description: "조회한 극장 이름(스냅샷 `theater.name`)" }
         movie: { type: [string, "null"], description: "조회한 영화 제목(스냅샷 `movie.title`)" }
+        time:
+          type: [string, "null"]
+          pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          description: "조회한 시각 하한/상한 'HH:MM'(KST) — 「○시 이후/이전」 하나일 때만. `date`가 있을 때만 값이 있고(그 날짜의 시각), `timeDirection`과 늘 같이 있거나 같이 null. 시각 범위 두 개·`start_hour` 표현·심야/조조 같은 고정 범위는 여기 담지 않는다(`context` 자체가 null)"
+        timeDirection:
+          type: [string, "null"]
+          enum: [after, before, null]
+          description: "`time`의 방향 — after = 그 시각 이후(시작 시각 ≥), before = 그 시각 이전(시작 시각 ≤). `time`이 null이면 null"
         label:
           type: string
-          description: "화면 표시용 요약 (예: 내일 11/20(금) · 부산본점). `inherited`가 있으면 이어받은 조건만, 없으면 이 답의 조건 전부"
+          description: "화면 표시용 요약 (예: 내일 11/20(금) · 부산본점, 오늘 11/19(목) · 20시 이후, 오늘 11/19(목) · 건대입구 · 20시 이후). `inherited`가 있으면 이어받은 조건만, 없으면 이 답의 조건 전부(날짜 · 극장 · 시각 · 영화 순)"
         inherited:
           type: array
-          maxItems: 2
+          maxItems: 3
           uniqueItems: true
-          items: { type: string, enum: [date, theater] }
+          items: { type: string, enum: [date, theater, time] }
           description: "`continueFrom`의 답에서 이어받은 칸. 빈 배열이면 이어받지 않은 답(화면은 조건 표시를 그리지 않는다). 값의 종류는 늘 수 있다 — 화면은 모르는 값을 무시한다"
 
     ChatResponse:
@@ -365,7 +376,7 @@ components:
         presetId: { type: [string, "null"], description: "PRESET·캐시 적중(프리셋 유래)일 때 프리셋 ID, 그 밖은 null. `ctx_`로 시작하면 문맥 이어받기 내부 틀(`GET /ai/presets` 목록에는 없다)" }
         context:
           description: |
-            이 답이 조회한 날짜·극장·영화. 표가 있는 답(PRESET·NL2SQL·CACHE_*)에서 확정된 조건이 하나라도 있을 때만 있고,
+            이 답이 조회한 날짜·극장·영화·시각(○시 이후/이전 하나). 표가 있는 답(PRESET·NL2SQL·CACHE_*)에서 확정된 조건이 하나라도 있을 때만 있고,
             그 밖(MY_BOOKINGS·REJECTED·OUT_OF_SCOPE·CLARIFY, 조건 없는 답, 서브쿼리·UNION·CTE나 이어받지 못하는 조건이 있는 답,
             세션을 둘 수 없는 local)은 null.
             null이면 화면은 그 답의 영화 버튼에 `continueFrom`을 붙이지 않는다(예전처럼 독립 질문)

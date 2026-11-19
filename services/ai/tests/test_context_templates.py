@@ -1,4 +1,4 @@
-"""문맥 이어받기 내부 SQL 틀 3개(context_templates.yaml): 모양·검증·실행·예열·밖으로 새지 않음."""
+"""문맥 이어받기 내부 SQL 틀 7개(context_templates.yaml): 모양·검증·실행·예열·밖으로 새지 않음."""
 
 import asyncio
 import re
@@ -19,25 +19,61 @@ from .test_cache_flow import ask, make
 
 TEMPLATES = context_templates()
 IDS = {t.preset_id for t in TEMPLATES}
-VALUES = {"date": "2026-11-18", "theater": "건대입구", "movie": "철의 심장"}
+# 시각 14:00 = 그 회차의 시작 시각 — 「이후」(>=)·「이전」(<=) 모두 경계를 포함한다
+VALUES = {"date": "2026-11-18", "theater": "건대입구", "movie": "철의 심장", "time": "14:00"}
 # 틀마다 결과 열과 sql_fixtures 기준 기대 행
 EXPECTED = {
     "ctx_movie_date_theater": (["starts_at"], [["2026-11-18 14:00"]]),
     "ctx_movie_date": (["theater_name", "starts_at"], [["건대입구", "2026-11-18 14:00"]]),
     # 건대입구의 철의 심장은 11/18 14:00 하나다(강남 회차 3건은 빠진다)
     "ctx_movie_theater": (["starts_at"], [["2026-11-18 14:00"]]),
+    "ctx_movie_date_theater_after": (["starts_at"], [["2026-11-18 14:00"]]),
+    "ctx_movie_date_theater_before": (["starts_at"], [["2026-11-18 14:00"]]),
+    "ctx_movie_date_after": (["theater_name", "starts_at"], [["건대입구", "2026-11-18 14:00"]]),
+    "ctx_movie_date_before": (["theater_name", "starts_at"], [["건대입구", "2026-11-18 14:00"]]),
 }
+# 시각 틀: 방향 → (틀에 써 둔 연산자, 회차 14:00 이 빠지는 시각)
+TIME_SIDE = {"after": (">=", "14:01"), "before": ("<=", "13:59")}
 # 사용자 결정(11/19): 이어받은 답의 표에 넣지 않는 열
 HIDDEN = {"auditorium_name", "screen_type", "ends_at", "remaining_seats", "business_date"}
 
 
-def test_three_templates_cover_every_combination_with_a_movie():
-    assert IDS == set(EXPECTED)
-    assert {frozenset(t.params) for t in TEMPLATES} == {
-        frozenset({"date", "theater", "movie"}),
-        frozenset({"date", "movie"}),
-        frozenset({"theater", "movie"}),
+def test_templates_cover_every_combination_with_a_movie_and_one_time_bound():
+    assert IDS == set(EXPECTED) and len(TEMPLATES) == 7
+    # 고르는 열쇠 = (빈칸 종류, 시각 방향). 겹치지 않아야 하나로 정해진다
+    keys = [(frozenset(t.params), t.time_direction) for t in TEMPLATES]
+    assert len(set(keys)) == len(keys)
+    assert set(keys) == {
+        (frozenset({"date", "theater", "movie"}), None),
+        (frozenset({"date", "movie"}), None),
+        (frozenset({"theater", "movie"}), None),
+        (frozenset({"date", "theater", "movie", "time"}), "after"),
+        (frozenset({"date", "theater", "movie", "time"}), "before"),
+        (frozenset({"date", "movie", "time"}), "after"),
+        (frozenset({"date", "movie", "time"}), "before"),
     }
+
+
+TIMED = [t for t in TEMPLATES if t.time_direction is not None]
+
+
+@pytest.mark.parametrize("template", TIMED, ids=lambda t: t.preset_id)
+def test_time_template_has_its_operator_written_in_and_binds_the_values(template):
+    """연산자는 틀에 미리 써 둔 것이고 값은 바인딩이다 — SQL에 글자를 끼워 넣지 않는다."""
+    operator, outside = TIME_SIDE[template.time_direction]
+    # 시각은 날짜에 붙는다(극장+영화 틀에는 없다). 프리셋 today_after_time 과 같은 비교 모양
+    assert "time" in template.params and "date" in template.params
+    assert template.sql.count(f"s.starts_at {operator} :date || ' ' || :time") == 1
+    assert len(re.findall(r"s\.starts_at\s*[<>]=?", template.sql)) == 2  # 시각 하나 + 지금 이후
+    assert "s.starts_at > :now" in template.sql and "s.business_date = :date" in template.sql
+    slots = {k: VALUES[k] for k in template.params} | {"time": outside}
+    assert execute(loaded_store(), validate(template.sql), SYSTEM | slots).rows == []
+
+
+def test_templates_without_a_time_have_no_time_condition():
+    for template in TEMPLATES:
+        if template.time_direction is None:
+            assert "time" not in template.params and ":time" not in template.sql
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t.preset_id)

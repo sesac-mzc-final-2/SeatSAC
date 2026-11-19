@@ -1,4 +1,4 @@
-# 문맥 이어받기 내부 SQL 틀 3개 (WBS 3.4.22)
+# 문맥 이어받기 내부 SQL 틀 7개 (WBS 3.4.22) — 시각 없는 틀 3개 + 「○시 이후/이전」 틀 4개
 #
 # 답 아래 「영화 고르기」 버튼을 누르면 앞 답의 날짜·극장에 그 영화를 더해 이 틀로 바로 실행한다
 # (seatsac_ai/context.py · llm/orchestrator.py). Claude를 부르지 않는다.
@@ -15,6 +15,12 @@
 #   날짜는 화면이 시작 시각에 함께 보여 주므로 business_date 열도 두지 않는다.
 # - 회차 ID(응답 screeningIds)가 붙는 모양으로 쓴다(sql/validator.py with_screening_id):
 #   바깥 SELECT 하나, screening 표 한 번, s.starts_at 그대로.
+# - 시각 틀(timeDirection 이 있는 4개): 앞 답이 「○시 이후/이전」 하나를 조회했을 때 쓴다.
+#   시각은 날짜에 붙는 조건이라 날짜가 있는 틀에만 있다(극장+영화 틀에는 없다).
+#   방향마다 틀이 따로다 — 연산자는 여기 써 둔 것을 **고를 뿐** SQL에 글자를 끼워 넣지 않는다
+#   (after → `>=`, before → `<=`. 값 :date·:time 은 바인딩). 고르는 열쇠는 (params, timeDirection).
+#   비교 모양은 프리셋 today_after_time 과 같다(`s.starts_at >= :date || ' ' || :time`).
+#   영업일(business_date)로 먼저 걸러서 「이후」는 자정 넘은 심야 회차도 포함하고 「이전」은 뺀다.
 # - 모든 SQL은 tests/test_context_templates.py 에서 검증기를 통과하고 실제 스냅샷에서 실행돼야 한다.
 
 templates:
@@ -57,3 +63,63 @@ templates:
       JOIN theater t ON t.theater_id = s.theater_id
       WHERE t.name = :theater AND m.title = :movie AND s.starts_at > :now
       ORDER BY s.starts_at
+
+  - presetId: ctx_movie_date_theater_after
+    title: "{theater} {movie} {time} 이후 회차"
+    params: [date, theater, movie, time]
+    timeDirection: after
+    phrasings:
+      - "{date} {theater} {movie} {time} 이후 회차"
+    sql: |
+      SELECT s.starts_at
+      FROM screening s
+      JOIN movie m ON m.movie_id = s.movie_id
+      JOIN theater t ON t.theater_id = s.theater_id
+      WHERE s.business_date = :date AND t.name = :theater AND m.title = :movie
+        AND s.starts_at >= :date || ' ' || :time AND s.starts_at > :now
+      ORDER BY s.starts_at
+
+  - presetId: ctx_movie_date_theater_before
+    title: "{theater} {movie} {time} 이전 회차"
+    params: [date, theater, movie, time]
+    timeDirection: before
+    phrasings:
+      - "{date} {theater} {movie} {time} 이전 회차"
+    sql: |
+      SELECT s.starts_at
+      FROM screening s
+      JOIN movie m ON m.movie_id = s.movie_id
+      JOIN theater t ON t.theater_id = s.theater_id
+      WHERE s.business_date = :date AND t.name = :theater AND m.title = :movie
+        AND s.starts_at <= :date || ' ' || :time AND s.starts_at > :now
+      ORDER BY s.starts_at
+
+  - presetId: ctx_movie_date_after
+    title: "{movie} {time} 이후 회차"
+    params: [date, movie, time]
+    timeDirection: after
+    phrasings:
+      - "{date} {movie} {time} 이후 회차"
+    sql: |
+      SELECT t.name AS theater_name, s.starts_at
+      FROM screening s
+      JOIN movie m ON m.movie_id = s.movie_id
+      JOIN theater t ON t.theater_id = s.theater_id
+      WHERE s.business_date = :date AND m.title = :movie
+        AND s.starts_at >= :date || ' ' || :time AND s.starts_at > :now
+      ORDER BY s.starts_at, t.name
+
+  - presetId: ctx_movie_date_before
+    title: "{movie} {time} 이전 회차"
+    params: [date, movie, time]
+    timeDirection: before
+    phrasings:
+      - "{date} {movie} {time} 이전 회차"
+    sql: |
+      SELECT t.name AS theater_name, s.starts_at
+      FROM screening s
+      JOIN movie m ON m.movie_id = s.movie_id
+      JOIN theater t ON t.theater_id = s.theater_id
+      WHERE s.business_date = :date AND m.title = :movie
+        AND s.starts_at <= :date || ' ' || :time AND s.starts_at > :now
+      ORDER BY s.starts_at, t.name

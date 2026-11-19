@@ -16,7 +16,7 @@
     "truncated": false,
     "sql": "SELECT s.starts_at FROM screening AS s JOIN movie AS m ON m.movie_id = s.movie_id JOIN theater AS t ON t.theater_id = s.theater_id WHERE s.business_date = '2026-11-18' AND t.name = '건대입구' AND m.title = '영화 제목' AND s.starts_at > '2026-11-17 19:41' ORDER BY s.starts_at LIMIT 500",
     "presetId": "ctx_movie_date_theater",
-    "context": { "id": "p93x0d", "date": "2026-11-18", "theater": "건대입구", "movie": "영화 제목", "label": "내일 11/18(수) · 건대입구", "inherited": [ "date", "theater" ] },
+    "context": { "id": "p93x0d", "date": "2026-11-18", "theater": "건대입구", "movie": "영화 제목", "time": null, "timeDirection": null, "label": "내일 11/18(수) · 건대입구", "inherited": [ "date", "theater" ] },
     "asOf": "2026-11-17T19:41:00+09:00",
     "llm": { "calls": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0 },
     "latencyMs": 12,

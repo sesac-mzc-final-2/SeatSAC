@@ -11,7 +11,8 @@
 캐시를 보지도 저장하지도 않는다
 — 같은 글자라도 직전 질문에 따라 뜻이 달라서.
 
-문맥 이어받기(seatsac_ai/context.py): 답마다 그 답이 조회한 날짜·극장·영화를 세션(ctx)에 남기고
+문맥 이어받기(seatsac_ai/context.py): 답마다 그 답이 조회한 날짜·극장·영화·시각(○시 이후/이전
+하나)을 세션(ctx)에 남기고
 응답 context 로 돌려준다. 답 아래 영화 버튼은 그 답의 context.id 를 continueFrom 으로 보낸다 —
 그때만 앞 답의 조건 + 새 영화로 내부 틀을 바로 실행한다(Claude 0번, ②~⑧보다 먼저).
 continueFrom 이 없는(직접 친) 질문은 위 순서 그대로다.
@@ -366,7 +367,11 @@ class ChatService:
             # 좌석 잡기(HOLD_*)도 저장하지 않는다 — 조회 문맥이 아니다
             if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS", *holds.HOLD_PATHS):
                 # 이번 답의 조건을 ctx 뒤에 붙인다. 되묻기(CLARIFY)는 조건이 없어 기존 ctx 만 넘긴다
-                values = carry.values if carried else self._queried(body, made, system_params)
+                if carried:
+                    values = carry.entry_values
+                else:
+                    asked = ext or self._extract(question, now)
+                    values = self._queried(body, made, system_params, asked)
                 if values is not None:
                     entry = ctx.new_entry(known, values)
                     known = ctx.appended(known, entry)
@@ -509,8 +514,14 @@ class ChatService:
             body["cache"] = _cache_info(plan.warm.key_text, stored=False)
         return body
 
-    def _queried(self, body: dict[str, Any], made: _Made | None, system_params) -> dict | None:
-        """이번 답이 실제로 조회한 날짜·극장·영화(실행한 SQL의 조건). 확정된 칸이 없으면 None."""
+    def _queried(
+        self, body: dict[str, Any], made: _Made | None, system_params, asked: Extracted
+    ) -> dict | None:
+        """이번 답이 실제로 조회한 날짜·극장·영화·시각(실행한 SQL의 조건). 확정된 칸이 없으면 None.
+
+        시각("○시 이후/이전")은 SQL의 시각 조건이 질문(asked)의 시각·말뜻과 같을 때만 남긴다.
+        SQL에 시각 조건이 있는데 확인하지 못하면 이 답에는 문맥을 남기지 않는다(None).
+        """
         if body["path"] not in ("PRESET", "NL2SQL", "CACHE_EXACT", "CACHE_SEMANTIC"):
             return None
         try:
@@ -525,9 +536,20 @@ class ChatService:
             else:
                 return None
             if conditions is None:
-                # 서브쿼리·UNION·CTE 이거나 이어받지 못하는 조건(지역·상영관 종류·시각 …)이 있다
+                # 서브쿼리·UNION·CTE 이거나 이어받지 못하는 조건(지역·상영관 종류·시각 범위 …)
                 return None
             values = ctx.from_conditions(conditions, *self._names())
+            if conditions.time is not None:
+                # 사용자가 말한 시각: 질문의 시각 슬롯(하나일 때만) · 프리셋 빈칸 time
+                said = {made.params.get("time")} if made is not None and made.preset else set()
+                if asked.cacheable and "time" in asked.slots:
+                    said.add(asked.slots["time"].value)
+                time = ctx.confirmed_time(
+                    conditions.time, said - {None}, meaning_signature(asked.question)
+                )
+                if time is None:
+                    return None
+                values |= time
         except Exception as exc:  # noqa: BLE001 — 부가 정보라 무슨 오류든 답을 막지 않는다
             # 이 답에서는 이어받을 조건이 없을 뿐이다. 질문·SQL 값이 섞이지 않게 예외 종류만 적는다
             log.warning("답의 조건을 읽지 못했다(%s)", type(exc).__name__)

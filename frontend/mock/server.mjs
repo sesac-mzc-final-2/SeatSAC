@@ -11,7 +11,8 @@
 //        예매 ID 9001 은 회차 정보 없음(screening null)
 // AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
-//        문맥 이어받기(3.4.22): 답마다 context, 영화 버튼의 continueFrom 이면 그 답의 날짜·극장으로 좁혀 답한다
+//        문맥 이어받기(3.4.22): 답마다 context, 영화 버튼의 continueFrom 이면 그 답의 날짜·극장·시각(○시 이후)으로 좁혀 답한다
+//          예: 「오늘 20시 이후 영화 알려줘」 → 답 아래 영화 버튼 → 오늘 · 20시 이후 · 그 영화만
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -643,7 +644,7 @@ for (const message of AI_WARMED) {
 // 6번째 전 답의 버튼·목 서버를 다시 띄운 뒤의 버튼은 모르는 id 라 독립 질문으로 답한다 → 화면의 「이어받지 못해…」 안내 확인용
 
 const AI_CONTEXT_MAX = 5;
-/** sessionId → [{ id, date, theater, movie }] (최신이 뒤) */
+/** sessionId → [{ id, date, theater, movie, time, timeDirection }] (최신이 뒤) */
 const aiContexts = new Map();
 const WEEKDAYS_KO = "일월화수목금토";
 
@@ -653,16 +654,29 @@ const dayLabel = (dateIso) => {
   const short = `${day.getUTCMonth() + 1}/${day.getUTCDate()}(${WEEKDAYS_KO[day.getUTCDay()]})`;
   return ["오늘", "내일", "모레"][offset] ? `${["오늘", "내일", "모레"][offset]} ${short}` : short;
 };
+/** "20:00" + after → "20시 이후" (ai context.time_label 과 같은 글자) */
+const timeLabel = (time, direction) => {
+  const [h, m] = time.split(":").map(Number);
+  return `${m ? `${h}시 ${m}분` : `${h}시`} ${direction === "before" ? "이전" : "이후"}`;
+};
+/** 조건 표시 순서(ai 와 같다): 날짜 · 극장 · 시각 · 영화 */
+const CONTEXT_ORDER = ["date", "theater", "time", "movie"];
 const contextLabel = (values, kinds) =>
-  kinds
-    .filter((kind) => values[kind])
-    .map((kind) => (kind === "date" ? dayLabel(values.date) : values[kind]))
+  CONTEXT_ORDER.filter((kind) => kinds.includes(kind) && values[kind])
+    .map((kind) => (kind === "date" ? dayLabel(values.date) : kind === "time" ? timeLabel(values.time, values.timeDirection) : values[kind]))
     .join(" · ");
+/** 목의 「○시 이후」는 시작 시각의 시(hour)로만 거른다(aiAnswer 의 today_after_time 갈래와 같은 기준) */
+const startsAfter = (s, time) => Number(s.startsAt.slice(11, 13)) >= Number(time.slice(0, 2));
 
 /** 목의 답이 조회한 조건 (aiAnswer 의 갈래와 같은 기준). 표가 없는 답·내 예매는 null */
 function aiContextValues(answer, message) {
   if (!answer.columns || answer.path === "MY_BOOKINGS") return null;
-  const values = { date: todayIso(), theater: null, movie: null };
+  const values = { date: todayIso(), theater: null, movie: null, time: null, timeDirection: null };
+  if (answer.presetId === "today_after_time") {
+    // 「오늘 ○시 이후」: 시각 하한 하나 — ai 는 실행한 SQL의 starts_at >= '<오늘> HH:MM' 에서 읽는다
+    const hour = /(\d{1,2})\s*시/.exec(message);
+    if (hour) Object.assign(values, { time: `${hour[1].padStart(2, "0")}:00`, timeDirection: "after" });
+  }
   if (answer.presetId === "theater_schedule") {
     values.theater = theaters.find((t) => t.hasLayout && message.includes(t.name))?.name ?? null;
     if (message.includes("내일")) values.date = dateOffset(1);
@@ -674,9 +688,11 @@ function aiContextValues(answer, message) {
 /** 이번 답의 조건을 세션에 남기고 계약 `context` 모양으로 돌려준다 */
 function rememberAiContext(sessionId, values, inherited = []) {
   if (!values) return null;
-  const entry = { id: randomUUID().slice(0, 6), date: values.date, theater: values.theater, movie: values.movie };
+  // 시각은 날짜에 붙은 값이다 — 날짜가 없으면 두 칸 다 null
+  const timed = values.date && values.time ? { time: values.time, timeDirection: values.timeDirection } : { time: null, timeDirection: null };
+  const entry = { id: randomUUID().slice(0, 6), date: values.date, theater: values.theater, movie: values.movie, ...timed };
   aiContexts.set(sessionId, [...(aiContexts.get(sessionId) ?? []), entry].slice(-AI_CONTEXT_MAX));
-  const label = contextLabel(entry, inherited.length > 0 ? inherited : ["date", "theater", "movie"]);
+  const label = contextLabel(entry, inherited.length > 0 ? inherited : CONTEXT_ORDER);
   return { ...entry, label, inherited };
 }
 
@@ -687,32 +703,37 @@ function aiContinuedSql(values, asOf) {
     values.date && `s.business_date = ${quote(values.date)}`,
     values.theater && `t.name = ${quote(values.theater)}`,
     `m.title = ${quote(values.movie)}`,
+    // 시각 틀: 연산자는 틀에 써 둔 것(이후 >=), 값은 바인딩
+    values.time && `s.starts_at >= ${quote(values.date)} || ' ' || ${quote(values.time)}`,
     `s.starts_at > ${quote(kstMinute(asOf))}`,
   ].filter(Boolean);
   const columns = values.theater ? "s.starts_at" : "t.name AS theater_name, s.starts_at";
   return `SELECT ${columns} FROM screening AS s JOIN movie AS m ON m.movie_id = s.movie_id JOIN theater AS t ON t.theater_id = s.theater_id WHERE ${where.join(" AND ")} ORDER BY s.starts_at LIMIT 500`;
 }
 
-/** continueFrom 이 가리킨 답의 날짜·극장 + 메시지의 영화로 답한다. 이어받을 것이 없으면 null(평소 답) */
+/** continueFrom 이 가리킨 답의 날짜·극장·시각 + 메시지의 영화로 답한다. 이어받을 것이 없으면 null(평소 답) */
 function aiContinued(body, sessionId, message) {
   const from = (aiContexts.get(sessionId) ?? []).find((entry) => entry.id === body.continueFrom);
   const movie = movies.find((m) => message.includes(m.title));
   if (!from || !movie) return null;
   const date = from.date && dayNumber(from.date) >= dayNumber(todayIso()) ? from.date : null;
   const theater = theaters.find((t) => t.name === from.theater) ?? null;
-  const inherited = [date && "date", theater && "theater"].filter(Boolean);
+  // 시각은 날짜를 이어받을 때만 같이 이어받는다(날짜가 지났으면 시각도 버린다)
+  const time = date && from.time ? from.time : null;
+  const inherited = [date && "date", theater && "theater", time && "time"].filter(Boolean);
   if (inherited.length === 0) return null;
   // 날짜가 없으면(극장만 이어받음) 오늘·내일 회차를 본다 — ai 는 그 극장의 남은 회차 전부
   const days = date ? [date] : [todayIso(), dateOffset(1)];
   const rows = days
     .flatMap((day) => (day === todayIso() ? upcoming(day) : screeningsOn(day)))
-    .filter((s) => s.movie.movieId === movie.movieId && (!theater || s.theater.theaterId === theater.theaterId));
-  const values = { date, theater: theater?.name ?? null, movie: movie.title };
+    .filter((s) => s.movie.movieId === movie.movieId && (!theater || s.theater.theaterId === theater.theaterId))
+    .filter((s) => !time || startsAfter(s, time));
+  const values = { date, theater: theater?.name ?? null, movie: movie.title, time, timeDirection: time ? "after" : null };
   // 표 열은 ai 내부 틀과 같다: 극장을 알면 시작 시각만, 날짜만 알면 극장·시작 시각 (상영관·종료·잔여석 없음)
   const columns = theater
     ? [{ name: "starts_at", type: "text" }]
     : [{ name: "theater_name", type: "text" }, { name: "starts_at", type: "text" }];
-  const subject = `${contextLabel(values, ["date", "theater", "movie"]).replaceAll(" · ", " ")} 회차`;
+  const subject = `${contextLabel(values, CONTEXT_ORDER).replaceAll(" · ", " ")} 회차`;
   const count = rows.length > 0 ? `${rows.length}건입니다.` : "조건에 맞는 결과가 없습니다.";
   const asOf = nowKstIso();
   return {
@@ -727,10 +748,10 @@ function aiContinued(body, sessionId, message) {
     truncated: false,
     // 계약: 캐시 적중(CACHE_EXACT)이면 실행한 SQL과 그 캐시 항목(cache)이 있다
     sql: aiContinuedSql(values, asOf),
-    cache: { entryId: aiEntryId(`ctx ${Object.keys(values).filter((kind) => values[kind]).join(" ")}`), stored: false, similarity: null },
+    cache: { entryId: aiEntryId(`ctx ${CONTEXT_ORDER.filter((kind) => values[kind]).join(" ")}`), stored: false, similarity: null },
     asOf,
     rejection: null,
-    presetId: theater && date ? "ctx_movie_date_theater" : theater ? "ctx_movie_theater" : "ctx_movie_date",
+    presetId: `${theater && date ? "ctx_movie_date_theater" : theater ? "ctx_movie_theater" : "ctx_movie_date"}${time ? "_after" : ""}`,
     llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
     latencyMs: 12,
     context: rememberAiContext(sessionId, values, inherited),

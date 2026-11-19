@@ -30,7 +30,7 @@ interface Props {
   onRetry?: (question: string, link?: ChatLink) => void;
   /**
    * 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성).
-   * continueFrom = 그 버튼이 달린 답의 `context.id` — 그 답의 날짜·극장을 이어받는다(없으면 예전처럼 독립 질문)
+   * continueFrom = 그 버튼이 달린 답의 `context.id` — 그 답의 날짜·극장·시각(○시 이후/이전)을 이어받는다(없으면 예전처럼 독립 질문)
    */
   onPickMovie?: (title: string, continueFrom?: string) => void;
   /** 이어받은 답의 「조건 지우기」 — 같은 질문을 `continueFrom` 없이 다시 보낸다 (보낼 수 없는 상태면 undefined) */
@@ -259,7 +259,8 @@ function Answer({
   onSeatNavigate?: () => void;
 }) {
   const movieTitles = answerMovieTitles(response);
-  const carried = inheritedLabel(response);
+  // 좌석 잡기 답(HOLD_*)은 조회 답이 아니다 — 조건 표시를 붙이지 않는다
+  const carried = response.path.startsWith("HOLD_") ? null : inheritedLabel(response);
   const choices = response.choices ?? [];
   // 좌석 잡기 확인·취소·회차 고르기: 지금 유효한 요청의 버튼만 누를 수 있다(지난 것·시간이 지난 것은 막는다).
   // 막을지는 응답 값(path·confirmExpiresAt)으로 정한다 — 버튼 문장의 모양은 주/보조 버튼 구분에만 쓴다.

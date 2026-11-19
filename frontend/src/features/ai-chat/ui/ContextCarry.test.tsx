@@ -252,4 +252,59 @@ describe("문맥 이어받기 (3.4.22)", () => {
     expect(await screen.findByText("내일 11/20(금) · 부산본점 기준")).toBeInTheDocument();
     expect(chatBodies(fetchMock)[2]).toEqual({ message: BUTTON, sessionId: SESSION_ID, continueFrom: "k7f2a1" });
   });
+
+  it("「오늘 20시 이후」 답의 영화 버튼도 continueFrom 을 보내고, 이어받은 답에 시각 조건을 서버 label 그대로 보여 준다", async () => {
+    const fetchMock = mockApi(
+      listed(
+        "오늘 20시 이후 시작하는 회차는 2개입니다.",
+        context({
+          id: "t4c9e2",
+          date: "2026-11-19",
+          theater: null,
+          time: "20:00",
+          timeDirection: "after",
+          label: "오늘 11/19(목) · 20시 이후",
+        }),
+      ),
+      showtimes(
+        "오늘 11/19(목) 20시 이후 부활남 회차: 1건입니다.",
+        ["2026-11-19 21:00"],
+        context({
+          id: "u2b7k0",
+          date: "2026-11-19",
+          theater: null,
+          movie: "부활남",
+          time: "20:00",
+          timeDirection: "after",
+          label: "오늘 11/19(목) · 20시 이후",
+          inherited: ["date", "time"],
+        }),
+      ),
+    );
+    await openAndAsk("오늘 20시 이후 영화 알려줘");
+    await pickMovie();
+
+    expect(await screen.findByText("오늘 11/19(목) 20시 이후 부활남 회차: 1건입니다.")).toBeInTheDocument();
+    expect(chatBodies(fetchMock)[1]).toEqual({ message: BUTTON, sessionId: SESSION_ID, continueFrom: "t4c9e2" });
+    expect(screen.getByText("오늘 11/19(목) · 20시 이후 기준")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "오늘 11/19(목) · 20시 이후 조건 지우기" })).toBeEnabled();
+    expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
+  });
+
+  it("좌석 잡기 답(HOLD_*)에는 조건 표시를 붙이지 않는다 — context 가 실려 와도", async () => {
+    mockApi({
+      ...base,
+      path: "HOLD_GUIDE",
+      answer: "좌석을 잡지 않았습니다.",
+      llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      seatHold: { screeningId: 2, bookingId: null, seatLabels: [], amount: null, expiresAt: null, reason: "CANCELED" },
+      // 계약상 HOLD_* 의 context 는 null 이다. 잘못 실려 와도 조회 답처럼 「… 기준」을 그리지 않는다
+      context: context({ inherited: ["date", "theater"] }),
+    });
+    await openAndAsk("취소");
+
+    expect(await screen.findByText("좌석을 잡지 않았습니다.")).toBeInTheDocument();
+    expect(screen.queryByText(/ 기준$/, { selector: "span" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /조건 지우기/ })).not.toBeInTheDocument();
+  });
 });

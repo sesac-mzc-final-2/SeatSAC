@@ -31,6 +31,14 @@ describe("문맥 이어받기 (3.4.22)", () => {
     expect(continueFromOf({ context: context({ date: null }) })).toBe("k7f2a1");
   });
 
+  it("시각 조건(○시 이후)이 있는 답도 날짜가 있으니 continueFrom 을 보낸다 — 시각만으로는 판단하지 않는다", () => {
+    const timed = context({ theater: null, time: "20:00", timeDirection: "after", label: "오늘 11/19(목) · 20시 이후" });
+    expect(continueFromOf({ context: timed })).toBe("k7f2a1");
+    // 날짜 없는 시각은 서버가 보내지 않는다. 와도 이어받을 조건으로 치지 않는다
+    expect(continueFromOf({ context: { ...timed, date: null } })).toBeUndefined();
+    expect(inheritedLabel({ context: { ...timed, inherited: ["date", "time"] } })).toBe("오늘 11/19(목) · 20시 이후");
+  });
+
   it("이어받은 답만 조건 글자를 보여 준다", () => {
     expect(inheritedLabel({ context: context({ inherited: ["date", "theater"] }) })).toBe("내일 11/20(금) · 부산본점");
     expect(inheritedLabel({ context: context() })).toBeNull();

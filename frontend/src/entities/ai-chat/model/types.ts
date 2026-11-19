@@ -91,9 +91,16 @@ export interface ChatContext {
   date: string | null;
   theater: string | null;
   movie: string | null;
-  /** 화면 표시용 (예: `내일 11/20(금) · 부산본점`) */
+  /**
+   * 「○시 이후/이전」 하나를 조회한 답만 `HH:MM` (그 `date` 의 시각). 그 밖은 null.
+   * 배포 순서상 옛 ai 는 이 두 칸을 보내지 않을 수 있어 선택 필드로 둔다 — 화면은 `label` 만 그린다
+   */
+  time?: string | null;
+  /** `time` 의 방향: after = 그 시각 이후, before = 그 시각 이전 */
+  timeDirection?: "after" | "before" | null;
+  /** 화면 표시용 (예: `내일 11/20(금) · 부산본점`, `오늘 11/19(목) · 20시 이후`) */
   label: string;
-  inherited: ("date" | "theater")[];
+  inherited: ("date" | "theater" | "time")[];
 }
 
 export interface ChatResponse {

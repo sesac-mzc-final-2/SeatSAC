@@ -12,6 +12,7 @@ type WithContext = Pick<ChatResponse, "context">;
 /**
  * 이 답의 영화 버튼이 보낼 `continueFrom`. 이어받을 조건(날짜 또는 극장)이 있는 답에만 —
  * 조건이 없는 답·영화만 있는 답·옛 ai(필드 없음)면 undefined → 예전처럼 독립 질문.
+ * 시각(`time` — "20시 이후")은 보지 않는다: 시각은 날짜가 있어야만 오는 값이라 날짜 판단으로 충분하다.
  * 이어받을 것이 없는데 보내면 서버가 평소 경로로 답하고 화면은 「이어받지 못해…」를 잘못 띄운다
  */
 export function continueFromOf(response: WithContext): string | undefined {
@@ -20,7 +21,7 @@ export function continueFromOf(response: WithContext): string | undefined {
   return context.id;
 }
 
-/** 앞 답의 조건을 이어받은 답이면 그 조건 글자(`내일 11/20(금) · 부산본점`), 아니면 null */
+/** 앞 답의 조건을 이어받은 답이면 그 조건 글자(`내일 11/20(금) · 부산본점`, `오늘 11/19(목) · 20시 이후`), 아니면 null. 글자는 서버 `label` 그대로다 */
 export function inheritedLabel(response: WithContext): string | null {
   const context = response.context;
   if (!context || !Array.isArray(context.inherited) || context.inherited.length === 0) return null;

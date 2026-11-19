@@ -62,6 +62,34 @@
 .dim code {
   color: var(--color-muted-strong);
 }
+/* 데모 모드: 질문 번호 — 답의 「n번째 질문」이 가리키는 말풍선 */
+.questionNo {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #ffffff1f;
+  color: var(--color-muted-strong);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 1px;
+}
+/* 캐시 짝(3.4.20): 어느 질문 덕분인지 · 뺄셈으로 낸 절약 */
+.pair {
+  color: var(--color-muted-strong);
+  overflow-wrap: anywhere;
+}
+.pairQuestion {
+  color: var(--color-text);
+}
+.saved {
+  color: var(--color-live);
+  font-weight: 600;
+}
 .sql summary {
   width: max-content;
   color: var(--color-muted);

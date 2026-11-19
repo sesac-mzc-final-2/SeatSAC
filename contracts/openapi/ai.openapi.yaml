@@ -65,6 +65,8 @@ paths:
             `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)·`CLARIFY`(되묻기)도 200이며 `columns`·`rows`는 null.
             `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다(버튼 없이 안내 문장만 올 수도 있다 — 빈 배열).
             `sql`은 `REJECTED`일 때 거부된 SQL(화면은 보여주지 않아도 됨), `OUT_OF_SCOPE`는 null.
+            `cache`는 이 답이 어느 캐시 항목과 이어지는지 — 데모 화면이 같은 대화에서 `entryId`가 같은
+            `stored: true` 답(처음 물은 답)과 `stored: false` 답(캐시로 나온 답)을 짝지어 실제로 아낀 토큰·시간을 보여 준다.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ChatResponse" }
@@ -241,8 +243,8 @@ components:
 
     ChatResponse:
       type: object
-      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`rejection`·`choices`)
-      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices]
+      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`rejection`·`choices`·`cache`)
+      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices, cache]
       properties:
         sessionId: { type: string, format: uuid, description: "서버가 발급. 후속 질문에 그대로 보낸다(30분)" }
         answer: { type: string, description: "답 문장(결과 행을 템플릿에 채워 만듦, Claude에 결과를 다시 보내지 않음). 끝에 \"○시 ○분 기준\"" }
@@ -290,6 +292,13 @@ components:
           maxItems: 7
           items: { $ref: "#/components/schemas/Choice" }
           description: "CLARIFY일 때만 버튼 목록(날짜 고르기 최대 7개, 조건을 다시 말해 달라는 안내는 빈 배열). 그 밖은 null"
+        cache:
+          description: |
+            이 답과 이어진 캐시 항목(데모 화면 표시용). 캐시에서 나왔거나 캐시에 저장한 답에만 있고 그 밖은 null.
+            `entryId`는 ai 파드가 다시 뜨면 바뀐다 — 같은 대화 안에서 두 답을 짝짓는 데만 쓴다
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/CacheRef" }
 
     Choice:
       type: object
@@ -297,6 +306,31 @@ components:
       properties:
         label: { type: string, description: "버튼 글자 (예: 내일 11/19(목))" }
         message: { type: string, maxLength: 300, description: "누르면 `POST /ai/chat`의 `message`로 그대로 보내는 완성된 질문" }
+
+    CacheRef:
+      type: object
+      description: |
+        이 답과 이어진 캐시 항목(3.4.20 데모 화면용). 캐시에서 나온 답(`CACHE_EXACT`·`CACHE_SEMANTIC`)과
+        Claude가 답하고 캐시에 저장한 답(`PRESET`·`NL2SQL`)에만 있다. 저장하지 않은 답(캐시할 수 없는 질문·후속 질문·
+        저장 실패, `MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY`)은 `cache` 자체가 null.
+        질문 원문·틀 문장은 싣지 않는다(다른 사용자의 질문 글자가 나가지 않게).
+      required: [entryId, stored, similarity]
+      properties:
+        entryId:
+          type: string
+          pattern: "^[0-9a-f]{12}$"
+          description: |
+            캐시 항목 식별자 — 캐시 키 해시를 서버 비밀(파드 기동 때 만든 임의 키)로 HMAC-SHA256 한 앞 12자.
+            같은 항목이면 저장한 답과 그 항목에서 나온 답이 같은 값이다. 키가 있어 틀 문장을 밖에서 맞혀 볼 수 없고,
+            **파드가 다시 뜨면 값이 바뀐다**(그 전 답과는 짝이 끊긴다 — 같은 대화 안 짝짓기에만 쓴다).
+            항목은 질문의 틀(시각·극장 같은 빈칸을 뺀 모양)이라 "20시 이후"로 저장하고 "21시 이후"로 물어도 같은 항목이다.
+            서버를 켤 때 미리 넣어 둔 버튼 질문 항목에서 나온 답도 값이 있다(같은 대화에 짝이 없을 뿐)
+        stored: { type: boolean, description: "true = 이번 답을 Claude가 만들었고 캐시에 저장했다(다음 질문의 짝). false = 이번 답이 그 캐시 항목에서 나왔다" }
+        similarity:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+          description: "`CACHE_SEMANTIC`일 때만 찾은 항목과의 코사인 유사도(소수 둘째 자리, 기준 0.92 이상). 그 밖은 null"
 
     Preset:
       type: object

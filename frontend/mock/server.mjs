@@ -13,7 +13,7 @@
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
 //        문맥 이어받기(3.4.22): 답마다 context, 영화 버튼의 continueFrom 이면 그 답의 날짜·극장으로 좁혀 답한다
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.MOCK_PORT ?? 8089);
 /** 화면에서 오류 상태를 재현할 때: 이 경로는 항상 MOCK_FAIL_STATUS(기본 503)로 응답 (예: MOCK_FAIL_PATH=/api/screenings) */
@@ -369,8 +369,32 @@ const AI_PRESETS = [
   { presetId: "theater_counts_today", title: "극장별 오늘 회차 수", example: "오늘 극장별로 남은 회차 몇 개야?" },
 ];
 
-/** 정확 일치 캐시 흉내: 같은 문장을 다시 물으면 CACHE_EXACT(토큰 0) */
+/**
+ * 캐시 흉내 (3.4.20 데모 — 처음 → 같은 질문 → 다른 말투). 실제 ai 처럼 질문의 「틀」(시각 숫자를 뺀 모양)이 항목이다.
+ *   처음 묻기                         → PRESET·NL2SQL + cache {stored: true}
+ *   같은 질문·시각만 다른 질문          → CACHE_EXACT + 같은 entryId {stored: false}
+ *   말투만 다른 질문("넘어서 하는 … 보여줘") → CACHE_SEMANTIC + 같은 entryId + similarity
+ * 틀 → entryId. 서버가 켜질 때 미리 넣어 둔 항목(AI_WARMED)은 같은 대화에 짝이 없는 캐시 답이 된다
+ */
 const aiAsked = new Map();
+/** 뜻 묶음(말투를 지운 틀) → entryId : 의미 캐시 흉내 */
+const aiMeanings = new Map();
+const aiTemplate = (message) =>
+  message
+    .toLowerCase()
+    .replace(/\d{1,2}\s*시/g, "{time}")
+    .replace(/[?!.,~\s]+/g, " ")
+    .trim();
+const aiMeaning = (template) =>
+  template
+    .replace(/넘어서|부터|이후에/g, "이후")
+    .replace(/시작하는|하는|알려\s*줘|보여\s*줘|뭐\s*있어|있어|목록|좀|요$/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+const aiEntryId = (template) => createHash("sha256").update(template).digest("hex").slice(0, 12);
+/** 유사도 흉내: 항목마다 고정된 0.93~0.99, 소수 둘째 자리 (실제 기준은 0.92 이상) */
+const aiSimilarity = (template) => (93 + (parseInt(aiEntryId(template).slice(0, 4), 16) % 7)) / 100;
+const AI_WARMED = ["오늘 심야 영화 뭐 있어?", "조조 영화 뭐 있어?"];
 let aiInflight = false;
 
 const kstMinute = (iso) => iso.slice(0, 16).replace("T", " ");
@@ -451,7 +475,7 @@ function aiAnswer(message, sessionId) {
       rejection: { reason: "FORBIDDEN_OBJECT", message: "허용되지 않은 테이블을 조회하는 SQL입니다.", object: "snapshot_meta" },
     };
   }
-  const hour = /(\d{1,2})\s*시\s*이후/.exec(message);
+  const hour = /(\d{1,2})\s*시\s*(?:이후|넘어서|부터)/.exec(message);
   if (hour) {
     const h = Number(hour[1]);
     const rows = upcoming(todayIso()).filter((s) => Number(s.startsAt.slice(11, 13)) >= h);
@@ -531,10 +555,16 @@ function aiAnswer(message, sessionId) {
   };
 }
 
+for (const message of AI_WARMED) {
+  const template = aiTemplate(message);
+  aiAsked.set(template, aiEntryId(template));
+  aiMeanings.set(aiMeaning(template), aiEntryId(template));
+}
+
 // ---------- 문맥 이어받기 (3.4.22) — ai 의 context·continueFrom 흉내 ----------
 // 답마다 그 답이 조회한 날짜·극장·영화를 세션별로 5개까지 기억한다(ai 는 실행한 SQL의 조건에서 뽑는다).
 // 영화 버튼이 continueFrom(그 답의 context.id)을 보내면 그 날짜·극장 + 고른 영화로만 답한다(Claude 호출 0).
-// 6번째 전 답의 버튼·목 서버를 다시 띄운 뒤의 버튼은 모르는 id 라 독립 질문으로 답한다 → 화면의 만료 안내 확인용
+// 6번째 전 답의 버튼·목 서버를 다시 띄운 뒤의 버튼은 모르는 id 라 독립 질문으로 답한다 → 화면의 「이어받지 못해…」 안내 확인용
 
 const AI_CONTEXT_MAX = 5;
 /** sessionId → [{ id, date, theater, movie }] (최신이 뒤) */
@@ -574,6 +604,19 @@ function rememberAiContext(sessionId, values, inherited = []) {
   return { ...entry, label, inherited };
 }
 
+/** ai 내부 틀(context_templates.yaml)에 값을 채운 모양의 SQL — 데모 정보의 「SQL 보기」용 */
+function aiContinuedSql(values, asOf) {
+  const quote = (text) => `'${String(text).replaceAll("'", "''")}'`;
+  const where = [
+    values.date && `s.business_date = ${quote(values.date)}`,
+    values.theater && `t.name = ${quote(values.theater)}`,
+    `m.title = ${quote(values.movie)}`,
+    `s.starts_at > ${quote(kstMinute(asOf))}`,
+  ].filter(Boolean);
+  const columns = values.theater ? "s.starts_at" : "t.name AS theater_name, s.starts_at";
+  return `SELECT ${columns} FROM screening AS s JOIN movie AS m ON m.movie_id = s.movie_id JOIN theater AS t ON t.theater_id = s.theater_id WHERE ${where.join(" AND ")} ORDER BY s.starts_at LIMIT 500`;
+}
+
 /** continueFrom 이 가리킨 답의 날짜·극장 + 메시지의 영화로 답한다. 이어받을 것이 없으면 null(평소 답) */
 function aiContinued(body, sessionId, message) {
   const from = (aiContexts.get(sessionId) ?? []).find((entry) => entry.id === body.continueFrom);
@@ -606,7 +649,9 @@ function aiContinued(body, sessionId, message) {
     screeningIds: rows.length > 0 ? rows.map((s) => s.screeningId) : null,
     rowCount: rows.length,
     truncated: false,
-    sql: null,
+    // 계약: 캐시 적중(CACHE_EXACT)이면 실행한 SQL과 그 캐시 항목(cache)이 있다
+    sql: aiContinuedSql(values, asOf),
+    cache: { entryId: aiEntryId(`ctx ${Object.keys(values).filter((kind) => values[kind]).join(" ")}`), stored: false, similarity: null },
     asOf,
     rejection: null,
     presetId: theater && date ? "ctx_movie_date_theater" : theater ? "ctx_movie_theater" : "ctx_movie_date",
@@ -659,14 +704,22 @@ async function handleAi(req, res, path) {
     }
 
     const sessionId = body.sessionId ?? randomUUID();
-    const key = message.replace(/\s+/g, " ").toLowerCase();
-    let answer = aiAnswer(message, sessionId);
-    const personal = answer.path === "MY_BOOKINGS";
+    const template = aiTemplate(message);
+    const meaning = aiMeaning(template);
+    let answer = { ...aiAnswer(message, sessionId), cache: null };
     const cacheable = answer.path === "PRESET" || answer.path === "NL2SQL";
-    if (!personal && aiAsked.has(key)) {
-      answer = { ...answer, path: "CACHE_EXACT", llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, latencyMs: 31 };
+    const free = { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+    if (cacheable && aiAsked.has(template)) {
+      const cache = { entryId: aiAsked.get(template), stored: false, similarity: null };
+      answer = { ...answer, path: "CACHE_EXACT", llm: free, latencyMs: 31, cache };
+    } else if (cacheable && aiMeanings.has(meaning)) {
+      const cache = { entryId: aiMeanings.get(meaning), stored: false, similarity: aiSimilarity(template) };
+      answer = { ...answer, path: "CACHE_SEMANTIC", llm: free, latencyMs: 38, cache };
     } else if (cacheable) {
-      aiAsked.set(key, true);
+      const entryId = aiEntryId(template);
+      aiAsked.set(template, entryId);
+      aiMeanings.set(meaning, entryId);
+      answer = { ...answer, cache: { entryId, stored: true, similarity: null } };
     }
     aiInflight = true;
     await sleep(Math.min(answer.latencyMs, 2500));

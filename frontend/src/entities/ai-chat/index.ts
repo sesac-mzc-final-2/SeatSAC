@@ -1,4 +1,5 @@
 export type {
+  ChatCacheRef,
   ChatPath,
   ChatColumn,
   ChatColumnType,

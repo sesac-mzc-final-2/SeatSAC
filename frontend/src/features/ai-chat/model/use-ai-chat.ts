@@ -14,7 +14,7 @@ export type ChatEntry =
       response: ChatResponse;
       link?: ChatLink;
       /** 이 답을 만든 질문 — 「조건 지우기」가 같은 질문을 `continueFrom` 없이 다시 보낸다 */
-      question: string;
+      question?: string;
       /** 이 질문에 붙여 보낸 `continueFrom`(앞 답의 `context.id`). 영화 버튼으로 보냈을 때만 */
       continueFrom?: string;
     }
@@ -42,6 +42,8 @@ export function useAiChat() {
   const sessionId = useRef<string | undefined>(undefined);
   const nextId = useRef(1);
   const controller = useRef<AbortController | null>(null);
+  // 데모 합계를 이 id 뒤의 항목부터 센다(「여기부터 다시 세기」). 대화 기록은 그대로다
+  const [countAfterId, setCountAfterId] = useState(0);
 
   const mutation = useMutation({
     mutationFn: ({ message, continueFrom, signal }: { message: string; continueFrom?: string; signal: AbortSignal }) =>
@@ -110,7 +112,11 @@ export function useAiChat() {
     resetMutation();
     sessionId.current = undefined;
     setEntries([]);
+    setCountAfterId(0);
   }, [resetMutation]);
 
-  return { entries, ask, restart, isPending, cooldownSeconds };
+  /** 데모 합계 기준만 지금으로 옮긴다 — 대화와 sessionId 는 둔다 */
+  const recount = useCallback(() => setCountAfterId(nextId.current - 1), []);
+
+  return { entries, ask, restart, isPending, cooldownSeconds, countAfterId, recount };
 }

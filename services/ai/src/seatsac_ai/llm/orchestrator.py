@@ -58,6 +58,8 @@ from seatsac_ai import bookings as my_bookings
 from seatsac_ai import context as ctx
 from seatsac_ai import seat_hold as holds
 from seatsac_ai.cache import template as tpl
+from seatsac_ai.cache.learned import ERROR as LEARN_ERROR
+from seatsac_ai.cache.learned import STORED, LearnedBook
 from seatsac_ai.cache.slots import (
     RELATIVE_DAYS,
     Extracted,
@@ -71,6 +73,7 @@ from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.cache.warm import INTERNAL_PRESET_PREFIX
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import (
+    AI_CACHE_LEARNED,
     AI_CACHE_REQUESTS,
     AI_CHAT,
     AI_TOKENS,
@@ -231,10 +234,12 @@ class ChatService:
         bookings: my_bookings.MyBookingsClient | None = None,
         refresher: SeatRefresher | None = None,
         seat_hold: holds.SeatHoldClient | None = None,
+        learned: LearnedBook | None = None,
     ) -> None:
         self._store = store
         self._refresher = refresher  # 잔여석을 읽는 SQL 직전에 회차를 새로 받는다
         self._cache = cache
+        self._learned = learned  # 버튼을 골라 답한 새 말투를 오래 기억한다(cache/learned.py)
         self._bookings = bookings
         self._clock = clock  # 테스트가 "지금"을 고정할 때만 바꾼다
         self._llm = llm
@@ -702,11 +707,37 @@ class ChatService:
         )
         if vector is None:
             vector = await self._embed(cache, ext.template)
-        if await cache.put(ext.key_text, entry, vector):
+        stored = await cache.put(ext.key_text, entry, vector)
+        if stored and self._learned is not None and made.preset is not None:
+            # 여기는 이어받은 답(carried)이 오지 않는다 — answer() 가 저장 자체를 건너뛴다.
+            # 한 사람의 조건이 섞인 답을 모든 사용자가 쓰는 장부에 적지 않는다(test_cache_learned)
+            await self._learn(ext, entry)
+        if stored:
             return True
         # put 은 의미 색인 추가만 실패해도 False 다(예열 warm.py 가 그 값으로 멈춘다 — 뜻을 바꾸지
         # 않는다). 정확 일치 항목이 들어갔으면 다음 같은 질문은 이 항목에서 나오므로 저장한 것이다
         return await cache.get_exact(ext.key_text) == entry
+
+    async def _learn(self, ext: Extracted, entry: CacheEntry) -> None:
+        """Claude가 버튼을 골라 답한 말투를 장부에 적는다 — 캐시 수명 뒤에도 캐시로 답한다."""
+        try:
+            result = await self._learned.learn(ext.key_text, entry)  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001 — 배우기는 덤이다. 이미 만든 답을 오류로 바꾸지 않는다
+            log.warning("배운 말투 적기 실패(답은 그대로 나감): %s", exc)
+            result = LEARN_ERROR
+        AI_CACHE_LEARNED.labels(result).inc()
+        if result == STORED:
+            # 질문 원문·템플릿 글자는 남기지 않는다(계약 9장 로그 규칙)
+            log.info(
+                "phrasing learned",
+                extra={
+                    "fields": {
+                        "presetId": entry.preset_id,
+                        "questionHash": _question_hash(ext.question),
+                        "questionLength": len(ext.question),
+                    }
+                },
+            )
 
     # --- 도구별 처리 ---------------------------------------------------------
 

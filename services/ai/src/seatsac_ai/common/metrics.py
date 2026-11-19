@@ -34,6 +34,8 @@ CHAT_RESULTS = ("ok", "error")
 TOKEN_KINDS = ("input", "output", "cache_read", "cache_write")
 CACHE_LAYERS = ("exact", "semantic")
 CACHE_RESULTS = ("hit", "miss")
+# 스스로 배우기(cache/learned.py) 결과 — learned.LEARN_RESULTS 와 같은 값(테스트가 지킨다)
+LEARN_RESULTS = ("stored", "known", "dropped", "skipped", "full", "error")
 LLM_RESULTS = ("ok", "timeout", "overloaded", "rate_limited", "error")
 SNAPSHOT_SCOPES = ("today", "other")
 QUOTA_WINDOWS = ("minute", "day")
@@ -53,6 +55,8 @@ HTTP_SERVER_REQUESTS = Histogram(
 AI_CHAT = Counter("ai_chat", "Chat requests by path and result", ["path", "result"])
 AI_TOKENS = Counter("ai_tokens", "Claude API tokens", ["kind", "path"])
 AI_CACHE_REQUESTS = Counter("ai_cache_requests", "Cache lookups", ["layer", "result"])
+# Claude가 버튼을 골라 답한 새 말투를 장부에 적은 결과 — stored 가 "새로 배운 말투" 수
+AI_CACHE_LEARNED = Counter("ai_cache_learned", "Learned phrasings by result", ["result"])
 # Claude 호출 한도 15초(APP_AI_LLM_TIMEOUT_SECONDS)까지 p95가 보이게.
 # 기본 버킷은 10초에서 잘린다(#95 리뷰)
 LLM_CALL_BUCKETS = (0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25)
@@ -95,6 +99,8 @@ def init_label_series(seat_hold: bool = False) -> None:
     for layer in CACHE_LAYERS:
         for result in CACHE_RESULTS:
             AI_CACHE_REQUESTS.labels(layer, result)
+    for result in LEARN_RESULTS:
+        AI_CACHE_LEARNED.labels(result)
     for window in QUOTA_WINDOWS:
         AI_QUOTA_REJECTED.labels(window)
     for category in (*UNMET_CATEGORIES, UNMET_UNKNOWN):

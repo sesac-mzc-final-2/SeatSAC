@@ -17,6 +17,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+from typing import Protocol
 
 import sqlglot
 from sqlglot import exp
@@ -90,7 +91,7 @@ def _item(preset: Preset, phrasing: str) -> WarmItem:
         offset = RELATIVE_DAYS[relative[0]]
         if not 0 <= offset <= MAX_OFFSET:
             raise WarmError(f"{preset.preset_id}: '{phrasing}' 날짜 {offset}일 뒤는 캐시 범위 밖")
-        sql = _rename_date(sql, "today" if offset == 0 else f"d{offset}")
+        sql = rename_date(sql, "today" if offset == 0 else f"d{offset}")
     elif missing:
         raise WarmError(f"{preset.preset_id}: '{phrasing}' 에 빈칸 {sorted(missing)} 이 없다")
     template = canonical(phrasing)
@@ -108,7 +109,7 @@ def _item(preset: Preset, phrasing: str) -> WarmItem:
     return WarmItem(normalize(template), template, entry)
 
 
-def _rename_date(sql: str, name: str) -> str:
+def rename_date(sql: str, name: str) -> str:
     def swap(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Placeholder) and node.name == "date":
             return exp.Placeholder(this=name)
@@ -135,15 +136,36 @@ async def warm(cache: ChatCache, items: list[WarmItem]) -> int:
     return stored
 
 
-async def refresh_forever(cache: ChatCache, items: list[WarmItem], every: float) -> None:
-    """캐시 수명보다 짧은 간격으로 다시 넣는다(수명이 지나 사라지지 않게)."""
+class LearnedSource(Protocol):
+    async def items(self) -> list[WarmItem]: ...
+
+
+async def refresh_forever(
+    cache: ChatCache,
+    items: list[WarmItem],
+    every: float,
+    learned: LearnedSource | None = None,
+) -> None:
+    """캐시 수명보다 짧은 간격으로 다시 넣는다(수명이 지나 사라지지 않게).
+
+    learned 가 있으면 스스로 배운 말투(cache/learned.py)도 같이 넣는다.
+    """
     while True:
         try:
             n = await warm(cache, items)
             if n == len(items):
-                log.info("버튼 질문 말투 %d개를 캐시에 넣었다", n)
+                if items:
+                    log.info("버튼 질문 말투 %d개를 캐시에 넣었다", n)
             else:
                 log.warning("버튼 질문 말투 %d/%d개만 넣었다(다음에 다시)", n, len(items))
         except Exception as exc:  # noqa: BLE001 — 예열 실패는 답에 영향 없음(놓친 것으로 처리)
             log.warning("캐시 예열 실패(다음에 다시): %s", exc)
+        if learned is not None:
+            try:  # 따로 묶는다 — 배운 말투 쪽 실패가 버튼 말투 예열을 막지 않게
+                extra = await learned.items()
+                if extra:
+                    put = await warm(cache, extra)
+                    log.info("배운 말투 %d/%d개를 캐시에 넣었다", put, len(extra))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("배운 말투 예열 실패(다음에 다시): %s", exc)
         await asyncio.sleep(every)

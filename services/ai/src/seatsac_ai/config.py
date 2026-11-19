@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     semantic_threshold: float = Field(0.92, alias="APP_AI_SEMANTIC_THRESHOLD")
     # 버튼 질문(프리셋) 말투를 기동 때 캐시에 미리 넣는다 — 첫 사용자도 캐시로 답한다(cache/warm.py)
     cache_warm_presets: bool = Field(True, alias="APP_AI_CACHE_WARM_PRESETS")
+    # Claude가 버튼을 골라 답한 새 말투를 장부에 적고 예열 루프가 계속 다시 넣는다(cache/learned.py)
+    cache_learn_enabled: bool = Field(True, alias="APP_AI_CACHE_LEARN_ENABLED")
     limit_per_minute: int = Field(10, alias="APP_AI_LIMIT_PER_MINUTE")
     limit_per_day: int = Field(100, alias="APP_AI_LIMIT_PER_DAY")
 

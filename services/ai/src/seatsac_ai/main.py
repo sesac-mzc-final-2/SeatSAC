@@ -12,6 +12,7 @@ from seatsac_ai import __version__
 from seatsac_ai.api import actuator, chat, presets
 from seatsac_ai.bookings import MyBookingsClient
 from seatsac_ai.cache.embedder import FastEmbedder
+from seatsac_ai.cache.learned import LearnedBook
 from seatsac_ai.cache.store import ChatCache, Embedder, ValkeySearchIndex
 from seatsac_ai.cache.warm import internal_items, preset_items, refresh_forever
 from seatsac_ai.common.errors import install_exception_handlers
@@ -44,13 +45,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # 임베딩 모델을 미리 읽는다(몇 초). 첫 질문이 기다리지 않게
             warm = asyncio.create_task(asyncio.to_thread(cache.embedder.load))
     prewarm = None
-    if cache is not None and app.state.settings.cache_warm_presets:
-        # 버튼 질문 말투를 캐시에 미리 넣는다(③). 수명의 절반마다 다시
-        items = preset_items(all_presets())
-        # 문맥 이어받기 내부 틀도 같이 — 키가 따로라 직접 친 질문은 이 항목에 적중하지 않는다
-        items += internal_items(context_templates())
+    learned: LearnedBook | None = app.state.learned
+    if cache is not None and (app.state.settings.cache_warm_presets or learned is not None):
+        # 버튼 질문 말투(③)와 스스로 배운 말투를 캐시에 미리 넣는다. 수명의 절반마다 다시
+        items = []
+        if app.state.settings.cache_warm_presets:
+            items = preset_items(all_presets())
+            # 문맥 이어받기 내부 틀도 같이 — 키가 따로라 직접 친 질문은 이 항목에 적중하지 않는다
+            items += internal_items(context_templates())
         every = max(60, app.state.settings.cache_ttl // 2)
-        prewarm = asyncio.create_task(refresh_forever(cache, items, every))
+        prewarm = asyncio.create_task(refresh_forever(cache, items, every, learned))
     try:
         yield
     finally:
@@ -142,6 +146,13 @@ def create_app(
             index=semantic_index if settings.semantic_cache_enabled else None,
         )
 
+    # 스스로 배우기(3.4.23) — 캐시와 같은 ai Valkey
+    app.state.learned = (
+        LearnedBook(valkey, all_presets())
+        if app.state.cache is not None and settings.cache_learn_enabled
+        else None
+    )
+
     # "내 예매"(3.4.10) — 스냅샷과 같은 공개 API 주소
     app.state.bookings = (
         MyBookingsClient(settings.public_api_base_url) if settings.public_api_base_url else None
@@ -169,6 +180,7 @@ def create_app(
             bookings=app.state.bookings,
             refresher=app.state.snapshot.refresher,
             seat_hold=app.state.seat_hold,
+            learned=app.state.learned,
         )
 
     app.add_middleware(RequestContextMiddleware)

@@ -31,6 +31,7 @@ from redis.exceptions import RedisError, ResponseError
 
 log = logging.getLogger(__name__)
 
+# 배운 말투 장부(learned.py)도 이 버전을 키에 쓴다 — 올리면 옛 장부는 보지 않고 7일 안에 사라진다
 CACHE_VERSION = "v2"
 SEMCACHE_INDEX = f"ai_semcache_{CACHE_VERSION}_idx"
 SEMCACHE_PREFIX = f"ai:semcache:{CACHE_VERSION}:"

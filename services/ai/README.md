@@ -100,6 +100,7 @@ readiness는 각 작업이 `app.state.readiness.register(이름, 점검)`으로 
 | --- | --- |
 | Claude 없이 답한 비율 | `sum(increase(ai_chat_total{result="ok",path=~"cache_exact\|cache_semantic\|my_bookings"}[1h])) / sum(increase(ai_chat_total{result="ok",path!~"hold_.*"}[1h]))` |
 | 캐시 적중률(층별) | `sum by (layer) (increase(ai_cache_requests_total{result="hit"}[1h])) / sum by (layer) (increase(ai_cache_requests_total[1h]))` |
+| 새로 배운 말투(24시간) | `increase(ai_cache_learned_total{result="stored"}[24h])` |
 | Claude 답 1건당 토큰(input+output) | `sum(increase(ai_tokens_total{kind=~"input\|output",path!~"hold_.*"}[1h])) / sum(increase(ai_chat_total{path=~"preset\|nl2sql\|rejected\|out_of_scope\|clarify"}[1h]))` |
 | 캐시로 아낀 토큰(추정) | 위 "1건당 토큰" × `sum(increase(ai_chat_total{result="ok",path=~"cache_exact\|cache_semantic"}[1h]))` |
 | 프롬프트 캐싱으로 싸게 읽은 토큰 | `sum(increase(ai_tokens_total{kind="cache_read"}[1h]))` |
@@ -121,6 +122,7 @@ sum(increase(ai_chat_total{result="ok",path=~"cache_exact|cache_semantic"}[1h]))
 - 경로 `out_of_scope`·`rejected`도 Claude를 부른 답이라 "1건당 토큰"의 분모에 넣는다.
 - 경로 `hold_*`(채팅으로 좌석 잡기, 플래그 `APP_AI_SEAT_HOLD_ENABLED`가 켜져 있을 때만 생긴다 — 기본 켜짐)는 조회 답이 아니라 위 식에서 뺀다(`path!~"hold_.*"`). `hold_confirm`·`hold_guide`는 Claude를 1회 쓰지만 조회 답이 아니고, `hold_result`는 토큰 0이라 넣으면 비율이 부풀려진다. 좌석 잡기가 켜져 있으면 좌석을 잡아 달라는 요청은 `hold_seats`로 가므로 `ai_unmet_demand_total{category="action_request"}`에는 결제·예매 취소 같은 나머지 행동 요청만 잡힌다(끄면 좌석 잡기 요청도 다시 여기에 잡힌다).
 - 캐시 적중률의 분모는 **캐시를 본 질문**만이다. 후속 질문("그중 …")과 같은 종류 값이 두 번 나온 질문은 캐시를 보지 않아 세지 않는다.
+- `ai_cache_learned_total`은 스스로 배우기(`cache/learned.py`) 결과다. 배운 말투가 틀린 답을 내면 ai Valkey에서 먼저 `APP_AI_CACHE_LEARN_ENABLED=false`로 끄고 ai Valkey에서 `DEL ai:learned:v2`로 장부를 비운다(다음 예열부터 다시 넣지 않는다, 캐시에 남은 항목은 1시간 안에 사라진다). 끄지 않고 지우기만 하면 Claude가 같은 답을 낼 때 다시 배운다.
 - `ai_unmet_demand_total`은 Claude가 `out_of_scope` 도구로 끝낸 질문을 `category`(`action_request`·`site_feature`·`unrelated`·`unknown`)별로 센다. `unknown`은 도구를 불렀는데 분류가 정해진 값이 아닌 경우다. 욕설·인사·잡담(Claude가 `chitchat`으로 분류)과 Claude가 도구 없이 두 번 끝난 폴백은 수요가 아니라 **지표도 로그도 남기지 않는다** — 그래서 합계는 `ai_chat_total{path="out_of_scope"}`보다 그만큼 작다. `unrelated`는 영화관과 무관해도 구체적인 정보·기능을 원한 요청("오늘 날씨 어때?")이고, "오늘 날씨 좋다" 같은 말은 chitchat이다.
 - 범위 밖(`OUT_OF_SCOPE`) 답의 `answer`는 같은 `category`에 따라 고정 문장이 다르다(3.4.21): `action_request`는 "그 기능은 아직 준비 중이에요. 지금은 화면에서 해 주세요.", `site_feature`는 "그 정보는 아직 제공하지 않아요. 영화·극장·상영 시간은 물어보실 수 있어요.", 그 밖(`unrelated`·`chitchat`·`unknown`·도구 없이 끝난 폴백)은 "영화·극장·상영 시간에 대한 질문에만 답할 수 있어요.". Claude가 쓴 `reason`은 답에 넣지 않는다. 응답 계약·`path`·지표·로그는 그대로다.
 - 무엇을 원했는지는 로그 `unmet demand`의 `reason`(Claude가 쓴 요약, 120자)으로 본다 — 질문 원문은 남기지 않는다. 숫자 연속(3개 이상)과 이메일은 `[숫자]`·`[이메일]`로 가리고, `reason`이 질문을 베낀 것으로 보이면(공백·문장부호를 뺀 뒤 겹치는 연속 글자가 `max(8, min(질문의 60%, 20))`자 이상) `reason`을 비우고 `reasonDropped: true`를 남긴다.

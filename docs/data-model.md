@@ -112,7 +112,7 @@
 
 ### 6-2. 개인 데이터
 
-"내 예매"는 SQLite에 넣지 않고 요청마다 `GET {PUBLIC_API_BASE_URL}/users/me/bookings`를 **사용자의 토큰 그대로** 호출해 답한다. 캐시하지 않고, Claude API에는 예매 행을 보내지 않는다(템플릿 문장으로 답).
+"내 예매"는 SQLite에 넣지 않고 요청마다 `GET {PUBLIC_API_BASE_URL}/users/me/bookings`를 **사용자의 토큰 그대로** 호출해 답한다. 캐시하지 않고, Claude API에는 예매 행을 보내지 않는다(템플릿 문장으로 답). 채팅으로 좌석 잡기(플래그 `APP_AI_SEAT_HOLD_ENABLED` 기본 켜짐)도 같은 길(공개 주소 + 사용자 토큰 그대로)로 `POST /seats/hold`를 부르되 **사용자의 확인 버튼 뒤에만** 부른다.
 
 ### 6-3. ai Valkey 키
 

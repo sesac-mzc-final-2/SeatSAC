@@ -9,7 +9,7 @@ info:
     외부 호출은 `/api` 접두사, Gateway가 StripPrefix=1 (`/api/ai/chat` → ai `/ai/chat`).
     gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND**(유효한 토큰으로 인증됐을 때. 토큰이 없거나 만료·서명 불일치면 gateway 인증이 라우팅보다 먼저라 401) — 화면은 챗봇 창을 열 때 부른
     `GET /ai/presets`가 404면 「준비 중」 안내 뒤 챗봇 버튼을 숨긴다(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5). 켜져 있을 때 `/api/ai/**` 라우트만 응답 타임아웃 28초(ai 요청 전체 기한 25초).
-    조회 전용이라 `Idempotency-Key`는 받지 않는다. 오류 코드 4개(`AI_*`)는 `services/ai` 안에서 정의하고 형식은
+    조회 중심이며 `/ai/chat`은 `Idempotency-Key`를 받지 않는다(좌석 잡기는 ai가 확인 요청 때 만든 키를 쓴다). 오류 코드 4개(`AI_*`)는 `services/ai` 안에서 정의하고 형식은
     `contracts/schemas/error.v1.json` 그대로.
 servers:
   - url: /api

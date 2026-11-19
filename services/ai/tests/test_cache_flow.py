@@ -418,6 +418,30 @@ def test_short_reply_to_a_date_question_is_joined_with_the_original():
     assert second["path"] == "NL2SQL"
 
 
+def test_out_of_scope_after_a_joined_reply_is_recorded_once_with_the_joined_question(caplog):
+    """되묻기 답("내일")을 원래 질문에 붙인 뒤 범위 밖으로 끝나면: 기록은 한 번,
+    해시는 「chat answered」와 같고, 원래 질문을 베낀 reason 은 버린다(3.4.17 × 3.4.9)."""
+    import logging
+
+    original = "잔여석 많은 회차 근처 주차장 요금"
+    llm = ScriptedLlm(
+        tool("ask_user", missing="date"),
+        tool("out_of_scope", category="site_feature", reason=original),
+    )
+    service, _ = make(llm)
+    first = ask(service, original)
+    assert first["path"] == "CLARIFY"
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        second = ask(service, "내일", session_id=first["sessionId"])
+    assert second["path"] == "OUT_OF_SCOPE"
+    (unmet,) = [r.fields for r in caplog.records if r.getMessage() == "unmet demand"]
+    (answered,) = [r.fields for r in caplog.records if r.getMessage() == "chat answered"]
+    assert unmet["questionHash"] == answered["questionHash"]
+    assert unmet["questionLength"] == len(f"내일 {original}")
+    assert unmet["reason"] is None and unmet["reasonDropped"] is True
+
+
 def test_date_button_for_a_short_question_is_not_joined_twice():
     """버튼은 완성된 질문(12자)을 보낸다 — 원래 질문을 또 붙이지 않는다(#140 리뷰)."""
     seats = (

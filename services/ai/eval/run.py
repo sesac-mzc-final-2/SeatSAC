@@ -133,7 +133,7 @@ class GoldLlm:
         question = text.rsplit("질문: ", 1)[-1].strip()
         q = self._by_text[question]
         if q.expect == "OUT_OF_SCOPE":
-            name, data = "out_of_scope", {"reason": "범위 밖"}
+            name, data = "out_of_scope", {"category": "unrelated", "reason": "범위 밖"}
         else:
             name, data = (
                 "run_sql",

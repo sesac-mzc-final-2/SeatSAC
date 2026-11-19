@@ -1,12 +1,20 @@
 """질문 처리 순서: 가짜 Claude가 고른 도구에 따라 경로·재요청·거부가 맞게 나오는지."""
 
 import asyncio
+import logging
 from datetime import date, datetime
 
 import pytest
 
 from seatsac_ai.common.errors import ApiError
+from seatsac_ai.common.metrics import (
+    AI_UNMET_DEMAND,
+    UNMET_CATEGORIES,
+    UNMET_UNKNOWN,
+    init_label_series,
+)
 from seatsac_ai.config import Settings
+from seatsac_ai.llm import orchestrator
 from seatsac_ai.llm.client import LlmUnavailable
 from seatsac_ai.llm.orchestrator import ChatService
 from seatsac_ai.snapshot.fresh import Fresh
@@ -77,6 +85,184 @@ def test_nl2sql_path_returns_the_sql_that_ran():
 def test_out_of_scope():
     body = ask(ScriptedLlm(tool("out_of_scope", reason="날씨")), "내일 날씨 어때?")
     assert body["path"] == "OUT_OF_SCOPE" and body["rows"] is None and body["llm"]["calls"] == 1
+
+
+def _unmet(category: str) -> float:
+    return AI_UNMET_DEMAND.labels(category)._value.get()
+
+
+def _unmet_logs(caplog) -> list[dict]:
+    return [r.fields for r in caplog.records if r.getMessage() == "unmet demand"]
+
+
+@pytest.mark.parametrize("category", ["action_request", "site_feature", "unrelated"])
+def test_out_of_scope_counts_unmet_demand_by_category(category):
+    before = _unmet(category)
+    ask(ScriptedLlm(tool("out_of_scope", category=category, reason="요약")), "아무 질문")
+    assert _unmet(category) == before + 1
+
+
+@pytest.mark.parametrize("given", [{"category": "주차 문의"}, {"category": 3}, {}])
+def test_unmet_demand_category_outside_the_enum_becomes_unknown(given):
+    # Claude가 적은 글자를 그대로 라벨로 쓰면 시계열이 끝없이 늘어난다
+    before = _unmet("unknown")
+    ask(ScriptedLlm(tool("out_of_scope", reason="x", **given)), "주차 돼?")
+    assert _unmet("unknown") == before + 1
+    init_label_series()  # 다른 테스트의 import 순서에 기대지 않는다
+    assert {s.labels["category"] for s in AI_UNMET_DEMAND.collect()[0].samples} == {
+        "action_request", "site_feature", "unrelated", "unknown",
+    }  # fmt: skip
+
+
+def test_chitchat_is_neither_counted_nor_logged(caplog):
+    # 인사·잡담·욕설은 수요가 아니다 — 답은 OUT_OF_SCOPE 그대로, 기록만 하지 않는다
+    before = {c: _unmet(c) for c in (*UNMET_CATEGORIES, UNMET_UNKNOWN)}
+    llm = ScriptedLlm(tool("out_of_scope", category="chitchat", reason="인사"))
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        body = ask(llm, "안녕")
+    assert body["path"] == "OUT_OF_SCOPE" and set(body) == CONTRACT_KEYS
+    assert {c: _unmet(c) for c in before} == before and _unmet_logs(caplog) == []
+    assert "chitchat" not in {s.labels["category"] for s in AI_UNMET_DEMAND.collect()[0].samples}
+
+
+def test_unmet_demand_log_has_summary_but_not_the_question(caplog):
+    question = "010-1234-5678 로 건대입구 주차 요금 알려줘"
+    long_reason = "주차 요금 안내  \n" + "가" * 200
+    llm = ScriptedLlm(tool("out_of_scope", category="site_feature", reason=long_reason))
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        body = ask(llm, question)
+    assert set(body) == CONTRACT_KEYS  # 응답 계약은 그대로다(category·reason 은 응답에 없다)
+    (fields,) = _unmet_logs(caplog)
+    assert set(fields) == {"category", "reason", "questionHash", "questionLength"}
+    assert fields["category"] == "site_feature"
+    assert len(fields["reason"]) == 120 and fields["reason"].startswith("주차 요금 안내 가")
+    assert fields["questionLength"] == len(question) and len(fields["questionHash"]) == 16
+    for record in caplog.records:  # 어느 로그 줄에도 질문 원문이 없다
+        assert question not in record.getMessage()
+        assert question not in str(getattr(record, "fields", ""))
+
+
+def _unmet_reason_fields(caplog, question: str, reason: str) -> dict:
+    llm = ScriptedLlm(tool("out_of_scope", category="site_feature", reason=reason))
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        ask(llm, question)
+    (fields,) = _unmet_logs(caplog)
+    return fields
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "건대입구 주차 요금 얼마야?",  # 그대로
+        "사용자 질문: 건대입구  주차요금 얼마야!!",  # 공백·문장부호만 바꿔 옮김
+    ],
+)
+def test_reason_that_copies_the_question_is_dropped(caplog, reason):
+    before = _unmet("site_feature")
+    fields = _unmet_reason_fields(caplog, "건대입구 주차 요금 얼마야?", reason)
+    assert set(fields) == {"category", "reason", "reasonDropped", "questionHash", "questionLength"}
+    assert fields["reason"] is None and fields["reasonDropped"] is True
+    assert fields["category"] == "site_feature" and _unmet("site_feature") == before + 1
+
+
+def test_long_question_copied_in_part_is_dropped(caplog):
+    # 질문이 길어도 20자가 그대로 겹치면 버린다(60% 기준만 쓰면 긴 질문에서 발동하지 않는다)
+    question = "".join(chr(0xAC00 + i * 7) for i in range(220))
+    fields = _unmet_reason_fields(caplog, question, "요약: " + question[:40])
+    assert fields["reason"] is None and fields["reasonDropped"] is True
+
+
+@pytest.mark.parametrize(
+    ("reason", "kept"),
+    [
+        ("010-1234-5678 hong@example.com 주차 요금 안내", "[숫자] [이메일] 주차 요금 안내"),
+        ("01012345678 주차 요금 안내", "[숫자] 주차 요금 안내"),
+        ("2관 20시 회차 할인 문의", "2관 20시 회차 할인 문의"),  # 숫자 한두 개는 그대로
+    ],
+)
+def test_phone_numbers_and_emails_in_reason_are_masked(caplog, reason, kept):
+    fields = _unmet_reason_fields(caplog, "주차 요금 알려줘", reason)
+    assert fields["reason"] == kept and "reasonDropped" not in fields
+    # questionHash 는 임의 16진수라 우연히 010 이 나올 수 있어 뺀다
+    rest = str({k: v for k, v in fields.items() if k != "questionHash"})
+    assert "010" not in rest and "@" not in rest
+
+
+@pytest.mark.parametrize("reason", [5, None, ["주차"], "", "  \n "])
+def test_reason_that_is_not_text_or_is_empty_becomes_none(caplog, reason):
+    fields = _unmet_reason_fields(caplog, "주차 돼?", reason)
+    assert fields["reason"] is None and "reasonDropped" not in fields
+
+
+def test_category_is_matched_ignoring_case_and_spaces(caplog):
+    before = {c: _unmet(c) for c in (*UNMET_CATEGORIES, UNMET_UNKNOWN)}
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        ask(ScriptedLlm(tool("out_of_scope", category="CHITCHAT", reason="인사")), "안녕")
+        assert _unmet_logs(caplog) == [] and {c: _unmet(c) for c in before} == before
+        ask(ScriptedLlm(tool("out_of_scope", category=" Site_Feature ", reason="주차")), "주차?")
+    assert _unmet("site_feature") == before["site_feature"] + 1
+    assert _unmet("unknown") == before["unknown"]
+
+
+def test_chitchat_with_copied_reason_leaves_nothing(caplog):
+    question = "야 이 멍청한 챗봇아 대답 좀 해봐"
+    llm = ScriptedLlm(tool("out_of_scope", category="chitchat", reason=question))
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        ask(llm, question)
+    assert _unmet_logs(caplog) == []
+    for record in caplog.records:
+        assert question not in record.getMessage()
+        assert question not in str(getattr(record, "fields", ""))
+
+
+def test_out_of_scope_after_a_nudge_is_recorded_once(caplog):
+    before = _unmet("unrelated")
+    llm = ScriptedLlm(text_only(), tool("out_of_scope", category="unrelated", reason="날씨 안내"))
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        body = ask(llm, "내일 날씨 어때?")
+    assert body["path"] == "OUT_OF_SCOPE" and body["llm"]["calls"] == 2
+    assert _unmet("unrelated") == before + 1 and len(_unmet_logs(caplog)) == 1
+
+
+def test_recording_failure_does_not_break_the_answer(caplog, monkeypatch):
+    def boom(question, reason):
+        raise RuntimeError(f"{question} {reason}")
+
+    monkeypatch.setattr(orchestrator, "_copies_question", boom)
+    llm = ScriptedLlm(tool("out_of_scope", category="site_feature", reason="주차 요금 안내"))
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        body = ask(llm, "건대입구 주차 요금 얼마야?")
+    assert body["path"] == "OUT_OF_SCOPE" and _unmet_logs(caplog) == []
+    (warning,) = [r for r in caplog.records if "기록 실패" in r.getMessage()]
+    assert "RuntimeError" in warning.getMessage() and "주차" not in warning.getMessage()
+
+
+def test_tool_input_that_is_not_a_dict_counts_as_unknown(caplog):
+    before = _unmet("unknown")
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        orchestrator._record_unmet("주차 돼?", ["category", "site_feature"])
+    assert _unmet("unknown") == before + 1
+    (fields,) = _unmet_logs(caplog)
+    assert fields["category"] == "unknown" and fields["reason"] is None
+
+
+def test_summary_reason_is_kept(caplog):
+    fields = _unmet_reason_fields(caplog, "건대입구 주차 요금 얼마야?", "극장 주차 요금 안내")
+    assert fields["reason"] == "극장 주차 요금 안내" and "reasonDropped" not in fields
+
+
+def test_short_question_never_drops_the_reason(caplog):
+    # 겹침 기준의 하한이 8자라, 짧은 질문은 요약과 같아도 남긴다(의도)
+    fields = _unmet_reason_fields(caplog, "날씨", "날씨")
+    assert fields["reason"] == "날씨" and "reasonDropped" not in fields
+
+
+def test_other_paths_do_not_count_unmet_demand(caplog):
+    before = {c: _unmet(c) for c in (*UNMET_CATEGORIES, UNMET_UNKNOWN)}
+    llm = ScriptedLlm(tool("run_preset", presetId="today_after_time", params={"time": "20:00"}))
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        ask(llm, "오늘 20시 이후 영화")
+    assert {c: _unmet(c) for c in before} == before and _unmet_logs(caplog) == []
 
 
 def test_rejected_sql_is_retried_once_with_the_reason():
@@ -311,6 +497,15 @@ def test_text_only_twice_falls_back_to_out_of_scope():
     body = ask(llm, "오늘 20시 이후 영화")
     assert body["path"] == "OUT_OF_SCOPE" and body["rows"] is None
     assert body["llm"]["calls"] == 2 and "세 편" not in body["answer"]
+
+
+def test_text_only_fallback_is_not_unmet_demand(caplog):
+    # 도구 없이 끝난 것은 모델 실패다 — 범위 안 질문이 섞이므로 수요로 세지 않는다
+    before = {c: _unmet(c) for c in (*UNMET_CATEGORIES, UNMET_UNKNOWN)}
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        body = ask(ScriptedLlm(text_only(), text_only()), "오늘 20시 이후 영화")
+    assert body["path"] == "OUT_OF_SCOPE"
+    assert {c: _unmet(c) for c in before} == before and _unmet_logs(caplog) == []
 
 
 class FakeRefresher:

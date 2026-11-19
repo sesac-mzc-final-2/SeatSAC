@@ -36,6 +36,7 @@ def test_ai_metric_names_are_registered(client):
         "ai_rejected_total",
         "ai_snapshot_age_seconds",
         "ai_quota_rejected_total",
+        "ai_unmet_demand_total",
     ):
         assert f"# TYPE {name}" in text, name
 
@@ -46,6 +47,9 @@ def test_label_series_are_pre_registered_at_zero(client):
     assert 'ai_chat_total{path="cache_semantic",result="ok"} ' in text
     assert 'ai_cache_requests_total{layer="exact",result="hit"} ' in text
     assert 'ai_quota_rejected_total{window="day"} ' in text
+    for category in ("action_request", "site_feature", "unrelated", "unknown"):
+        assert f'ai_unmet_demand_total{{category="{category}"}} ' in text
+    assert 'category="chitchat"' not in text  # 잡담·욕설은 수요가 아니라 세지 않는다
 
 
 def test_json_log_has_contract_fields():

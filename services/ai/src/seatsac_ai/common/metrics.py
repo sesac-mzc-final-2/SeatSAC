@@ -34,6 +34,12 @@ CACHE_RESULTS = ("hit", "miss")
 LLM_RESULTS = ("ok", "timeout", "overloaded", "rate_limited", "error")
 SNAPSHOT_SCOPES = ("today", "other")
 QUOTA_WINDOWS = ("minute", "day")
+# 범위 밖 질문 중 "수요"로 세는 분류 + out_of_scope 도구의 category 가 정해진 값이 아닌 경우
+UNMET_CATEGORIES = ("action_request", "site_feature", "unrelated")
+UNMET_UNKNOWN = "unknown"
+# 욕설·인사·잡담은 수요가 아니라 세지 않는다. Claude가 고를 수는 있어야 다른 분류로 새지 않는다
+UNMET_CHITCHAT = "chitchat"
+OUT_OF_SCOPE_CATEGORIES = (*UNMET_CATEGORIES, UNMET_CHITCHAT)  # out_of_scope 도구의 category enum
 
 # --- 지표 ---------------------------------------------------------------------
 HTTP_SERVER_REQUESTS = Histogram(
@@ -54,6 +60,8 @@ AI_SQL_EXEC_SECONDS = Histogram("ai_sql_exec_seconds", "SQLite execution duratio
 AI_REJECTED = Counter("ai_rejected", "SQL validator rejections", ["reason"])
 AI_SNAPSHOT_AGE_SECONDS = Gauge("ai_snapshot_age_seconds", "Snapshot age", ["scope"])
 AI_QUOTA_REJECTED = Counter("ai_quota_rejected", "Quota rejections", ["window"])
+# 사용자가 원했지만 답하지 못한 요청(OUT_OF_SCOPE)을 분류별로 센다 — 다음 개발 후보를 고르는 근거
+AI_UNMET_DEMAND = Counter("ai_unmet_demand", "Out-of-scope requests by category", ["category"])
 
 
 def chat_path_label(response_path: str) -> str:
@@ -62,6 +70,15 @@ def chat_path_label(response_path: str) -> str:
     if label not in CHAT_PATHS:
         raise ValueError(f"unknown chat path: {response_path}")
     return label
+
+
+def unmet_category_label(value: object) -> str:
+    """Claude가 적은 category → 지표 라벨. 정해 둔 값이 아니면 unknown.
+
+    임의 글자가 라벨로 들어가 시계열이 늘어나는 것을 막는다.
+    chitchat 은 부르는 쪽이 먼저 걸러 여기로 오지 않는다(세지 않는 분류).
+    """
+    return value if isinstance(value, str) and value in UNMET_CATEGORIES else UNMET_UNKNOWN
 
 
 def init_label_series() -> None:
@@ -74,6 +91,8 @@ def init_label_series() -> None:
             AI_CACHE_REQUESTS.labels(layer, result)
     for window in QUOTA_WINDOWS:
         AI_QUOTA_REJECTED.labels(window)
+    for category in (*UNMET_CATEGORIES, UNMET_UNKNOWN):
+        AI_UNMET_DEMAND.labels(category)
 
 
 def record_http_request(uri: str, status: int, method: str, seconds: float) -> None:

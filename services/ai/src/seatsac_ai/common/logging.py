@@ -5,6 +5,8 @@
   timestamp(+09:00)·level·service=ai·logger·traceId·userId(있으면)·message·error(있으면)
   + 요청별 필드(path·latencyMs·tokens 등, service-runtime-contract 9장).
 질문·SQL·결과 행 수만 남기고 결과 행 내용·토큰 값·비밀번호는 남기지 않는다.
+예외 하나: `unmet demand` 로그의 reason — 범위 밖 요청을 Claude가 요약한 120자 이하 글
+(category·reason·reasonDropped·questionHash·questionLength, 9장).
 """
 
 from __future__ import annotations

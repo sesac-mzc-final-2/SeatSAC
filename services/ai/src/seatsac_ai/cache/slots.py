@@ -195,6 +195,30 @@ _DROP = frozenset(
     "좀 혹시 그냥 하는 시작하는 상영하는 상영되는 하는거 하는것 하는게 거 것 게 줘 주세요".split()
 )
 _SLOT_HEAD = re.compile(r"^(\{[a-z]+\})(.+)$")
+# 붙여 쓴 꼬리말("영화뭐있어"·"영화알려줘")을 떼는 데 쓰는 말 — 긴 것부터 본다("뭐있어" > "있어").
+# 한 글자("뭐"·"좀"·"거")는 낱말 끝과 우연히 겹치기 쉬워 떼지 않는다. "하는…"도 뺀다 —
+# "좋아하는"·"예매하는거"처럼 낱말의 일부인 경우가 더 많다
+_NOT_GLUED = frozenset("하는 하는거 하는것 하는게".split())
+_GLUED = tuple(
+    sorted((w for w in _DROP if len(w) >= 2 and w not in _NOT_GLUED), key=len, reverse=True)
+)
+_KNOWN_WORDS = _DROP | _CANON.keys() | _AFTER_SLOT.keys()
+
+
+def _unglue(word: str) -> str:
+    """낱말 끝에 붙은 부탁·물음 꼬리를 뗀다: "영화뭐있어" → "영화".
+
+    띄어 쓴 "영화 뭐 있어"는 꼬리가 낱말로 나뉘어 지워지는데, 붙여 쓰면 한 낱말이라 남았다
+    (11/19 실행 확인 — 네 말투가 서로 다른 질문이 됐다). 흔한 꼬리만 맞춘다 — 한 글자 꼬리
+    ("영화좀알려줘"의 "좀")나 목록에 없는 말은 그대로 남아 캐시를 놓칠 뿐이다(오답은 아님).
+    남는 앞말이 두 글자보다 짧으면 떼지 않는다("곧시작하는"을 "곧"으로 만들지 않는다).
+    """
+    while word not in _KNOWN_WORDS:
+        tail = next((t for t in _GLUED if word.endswith(t) and len(word) - len(t) >= 2), None)
+        if tail is None:
+            break
+        word = word[: -len(tail)]
+    return word
 
 
 def canonical(template: str) -> str:
@@ -206,7 +230,7 @@ def canonical(template: str) -> str:
     """
     words: list[str] = []
     for token in template.split():
-        word = token.strip("?？!！.,~'\"")
+        word = _unglue(token.strip("?？!！.,~'\""))
         head = _SLOT_HEAD.match(word)
         tail = head.group(2) if head else ""
         if head and (tail in _CANON or tail in _DROP or tail in _AFTER_SLOT):

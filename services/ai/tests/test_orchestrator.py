@@ -40,6 +40,7 @@ AFTER_20 = (
 
 ACTION_REQUEST_ANSWER = orchestrator._OUT_OF_SCOPE_ANSWERS["action_request"]
 SITE_FEATURE_ANSWER = orchestrator._OUT_OF_SCOPE_ANSWERS["site_feature"]
+RECOMMENDATION_ANSWER = orchestrator._OUT_OF_SCOPE_ANSWERS["recommendation"]
 
 
 def ask(llm, question="질문", store=None, **settings):
@@ -99,6 +100,7 @@ def test_out_of_scope():
         ({"category": " Action_Request\n"}, ACTION_REQUEST_ANSWER),
         ({"category": "site_feature"}, SITE_FEATURE_ANSWER),
         ({"category": "SITE_FEATURE "}, SITE_FEATURE_ANSWER),
+        ({"category": "recommendation"}, RECOMMENDATION_ANSWER),
         ({"category": "unrelated"}, orchestrator.OUT_OF_SCOPE_ANSWER),
         ({"category": "chitchat"}, orchestrator.OUT_OF_SCOPE_ANSWER),
         ({"category": "주차 문의"}, orchestrator.OUT_OF_SCOPE_ANSWER),
@@ -122,7 +124,13 @@ def test_out_of_scope_answers_are_the_fixed_sentences():
         "그 정보는 아직 제공하지 않아요. 영화·극장·상영 시간은 물어보실 수 있어요."
     )
     assert orchestrator.OUT_OF_SCOPE_ANSWER == "영화·극장·상영 시간에 대한 질문에만 답할 수 있어요."
-    assert set(orchestrator._OUT_OF_SCOPE_ANSWERS) == {"action_request", "site_feature"}
+    # 3.4.25: 조건 없는 추천은 "없는 정보"가 아니라 "아직 없는 기능" — 조건을 말하면 찾아 준다
+    assert RECOMMENDATION_ANSWER == (
+        "추천 기능은 준비 중이에요. 날짜·극장·관람 등급 같은 조건을 말해 주시면 찾아 드릴게요."
+    )
+    assert set(orchestrator._OUT_OF_SCOPE_ANSWERS) == {
+        "action_request", "site_feature", "recommendation",
+    }  # fmt: skip
 
 
 def test_out_of_scope_answer_never_carries_what_claude_wrote():
@@ -146,7 +154,9 @@ def _unmet_logs(caplog) -> list[dict]:
     return [r.fields for r in caplog.records if r.getMessage() == "unmet demand"]
 
 
-@pytest.mark.parametrize("category", ["action_request", "site_feature", "unrelated"])
+@pytest.mark.parametrize(
+    "category", ["action_request", "site_feature", "recommendation", "unrelated"]
+)
 def test_out_of_scope_counts_unmet_demand_by_category(category, caplog):
     before = _unmet(category)
     with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
@@ -164,7 +174,7 @@ def test_unmet_demand_category_outside_the_enum_becomes_unknown(given):
     assert _unmet("unknown") == before + 1
     init_label_series()  # 다른 테스트의 import 순서에 기대지 않는다
     assert {s.labels["category"] for s in AI_UNMET_DEMAND.collect()[0].samples} == {
-        "action_request", "site_feature", "unrelated", "unknown",
+        "action_request", "site_feature", "recommendation", "unrelated", "unknown",
     }  # fmt: skip
 
 

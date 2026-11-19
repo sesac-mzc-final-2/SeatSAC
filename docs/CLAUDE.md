@@ -492,7 +492,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | ⚠️AI `ai_llm_call_seconds` | histogram | `result`=`ok`·`timeout`·`overloaded`·`rate_limited`·`error` | ai | Claude API 지연·장애 |
 | ⚠️AI `ai_sql_exec_seconds` · `ai_rejected_total` | histogram · counter | — · `reason`(SQL 검증 거부 사유) | ai | SQLite 실행 시간 · 검증기 동작 |
 | ⚠️AI `ai_snapshot_age_seconds` · `ai_quota_rejected_total` | gauge · counter | `scope`=`today`·`other` · `window`=`minute`·`day` | ai | 스냅샷 신선도(오늘 1분·나머지 10분) · 한도 초과 |
-| ⚠️AI `ai_unmet_demand_total` | counter | `category`=`action_request`·`site_feature`·`unrelated`·`unknown` | ai | 범위 밖(OUT_OF_SCOPE)으로 끝난 요청의 분류별 수 — 다음 개발 후보의 근거. 욕설·인사·잡담(`chitchat`)은 수요가 아니라 세지 않는다. `unknown`은 `out_of_scope` 도구의 `category`가 정해진 값이 아닌 경우(도구 없이 끝난 폴백은 세지 않는다). 로그는 9장 |
+| ⚠️AI `ai_unmet_demand_total` | counter | `category`=`action_request`·`site_feature`·`recommendation`(조건 없는 영화 추천 요청, 3.4.25)·`unrelated`·`unknown` | ai | 범위 밖(OUT_OF_SCOPE)으로 끝난 요청의 분류별 수 — 다음 개발 후보의 근거. 욕설·인사·잡담(`chitchat`)은 수요가 아니라 세지 않는다. `unknown`은 `out_of_scope` 도구의 `category`가 정해진 값이 아닌 경우(도구 없이 끝난 폴백은 세지 않는다). 로그는 9장 |
 | `cinema:http_requests:rate5m` | recording rule | `application` | 인프라 (gitops `observability/prometheusrule.yaml`, 3.1.7) | 신호등 계산용 서비스별 요청률(actuator 제외). **앱이 만드는 지표가 아니다** |
 | `cinema:http_5xx_ratio:rate5m` · `cinema:http_p95_seconds:rate5m` | recording rule | `application` | 인프라 (3.1.7) | 최근 5분 5xx 비율 · p95(SSE `…/stream` 제외). 트래픽이 없으면 값이 없다 |
 | `cinema:http_5xx_state` · `cinema:http_latency_state` · `cinema:service_state` | recording rule | `application` | 인프라 (3.1.7) | 신호등 상태 0 정상 · 1 주의 · 2 장애. 5xx 주의 ≥ 1%·장애 ≥ 5%, p95 주의 ≥ 300ms·장애 ≥ 1s, `service_state`는 둘 중 큰 값. 값이 없으면 대시보드가 회색 "트래픽 없음" |

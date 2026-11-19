@@ -120,11 +120,16 @@ _HASH_KEY = secrets.token_bytes(32)
 
 OUT_OF_SCOPE_ANSWER = "영화·극장·상영 시간에 대한 질문에만 답할 수 있어요."
 # 범위 밖 답은 분류(out_of_scope 도구의 category)에 따라 고정 문장 중 하나다(3.4.21).
+# recommendation(3.4.25) = 조건 없이 골라 달라는 추천 — 없는 정보가 아니라 아직 없는 기능이라
+# 문장이 다르다.
 # 여기 없는 분류(unrelated·chitchat·unknown)와 도구 없이 끝난 폴백은 위 기본 문장.
 # Claude가 쓴 글(reason)은 답에 넣지 않는다 — 로그에만 남는다
 _OUT_OF_SCOPE_ANSWERS = {
     "action_request": "그 기능은 아직 준비 중이에요. 지금은 화면에서 해 주세요.",
     "site_feature": "그 정보는 아직 제공하지 않아요. 영화·극장·상영 시간은 물어보실 수 있어요.",
+    "recommendation": (
+        "추천 기능은 준비 중이에요. 날짜·극장·관람 등급 같은 조건을 말해 주시면 찾아 드릴게요."
+    ),
 }
 REJECTED_ANSWER = "그 질문은 지금 데이터로 답하기 어렵습니다. 영화·극장·회차에 대해 물어봐 주세요."
 _REJECTION_MESSAGE = {

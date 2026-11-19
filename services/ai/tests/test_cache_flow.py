@@ -89,6 +89,22 @@ def test_same_question_second_time_is_exact_hit_with_zero_tokens():
     assert len(llm.requests) == 1  # Claude는 한 번만
 
 
+def test_cache_hits_carry_the_same_screening_ids_as_the_first_answer():
+    """캐시에는 SQL 템플릿만 있다 — 다시 실행할 때도 회차 ID를 같은 방식으로 얻는다."""
+    for reply in (
+        preset_after("20:00"),
+        tool("run_sql", sql=AFTER_20_SQL, explanation="오늘 20시 이후 회차"),
+    ):
+        service, _ = make(ScriptedLlm(reply))
+        first = ask(service, "오늘 20시 이후 영화 알려줘")
+        second = ask(service, "오늘 20시 이후 영화 알려줘")
+        assert second["path"] == "CACHE_EXACT" and second["llm"]["calls"] == 0
+        assert first["screeningIds"] == second["screeningIds"] == [2, 3, 5, 6]
+        assert second["rows"] == first["rows"]
+        # 저장된 템플릿(다시 실행해 보여 주는 SQL)에는 덧붙인 칸이 없다
+        assert "_screening_id" not in second["sql"]
+
+
 def test_different_slot_value_reuses_the_template_with_new_value():
     service, _ = make(ScriptedLlm(preset_after("20:00")))
     ask(service, "오늘 20시 이후 영화 알려줘")
@@ -186,6 +202,7 @@ def test_similar_question_is_semantic_hit():
     ask(service, FIRST)
     hit = ask(service, "오늘 21시 넘어서 하는 영화 보여줘")
     assert hit["path"] == "CACHE_SEMANTIC" and hit["llm"]["calls"] == 0 and hit["rowCount"] == 3
+    assert hit["screeningIds"] == [3, 5, 6]  # 의미 캐시로 답할 때도 회차 ID (21:00 · 22:30 · 00:30)
 
 
 def test_below_threshold_is_a_miss():

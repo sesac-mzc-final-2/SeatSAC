@@ -17,6 +17,7 @@
     "rows": [
       [ 9876, "CONFIRMED", "영화 제목", "건대입구", "6관", "2026-11-18 14:30", "J7, J8", 30000 ]
     ],
+    "screeningIds": null,
     "rowCount": 1,
     "truncated": false,
     "sql": null,

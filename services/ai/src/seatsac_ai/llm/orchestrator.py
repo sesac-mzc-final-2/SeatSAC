@@ -74,9 +74,11 @@ from seatsac_ai.sql.executor import (
 )
 from seatsac_ai.sql.validator import (
     SqlRejected,
+    ValidatedSql,
     exclude_started,
     sql_template,
     validate,
+    with_screening_id,
 )
 
 log = logging.getLogger(__name__)
@@ -367,6 +369,7 @@ class ChatService:
             "path": "MY_BOOKINGS",
             "columns": my_bookings.COLUMNS,
             "rows": rows,
+            "screeningIds": None,
             "rowCount": len(rows),
             "truncated": page.truncated,
             "sql": None,
@@ -531,6 +534,10 @@ class ChatService:
         Claude가 쓴 SQL(claude_sql)은 screening 을 읽는 SELECT마다 `starts_at > :now` 를
         붙여 실행한다(data-model 6-1, #93 리뷰). 조건을 빼먹거나 지금보다 이른 시각과 비교해도
         시작한 회차가 나오지 않는다. 프리셋은 SQL에 :now 가 이미 들어 있다.
+
+        행 하나가 회차 하나인 SQL은 회차 ID 칸을 덧붙여 실행하고 결과에서 떼어 둔다
+        (result.screening_ids → 계약 screeningIds). 프리셋·Claude·캐시 템플릿이 모두 여기를 지나므로
+        어느 경로든 같다. 돌려주는 SQL(응답 sql·세션·로그)은 덧붙이기 전 그대로다.
         """
         try:
             validated = validate(sql, self._s.max_rows)
@@ -556,9 +563,7 @@ class ChatService:
         if timeout <= 0:
             raise LlmUnavailable("TIMEOUT")
         try:
-            result = await execute_async(
-                self._store, validated, params, timeout_seconds=timeout, max_rows=self._s.max_rows
-            )
+            result = await self._run(validated, params, timeout)
         except SqlExecutionError as e:
             if e.reason == TIMEOUT:
                 # 다시 물어도 같은 무거운 SQL일 가능성이 커서 바로 거부한다
@@ -670,6 +675,36 @@ class ChatService:
         summary = " · ".join(parts) or "질문하신 조건"
         answer = f"{summary} 조건을 정확히 반영한 조회를 만들지 못했어요. {CLARIFY_CONFIRM_HINT}"
         return _clarify(answer, [], self._as_of())
+
+    async def _run(
+        self, validated: ValidatedSql, params: dict[str, Any], timeout: float
+    ) -> QueryResult:
+        async def run(query: ValidatedSql, seconds: float) -> QueryResult:
+            return await execute_async(
+                self._store, query, params, timeout_seconds=seconds, max_rows=self._s.max_rows
+            )
+
+        with_id = with_screening_id(validated)
+        if with_id is None:
+            return await run(validated, timeout)
+        started = time.monotonic()
+        try:
+            return _take_screening_ids(await run(with_id, timeout))
+        except SqlExecutionError as first:
+            if first.reason == TIMEOUT:
+                raise
+            # 칸을 덧붙인 탓인지 원래 SQL이 틀린 건지 아직 모른다 — 원래 SQL로 다시 실행한다.
+            # 원래 SQL도 실패하면 그 오류가 그대로 올라가 기존 처리(Claude 재요청)를 탄다
+            left = timeout - (time.monotonic() - started)
+            if left <= 0:
+                raise LlmUnavailable("TIMEOUT") from first
+            result = await run(validated, left)
+            # 덧붙인 칸만 문제였다 — 답은 그대로 나가고 좌석 링크만 없다. SQL·값은 남기지 않는다
+            log.warning(
+                "회차 ID 칸을 덧붙인 SQL만 실패(원래 SQL로 답함): %s",
+                type(first.__cause__).__name__,
+            )
+            return result
 
     def _resolve_preset(self, raw: dict[str, Any]) -> tuple[Preset, dict[str, Any]]:
         preset = self._presets.get(str(raw.get("presetId")))
@@ -794,6 +829,7 @@ class ChatService:
             "path": path,
             "columns": result.columns,
             "rows": result.rows,
+            "screeningIds": result.screening_ids,
             "rowCount": result.row_count,
             "truncated": result.truncated,
             "sql": sql,
@@ -898,6 +934,19 @@ def _hide_seat_source(result: QueryResult) -> QueryResult:
         rows.append(row)
     columns = [c for i, c in enumerate(result.columns) if i != src]
     return replace(result, columns=columns, rows=rows)
+
+
+def _take_screening_ids(result: QueryResult) -> QueryResult:
+    """서버가 덧붙인 회차 ID 칸(validator.with_screening_id)을 결과 표에서 떼어 따로 둔다.
+
+    덧붙인 칸은 항상 마지막이다 — 이름으로 찾지 않는다(같은 이름의 칸이 앞에 있어도 헷갈리지 않게).
+    """
+    ids = [row[-1] for row in result.rows]
+    rows = [row[:-1] for row in result.rows]
+    known = any(i is not None for i in ids)
+    return replace(
+        result, columns=result.columns[:-1], rows=rows, screening_ids=ids if known else None
+    )
 
 
 def _business_dates(sql: str) -> list[str]:
@@ -1027,6 +1076,7 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
         "path": path,
         "columns": None,
         "rows": None,
+        "screeningIds": None,
         "rowCount": 0,
         "truncated": False,
         "sql": None,

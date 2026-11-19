@@ -15,6 +15,17 @@ curl -s localhost:8085/actuator/health/readiness
 gateway를 거치지 않고 직접 부를 때는 gateway가 넣어 주는 헤더를 직접 붙인다:
 `-H 'X-User-Id: 11111111-2222-3333-4444-555555555555'`.
 
+## 채팅으로 좌석 잡기 (3.4.19)
+
+"오늘 20시 ○○ 건대입구 J7 J8 잡아줘" → 확인 요청(버튼) → **확인 버튼을 누른 뒤에만** 공개 API `POST /seats/hold`.
+결제는 채팅에서 하지 않는다(`seat_hold.py`, 계약 `ai.openapi.yaml`의 `HOLD_*`·`seatHold`).
+
+- **기본 켜짐.** 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(로컬 `.env`, staging은 gitops `overlays/staging/ai`의 `ai-config`).
+  끄면 Claude에 가는 system·도구가 좌석 잡기가 없던 때와 글자 하나 다르지 않다(`tests/test_seat_hold.py`)
+- 켜져 있어도 ai Valkey(`AI_VALKEY_HOST`)나 `PUBLIC_API_BASE_URL`이 없으면 꺼진 것으로 동작한다
+- 로컬에서 켠 채 `PUBLIC_API_BASE_URL`을 staging 주소로 두면 확인 버튼이 **staging 좌석을 실제로 잡는다** — 로컬 gateway 주소로 두고 쓴다
+- `eval.run`은 좌석 잡기 클라이언트를 붙이지 않아 도구 4개(꺼진 상태)의 정확도를 잰다
+
 ## 검사 (pr-check `python`과 같은 명령)
 
 ```bash

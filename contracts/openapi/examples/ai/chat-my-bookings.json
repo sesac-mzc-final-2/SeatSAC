@@ -25,6 +25,7 @@
     "llm": { "calls": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0 },
     "latencyMs": 142,
     "rejection": null,
-    "choices": null
+    "choices": null,
+    "seatHold": null
   }
 }

@@ -144,7 +144,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
 | `payment_pg_call_total` | counter | `result`=`ok`·`error`·`timeout`, `op`=`get`·`cancel` | payment | 포트원 호출 결과(ADR-112). 웹훅 수신은 `http_server_requests`(`uri=/webhooks/portone`)로 본다 |
 | `payment_refund_unresolved_total` | counter | — | payment | 환불 미완료(FAILED + pgTransactionId + canceledAt null) 행이 결제 생성 뒤 15분이 지나도 끝나지 않았으면 **스윕(1분)마다 1씩** 센다 — 건수가 아니라 「남아 있는 행 × 분」이다. 경보는 `increase(...[5m]) > 0`, 0이 아니면 포트원 콘솔과 대조(사람) |
-| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다 |
+| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`·`hold_confirm`·`hold_result`·`hold_guide`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다. `hold_*`(채팅으로 좌석 잡기)는 **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 0으로 등록되고, 조회 답이 아니므로 **토큰 절감 계산의 분모·분자에서 `hold_*`를 제외**한다(`path!~"hold_.*"`) |
 | ⚠️AI `ai_tokens_total` | counter | `kind`=`input`·`output`·`cache_read`·`cache_write`, `path` | ai | 토큰 사용량. 절감 그래프는 `input+output`(우리 캐시 효과), 프롬프트 캐싱은 `cache_read`로 **따로** 표시 |
 | ⚠️AI `ai_cache_requests_total` | counter | `layer`=`exact`·`semantic`, `result`=`hit`·`miss` | ai | 캐시 적중률 |
 | ⚠️AI `ai_llm_call_seconds` | histogram | `result`=`ok`·`timeout`·`overloaded`·`rate_limited`·`error` | ai | Claude API 지연·장애 |
@@ -261,6 +261,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `APP_AI_SNAPSHOT_TODAY_INTERVAL` / `APP_AI_SNAPSHOT_OTHER_INTERVAL` / `APP_AI_SNAPSHOT_DAYS` | `60s` / `600s` / `7` | 오늘 회차 1분, 나머지 10분, 오늘~+6일 |
 | `APP_AI_SNAPSHOT_REFRESH_ON_CHAT` / `APP_AI_SNAPSHOT_REFRESH_TIMEOUT_SECONDS` | `true` / `2.0` | 질문 시점 잔여석 갱신: SQL이 `remaining_seats`를 읽으면 실행 직전에 **그 SQL의 날짜 × 극장** 회차만 새로 받는다(SQL 조건 분석기 `sql/conditions.py`, 극장 조건이 없으면 극장 전부). 날짜는 2개까지 — 날짜 조건을 읽지 못하면(범위 비교·OR) 오늘만, 3개 이상이면 앞의 2개만 새로 받고 나머지는 주기 갱신 값으로 답하며 답 문장에 알린다(catalog 호출 최대 8번). 같은 범위 동시 질문은 한 번만, 확인 불가(TOTAL)가 섞이면 한 번 더. 2초 안에 못 받거나 실패하면 기존 스냅샷으로 답하고 답 문장에 알린다. 잔여석은 물었을 때만 SELECT 하고, 날짜가 없으면 되묻는다(`CLARIFY`) |
 | `APP_AI_CACHE_TTL` / `APP_AI_SESSION_TTL` | `1h` / `30m` | |
+| `APP_AI_SEAT_HOLD_ENABLED` | `true` | **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)**. 채팅으로 좌석 잡기 — 확인 버튼을 누른 뒤에만 선점한다. ConfigMap에 넣지 않으면 앱 기본값(켜짐)으로 동작하고, 끌 때만 gitops `overlays/staging/ai`의 `ai-config`에 `APP_AI_SEAT_HOLD_ENABLED=false` 한 줄을 넣는다. 꺼져 있으면 Claude 도구 목록·system·처리 경로가 좌석 잡기가 없던 때와 같다. 켜져 있어도 ai Valkey나 `PUBLIC_API_BASE_URL`이 없으면 꺼진 것으로 동작한다 |
+| `APP_AI_SEAT_HOLD_CONFIRM_TTL` | `120s` | 좌석 잡기(위 행)가 켜져 있을 때만 쓴다. 확인 버튼을 기다리는 시간. 지나면 대기 행동(`ai:pending:*`)이 사라져 확인을 눌러도 잡지 않는다 |
 | `APP_AI_CACHE_WARM_PRESETS` | `true` | 프리셋 `phrasings`(버튼 질문 말투)를 기동 때·캐시 TTL 절반마다 정확 일치·의미 캐시에 넣는다(`cache/warm.py`). 버튼 질문은 첫 사용자부터 토큰 0. 끄면 첫 질문은 Claude. 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_SEMANTIC_CACHE_ENABLED` / `APP_AI_SEMANTIC_THRESHOLD` | `true` / `0.92` | rc2까지 의미 캐시가 안 되면 `false`로 정확 일치 캐시만(B1) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |

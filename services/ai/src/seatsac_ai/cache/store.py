@@ -8,6 +8,7 @@
 옛 키는 보지 않고 1시간 TTL로 사라진다.
   v2 (#140) 잔여석 칸은 잔여석을 물었을 때만 SELECT — v1 템플릿에는 묻지 않은 잔여석이 들어 있다
   ai:session:{userId}:{sessionId}          30분   후속 질문 문맥(직전 질문·SQL)
+  ai:pending:{userId}:{sessionId}          2분    좌석 잡기 확인 대기 행동(seat_hold.py)
 
 캐시는 비용을 줄이는 장치일 뿐이다. Valkey가 실패하면 **놓친 것(miss)으로 보고** Claude로 답한다
 (사용 한도는 quota/limiter.py 가 따로 503으로 막는다).
@@ -100,6 +101,10 @@ def exact_key(key_text: str) -> str:
 
 def session_key(user_id: str, session_id: str) -> str:
     return f"ai:session:{user_id}:{session_id}"
+
+
+def pending_key(user_id: str, session_id: str) -> str:
+    return f"ai:pending:{user_id}:{session_id}"
 
 
 class ValkeySearchIndex:
@@ -320,6 +325,33 @@ class ChatCache:
             )
         except RedisError as exc:
             log.warning("세션 저장 실패: %s", exc)
+
+    # --- 대기 중인 행동(좌석 잡기 확인) -------------------------------------------
+    async def put_pending(
+        self, user_id: str, session_id: str, action: dict[str, Any], ttl: int
+    ) -> bool:
+        """저장했으면 True. 실패하면 False — 확인 단계를 기억하지 못하면 선점하지 않는다."""
+        try:
+            await self._v.set(
+                pending_key(user_id, session_id), json.dumps(action, ensure_ascii=False), ex=ttl
+            )
+            return True
+        except RedisError as exc:
+            log.warning("대기 행동 저장 실패: %s", exc)
+            return False
+
+    async def take_pending(self, user_id: str, session_id: str) -> dict[str, Any] | None:
+        """꺼내면서 지운다(GETDEL — 한 번만 쓴다). 없거나 Valkey 실패면 None(= 선점하지 않는다)."""
+        try:
+            raw = await self._v.getdel(pending_key(user_id, session_id))
+        except RedisError as exc:
+            log.warning("대기 행동 조회 실패: %s", exc)
+            return None
+        try:
+            action = json.loads(raw) if raw else None
+        except ValueError:
+            return None
+        return action if isinstance(action, dict) else None
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:

@@ -82,11 +82,12 @@ def test_semantic_hit_points_at_the_stored_entry_with_similarity():
 
 
 def test_entry_id_is_keyed_same_entry_same_value_other_entry_other_value():
-    """서버 비밀로 HMAC 한 값 — 캐시 키 해시에서 잘라 낸 글자가 아니라 틀 문장을 밖에서 맞혀 볼 수 없다."""
+    """서버 비밀로 HMAC 한 값 — 캐시 키 해시의 일부가 아니라 틀 문장을 밖에서 맞혀 볼 수 없다."""
+    schedule_params = {"date": "2026-11-18", "theater": "건대입구"}
     llm = ScriptedLlm(
         preset_after("20:00"),
-        tool("run_preset", presetId="theater_schedule", params={"date": "2026-11-18", "theater": "건대입구"}),
-    )  # fmt: skip
+        tool("run_preset", presetId="theater_schedule", params=schedule_params),
+    )
     service, cache = make(llm, FakeEmbedder())
     after = ask(service, QUESTION)
     schedule = ask(service, "내일 건대입구 편성표 보여줘")

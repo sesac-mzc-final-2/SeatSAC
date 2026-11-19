@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatResponse } from "@/entities/ai-chat";
-import { activeHold, isHoldConfirm, isHoldReply } from "./seat-hold";
+import { activeHold, hasHoldButtons, isHoldConfirm, isHoldReply } from "./seat-hold";
 
 const answer = (id: number, over: Partial<ChatResponse> = {}) => ({
   id,
@@ -47,5 +47,23 @@ describe("좌석 잡기 확인 (3.4.19 초안)", () => {
     // 다른 답이 오면 유효한 확인 요청이 없다
     expect(activeHold([a, answer(6)])).toBeNull();
     expect(activeHold([])).toBeNull();
+  });
+
+  it("버튼을 막는 조건은 문장 형식이 아니라 응답 값으로 본다", () => {
+    // ai 가 확인 문장을 바꿔도(대문자 ID 등) 확인 요청으로 본다 → 지난 것·시간이 지난 것은 막힌다
+    const changed = confirm(2, "AAAAAA");
+    expect(isHoldReply("좌석 잡기 #AAAAAA")).toBe(false);
+    expect(hasHoldButtons(changed.response)).toBe(true);
+    expect(activeHold([changed])?.messages).toEqual(["좌석 잡기 #AAAAAA", "취소 #AAAAAA"]);
+    // 회차 고르기 버튼도 같은 2분 기한에 묶인다
+    const pick = answer(3, {
+      path: "HOLD_GUIDE",
+      choices: [{ label: "별의 항해 20:00", message: "별의 항해 20:00" }],
+      seatHold: { ...confirm(0, "aaaaaa").response.seatHold!, screeningId: null, reason: "SCREENING_AMBIGUOUS" },
+    });
+    expect(hasHoldButtons(pick.response)).toBe(true);
+    expect(activeHold([pick])?.messages).toEqual(["별의 항해 20:00"]);
+    // 기한이 없는 안내·평소 되묻기 버튼은 막지 않는다
+    expect(hasHoldButtons(answer(4, { path: "CLARIFY", choices: [{ label: "오늘", message: "오늘" }] }).response)).toBe(false);
   });
 });

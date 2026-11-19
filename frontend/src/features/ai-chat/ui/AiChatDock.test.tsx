@@ -354,14 +354,37 @@ describe("AiChatDock (3.3.7)", () => {
 
   it("좌석 잡기: 확인 시간이 지나면 버튼을 막고 안내한다", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-      String(input) === "/api/ai/presets" ? json(200, presets) : json(200, confirmRequest(400)),
+      String(input) === "/api/ai/presets" ? json(200, presets) : json(200, confirmRequest(1500)),
     );
     await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    // 기한을 넉넉히(1.5초) 둬서 느린 CI 에서도 첫 단언 전에 버튼이 막히지 않게 한다
     expect(await screen.findByRole("button", { name: "J7·J8 잡기" })).toBeEnabled();
-    expect(await screen.findByText(/확인 시간이 지났어요/, undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText(/확인 시간이 지났어요/, undefined, { timeout: 4000 })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "취소" })).toBeDisabled();
     expect(chatBodies(fetchMock)).toHaveLength(1);
+  });
+
+  it("좌석 잡기: 진행 중인 예매가 있으면 그 예매로 가는 링크를, 예매 ID가 없으면 링크 없이 안내만 보여 준다", async () => {
+    const active = (bookingId: number | null) => ({
+      ...holdResult.value,
+      answer: "이미 진행 중인 예매(선점)가 있어요. 그 예매를 먼저 결제하거나 취소해 주세요.",
+      seatHold: { ...holdResult.value.seatHold, bookingId, seatLabels: [], amount: null, reason: "ACTIVE_HOLD_EXISTS" },
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      return json(200, active(chatBodies(fetchMock).length <= 1 ? 9876 : null));
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    expect(await screen.findByRole("link", { name: /진행 중인 예매로 가기/ })).toHaveAttribute("href", "/bookings/9876/pay");
+    expect(screen.queryByLabelText("잡은 좌석")).not.toBeInTheDocument();
+
+    // booking 이 예매 ID를 알려 주지 않은 경우(null) — /bookings/null/pay 같은 링크를 만들지 않는다
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "오늘 20시 건대입구 A1 잡아줘{Enter}");
+    await waitFor(() => expect(chatBodies(fetchMock)).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText(/이미 진행 중인 예매/)).toHaveLength(2));
+    expect(screen.getAllByRole("link", { name: /진행 중인 예매로 가기/ })).toHaveLength(1);
+    expect(document.querySelector('a[href*="null"]')).toBeNull();
   });
 
   it("좌석 잡기: 못 잡는 좌석이면 좌석 화면 링크를 보여 주고, 누르면 창이 닫힌다", async () => {

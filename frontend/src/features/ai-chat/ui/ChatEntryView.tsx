@@ -258,7 +258,9 @@ function Answer({
         </div>
       )}
       {holdButtons && hold === "expired" && (
-        <p className={styles.note}>확인 시간이 지났어요. 잡을 회차와 좌석을 다시 말해 주세요.</p>
+        <p className={styles.note} role="status">
+          확인 시간이 지났어요. 잡을 회차와 좌석을 다시 말해 주세요.
+        </p>
       )}
       <SeatHoldCard response={response} onNavigate={onNavigate} />
       {/* 0건이면 머리글만 남은 빈 표를 그리지 않는다 — 답 문장이 이유를 말한다 */}

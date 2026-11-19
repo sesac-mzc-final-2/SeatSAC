@@ -54,7 +54,7 @@ export interface ChatResponse {
   rows: ChatCell[][] | null;
   /**
    * `rows` 와 같은 순서의 회차 ID — 그 행의 좌석 선택 화면으로 넘길 때 쓴다. 행이 회차 하나가 아니면(집계 등) null.
-   * 계약에서는 항상 있는 필드지만, 이 필드가 생기기 전 버전의 ai 가 답하면 없을 수 있어 선택으로 둔다
+   * 계약(#150)에서 추가되는 필드. 그 전의 ai 응답에는 없어서 선택 필드로 둔다
    */
   screeningIds?: (number | null)[] | null;
   rowCount: number;

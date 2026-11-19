@@ -117,6 +117,34 @@ describe("ResultTable", () => {
     expect(onSeatNavigate).toHaveBeenCalledTimes(1);
   });
 
+  it("Ctrl·Cmd·Shift+클릭(새 탭·새 창)은 이 화면이 그대로라 알리지 않는다 — 보통 클릭만 알린다", async () => {
+    const onSeatNavigate = vi.fn();
+    render(
+      <MemoryRouter>
+        <ResultTable
+          caption="결과 1건"
+          columns={screeningColumns}
+          rows={[["별의 항해", "2026-11-18 20:20", 129]]}
+          seatLinks={[{ kind: "link", href: "/screenings/769004021" }]}
+          onSeatNavigate={onSeatNavigate}
+        />
+      </MemoryRouter>,
+    );
+    const link = screen.getByRole("link", { name: "11/18 20:20 좌석 고르기" });
+    // jsdom 은 새 탭을 열지 못한다 — 브라우저 기본 동작(이동)만 막는다. 우리 onClick 은 그대로 불린다
+    link.addEventListener("click", (event) => event.preventDefault());
+    const user = userEvent.setup();
+    for (const key of ["Control", "Meta", "Shift"]) {
+      await user.keyboard(`{${key}>}`);
+      await user.click(link);
+      await user.keyboard(`{/${key}}`);
+    }
+    expect(onSeatNavigate).not.toHaveBeenCalled();
+
+    await user.click(link);
+    expect(onSeatNavigate).toHaveBeenCalledTimes(1);
+  });
+
   it("누를 수 있는 시각이 하나도 없으면(전부 매진·마감) 안내를 그리지 않는다", () => {
     render(
       <ResultTable

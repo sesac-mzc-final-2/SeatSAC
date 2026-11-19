@@ -97,6 +97,14 @@ describe("seatLinks", () => {
     expect(seatLinks(row("2026-11-18 19:00"), NOW)?.[0]).toEqual({ kind: "blocked", text: "마감" });
   });
 
+  it("형식이 다른 시각 문자열은 마감 판정 없이 링크를 유지한다 (좌석 화면이 막는다)", () => {
+    // 이미 지난 시각이지만 `YYYY-MM-DD HH:MM` 모양이 아니라 마감으로 판정하지 않는다
+    const row = (startsAt: string) => ({ columns, rows: [["별의 항해", startsAt, 10]], screeningIds: [1] });
+    for (const startsAt of ["2026-11-18T19:00:00+09:00", "2026-11-18 19:00:00", "11/18 19:00"]) {
+      expect(seatLinks(row(startsAt), NOW)).toEqual([{ kind: "link", href: "/screenings/1" }]);
+    }
+  });
+
   it("회차를 알 수 없는 행(null)만 비우고 나머지는 링크", () => {
     const links = seatLinks(
       {

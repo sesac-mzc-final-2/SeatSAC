@@ -19,7 +19,10 @@ const BOOKING_CLOSE_MS = 5 * 60 * 1000;
 
 const KST_MINUTE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})$/;
 
-/** 스냅샷의 KST 문자열(`YYYY-MM-DD HH:MM`) → epoch ms. 모양이 다르면 null */
+/**
+ * 스냅샷의 KST 문자열(`YYYY-MM-DD HH:MM`) → epoch ms. 모양이 다르면 null.
+ * 의도: 형식이 다른 시각 문자열은 마감 판정 없이 링크를 유지한다(좌석 화면이 막는다) — `result-cells` 의 표시용 파서와 일부러 따로 둔다
+ */
 function startsAtMs(value: unknown): number | null {
   const match = typeof value === "string" ? KST_MINUTE.exec(value) : null;
   return match ? Date.parse(`${match[1]}T${match[2]}:00+09:00`) : null;

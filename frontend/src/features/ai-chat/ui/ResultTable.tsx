@@ -78,7 +78,15 @@ function seatCell(seat: SeatLink, text: string, onNavigate?: () => void) {
   if (seat.kind === "link") {
     // 보이는 글자(시각)를 이름 앞에 둔다 — 음성 명령으로 보이는 글자를 불러도 찾게 (WCAG 2.5.3)
     return (
-      <Link className={styles.seatLink} to={seat.href} aria-label={`${text} 좌석 고르기`} onClick={onNavigate}>
+      <Link
+        className={styles.seatLink}
+        to={seat.href}
+        aria-label={`${text} 좌석 고르기`}
+        onClick={(event) => {
+          // 새 탭·새 창으로 여는 클릭은 이 화면이 그대로라 창을 닫지 않는다
+          if (!event.metaKey && !event.ctrlKey && !event.shiftKey) onNavigate?.();
+        }}
+      >
         {text}
       </Link>
     );

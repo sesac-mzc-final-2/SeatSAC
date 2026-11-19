@@ -34,7 +34,7 @@ USER = "user-1"
 TOKEN = "Bearer user-access-token"
 CONTRACT_KEYS = {
     "answer", "path", "columns", "rows", "screeningIds", "rowCount", "truncated", "sql",
-    "presetId", "asOf", "llm", "latencyMs", "rejection", "choices", "seatHold",
+    "presetId", "asOf", "llm", "latencyMs", "rejection", "choices", "cache", "seatHold",
 }  # fmt: skip
 # sql_fixtures 회차 2: 별의 항해 · 건대입구 1관(auditorium 101) · 2026-11-17 20:00
 SEATS = {"J7": 1007, "J8": 1008, "J9": 1009, "A1": 1001, "A2": 1002}
@@ -625,6 +625,8 @@ def test_several_screenings_ask_which_one_then_continue_without_claude():
         "한강의 밤 11/17(화) 21:00 건대입구 2관",
     ]
     assert api.seen == []
+    # 회차 버튼도 2분 기한을 알린다(화면이 지난 버튼을 막는다)
+    assert first["seatHold"]["confirmExpiresAt"] == "2026-11-17T19:42:00+09:00"
     second = ask(service, first["choices"][0]["message"], session_id=first["sessionId"])
     assert second["path"] == "HOLD_CONFIRM" and second["seatHold"]["screeningId"] == 2
     assert second["seatHold"]["seatLabels"] == ["J7", "J8"] and len(llm.requests) == 1

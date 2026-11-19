@@ -315,7 +315,8 @@ class SeatHoldFlow:
             # 대기 행동 없이 온 확인·취소 — 아무것도 하지 않는다(Claude도 부르지 않는다)
             return _guide(
                 "확인할 좌석 요청이 없어요(확인 시간이 지났을 수 있어요). "
-                "잡을 회차와 좌석을 다시 말해 주세요.",
+                "방금 누른 확인의 결과를 받지 못했다면 마이페이지 예매 내역을 먼저 확인해 주세요. "
+                "아니면 잡을 회차와 좌석을 다시 말해 주세요.",
                 NOT_CONFIRMED,
             ), False
         return await self._answer_pending(
@@ -499,6 +500,7 @@ class SeatHoldFlow:
             )
         if len(rows) > 1:
             choices = [{"label": _label(r), "message": _label(r)} for r in rows]
+            expires_at = now.timestamp() + self._ttl
             stored = await self._cache.put_pending(
                 user_id,
                 session_id,
@@ -509,7 +511,7 @@ class SeatHoldFlow:
                     "options": {
                         c["message"]: r["screening_id"] for c, r in zip(choices, rows, strict=True)
                     },
-                    "expiresAt": now.timestamp() + self._ttl,
+                    "expiresAt": expires_at,
                 },
                 self._ttl,
             )
@@ -523,7 +525,13 @@ class SeatHoldFlow:
             return HoldReply(
                 HOLD_GUIDE,
                 "어느 회차인가요? 골라 주세요.",
-                _seat_hold(None, labels=seats, reason=SCREENING_AMBIGUOUS),
+                # 회차 버튼도 같은 대기 행동(2분)에 묶인다 — 화면이 지난 버튼을 막게 기한을 준다
+                _seat_hold(
+                    None,
+                    labels=seats,
+                    reason=SCREENING_AMBIGUOUS,
+                    confirm_expires_at=_at(expires_at),
+                ),
                 choices,
             )
         return await self._propose(rows[0], seats, user_id, session_id, now, deadline)

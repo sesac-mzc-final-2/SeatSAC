@@ -12,6 +12,21 @@ provider "aws" {
   }
 }
 
+# 3.1.23 CloudFront 인증서는 us-east-1(버지니아)의 ACM에만 둘 수 있다 — 사용자 도메인 인증서 전용
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  default_tags {
+    tags = {
+      Project   = "cinema"
+      Env       = var.env
+      ManagedBy = "terraform"
+      Owner     = var.owner
+    }
+  }
+}
+
 # 계정 ID·팀 역할 ARN (역할 자체는 infra/terraform/global에서 만든다)
 data "aws_caller_identity" "current" {}
 

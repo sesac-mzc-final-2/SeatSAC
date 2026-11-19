@@ -14,10 +14,11 @@ locals {
   cognito_pool_name = "${var.name}-users" # cinema-staging-users
 
   # 콜백·로그아웃 URL: CloudFront 기본 도메인 + 로컬 개발(Vite 5173). 로그아웃은 화면이 origin + "/"로 돌아온다
-  cognito_app_origins = [
+  # 3.1.23 사용자 도메인이 있으면 그 주소도 더한다(기본 도메인은 그대로)
+  cognito_app_origins = concat([
     "https://${aws_cloudfront_distribution.frontend.domain_name}",
     "http://localhost:5173",
-  ]
+  ], local.custom_domain_enabled ? ["https://${var.custom_domain}"] : [])
   cognito_issuer_uri = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.this.id}"
   cognito_domain_url = "https://${aws_cognito_user_pool_domain.this.domain}.auth.${var.region}.amazoncognito.com"
 }

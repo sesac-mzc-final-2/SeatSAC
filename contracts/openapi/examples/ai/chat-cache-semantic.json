@@ -23,6 +23,7 @@
     "llm": { "calls": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0 },
     "latencyMs": 38,
     "rejection": null,
-    "choices": null
+    "choices": null,
+    "cache": { "entryId": "9f2c1a7b3e4d", "stored": false, "similarity": 0.981 }
   }
 }

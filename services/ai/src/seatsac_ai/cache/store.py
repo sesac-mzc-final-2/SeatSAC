@@ -98,6 +98,15 @@ def exact_key(key_text: str) -> str:
     return f"ai:exact:{CACHE_VERSION}:" + hashlib.sha256(key_text.encode()).hexdigest()
 
 
+def entry_id(key_text: str) -> str:
+    """응답 `cache.entryId` — 캐시 항목 하나를 가리키는 값(질문 글자는 싣지 않는다).
+
+    정확 일치 키(exact_key)·의미 캐시 문서 ID(_put_semantic)와 같은 sha256(key_text)의 앞 12자라,
+    저장한 답과 그 항목에서 나온 답(정확 일치·의미 캐시 모두)이 같은 값을 갖는다.
+    """
+    return hashlib.sha256(key_text.encode()).hexdigest()[:12]
+
+
 def session_key(user_id: str, session_id: str) -> str:
     return f"ai:session:{user_id}:{session_id}"
 

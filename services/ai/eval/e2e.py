@@ -194,6 +194,7 @@ def _chat_ok(r: httpx.Response, body: dict[str, Any]) -> bool:
     required = {
         "sessionId", "answer", "path", "columns", "rows", "rowCount", "truncated",
         "sql", "presetId", "asOf", "llm", "latencyMs", "rejection", "choices",
+        "cache",
     }  # fmt: skip
     return r.status_code == 200 and required <= set(body)
 

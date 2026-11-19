@@ -52,8 +52,9 @@ from seatsac_ai.cache.slots import (
     extract,
     is_followup,
     meaning_signature,
+    normalize,
 )
-from seatsac_ai.cache.store import CacheEntry, ChatCache
+from seatsac_ai.cache.store import CacheEntry, ChatCache, entry_id
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
 from seatsac_ai.config import Settings
@@ -260,11 +261,14 @@ class ChatService:
                 )
                 # ⑧ 저장 (후속 질문은 직전 문맥에 기대므로 저장하지 않는다)
                 if made is not None and cache is not None and ext is not None and ext.cacheable:
-                    await self._save(cache, ext, made, system_params, deadline, vector)
+                    if await self._save(cache, ext, made, system_params, deadline, vector):
+                        # 이번 답을 캐시에 넣었다 — 같은 항목에서 나올 다음 답과 entryId 가 같다
+                        body["cache"] = _cache_info(ext.key_text, stored=True)
         except SnapshotNotReady as exc:
             # 질의 도중 스냅샷이 아직 준비 안 됨(기동 직후 교체 순간). 계약의 503으로
             raise snapshot_not_ready() from exc
 
+        body.setdefault("cache", None)  # 캐시에서 나오지도 저장하지도 않은 답
         body["llm"] = {
             "calls": calls,
             "inputTokens": usage.input,
@@ -408,12 +412,13 @@ class ChatService:
         AI_CACHE_REQUESTS.labels("exact", "hit" if entry else "miss").inc()
         path = "CACHE_EXACT"
         vector = None
+        similarity: float | None = None
         if entry is None:
             vector = await self._embed(cache, ext.template)
             if vector is not None:
                 found = await cache.nearest(vector, ext.kinds)
                 if found is not None and _semantic_match(found[0], found[1], ext, cache.threshold):
-                    entry = found[0]
+                    entry, similarity = found
                 AI_CACHE_REQUESTS.labels("semantic", "hit" if entry else "miss").inc()
                 path = "CACHE_SEMANTIC"
         if entry is None:
@@ -431,9 +436,15 @@ class ChatService:
         shown_sql = tpl.render(ran.sql, params)
         answer = _answer(subject, ran.result) + self._date_note(shown_sql)
         body = self._result_body(path, answer, ran, shown_sql, entry.preset_id)
+        # 항목의 키는 저장할 때의 normalize(템플릿 질문)이다(_save·warm.py) — 의미 캐시 적중은
+        # 새 질문의 키가 아니라 찾은 항목의 키로 낸다
+        body["cache"] = _cache_info(normalize(entry.template), stored=False, similarity=similarity)
         return body, vector
 
-    async def _save(self, cache, ext: Extracted, made: _Made, system_params, deadline, vector):
+    async def _save(
+        self, cache, ext: Extracted, made: _Made, system_params, deadline, vector
+    ) -> bool:
+        """캐시에 넣었으면 True. 넣지 않았거나(템플릿 불가·결과 다름) 저장에 실패하면 False."""
         today = datetime.fromisoformat(system_params["today"]).date()
         try:
             if made.preset is not None:
@@ -442,7 +453,7 @@ class ChatService:
                 template = tpl.make_template(made.sql, ext, today, system_params["now"])
         except tpl.TemplateError as exc:
             log.info("캐시하지 않음(템플릿 불가): %s", exc)
-            return
+            return False
         # 같은 값으로 템플릿을 다시 실행해 결과가 같을 때만 저장한다(템플릿 실수 = 오적중을 막는다)
         try:
             again = await self._execute(
@@ -454,10 +465,10 @@ class ChatService:
             )
         except (_Retry, LlmUnavailable) as exc:
             log.info("캐시하지 않음(템플릿 실행 실패): %s", exc)
-            return
+            return False
         if again.result.rows != made.result.rows:
             log.info("캐시하지 않음(템플릿 결과가 원래 결과와 다름)")
-            return
+            return False
         entry = CacheEntry(
             origin=made.origin,
             preset_id=made.preset.preset_id if made.preset else None,
@@ -473,7 +484,7 @@ class ChatService:
         )
         if vector is None:
             vector = await self._embed(cache, ext.template)
-        await cache.put(ext.key_text, entry, vector)
+        return await cache.put(ext.key_text, entry, vector)
 
     # --- 도구별 처리 ---------------------------------------------------------
 
@@ -1035,6 +1046,16 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
         "rejection": None,
         "choices": None,
     }
+
+
+def _cache_info(key_text: str, *, stored: bool, similarity: float | None = None) -> dict[str, Any]:
+    """계약 ChatResponse.cache. stored=True 는 이번 답을 저장함, False 는 그 항목에서 나온 답.
+
+    similarity 는 의미 캐시 적중일 때만(0~1, 소수 셋째 자리). 질문·틀 문장은 싣지 않는다.
+    """
+    if similarity is not None:
+        similarity = round(min(1.0, max(0.0, similarity)), 3)
+    return {"entryId": entry_id(key_text), "stored": stored, "similarity": similarity}
 
 
 def _clarify(answer: str, choices: list[dict[str, str]], as_of: str) -> dict[str, Any]:

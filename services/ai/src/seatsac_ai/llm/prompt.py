@@ -27,8 +27,23 @@ _ROLE = """너는 영화 예매 사이트 SeatSAC의 상영 정보 도우미다.
 "내 예매" 같은 개인 정보는 표에 없다(서버가 따로 처리한다)."""
 
 
+# 좌석 잡기 플래그가 켜졌을 때만 쓰는 역할 안내. 꺼져 있으면 위 _ROLE 을 글자 그대로 쓴다.
+# 3번의 "예매 대행 → out_of_scope"가 hold_seats 와 부딪치지 않게 3·4번을 다시 썼다
+# (4번의 category 안내는 _ROLE 3번의 것과 같은 글자 — 3.4.17)
+_ROLE_SEAT_HOLD = """너는 영화 예매 사이트 SeatSAC의 상영 정보 도우미다.
+사용자의 질문을 보고 도구 하나를 반드시 호출한다. 글로 답하지 않는다.
+1. 질문이 프리셋 하나와 뜻이 같으면 run_preset (SQL을 쓰지 않는다)
+2. 프리셋은 없지만 아래 표로 답할 수 있으면 run_sql
+3. 사용자가 좌석을 잡아(예매해) 달라고 하면 hold_seats — 질문에 적힌 영화·극장·날짜·시각·좌석 이름만
+   옮긴다. 좌석을 고르거나 추천하지 않는다(실제 선점은 서버가 사용자 확인을 받은 뒤에 한다)
+4. 영화·극장·회차와 상관없거나 표에 없는 정보(가격·리뷰·결제·예매 취소·좌석 추천 등)면 out_of_scope
+   (category로 종류를 고른다 — 인사·잡담·욕설처럼 원하는 것이 없는 말은 chitchat.
+    reason에는 질문 원문·개인정보 없이 무엇을 원했는지만 짧게 적는다)
+"내 예매" 같은 개인 정보는 표에 없다(서버가 따로 처리한다)."""
+
+
 @lru_cache
-def system_text() -> str:
+def system_text(seat_hold: bool = False) -> str:
     doc = schema_doc()
     preset_lines = "\n".join(
         f"- {p.preset_id}: {p.description} (빈칸: {', '.join(p.params) or '없음'}) 예: {p.example}"
@@ -40,16 +55,17 @@ def system_text() -> str:
         sort_keys=False,
         width=200,
     )
+    role = _ROLE_SEAT_HOLD if seat_hold else _ROLE
     return (
-        f"{_ROLE}\n\n## 프리셋\n{preset_lines}\n\n"
+        f"{role}\n\n## 프리셋\n{preset_lines}\n\n"
         f"## 스냅샷 표 설명 (SQLite)\n{schema_part}"
         "예시의 날짜는 '오늘 = 2026-11-17(화), 지금 = 19:40'을 가정한 값이다. "
         "실제 오늘·지금은 질문 위에 주어진다."
     )
 
 
-def system_blocks(cache: bool) -> list[dict[str, Any]]:
-    block: dict[str, Any] = {"type": "text", "text": system_text()}
+def system_blocks(cache: bool, seat_hold: bool = False) -> list[dict[str, Any]]:
+    block: dict[str, Any] = {"type": "text", "text": system_text(seat_hold)}
     if cache:
         # 도구 정의 + system 까지가 캐시 앞부분이 된다
         block["cache_control"] = {"type": "ephemeral"}

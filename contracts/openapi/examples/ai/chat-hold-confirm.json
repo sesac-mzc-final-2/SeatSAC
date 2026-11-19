@@ -1,0 +1,48 @@
+{
+  "summary": "HOLD_CONFIRM — 좌석 잡기 확인 요청(플래그 on). 아직 선점하지 않았다. 「J7·J8 잡기」 버튼의 message(확인 ID 포함)를 직전 응답의 sessionId로 보내면 그때 선점한다",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "별의 항해 11/17(화) 20:00 건대입구 1관 J7·J8 — 2석. 이 좌석을 5분간 잡을까요? (2분 안에 눌러 주세요)",
+    "path": "HOLD_CONFIRM",
+    "columns": null,
+    "rows": null,
+    "screeningIds": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 1,
+      "inputTokens": 420,
+      "outputTokens": 48,
+      "cacheReadTokens": 4100,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 1480,
+    "rejection": null,
+    "choices": [
+      {
+        "label": "J7·J8 잡기",
+        "message": "좌석 잡기 #c7f2a1"
+      },
+      {
+        "label": "취소",
+        "message": "취소 #c7f2a1"
+      }
+    ],
+    "cache": null,
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": null,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": null,
+      "expiresAt": null,
+      "confirmExpiresAt": "2026-11-17T19:42:00+09:00",
+      "reason": null
+    }
+  }
+}

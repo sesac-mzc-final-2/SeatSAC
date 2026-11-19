@@ -27,8 +27,7 @@ from .sql_fixtures import loaded_store
 NOW = datetime(2026, 11, 17, 19, 40, tzinfo=KST)
 CONTRACT_KEYS = {
     "answer", "path", "columns", "rows", "screeningIds", "rowCount", "truncated", "sql",
-    "presetId", "asOf", "llm", "latencyMs", "rejection", "choices",
-    "cache",
+    "presetId", "asOf", "llm", "latencyMs", "rejection", "choices", "cache", "seatHold",
 }  # fmt: skip
 AFTER_20 = (
     "SELECT m.title AS movie_title, s.starts_at FROM screening s "

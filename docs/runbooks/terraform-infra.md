@@ -1916,7 +1916,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 4
 
 ### 7-7. 사용자 도메인 (3.1.23, 선택) — ⬜
 
-CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메인 하나를 더한다. 두 주소 모두 같은 배포로 간다(화면·`/api`·SSE 동일). `var.custom_domain`이 비어 있으면 Terraform은 아무것도 만들지 않는다.
+CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메인 하나(apex만 — `www.<도메인>`은 만들지 않는다)를 더한다. 두 주소 모두 같은 배포로 간다(화면·`/api`·SSE 동일). `var.custom_domain`이 비어 있으면 Terraform은 아무것도 만들지 않는다.
 
 | 할 일 | 어디서 | 비고 |
 | --- | --- | --- |
@@ -1928,7 +1928,7 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
 
 - 도메인 등록: **1년 선불, 환불 없음**(TLD마다 값이 다르다 — 콘솔에서 확인. 싼 TLD는 수 달러). 등록 직후 **자동 갱신을 끄면** 1년 뒤 만료되고 더 내지 않는다. 일부 TLD는 도메인 삭제가 되지만 그래도 환불은 없다
 - 호스팅 영역: 월 $0.50(만든 지 12시간 안에 지우면 청구되지 않음). ACM 공개 인증서·CloudFront 별칭 조회: 무료
-- 발표 뒤 정리: `custom_domain = ""` → apply(별칭·인증서·검증 레코드 삭제, CloudFront는 기본 도메인만) → 호스팅 영역 삭제(콘솔) → 자동 갱신 꺼 둔 도메인은 만료되게 둔다
+- 발표 뒤 정리: `custom_domain = ""` → plan 기대: **삭제** 인증서 1·검증 레코드 1·검증 1·별칭 2, **변경** CloudFront 1(`aliases → []`·기본 인증서)·Cognito 앱 클라이언트 1, 추가 없음 → apply(CloudFront가 `Deployed`가 된 뒤 인증서가 지워진다) → 호스팅 영역 삭제(콘솔) → 자동 갱신 꺼 둔 도메인은 만료되게 둔다
 
 **순서**
 
@@ -1951,7 +1951,8 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
 
 | 증상 | 원인·해결 |
 | --- | --- |
-| plan에서 `no matching Route 53 Hosted Zone` | 등록이 끝나지 않았거나 이름 철자 — 1번 확인 |
+| plan에서 `no matching Route 53 Hosted Zone` | 등록이 끝나지 않았거나 이름 철자 — 1번 확인. `custom_domain`이 서브도메인(`app.<도메인>`)이면 그 이름의 영역이 없어 같은 오류 — 등록 도메인 영역 ID를 `custom_domain_zone_id`에 |
+| plan에서 `custom_domain은 스킴·경로·끝 점이 없는 …` | `https://`·끝 `/`·끝 `.`·대문자가 섞였다 — 도메인 이름만 소문자로 |
 | plan에서 `multiple Route 53 Hosted Zone matched` | 같은 이름 영역이 둘 — 네임서버가 맞는 쪽 ID를 `custom_domain_zone_id`에(1번) |
 | apply가 인증서 검증에서 오래 멈춤 | 등록 직후 네임서버 전파 중 — 기다린다(최대 수십 분). 등록 영역이 아닌 다른 영역에 검증 레코드가 들어갔는지 확인 |
 | 사용자 도메인에서 403·인증서 오류 | CloudFront 배포가 아직 진행 중(`aws cloudfront get-distribution --id <ID> --query Distribution.Status` → `Deployed`) |

@@ -220,7 +220,8 @@ resource "aws_cloudfront_distribution" "frontend" {
       # CloudFront → ALB 구간은 HTTP(80)다. HTTPS 원본은 ALB에 공개 CA 인증서가 있어야 하는데(CloudFront가 원본 인증서를
       # 신뢰 CA·도메인 이름으로 검증한다) ACM은 *.elb.amazonaws.com 에 발급하지 않는다 → 사용자 지정 도메인이 필요하고,
       # ADR-9는 기본 도메인만 쓴다. 완화: ALB SG는 CloudFront origin-facing 접두사 목록만 허용(security_groups.tf),
-      # 구간은 AWS 네트워크 안, Access Token은 Cognito 단기 토큰. 도메인을 사게 되면 ACM + ALB 443 + https-only로 바꾼다
+      # 구간은 AWS 네트워크 안, Access Token은 Cognito 단기 토큰. 3.1.23 사용자 도메인을 붙여도 이 구간은 HTTP 그대로다 —
+      # HTTPS 원본은 ALB 443 리스너(gitops Ingress)와 원본용 이름(api.<도메인>)의 ap-northeast-2 ACM 인증서가 더 필요해 범위 밖
       custom_origin_config {
         http_port                = 80
         https_port               = 443

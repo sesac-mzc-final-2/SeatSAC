@@ -34,6 +34,54 @@
   padding: 14px 14px 14px 18px;
   border-bottom: 1px solid var(--color-border);
 }
+/* 데모 모드: 대화 누적 합계 한 줄 (3.4.20). 좁은 창에서는 항목 단위로 줄바꿈 */
+.totals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  padding: 8px 14px 8px 18px;
+  border-bottom: 1px dashed var(--color-border-strong);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.totalsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.totalsList li:not(:last-child)::after {
+  content: "·";
+  margin: 0 6px;
+  color: var(--color-dim);
+  font-weight: 400;
+}
+.totalsSaved {
+  color: var(--color-live);
+  font-weight: 600;
+}
+.totalsReset {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #ffffff30;
+  border-radius: 6px;
+  color: var(--color-muted-strong);
+  font-size: 12px;
+  transition: background-color var(--t-color);
+}
+.totalsReset:hover:not(:disabled) {
+  background: #ffffff10;
+}
+.totalsReset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .titleWrap {
   display: flex;
   align-items: center;

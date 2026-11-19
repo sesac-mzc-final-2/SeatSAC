@@ -48,6 +48,10 @@ const BAR_PRESETS = 3;
 
 type Picker = { kind: PickKind; presetId: string } | { kind: "more" };
 
+/** 영화 버튼으로 보낸 질문이 실패했으면 「다시 묻기」도 같은 `continueFrom` 을 보낸다 — 조건이 빠지지 않게(3.4.22) */
+const retryContinueFrom = (entry: ReturnType<typeof useAiChat>["entries"][number]): string | undefined =>
+  entry.kind === "error" ? entry.continueFrom : undefined;
+
 /** 우하단 대화창 본문 (AI-01·AI-04). 열려 있는 동안만 마운트된다 */
 export function ChatPanel({
   chat,
@@ -100,8 +104,8 @@ export function ChatPanel({
     if (picker && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [picker, theaters.isSuccess, movies.isSuccess]);
 
-  const send = (text: string, link?: ChatLink) => {
-    if (ask(text, link)) {
+  const send = (text: string, link?: ChatLink, continueFrom?: string) => {
+    if (ask(text, link, continueFrom)) {
       setDraft("");
       setPicker(null);
       inputRef.current?.focus();
@@ -151,9 +155,10 @@ export function ChatPanel({
     choices = gradeChoices();
   }
 
-  const pickMovie = (title: string) => {
+  /** continueFrom: 버튼이 달린 답의 `context.id` — 보내는 문장은 그대로고 그 답의 날짜·극장만 이어받는다(3.4.22) */
+  const pickMovie = (title: string, continueFrom?: string) => {
     const choice = movieFromAnswer(title, movies.data?.content);
-    send(choice.text, choice.link);
+    send(choice.text, choice.link, continueFrom);
   };
 
   const pick = (key: string) => {
@@ -299,10 +304,11 @@ export function ChatPanel({
               key={entry.id}
               entry={entry}
               demo={demo.enabled}
-              onRetry={blocked ? undefined : (question, link) => send(question, link)}
+              onRetry={blocked ? undefined : (question, link) => send(question, link, retryContinueFrom(entry))}
               onChoose={blocked ? undefined : (message) => send(message)}
               onPickMovie={blocked ? undefined : pickMovie}
               onSeatNavigate={onClose}
+              onClearContext={blocked ? undefined : (question, link) => send(question, link)}
             />
           ))
         )}

@@ -44,6 +44,23 @@ export interface ChatChoice {
 export interface ChatRequest {
   message: string;
   sessionId?: string;
+  /** 답 아래 영화 버튼을 눌렀을 때만: 그 답의 `context.id`. 모르는 값이면 서버가 무시한다 */
+  continueFrom?: string;
+}
+
+/**
+ * 이 답이 실제로 조회한 조건 (문맥 이어받기 3.4.22). 하나로 확정된 값만 있고 나머지는 null.
+ * `inherited` 가 비어 있지 않으면 앞 답의 조건을 이어받은 답이다
+ */
+export interface ChatContext {
+  /** 이 답 아래 영화 버튼을 누를 때 `continueFrom` 으로 보낸다 */
+  id: string;
+  date: string | null;
+  theater: string | null;
+  movie: string | null;
+  /** 화면 표시용 (예: `내일 11/20(금) · 부산본점`) */
+  label: string;
+  inherited: ("date" | "theater")[];
 }
 
 export interface ChatResponse {
@@ -61,6 +78,8 @@ export interface ChatResponse {
   truncated: boolean;
   sql: string | null;
   presetId: string | null;
+  /** 이 답이 조회한 조건. 해당 없으면 null (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
+  context?: ChatContext | null;
   /** 스냅샷 기준 시각 `+09:00` */
   asOf: string;
   llm: LlmUsage;

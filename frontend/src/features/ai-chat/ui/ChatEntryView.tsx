@@ -6,6 +6,7 @@ import { Badge, Chip, Icon, TraceCode } from "@/shared/ui";
 import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/preset-actions";
 import { seatLinks } from "../lib/seat-links";
 import type { ChatEntry } from "../model/use-ai-chat";
+import { CONTEXT_EXPIRED_NOTICE, continueFromOf, inheritedLabel, isContextExpired } from "../lib/context-carry";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
 
@@ -14,8 +15,13 @@ interface Props {
   demo: boolean;
   /** 오류 항목의 「다시 묻기」 (보낼 수 없는 상태면 undefined) */
   onRetry?: (question: string, link?: ChatLink) => void;
-  /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
-  onPickMovie?: (title: string) => void;
+  /**
+   * 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성).
+   * continueFrom = 그 버튼이 달린 답의 `context.id` — 그 답의 날짜·극장을 이어받는다(없으면 예전처럼 독립 질문)
+   */
+  onPickMovie?: (title: string, continueFrom?: string) => void;
+  /** 이어받은 답의 「조건 지우기」 — 같은 질문을 `continueFrom` 없이 다시 보낸다 (보낼 수 없는 상태면 undefined) */
+  onClearContext?: (question: string, link?: ChatLink) => void;
   /** 되묻기(`CLARIFY`) 버튼 — 누르면 그 `message` 를 보낸다 (보낼 수 없는 상태면 undefined) */
   onChoose?: (message: string) => void;
   /** 표의 좌석 링크로 좌석 선택 화면에 넘어갈 때 (대화창 닫기) */
@@ -79,18 +85,25 @@ function Answer({
   response,
   demo,
   link,
+  question,
+  continueFrom,
   onPickMovie,
+  onClearContext,
   onChoose,
   onSeatNavigate,
 }: {
   response: ChatResponse;
   demo: boolean;
   link?: ChatLink;
-  onPickMovie?: (title: string) => void;
+  question: string;
+  continueFrom?: string;
+  onPickMovie?: (title: string, continueFrom?: string) => void;
+  onClearContext?: (question: string, link?: ChatLink) => void;
   onChoose?: (message: string) => void;
   onSeatNavigate?: () => void;
 }) {
   const movieTitles = answerMovieTitles(response);
+  const carried = inheritedLabel(response);
   const choices = response.choices ?? [];
   const table = hasResultTable(response);
   // 매진·마감은 이 답을 그린 시각 기준(대화창을 다시 열면 새로 본다). 그 뒤에 마감되면 좌석 화면·선점이 막는다
@@ -98,6 +111,22 @@ function Answer({
   return (
     <div className={styles.answer}>
       <p className={styles.text}>{response.answer}</p>
+      {/* 앞 답의 조건을 이어받은 답 — 무엇을 기준으로 찾았는지 보여 주고, 지우면 같은 질문을 전체 기준으로 다시 묻는다 */}
+      {carried && (
+        <p className={styles.carried}>
+          <span className={styles.carriedLabel}>{carried} 기준</span>
+          <button
+            type="button"
+            className={styles.clear}
+            disabled={!onClearContext}
+            onClick={() => onClearContext?.(question, link)}
+          >
+            <Icon name="x" size={12} />
+            조건 지우기
+          </button>
+        </p>
+      )}
+      {isContextExpired(response, continueFrom) && <p className={styles.note}>{CONTEXT_EXPIRED_NOTICE}</p>}
       {response.rejection && <p className={styles.note}>{response.rejection.message}</p>}
       {choices.length > 0 && (
         <div className={styles.choices} role="group" aria-label="답 고르기">
@@ -130,7 +159,12 @@ function Answer({
         {table && ` · ${n(response.rowCount)}건`}
         {response.truncated && " · 500건까지만 보여요"}
       </p>
-      {movieTitles.length > 0 && <MovieChoices titles={movieTitles} onPick={onPickMovie} />}
+      {movieTitles.length > 0 && (
+        <MovieChoices
+          titles={movieTitles}
+          onPick={onPickMovie && ((title) => onPickMovie(title, continueFromOf(response)))}
+        />
+      )}
       {/* 추천 질문으로 고른 극장·영화·날짜면 그 화면으로 바로 간다 */}
       {link && response.path !== "OUT_OF_SCOPE" && response.path !== "REJECTED" && (
         <Link className={styles.link} to={link.href}>
@@ -143,7 +177,15 @@ function Answer({
   );
 }
 
-export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, onSeatNavigate }: Props) {
+export function ChatEntryView({
+  entry,
+  demo,
+  onRetry,
+  onPickMovie,
+  onClearContext,
+  onChoose,
+  onSeatNavigate,
+}: Props) {
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
@@ -158,7 +200,10 @@ export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, onS
         response={entry.response}
         demo={demo}
         link={entry.link}
+        question={entry.question}
+        continueFrom={entry.continueFrom}
         onPickMovie={onPickMovie}
+        onClearContext={onClearContext}
         onChoose={onChoose}
         onSeatNavigate={onSeatNavigate}
       />

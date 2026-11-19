@@ -156,3 +156,39 @@
 .more {
   color: var(--color-muted);
 }
+
+/* 문맥 이어받기(3.4.22) — 앞 답의 조건으로 찾은 답: 「내일 11/20(금) · 부산본점 기준」 + 조건 지우기 */
+.carried {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  font-size: 12px;
+}
+.carriedLabel {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #ff5a4e40;
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+  transition: color var(--t-color);
+}
+.clear:hover:not(:disabled) {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+.clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

@@ -8,8 +8,25 @@ export const MAX_MESSAGE_LENGTH = 300;
 
 export type ChatEntry =
   | { id: number; kind: "question"; text: string }
-  | { id: number; kind: "answer"; response: ChatResponse; link?: ChatLink }
-  | { id: number; kind: "error"; question: string; link?: ChatLink; info: ChatErrorInfo; traceId: string | null };
+  | {
+      id: number;
+      kind: "answer";
+      response: ChatResponse;
+      link?: ChatLink;
+      /** 이 답을 만든 질문 — 「조건 지우기」가 같은 질문을 `continueFrom` 없이 다시 보낸다 */
+      question: string;
+      /** 이 질문에 붙여 보낸 `continueFrom`(앞 답의 `context.id`). 영화 버튼으로 보냈을 때만 */
+      continueFrom?: string;
+    }
+  | {
+      id: number;
+      kind: "error";
+      question: string;
+      link?: ChatLink;
+      continueFrom?: string;
+      info: ChatErrorInfo;
+      traceId: string | null;
+    };
 
 type NewEntry = { [K in ChatEntry["kind"]]: Omit<Extract<ChatEntry, { kind: K }>, "id"> }[ChatEntry["kind"]];
 
@@ -27,8 +44,8 @@ export function useAiChat() {
   const controller = useRef<AbortController | null>(null);
 
   const mutation = useMutation({
-    mutationFn: ({ message, signal }: { message: string; signal: AbortSignal }) =>
-      sendChatMessage({ message, sessionId: sessionId.current }, signal),
+    mutationFn: ({ message, continueFrom, signal }: { message: string; continueFrom?: string; signal: AbortSignal }) =>
+      sendChatMessage({ message, sessionId: sessionId.current, continueFrom }, signal),
   });
   const { mutate, reset: resetMutation, isPending } = mutation;
 
@@ -53,18 +70,21 @@ export function useAiChat() {
   }, []);
 
   const ask = useCallback(
-    /** link: 추천 질문으로 보낸 경우 답 아래에 붙일 바로가기(상영시간표 등) */
-    (raw: string, link?: ChatLink): boolean => {
+    /**
+     * link: 추천 질문으로 보낸 경우 답 아래에 붙일 바로가기(상영시간표 등)
+     * continueFrom: 답 아래 영화 버튼으로 보낸 경우 그 답의 `context.id` — 서버가 그 답의 날짜·극장을 이어받는다
+     */
+    (raw: string, link?: ChatLink, continueFrom?: string): boolean => {
       const message = raw.trim();
       if (!message || message.length > MAX_MESSAGE_LENGTH || isPending || cooldownSeconds > 0) return false;
       append({ kind: "question", text: message });
       controller.current = new AbortController();
       mutate(
-        { message, signal: controller.current.signal },
+        { message, continueFrom, signal: controller.current.signal },
         {
           onSuccess: (response) => {
             sessionId.current = response.sessionId;
-            append({ kind: "answer", response, link });
+            append({ kind: "answer", response, link, question: message, continueFrom });
           },
           onError: (error) => {
             if (controller.current?.signal.aborted) return;
@@ -74,8 +94,8 @@ export function useAiChat() {
               setNow(Date.now());
               setCooldownUntil(until);
             }
-            // link 도 같이 둔다 — 「다시 묻기」로 답을 받았을 때 바로가기가 빠지지 않게
-            append({ kind: "error", question: message, link, info, traceId: traceIdOf(error) });
+            // link 도 같이 둔다 — 「다시 묻기」로 답을 받았을 때 바로가기가 빠지지 않게 (continueFrom 도: 조건이 빠지지 않게)
+            append({ kind: "error", question: message, link, continueFrom, info, traceId: traceIdOf(error) });
           },
         },
       );

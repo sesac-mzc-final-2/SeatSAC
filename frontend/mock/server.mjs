@@ -11,6 +11,7 @@
 //        예매 ID 9001 은 회차 정보 없음(screening null)
 // AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
+//        문맥 이어받기(3.4.22): 답마다 context, 영화 버튼의 continueFrom 이면 그 답의 날짜·극장으로 좁혀 답한다
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
@@ -530,6 +531,91 @@ function aiAnswer(message, sessionId) {
   };
 }
 
+// ---------- 문맥 이어받기 (3.4.22) — ai 의 context·continueFrom 흉내 ----------
+// 답마다 그 답이 조회한 날짜·극장·영화를 세션별로 5개까지 기억한다(ai 는 실행한 SQL의 조건에서 뽑는다).
+// 영화 버튼이 continueFrom(그 답의 context.id)을 보내면 그 날짜·극장 + 고른 영화로만 답한다(Claude 호출 0).
+// 6번째 전 답의 버튼·목 서버를 다시 띄운 뒤의 버튼은 모르는 id 라 독립 질문으로 답한다 → 화면의 만료 안내 확인용
+
+const AI_CONTEXT_MAX = 5;
+/** sessionId → [{ id, date, theater, movie }] (최신이 뒤) */
+const aiContexts = new Map();
+const WEEKDAYS_KO = "일월화수목금토";
+
+const dayLabel = (dateIso) => {
+  const offset = dayNumber(dateIso) - dayNumber(todayIso());
+  const day = new Date(dayNumber(dateIso) * 86400000);
+  const short = `${day.getUTCMonth() + 1}/${day.getUTCDate()}(${WEEKDAYS_KO[day.getUTCDay()]})`;
+  return ["오늘", "내일", "모레"][offset] ? `${["오늘", "내일", "모레"][offset]} ${short}` : short;
+};
+const contextLabel = (values, kinds) =>
+  kinds
+    .filter((kind) => values[kind])
+    .map((kind) => (kind === "date" ? dayLabel(values.date) : values[kind]))
+    .join(" · ");
+
+/** 목의 답이 조회한 조건 (aiAnswer 의 갈래와 같은 기준). 표가 없는 답·내 예매는 null */
+function aiContextValues(answer, message) {
+  if (!answer.columns || answer.path === "MY_BOOKINGS") return null;
+  const values = { date: todayIso(), theater: null, movie: null };
+  if (answer.presetId === "theater_schedule") {
+    values.theater = theaters.find((t) => t.hasLayout && message.includes(t.name))?.name ?? null;
+    if (message.includes("내일")) values.date = dateOffset(1);
+  }
+  if (answer.presetId === "movie_theaters") values.movie = movies.find((m) => message.includes(m.title))?.title ?? null;
+  return values;
+}
+
+/** 이번 답의 조건을 세션에 남기고 계약 `context` 모양으로 돌려준다 */
+function rememberAiContext(sessionId, values, inherited = []) {
+  if (!values) return null;
+  const entry = { id: randomUUID().slice(0, 6), date: values.date, theater: values.theater, movie: values.movie };
+  aiContexts.set(sessionId, [...(aiContexts.get(sessionId) ?? []), entry].slice(-AI_CONTEXT_MAX));
+  const label = contextLabel(entry, inherited.length > 0 ? inherited : ["date", "theater", "movie"]);
+  return { ...entry, label, inherited };
+}
+
+/** continueFrom 이 가리킨 답의 날짜·극장 + 메시지의 영화로 답한다. 이어받을 것이 없으면 null(평소 답) */
+function aiContinued(body, sessionId, message) {
+  const from = (aiContexts.get(sessionId) ?? []).find((entry) => entry.id === body.continueFrom);
+  const movie = movies.find((m) => message.includes(m.title));
+  if (!from || !movie) return null;
+  const date = from.date && dayNumber(from.date) >= dayNumber(todayIso()) ? from.date : null;
+  const theater = theaters.find((t) => t.name === from.theater) ?? null;
+  const inherited = [date && "date", theater && "theater"].filter(Boolean);
+  if (inherited.length === 0) return null;
+  // 날짜가 없으면(극장만 이어받음) 오늘·내일 회차를 본다 — ai 는 그 극장의 남은 회차 전부
+  const days = date ? [date] : [todayIso(), dateOffset(1)];
+  const rows = days
+    .flatMap((day) => (day === todayIso() ? upcoming(day) : screeningsOn(day)))
+    .filter((s) => s.movie.movieId === movie.movieId && (!theater || s.theater.theaterId === theater.theaterId));
+  const values = { date, theater: theater?.name ?? null, movie: movie.title };
+  // 표 열은 ai 내부 틀과 같다: 극장을 알면 시작 시각만, 날짜만 알면 극장·시작 시각 (상영관·종료·잔여석 없음)
+  const columns = theater
+    ? [{ name: "starts_at", type: "text" }]
+    : [{ name: "theater_name", type: "text" }, { name: "starts_at", type: "text" }];
+  const subject = `${contextLabel(values, ["date", "theater", "movie"]).replaceAll(" · ", " ")} 회차`;
+  const count = rows.length > 0 ? `${rows.length}건입니다.` : "조건에 맞는 결과가 없습니다.";
+  const asOf = nowKstIso();
+  return {
+    sessionId,
+    answer: `${subject}: ${count} (${hhmm(asOf)} 기준)`,
+    path: "CACHE_EXACT",
+    columns,
+    rows: rows.map((s) => (theater ? [kstMinute(s.startsAt)] : [s.theater.name, kstMinute(s.startsAt)])),
+    // 행 하나가 회차 하나라 좌석 화면 링크도 붙는다(3.4.18)
+    screeningIds: rows.length > 0 ? rows.map((s) => s.screeningId) : null,
+    rowCount: rows.length,
+    truncated: false,
+    sql: null,
+    asOf,
+    rejection: null,
+    presetId: theater && date ? "ctx_movie_date_theater" : theater ? "ctx_movie_theater" : "ctx_movie_date",
+    llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    latencyMs: 12,
+    context: rememberAiContext(sessionId, values, inherited),
+  };
+}
+
 async function handleAi(req, res, path) {
   if (MOCK_AI === "off") return fail(res, 404, "NOT_FOUND", path);
   if (MOCK_AI === "down") return fail(res, 503, "SERVICE_UNAVAILABLE", "no ai pod");
@@ -563,6 +649,15 @@ async function handleAi(req, res, path) {
       return fail(res, 503, "AI_LLM_UNAVAILABLE", reason, [{ field: "provider", value: "anthropic", reason }]);
     }
 
+    if (typeof body.continueFrom === "string" && body.sessionId) {
+      // 문맥 이어받기: 같은 문장의 캐시(aiAsked)는 보지도 남기지도 않는다 — 그 키는 조건 없는 답이다
+      const continued = aiContinued(body, body.sessionId, message);
+      if (continued) {
+        await sleep(continued.latencyMs);
+        return json(res, 200, continued);
+      }
+    }
+
     const sessionId = body.sessionId ?? randomUUID();
     const key = message.replace(/\s+/g, " ").toLowerCase();
     let answer = aiAnswer(message, sessionId);
@@ -576,7 +671,7 @@ async function handleAi(req, res, path) {
     aiInflight = true;
     await sleep(Math.min(answer.latencyMs, 2500));
     aiInflight = false;
-    return json(res, 200, answer);
+    return json(res, 200, { ...answer, context: rememberAiContext(sessionId, aiContextValues(answer, message)) });
   }
   return fail(res, 404, "NOT_FOUND", path);
 }

@@ -3,6 +3,7 @@ export type {
   ChatColumn,
   ChatColumnType,
   ChatCell,
+  ChatContext,
   ChatPreset,
   ChatPresetList,
   ChatRejection,

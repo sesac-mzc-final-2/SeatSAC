@@ -28,6 +28,7 @@ REJECTED(조건 불일치였으면 CLARIFY — 사용자에게 조건을 확인�
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import hmac
 import logging
@@ -56,7 +57,14 @@ from seatsac_ai.cache.slots import (
 )
 from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
-from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
+from seatsac_ai.common.metrics import (
+    AI_CACHE_REQUESTS,
+    AI_CHAT,
+    AI_TOKENS,
+    AI_UNMET_DEMAND,
+    UNMET_CHITCHAT,
+    unmet_category_label,
+)
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
 from seatsac_ai.llm.client import NO_TOOL, LlmClient, LlmUnavailable, ToolCall, Usage
@@ -75,9 +83,11 @@ from seatsac_ai.sql.executor import (
 )
 from seatsac_ai.sql.validator import (
     SqlRejected,
+    ValidatedSql,
     exclude_started,
     sql_template,
     validate,
+    with_screening_id,
 )
 
 log = logging.getLogger(__name__)
@@ -315,6 +325,7 @@ class ChatService:
                 if call.name == NO_TOOL:
                     # tool_choice=auto: 도구 없이 쓴 글은 표를 조회한 답이 아니라서 버린다.
                     # 한 번만 다시 시키고, 또 그러면 범위 밖 문구로 답한다
+                    # (모델 실패라 수요로 세지 않는다 — 범위 안 질문이 섞인다)
                     log.warning("Claude가 도구를 호출하지 않았다(%d번째 호출)", calls)
                     if not nudged and calls < self._s.llm_max_calls_per_query:
                         nudged = True
@@ -324,6 +335,11 @@ class ChatService:
                 failed_path = "preset" if call.name == RUN_PRESET else "nl2sql"
                 try:
                     body, made = await self._run_tool(call, ask, system_params, deadline)
+                    if call.name == OUT_OF_SCOPE:
+                        # ask.question = Claude에게 보여 준 질문(되묻기 답을 원래 질문에 붙인
+                        # 경우 포함). 「chat answered」 로그의 questionHash 와 같은 글자이고,
+                        # reason 이 베꼈는지도 Claude가 본 글자 전체와 견줘야 한다
+                        _record_unmet(ask.question, call.input)
                     return body, made, calls
                 except _Clarify as clarify:
                     return clarify.body, None, calls
@@ -371,6 +387,7 @@ class ChatService:
             "path": "MY_BOOKINGS",
             "columns": my_bookings.COLUMNS,
             "rows": rows,
+            "screeningIds": None,
             "rowCount": len(rows),
             "truncated": page.truncated,
             "sql": None,
@@ -546,6 +563,10 @@ class ChatService:
         Claude가 쓴 SQL(claude_sql)은 screening 을 읽는 SELECT마다 `starts_at > :now` 를
         붙여 실행한다(data-model 6-1, #93 리뷰). 조건을 빼먹거나 지금보다 이른 시각과 비교해도
         시작한 회차가 나오지 않는다. 프리셋은 SQL에 :now 가 이미 들어 있다.
+
+        행 하나가 회차 하나인 SQL은 회차 ID 칸을 덧붙여 실행하고 결과에서 떼어 둔다
+        (result.screening_ids → 계약 screeningIds). 프리셋·Claude·캐시 템플릿이 모두 여기를 지나므로
+        어느 경로든 같다. 돌려주는 SQL(응답 sql·세션·로그)은 덧붙이기 전 그대로다.
         """
         try:
             validated = validate(sql, self._s.max_rows)
@@ -571,9 +592,7 @@ class ChatService:
         if timeout <= 0:
             raise LlmUnavailable("TIMEOUT")
         try:
-            result = await execute_async(
-                self._store, validated, params, timeout_seconds=timeout, max_rows=self._s.max_rows
-            )
+            result = await self._run(validated, params, timeout)
         except SqlExecutionError as e:
             if e.reason == TIMEOUT:
                 # 다시 물어도 같은 무거운 SQL일 가능성이 커서 바로 거부한다
@@ -685,6 +704,36 @@ class ChatService:
         summary = " · ".join(parts) or "질문하신 조건"
         answer = f"{summary} 조건을 정확히 반영한 조회를 만들지 못했어요. {CLARIFY_CONFIRM_HINT}"
         return _clarify(answer, [], self._as_of())
+
+    async def _run(
+        self, validated: ValidatedSql, params: dict[str, Any], timeout: float
+    ) -> QueryResult:
+        async def run(query: ValidatedSql, seconds: float) -> QueryResult:
+            return await execute_async(
+                self._store, query, params, timeout_seconds=seconds, max_rows=self._s.max_rows
+            )
+
+        with_id = with_screening_id(validated)
+        if with_id is None:
+            return await run(validated, timeout)
+        started = time.monotonic()
+        try:
+            return _take_screening_ids(await run(with_id, timeout))
+        except SqlExecutionError as first:
+            if first.reason == TIMEOUT:
+                raise
+            # 칸을 덧붙인 탓인지 원래 SQL이 틀린 건지 아직 모른다 — 원래 SQL로 다시 실행한다.
+            # 원래 SQL도 실패하면 그 오류가 그대로 올라가 기존 처리(Claude 재요청)를 탄다
+            left = timeout - (time.monotonic() - started)
+            if left <= 0:
+                raise LlmUnavailable("TIMEOUT") from first
+            result = await run(validated, left)
+            # 덧붙인 칸만 문제였다 — 답은 그대로 나가고 좌석 링크만 없다. SQL·값은 남기지 않는다
+            log.warning(
+                "회차 ID 칸을 덧붙인 SQL만 실패(원래 SQL로 답함): %s",
+                type(first.__cause__).__name__,
+            )
+            return result
 
     def _resolve_preset(self, raw: dict[str, Any]) -> tuple[Preset, dict[str, Any]]:
         preset = self._presets.get(str(raw.get("presetId")))
@@ -809,6 +858,7 @@ class ChatService:
             "path": path,
             "columns": result.columns,
             "rows": result.rows,
+            "screeningIds": result.screening_ids,
             "rowCount": result.row_count,
             "truncated": result.truncated,
             "sql": sql,
@@ -822,7 +872,7 @@ class ChatService:
         path = body["path"].lower()
         AI_CHAT.labels(path, "ok").inc()
         _count_tokens(usage, path)
-        digest = hmac.new(_HASH_KEY, question.encode(), hashlib.sha256).hexdigest()[:16]
+        digest = _question_hash(question)
         log.info(
             "chat answered",
             extra={
@@ -844,6 +894,80 @@ class ChatService:
                 }
             },
         )
+
+
+_UNMET_REASON_MAX = 120
+# reason 이 질문을 베꼈다고 보는 기준: 겹치는 연속 글자 수가 max(8자, min(질문의 60%, 20자)) 이상
+_REASON_COPY_MIN_CHARS = 8
+_REASON_COPY_RATIO = 0.6
+_REASON_COPY_MAX_CHARS = 20  # 질문이 길어도 20자가 그대로 겹치면 베낀 것이다
+_REASON_COMPARE_MAX = 500  # 비교에 쓰는 reason 길이 상한(도구의 maxLength 는 힌트일 뿐이다)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_DIGIT_RUN = re.compile(r"\d(?:[\s.\-]*\d){2,}")  # 구분자를 끼고 숫자 3개 이상(전화·카드·예매 번호)
+
+
+def _question_hash(question: str) -> str:
+    return hmac.new(_HASH_KEY, question.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def _letters(text: str) -> str:
+    """비교용 정규화: 공백·문장부호를 빼고 소문자로."""
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _copies_question(question: str, reason: str) -> bool:
+    """reason 에 질문 원문이 길게 그대로 들어 있는가.
+
+    짧은 질문("날씨")은 요약과 같을 수밖에 없어 8자 하한으로 걸리지 않게 둔다(의도).
+    """
+    q, r = _letters(question), _letters(reason[:_REASON_COMPARE_MAX])
+    longest = (
+        difflib.SequenceMatcher(None, q, r, autojunk=False)
+        .find_longest_match(0, len(q), 0, len(r))
+        .size
+    )
+    limit = min(len(q) * _REASON_COPY_RATIO, _REASON_COPY_MAX_CHARS)
+    return longest >= max(_REASON_COPY_MIN_CHARS, limit)
+
+
+def _mask_reason(reason: str) -> str | None:
+    """남기는 요약에서 이메일·숫자 연속을 가리고 120자로 자른다. 빈 글이면 None."""
+    masked = _DIGIT_RUN.sub("[숫자]", _EMAIL.sub("[이메일]", " ".join(reason.split())))
+    return masked[:_UNMET_REASON_MAX].strip() or None
+
+
+def _record_unmet(question: str, tool_input: object) -> None:
+    """답하지 못한 요청(out_of_scope 도구)의 분류를 세고, Claude가 요약한 사유를 로그로 남긴다.
+
+    질문 원문은 남기지 않는다(개인정보). 욕설·인사·잡담(chitchat)은 수요가 아니라 세지도
+    적지도 않는다. 부가 기록이라 여기서 난 오류가 답을 막지 않게 삼킨다.
+    """
+    try:
+        _write_unmet(question, tool_input if isinstance(tool_input, dict) else {})
+    except Exception as exc:  # 질문·reason 이 섞이지 않게 예외 종류만 적는다
+        log.warning("unmet demand 기록 실패(%s)", type(exc).__name__)
+
+
+def _write_unmet(question: str, raw: dict[str, Any]) -> None:
+    category = raw.get("category")
+    if isinstance(category, str):
+        category = category.strip().lower()
+    if category == UNMET_CHITCHAT:
+        return
+    category = unmet_category_label(category)
+    AI_UNMET_DEMAND.labels(category).inc()
+    reason = raw.get("reason")
+    fields: dict[str, Any] = {
+        "category": category,
+        "reason": _mask_reason(reason) if isinstance(reason, str) else None,
+        "questionHash": _question_hash(question),
+        "questionLength": len(question),
+    }
+    if isinstance(reason, str) and _copies_question(question, reason):
+        # Claude가 요약 대신 질문을 옮겨 적었다 → 원문이 로그에 남지 않게 버린다
+        fields["reason"] = None
+        fields["reasonDropped"] = True
+    log.info("unmet demand", extra={"fields": fields})
 
 
 def _feedback(call: ToolCall, message: str) -> list[dict[str, Any]]:
@@ -913,6 +1037,19 @@ def _hide_seat_source(result: QueryResult) -> QueryResult:
         rows.append(row)
     columns = [c for i, c in enumerate(result.columns) if i != src]
     return replace(result, columns=columns, rows=rows)
+
+
+def _take_screening_ids(result: QueryResult) -> QueryResult:
+    """서버가 덧붙인 회차 ID 칸(validator.with_screening_id)을 결과 표에서 떼어 따로 둔다.
+
+    덧붙인 칸은 항상 마지막이다 — 이름으로 찾지 않는다(같은 이름의 칸이 앞에 있어도 헷갈리지 않게).
+    """
+    ids = [row[-1] for row in result.rows]
+    rows = [row[:-1] for row in result.rows]
+    known = any(i is not None for i in ids)
+    return replace(
+        result, columns=result.columns[:-1], rows=rows, screening_ids=ids if known else None
+    )
 
 
 def _business_dates(sql: str) -> list[str]:
@@ -1042,6 +1179,7 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
         "path": path,
         "columns": None,
         "rows": None,
+        "screeningIds": None,
         "rowCount": 0,
         "truncated": False,
         "sql": None,

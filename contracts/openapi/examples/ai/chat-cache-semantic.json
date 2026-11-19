@@ -15,6 +15,7 @@
       [ "영화 제목", "건대입구", "2관", "2026-11-17 20:40" ],
       [ "다른 영화", "노원", "1관", "2026-11-17 21:05" ]
     ],
+    "screeningIds": [ 769004021, 769004032, 769011011 ],
     "rowCount": 3,
     "truncated": false,
     "sql": "SELECT m.title AS movie_title, t.name AS theater_name, s.auditorium_name, s.starts_at FROM screening s JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id WHERE s.business_date = '2026-11-17' AND s.start_hour >= 20 AND s.starts_at > '2026-11-17 19:42' ORDER BY s.starts_at LIMIT 500",

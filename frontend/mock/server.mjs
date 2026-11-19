@@ -396,6 +396,7 @@ function aiAnswer(message, sessionId) {
     sessionId,
     columns: null,
     rows: null,
+    screeningIds: null,
     rowCount: 0,
     truncated: false,
     sql: null,
@@ -407,6 +408,11 @@ function aiAnswer(message, sessionId) {
   };
   const at = `(${hhmm(asOf)} 기준)`;
   const table = (columns, rows) => ({ columns, rows, rowCount: rows.length });
+  /** 회차 한 줄인 표: screeningIds(rows 와 같은 순서)로 화면이 좌석 선택 링크를 만든다 */
+  const screeningTable = (columns, screenings, toRow) => ({
+    ...table(columns, screenings.map(toRow)),
+    screeningIds: screenings.length > 0 ? screenings.map((s) => s.screeningId) : null,
+  });
 
   if (/내\s*예매|예매\s*내역/.test(message)) {
     const mine = bookings.filter((b) => b.status === "CONFIRMED" && b.screening).slice(0, 5);
@@ -453,7 +459,7 @@ function aiAnswer(message, sessionId) {
       path: "PRESET",
       presetId: "today_after_time",
       answer: `오늘 ${h}시 이후 시작하는 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+      ...screeningTable(SCREENING_COLUMNS, rows, screeningRow),
     };
   }
   const theater = theaters.find((t) => t.hasLayout && message.includes(t.name));
@@ -465,7 +471,7 @@ function aiAnswer(message, sessionId) {
       path: "PRESET",
       presetId: "theater_schedule",
       answer: `${Number(date.slice(5, 7))}월 ${Number(date.slice(8))}일 ${theater.name} 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(
+      ...screeningTable(
         [
           { name: "movie_title", type: "text" },
           { name: "auditorium_name", type: "text" },
@@ -474,7 +480,8 @@ function aiAnswer(message, sessionId) {
           { name: "ends_at", type: "text" },
           { name: "remaining_seats", type: "integer" },
         ],
-        rows.map((s) => [s.movie.title, s.auditorium.name, s.auditorium.screenType, kstMinute(s.startsAt), kstMinute(s.endsAt), s.remainingSeats]),
+        rows,
+        (s) => [s.movie.title, s.auditorium.name, s.auditorium.screenType, kstMinute(s.startsAt), kstMinute(s.endsAt), s.remainingSeats],
       ),
     };
   }
@@ -486,18 +493,16 @@ function aiAnswer(message, sessionId) {
       path: "PRESET",
       presetId: "movie_theaters",
       answer: `오늘 ${movie.title} 남은 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+      ...screeningTable(SCREENING_COLUMNS, rows, screeningRow),
     };
   }
   if (/비율|매진/.test(message)) {
-    const rows = upcoming(todayIso())
-      .filter((s) => s.totalSeats > 0 && s.remainingSeats / s.totalSeats <= 0.5)
-      .map((s) => [s.movie.title, s.theater.name, kstMinute(s.startsAt), s.remainingSeats, s.totalSeats, Math.round((s.remainingSeats / s.totalSeats) * 1000) / 1000]);
+    const rows = upcoming(todayIso()).filter((s) => s.totalSeats > 0 && s.remainingSeats / s.totalSeats <= 0.5);
     return {
       ...base,
       path: "NL2SQL",
       answer: `잔여석이 절반 이하인 오늘 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(
+      ...screeningTable(
         [
           { name: "movie_title", type: "text" },
           { name: "theater_name", type: "text" },
@@ -507,6 +512,7 @@ function aiAnswer(message, sessionId) {
           { name: "remaining_ratio", type: "real" },
         ],
         rows,
+        (s) => [s.movie.title, s.theater.name, kstMinute(s.startsAt), s.remainingSeats, s.totalSeats, Math.round((s.remainingSeats / s.totalSeats) * 1000) / 1000],
       ),
       sql: "SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats, s.total_seats, ROUND(1.0 * s.remaining_seats / s.total_seats, 3) AS remaining_ratio FROM screening s JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id WHERE s.business_date = date('now') AND s.total_seats > 0 AND 1.0 * s.remaining_seats / s.total_seats <= 0.5 ORDER BY remaining_ratio LIMIT 500",
       llm: { calls: 1, inputTokens: 455, outputTokens: 212, cacheReadTokens: 3810, cacheWriteTokens: 0 },
@@ -520,7 +526,7 @@ function aiAnswer(message, sessionId) {
     path: "PRESET",
     presetId: "most_remaining_today",
     answer: `오늘 자리가 많이 남은 회차 ${rows.length}개입니다. ${at}`,
-    ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+    ...screeningTable(SCREENING_COLUMNS, rows, screeningRow),
   };
 }
 

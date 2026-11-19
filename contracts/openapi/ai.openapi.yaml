@@ -60,6 +60,7 @@ paths:
         "200":
           description: |
             답. `path`로 처리 경로를 구분하고 화면은 `answer` 문장 + `columns`/`rows` 표 + "`asOf` 기준"을 보여준다.
+            `screeningIds`가 있으면 표의 그 행에 좌석 선택 화면(화면 라우트 `/screenings/{screeningId}` — API 경로가 아님)으로 가는 링크를 붙인다.
             `llm.calls`가 0이면 Claude API를 부르지 않은 것(캐시·내 예매) — 데모 화면에 그대로 표시.
             `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)·`CLARIFY`(되묻기)도 200이며 `columns`·`rows`는 null.
             `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다(버튼 없이 안내 문장만 올 수도 있다 — 빈 배열).
@@ -242,8 +243,8 @@ components:
 
     ChatResponse:
       type: object
-      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`sql`·`presetId`·`rejection`·`choices`·`cache`)
-      required: [sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices, cache]
+      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`rejection`·`choices`·`cache`)
+      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices, cache]
       properties:
         sessionId: { type: string, format: uuid, description: "서버가 발급. 후속 질문에 그대로 보낸다(30분)" }
         answer: { type: string, description: "답 문장(결과 행을 템플릿에 채워 만듦, Claude에 결과를 다시 보내지 않음). 끝에 \"○시 ○분 기준\"" }
@@ -259,6 +260,17 @@ components:
             type: array
             items: { type: [string, integer, number, "null"], description: "`Column.type` text → string, integer → integer, real → number. SQLite에 boolean은 없다(0·1 integer)" }
           description: "`columns` 순서의 값 배열. 최대 500행(`truncated`). MY_BOOKINGS는 본인 예매만. REJECTED·OUT_OF_SCOPE·CLARIFY는 null. 잔여석(remaining_seats)이 null이면 확인 불가(booking이 늦게 답함)"
+        screeningIds:
+          type: [array, "null"]
+          maxItems: 500
+          items: { type: [integer, "null"], format: int64, description: "그 행의 회차 ID(catalog `screeningId`와 같은 값). 회차를 알 수 없는 행은 null" }
+          description: |
+            `rows`와 같은 길이·같은 순서의 회차 ID. 화면은 이 값으로 그 행의 좌석 선택 화면 링크를 만든다
+            (ai는 화면 경로를 만들지 않는다). **행 하나가 회차 하나일 때만** 채운다 — `screening`을 집계·DISTINCT·UNION 없이
+            조회했고 그 회차의 `starts_at`이 결과 열에 그대로 있을 때. 그 밖(영화별 회차 수 같은 집계, 영화·극장 목록, 0건,
+            MY_BOOKINGS·REJECTED·OUT_OF_SCOPE·CLARIFY)은 null. 경로(PRESET·NL2SQL·CACHE_*)와 상관없이 같은 규칙이다.
+            ID는 서버가 실행할 때만 덧붙여 얻는다 — `columns`·`rows`·`sql`에는 나오지 않는다.
+            스냅샷 기준(`asOf`)이라 그 뒤 매진·예매 마감(상영 시작 5분 전)은 좌석 화면·booking이 판단한다
         rowCount: { type: integer, minimum: 0, description: "`rows` 길이(null이면 0)" }
         truncated: { type: boolean, description: "500행에서 잘렸으면 true(LIMIT 없는 SQL은 LIMIT 500을 붙여 실행)" }
         sql:

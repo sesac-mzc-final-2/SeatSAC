@@ -6,6 +6,7 @@
     "path": "REJECTED",
     "columns": null,
     "rows": null,
+    "screeningIds": null,
     "rowCount": 0,
     "truncated": false,
     "sql": "SELECT table_name, refreshed_at FROM snapshot_meta",

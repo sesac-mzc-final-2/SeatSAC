@@ -302,6 +302,7 @@ export function ChatPanel({
               onRetry={blocked ? undefined : (question, link) => send(question, link)}
               onChoose={blocked ? undefined : (message) => send(message)}
               onPickMovie={blocked ? undefined : pickMovie}
+              onSeatNavigate={onClose}
             />
           ))
         )}

@@ -61,3 +61,36 @@
 .table [data-numeric] {
   text-align: right;
 }
+/* 시작 시각 = 좌석 선택 화면 링크. 색·밑줄은 답 아래 바로가기(ChatEntryView .link)와 같은 규칙 */
+.seatLink {
+  color: var(--color-primary);
+  font-weight: 500;
+  text-decoration: none;
+  /* "11/18 20:20" 이 두 줄로 쪼개지면 어디까지가 링크인지 흐려진다 */
+  white-space: nowrap;
+  border-radius: 2px;
+}
+.seatLink:hover {
+  color: var(--color-primary-hover);
+  text-decoration: underline;
+}
+.seatLink:focus-visible {
+  outline-offset: 2px;
+  text-decoration: underline;
+}
+/* 매진·마감 회차의 시각: 링크 없이 흐리게 */
+.blocked {
+  color: var(--color-dim);
+}
+/* 칸 폭이 늘지 않게 작은 글씨 — 자리가 없으면 시각 아래 줄로 내려간다 */
+.closed {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.hint {
+  color: var(--color-dim);
+  font-size: 12px;
+}

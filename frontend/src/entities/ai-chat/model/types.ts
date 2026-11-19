@@ -52,6 +52,11 @@ export interface ChatResponse {
   path: ChatPath;
   columns: ChatColumn[] | null;
   rows: ChatCell[][] | null;
+  /**
+   * `rows` 와 같은 순서의 회차 ID — 그 행의 좌석 선택 화면으로 넘길 때 쓴다. 행이 회차 하나가 아니면(집계 등) null.
+   * 계약(#150)에서 추가되는 필드. 그 전의 ai 응답에는 없어서 선택 필드로 둔다
+   */
+  screeningIds?: (number | null)[] | null;
   rowCount: number;
   truncated: boolean;
   sql: string | null;

@@ -1,8 +1,10 @@
 import { asOfLabel, chatPathLabel, hasResultTable, isTokenFree, type ChatResponse } from "@/entities/ai-chat";
 import { useState } from "react";
 import { Link } from "react-router";
+import { serverNow } from "@/shared/lib";
 import { Badge, Chip, Icon, TraceCode } from "@/shared/ui";
 import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/preset-actions";
+import { seatLinks } from "../lib/seat-links";
 import type { ChatEntry } from "../model/use-ai-chat";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
@@ -16,6 +18,8 @@ interface Props {
   onPickMovie?: (title: string) => void;
   /** 되묻기(`CLARIFY`) 버튼 — 누르면 그 `message` 를 보낸다 (보낼 수 없는 상태면 undefined) */
   onChoose?: (message: string) => void;
+  /** 표의 좌석 링크로 좌석 선택 화면에 넘어갈 때 (대화창 닫기) */
+  onSeatNavigate?: () => void;
 }
 
 const n = (value: number) => value.toLocaleString("ko-KR");
@@ -77,16 +81,20 @@ function Answer({
   link,
   onPickMovie,
   onChoose,
+  onSeatNavigate,
 }: {
   response: ChatResponse;
   demo: boolean;
   link?: ChatLink;
   onPickMovie?: (title: string) => void;
   onChoose?: (message: string) => void;
+  onSeatNavigate?: () => void;
 }) {
   const movieTitles = answerMovieTitles(response);
   const choices = response.choices ?? [];
   const table = hasResultTable(response);
+  // 매진·마감은 이 답을 그린 시각 기준(대화창을 다시 열면 새로 본다). 그 뒤에 마감되면 좌석 화면·선점이 막는다
+  const [shownAt] = useState(() => serverNow());
   return (
     <div className={styles.answer}>
       <p className={styles.text}>{response.answer}</p>
@@ -108,7 +116,13 @@ function Answer({
       )}
       {/* 0건이면 머리글만 남은 빈 표를 그리지 않는다 — 답 문장이 이유를 말한다 */}
       {table && response.columns && response.rows && response.rows.length > 0 && (
-        <ResultTable columns={response.columns} rows={response.rows} caption={`결과 ${response.rowCount}건`} />
+        <ResultTable
+          columns={response.columns}
+          rows={response.rows}
+          caption={`결과 ${response.rowCount}건`}
+          seatLinks={seatLinks(response, shownAt)}
+          onSeatNavigate={onSeatNavigate}
+        />
       )}
       <p className={styles.meta}>
         <Icon name="clock" size={12} />
@@ -129,7 +143,7 @@ function Answer({
   );
 }
 
-export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose }: Props) {
+export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, onSeatNavigate }: Props) {
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
@@ -146,6 +160,7 @@ export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose }: P
         link={entry.link}
         onPickMovie={onPickMovie}
         onChoose={onChoose}
+        onSeatNavigate={onSeatNavigate}
       />
     );
   }

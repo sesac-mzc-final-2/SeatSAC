@@ -42,6 +42,7 @@ function renderDock(session: Session = authenticated) {
 
 describe("AiChatDock (3.3.7)", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     window.localStorage.clear();
   });
@@ -117,7 +118,8 @@ describe("AiChatDock (3.3.7)", () => {
 
     expect(await screen.findByText(cacheSemantic.value.answer)).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "영화" })).toBeInTheDocument();
-    expect(screen.getByRole("cell", { name: "11/17 20:10" })).toBeInTheDocument();
+    // 시각 칸은 회차 상태(링크·마감)에 따라 이름이 달라져 글자로 찾는다 — 실제 시계에 기대지 않게
+    expect(screen.getByText("11/17 20:10")).toBeInTheDocument();
     expect(screen.getByText(/19:42 기준/)).toBeInTheDocument();
     expect(chatBodies(fetchMock)[0]).toEqual({ message: "오늘 20시 이후에 시작하는 영화 알려줘" });
 
@@ -282,6 +284,53 @@ describe("AiChatDock (3.3.7)", () => {
     await userEvent.click(within(more).getByRole("button", { name: "질문 e" }));
     await waitFor(() => expect(chatBodies(fetchMock)).toHaveLength(2));
     expect(chatBodies(fetchMock)[1].message).toBe("예시 e");
+  });
+
+  it("회차 목록 답은 시작 시각이 그 회차의 좌석 선택 화면 링크다 — 매진·마감은 링크 없이, 누르면 창을 닫는다", async () => {
+    // 마감 판정이 실제 시계에 기대지 않게 Date 만 고정한다(타이머는 그대로 — userEvent·react-query)
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-17T19:42:00+09:00"));
+    const answer = {
+      ...cacheSemantic.value,
+      answer: "오늘 19시 이후 회차: 3건입니다.",
+      // 잔여석을 물은 답 — 계약 예시(회차 목록)에는 잔여석 열이 없어 여기서 붙인다
+      columns: [...cacheSemantic.value.columns, { name: "remaining_seats", type: "integer" }],
+      rows: [
+        ["영화 제목", "건대입구", "6관", "2026-11-17 20:10", 121],
+        ["영화 제목", "건대입구", "2관", "2026-11-17 20:40", 0],
+        ["다른 영화", "노원", "1관", "2026-11-17 19:45", 160], // 시작 3분 전 → 마감
+      ],
+      screeningIds: [769004021, 769004032, 769011011],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/ai/presets") return json(200, presets);
+      if (url.startsWith("/api/movies")) return json(200, { content: [], page: 0, size: 50, totalElements: 0, totalPages: 0 });
+      return json(200, answer);
+    });
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "질문" }), "오늘 19시 이후 영화{Enter}");
+
+    const link = await screen.findByRole("link", { name: "11/17 20:10 좌석 고르기" });
+    expect(link).toHaveAttribute("href", "/screenings/769004021");
+    expect(link).toHaveTextContent("11/17 20:10");
+    // 열은 늘지 않는다(영화·극장·상영관·시작·잔여석)
+    expect(screen.getAllByRole("columnheader")).toHaveLength(answer.columns.length);
+    expect(screen.getAllByRole("link", { name: /좌석 고르기/ })).toHaveLength(1);
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[1]).queryByRole("link")).not.toBeInTheDocument(); // 매진(잔여석 0)
+    expect(within(rows[1]).getByText("11/17 20:40")).toBeInTheDocument();
+    expect(within(rows[2]).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(rows[2]).getByText("마감")).toBeInTheDocument();
+    expect(screen.getByText("시각을 누르면 좌석 선택으로 이동해요")).toBeInTheDocument();
+
+    // 좌석 화면으로 넘어가면 대화창을 닫는다 — 좁은 화면에서 창이 좌석 화면을 가리지 않게. 대화는 남는다
+    await userEvent.click(link);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AI 상영 도우미 열기" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "AI 상영 도우미 열기" }));
+    expect(await screen.findByText(answer.answer)).toBeInTheDocument();
   });
 
   it("답에 영화가 여럿이면 5개씩 고르는 버튼, 「더 보기」마다 5개씩 더, 고르면 그 영화 상영 정보를 묻는다", async () => {

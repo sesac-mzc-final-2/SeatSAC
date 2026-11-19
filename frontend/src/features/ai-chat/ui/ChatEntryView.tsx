@@ -32,6 +32,9 @@ interface Props {
 /** 응답에 값이 빠졌으면(계약 밖) 숫자 대신 「–」 — 데모 정보 때문에 답 전체가 깨지지 않게 */
 const n = (value: number) => (Number.isFinite(value) ? value.toLocaleString("ko-KR") : "–");
 
+/** ai 의 `APP_AI_CACHE_TTL`(기본 1h) — 응답에 TTL 이 없어 화면에 적어 둔 값. ai 설정을 바꾸면 같이 고친다 */
+const CACHE_TTL_TEXT = "1시간";
+
 const MATCH_TEXT: Record<PairMatch, string> = {
   same: "같은 질문",
   template: "같은 틀의 질문(말투·값만 다름)",
@@ -46,14 +49,14 @@ function CacheNoteLines({ note }: { note: CacheNote }) {
   if (note.kind === "stored") {
     return (
       <p className={styles.dim}>
-        이 답의 SQL 틀을 캐시에 저장함 — 1시간 동안 같은 틀의 질문은 Claude 없이 답할 수 있습니다
+        이 답의 SQL 틀을 캐시에 저장함 — {CACHE_TTL_TEXT} 동안 같은 틀의 질문은 Claude 없이 답할 수 있습니다
       </p>
     );
   }
   if (note.kind === "outside") {
     return (
       <p className={styles.dim}>
-        이 대화 밖에서 만들어진 캐시(이전 대화 · 다른 사용자 · 미리 넣어 둔 질문) · Claude 호출 없음 · 토큰 0
+        이 대화에서 짝을 찾지 못한 캐시(이전 대화 · 다른 사용자 · 미리 넣어 둔 질문 · ai 재시작)
       </p>
     );
   }
@@ -77,8 +80,8 @@ function CacheNoteLines({ note }: { note: CacheNote }) {
 /** 데모 모드: 처리 경로 · Claude 호출 · 토큰 · 지연 · 캐시 짝 · SQL */
 function DemoMeta({ response, note }: { response: ChatResponse; note?: CacheNote }) {
   // llm·latencyMs 는 계약상 항상 있지만, 빠진 응답이 와도 그 칸만 생략한다
-  const llm: ChatResponse["llm"] | undefined = response.llm;
-  const free = llm !== undefined && isTokenFree(response);
+  const llm: ChatResponse["llm"] | null | undefined = response.llm;
+  const free = Boolean(llm) && isTokenFree(response);
   return (
     <div className={styles.demo} aria-label="처리 정보">
       <div className={styles.demoRow}>

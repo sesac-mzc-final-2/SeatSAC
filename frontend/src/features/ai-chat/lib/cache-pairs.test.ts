@@ -195,7 +195,7 @@ describe("cacheNotes (3.4.20 캐시 짝)", () => {
     const tokenPair = pairOf(notes.get(4));
     expect(tokenPair).toMatchObject({ inputTokens: null, savedTokens: null, fasterMs: 1829 });
     expect(savedLabel(tokenPair)).toBe("1.83초 빠름");
-    expect(basisLabel(tokenPair)).toBe("1번째 질문이 서버 처리 시간(1,860ms)에서 이 답(31ms)을 뺀 값");
+    expect(basisLabel(tokenPair)).toBe("1번째 질문의 서버 처리 시간(1,860ms)에서 이 답(31ms)을 뺀 값");
     // 절약을 셀 수 없는 캐시 답은 아낀 토큰에서 빼고 「제외」로 센다
     expect(demoTotals(noTokens, notes)).toEqual({
       questions: 2,

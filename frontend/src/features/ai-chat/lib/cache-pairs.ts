@@ -213,5 +213,7 @@ export function basisLabel(pair: CachePair): string | null {
     mine.push(`${count(pair.latencyMs)}ms`);
   }
   if (from.length === 0) return null;
-  return `${pair.questionNo}번째 질문이 ${from.join("과 ")}에서 이 답(${mine.join(" · ")})을 뺀 값`;
+  // 토큰 값이 있으면 「질문이 실제로 쓴 토큰…」, 시간만 있으면 「질문의 서버 처리 시간…」
+  const particle = from[0]?.startsWith("실제로") ? "이" : "의";
+  return `${pair.questionNo}번째 질문${particle} ${from.join("과 ")}에서 이 답(${mine.join(" · ")})을 뺀 값`;
 }

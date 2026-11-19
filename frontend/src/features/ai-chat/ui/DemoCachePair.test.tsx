@@ -103,7 +103,7 @@ describe("데모 모드 캐시 짝 (3.4.20)", () => {
       ),
     ).toBeInTheDocument();
     expect(two).not.toHaveTextContent("실측");
-    expect(within(two).queryByText(/이 대화 밖에서/)).not.toBeInTheDocument();
+    expect(within(two).queryByText(/짝을 찾지 못한 캐시/)).not.toBeInTheDocument();
   });
 
   it("정확 일치 캐시라도 글자가 다르면 같은 틀의 질문이라고 한다", async () => {
@@ -180,7 +180,7 @@ describe("데모 모드 캐시 짝 (3.4.20)", () => {
     await ask("매진 임박 회차", 1);
     const two = await ask("매진 임박 회차", 2);
     expect(within(two).getByText("3.21초 빠름")).toBeInTheDocument();
-    expect(within(two).getByText("1번째 질문이 서버 처리 시간(3,240ms)에서 이 답(31ms)을 뺀 값")).toBeInTheDocument();
+    expect(within(two).getByText("1번째 질문의 서버 처리 시간(3,240ms)에서 이 답(31ms)을 뺀 값")).toBeInTheDocument();
     expect(two).not.toHaveTextContent("절약");
     expect(document.body).not.toHaveTextContent("NaN");
     // 절약을 셀 수 없는 캐시 답은 합계에서 뺀다
@@ -189,6 +189,16 @@ describe("데모 모드 캐시 짝 (3.4.20)", () => {
       "아낀 토큰 0(짝 질문이 실제로 쓴 양 기준)",
       "짝 없는 캐시 답 1건은 제외",
     ]);
+  });
+
+  it("llm 이 null 로 와도 예외 없이 그 칸만 생략한다", async () => {
+    mockAnswers({ ...first, llm: null } as unknown as ChatResponse);
+    await openDock({ demo: true });
+    const one = await ask("매진 임박 회차", 1);
+    expect(one).toHaveTextContent("3,240ms");
+    expect(one).not.toHaveTextContent("토큰 0");
+    expect(one).not.toHaveTextContent("입력");
+    expect(document.body).not.toHaveTextContent("NaN");
   });
 
   it("의미 캐시 답은 같은 뜻으로 판단했다는 것과 유사도를 보여 준다", async () => {
@@ -215,7 +225,7 @@ describe("데모 모드 캐시 짝 (3.4.20)", () => {
     const one = await ask("조조 영화 뭐 있어?", 1);
     expect(
       within(one).getByText(
-        "이 대화 밖에서 만들어진 캐시(이전 대화 · 다른 사용자 · 미리 넣어 둔 질문) · Claude 호출 없음 · 토큰 0",
+        "이 대화에서 짝을 찾지 못한 캐시(이전 대화 · 다른 사용자 · 미리 넣어 둔 질문 · ai 재시작)",
       ),
     ).toBeInTheDocument();
     expect(within(one).queryByText(/절약/)).not.toBeInTheDocument();

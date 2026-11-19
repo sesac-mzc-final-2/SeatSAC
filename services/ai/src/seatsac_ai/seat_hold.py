@@ -803,12 +803,23 @@ def _theater_patch(row: dict[str, Any]) -> dict[str, Any]:
     return {"theaterIds": [row["theater_id"]]}
 
 
+def _squash(name: Any) -> str:
+    """이름 비교용: 띄어쓰기·괄호·문장부호를 지우고 소문자로('암살자(들)' → '암살자들')."""
+    return re.sub(r"[\W_]+", "", str(name)).lower()
+
+
 def _match(names: list[tuple[int, str]], said: str) -> list[int]:
-    """이름 그대로면 그것만, 아니면 일부가 겹치는 것 전부('건대' → '건대입구')."""
-    key = re.sub(r"\s+", "", said).lower()
-    squashed = [(i, re.sub(r"\s+", "", str(n)).lower()) for i, n in names]
+    """이름 그대로면 그것만, 아니면 일부가 겹치는 것 전부('건대' → '건대입구').
+
+    띄어쓰기·괄호·문장부호는 보지 않는다 — '암살자들'이 '암살자(들)'을, '별의항해!'가 '별의 항해'를
+    찾는다(11/19 사용자 테스트). 오타('암살지들')는 찾지 못한다(지금은 "못 찾았어요"로 답한다).
+    """
+    key = _squash(said)
+    if not key:
+        return []
+    squashed = [(i, _squash(n)) for i, n in names]
     exact = [i for i, n in squashed if n == key]
-    return exact or [i for i, n in squashed if key in n or n in key]
+    return exact or [i for i, n in squashed if n and (key in n or n in key)]
 
 
 def _text(value: Any) -> str:

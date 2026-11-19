@@ -673,6 +673,42 @@ def test_no_matching_screening():
     assert body["seatHold"]["reason"] == "SCREENING_NOT_FOUND" and api.seen == []
 
 
+@pytest.mark.parametrize(
+    ("said", "found"),
+    [
+        ("암살자들", [1]),  # 괄호 없이 말해도
+        ("암살자(들)", [1]),
+        ("암살자 들", [1]),
+        ("암살자", [1, 2]),  # 일부만 말하면 겹치는 것 전부(회차가 여럿이면 버튼으로 고른다)
+        ("별의항해!", [3]),
+        ("STAR wars: 에피소드1", [4]),
+        ("치이카와", [5]),  # 긴 제목의 일부
+        ("암살지들", []),  # 오타는 찾지 못한다
+        ("()", []),  # 글자가 없는 말은 아무것도 고르지 않는다
+    ],
+)
+def test_names_match_without_spaces_brackets_or_punctuation(said, found):
+    names = [
+        (1, "암살자(들)"),
+        (2, "암살자의 밤"),
+        (3, "별의 항해"),
+        (4, "Star Wars 에피소드 1"),
+        (5, "극장판 치이카와: 인어의 섬"),
+        (6, "!!!"),  # 글자가 없는 이름이 모든 말에 걸리지 않는다
+    ]
+    assert holds._match(names, said) == found
+
+
+def test_a_title_said_without_its_brackets_finds_the_screening(monkeypatch):
+    movies = [(1, "암살자(들)", "15", 140, "액션"), *sql_fixtures.MOVIES[1:]]
+    monkeypatch.setattr(sql_fixtures, "MOVIES", movies)
+    llm = ScriptedLlm(hold_tool(movie="암살자들"))
+    service, _, _ = make(llm, store=loaded_store())
+    body = ask(service, "오늘 20시 암살자들 건대입구 J7 J8 잡아줘")
+    assert body["path"] == "HOLD_CONFIRM" and body["seatHold"]["screeningId"] == 2
+    assert "암살자(들)" in body["answer"]
+
+
 def test_unknown_movie_is_named_in_the_answer():
     service, _, _ = make(ScriptedLlm(hold_tool(movie="부활남")))
     body = ask(service, "오늘 20시 부활남 건대입구 J7 J8 잡아줘")

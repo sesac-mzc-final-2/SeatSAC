@@ -13,7 +13,7 @@ from seatsac_ai.api import actuator, chat, presets
 from seatsac_ai.bookings import MyBookingsClient
 from seatsac_ai.cache.embedder import FastEmbedder
 from seatsac_ai.cache.store import ChatCache, Embedder, ValkeySearchIndex
-from seatsac_ai.cache.warm import preset_items, refresh_forever
+from seatsac_ai.cache.warm import internal_items, preset_items, refresh_forever
 from seatsac_ai.common.errors import install_exception_handlers
 from seatsac_ai.common.logging import configure_logging
 from seatsac_ai.common.metrics import init_label_series
@@ -45,8 +45,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     prewarm = None
     if cache is not None and app.state.settings.cache_warm_presets:
         # 버튼 질문 말투를 캐시에 미리 넣는다(③). 수명의 절반마다 다시
-        # 문맥 이어받기 내부 틀도 같이 — 말투가 프리셋과 겹치면 여기서 WarmError 로 멈춘다
-        items = preset_items(all_presets() + context_templates())
+        items = preset_items(all_presets())
+        # 문맥 이어받기 내부 틀도 같이 — 키가 따로라 직접 친 질문은 이 항목에 적중하지 않는다
+        items += internal_items(context_templates())
         every = max(60, app.state.settings.cache_ttl // 2)
         prewarm = asyncio.create_task(refresh_forever(cache, items, every))
     try:

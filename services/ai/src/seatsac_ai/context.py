@@ -27,7 +27,7 @@ from functools import lru_cache
 from typing import Any
 
 from seatsac_ai.cache.slots import RELATIVE_DAYS, extract, find_name
-from seatsac_ai.cache.warm import WarmItem, preset_items
+from seatsac_ai.cache.warm import WarmItem, internal_items
 from seatsac_ai.resources import Preset, context_templates
 from seatsac_ai.sql.conditions import Conditions
 
@@ -46,7 +46,7 @@ class Plan:
     values: dict[str, str]
     inherited: tuple[str, ...]
     sentence: str  # 완성 문장("11월 18일 부산본점 부활남 회차") — 세션의 직전 질문으로 남긴다
-    warm: WarmItem  # 조건이 다 찬 틀의 캐시 키·항목. 원래의 짧은 메시지 키는 쓰지 않는다
+    warm: WarmItem  # 틀의 캐시 키(ctx …)·항목. 원래의 짧은 메시지 키는 쓰지 않는다
 
 
 # --- 세션의 ctx 목록 --------------------------------------------------------------
@@ -172,9 +172,8 @@ _TEMPLATE_OF = {frozenset(t.params): t for t in context_templates()}
 
 @lru_cache
 def _warm_item(template_id: str) -> WarmItem:
-    """빈칸이 모두 있는 첫 말투의 예열 항목(context_templates.yaml 규칙)."""
-    template = next(t for t in context_templates() if t.preset_id == template_id)
-    return preset_items((template,))[0]
+    """그 틀의 예열 항목(키 `ctx {presetId}` — 직접 친 질문의 키와 겹치지 않는다)."""
+    return next(i for i in internal_items(context_templates()) if i.entry.preset_id == template_id)
 
 
 def _sentence(template: Preset, values: Mapping[str, str]) -> str:

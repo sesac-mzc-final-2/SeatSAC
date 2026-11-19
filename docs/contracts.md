@@ -15,7 +15,7 @@
 | `openapi/payment.openapi.yaml` | 외부 1개 (포트원 웹훅 — 인증 없음, 서명 검증) | 남궁일 |
 | `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장) | 한채연 |
 | ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`) | 김서현 · 한채연 |
-| ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
+| ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED·CLARIFY, 문맥 이어받기 `chat-context-carry.json`). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 4개 (생성·조회·확인·취소) | 남궁일 |

@@ -2,20 +2,19 @@
 
 import asyncio
 import re
-from datetime import date
 
 import pytest
 
-from seatsac_ai.cache import template as tpl
-from seatsac_ai.cache.warm import preset_items, warm
+from seatsac_ai.cache.slots import normalize
+from seatsac_ai.cache.warm import _item, internal_items, preset_items, warm
 from seatsac_ai.llm import prompt
 from seatsac_ai.llm.tools import tool_definitions
 from seatsac_ai.resources import SYSTEM_PARAMS, context_templates, presets
 from seatsac_ai.sql.executor import execute
 from seatsac_ai.sql.validator import validate, with_screening_id
 
-from .llm_fakes import ScriptedLlm
-from .sql_fixtures import NOW, SYSTEM, TODAY, loaded_store
+from .llm_fakes import ScriptedLlm, tool
+from .sql_fixtures import SYSTEM, loaded_store
 from .test_cache_flow import ask, make
 
 TEMPLATES = context_templates()
@@ -59,30 +58,35 @@ def test_rows_can_carry_screening_ids(template):
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda t: t.preset_id)
-def test_first_phrasing_has_every_blank_and_title_has_no_date(template):
-    blanks = set(re.findall(r"\{([a-z]+)\}", template.phrasings[0]))
-    assert blanks == set(template.params)  # 이어받은 답의 캐시 키·완성 문장으로 쓴다
-    assert "{date}" not in template.title  # "내일" 말투에는 채울 날짜 글자가 없다
+def test_one_phrasing_with_every_blank(template):
+    (phrasing,) = template.phrasings  # 세션에 남기는 완성 문장으로 쓴다
+    assert set(re.findall(r"\{([a-z]+)\}", phrasing)) == set(template.params)
 
 
-def test_phrasings_do_not_collide_with_the_presets():
-    """기동 때 예열(main.lifespan)과 같은 호출 — 말투의 캐시 키가 겹치면 WarmError 다."""
-    items = preset_items(presets() + context_templates())
-    only_presets = preset_items(presets())
-    mine = [i for i in items if i.entry.preset_id in IDS]
-    assert len(items) == len(only_presets) + len(mine)
-    assert len(mine) == sum(len(t.phrasings) for t in TEMPLATES)  # 틀끼리도 겹치지 않는다
-    # 프리셋 말투의 항목은 틀을 같이 넣어도 그대로다
-    assert [i for i in items if i.entry.preset_id not in IDS] == only_presets
-
-
-def test_warmed_entries_answer_like_the_template():
-    params = tpl.system_params(date.fromisoformat(TODAY), NOW)
-    for item in (i for i in preset_items(context_templates()) if "내일" in i.template):
+def test_warm_items_use_their_own_keys_and_stay_out_of_the_semantic_index():
+    """내부 틀 항목의 키는 질문 말투가 아니다 — 직접 친 질문의 캐시 조회에 걸리지 않는다."""
+    items = internal_items(TEMPLATES)
+    assert [i.key_text for i in items] == [f"ctx {t.preset_id}" for t in TEMPLATES]
+    assert all(not i.semantic for i in items)
+    # 질문의 키(normalize)는 빈칸을 모두 지운다 → 빈칸이 든 이 키와는 같아질 수 없다
+    for item in items:
+        assert " " in item.key_text and normalize(item.key_text) != item.key_text
+    preset_keys = {i.key_text for i in preset_items(presets())}
+    assert not preset_keys & {i.key_text for i in items}
+    for item in items:
         template = next(t for t in TEMPLATES if t.preset_id == item.entry.preset_id)
-        slots = {k: VALUES[k] for k in item.entry.kinds}
-        got = execute(loaded_store(), validate(item.entry.sql), params | slots)
-        assert got.rows == EXPECTED[template.preset_id][1]  # 내일 = 11/18
+        assert item.entry.sql == template.sql
+
+
+def test_warming_adds_nothing_to_the_semantic_index_for_the_templates():
+    """의미 색인에는 프리셋 말투만 들어간다 — 내부 틀이 프리셋 적중을 가리지 않는다."""
+    _, only_presets = make(ScriptedLlm())
+    asyncio.run(warm(only_presets, preset_items(presets())))
+    _, both = make(ScriptedLlm())
+    stored = asyncio.run(warm(both, preset_items(presets()) + internal_items(TEMPLATES)))
+    assert stored == len(preset_items(presets())) + len(TEMPLATES)
+    assert both._index.docs.keys() == only_presets._index.docs.keys()
+    assert not any("ctx_" in entry for _, _, entry in both._index.docs.values())
 
 
 def test_templates_are_not_presets():
@@ -98,16 +102,51 @@ def test_presets_api_does_not_list_the_templates(client, user_headers):
     assert len(items) == 13 and not IDS & {i["presetId"] for i in items}
 
 
-def test_typed_question_in_a_template_phrasing_is_answered_from_the_warmed_cache():
+class SameVector:
+    """모든 글을 같은 벡터로 — 의미 색인에 있기만 하면 유사도 1.0 으로 최근접이 된다."""
+
+    def embed(self, text):
+        return [1.0, 0.0, 0.0]
+
+
+TYPED_LIKE_A_TEMPLATE = [
+    "오늘 건대입구 철의 심장 시간표 알려줘",  # 리뷰에서 정확 일치로 내부 틀에 적중했던 문장
+    "철의 심장 건대입구 시간표",  # 의미 캐시 0.996 으로 적중했던 문장
+    "11월 18일 건대입구 철의 심장 회차",  # 내부 틀의 완성 문장 그대로
+    "내일 건대입구 철의 심장 회차",
+    "건대입구 철의 심장 회차",
+    "내일 철의 심장 회차",
+]
+
+
+@pytest.mark.parametrize("question", TYPED_LIKE_A_TEMPLATE)
+def test_typed_question_never_hits_a_template_even_when_warmed(question):
+    """직접 친 질문은 내부 틀로 답하지 않는다 — 예열된 상태에서도 Claude로 간다(main 과 같다)."""
+    llm = ScriptedLlm(tool("out_of_scope", reason="x"))  # Claude까지 갔는지만 본다
+    service, cache = make(llm, SameVector())
+    asyncio.run(warm(cache, preset_items(presets()) + internal_items(TEMPLATES)))
+    body = ask(service, question)
+    assert body["path"] == "OUT_OF_SCOPE" and body["llm"]["calls"] == 1 and len(llm.requests) == 1
+
+
+def test_template_entry_found_under_a_question_key_is_treated_as_a_miss():
+    """방어: 질문 말투의 키에 내부 틀 항목이 있어도(첫 판의 예열) 직접 친 질문에 쓰지 않는다."""
+    llm = ScriptedLlm(tool("out_of_scope", reason="x"), tool("out_of_scope", reason="x"))
+    service, cache = make(llm, SameVector())
+    old = _item(TEMPLATES[0], "내일 {theater} {movie} 회차")
+    asyncio.run(cache.put(old.key_text, old.entry, [1.0, 0.0, 0.0]))  # 정확 일치 + 의미 색인 둘 다
+    exact = ask(service, "내일 건대입구 철의 심장 회차")
+    assert exact["path"] == "OUT_OF_SCOPE" and exact["presetId"] is None
+    similar = ask(service, "내일 건대입구 철의 심장 회차 알려줄 수 있어")  # 의미 캐시로만 닿는 문장
+    assert similar["path"] == "OUT_OF_SCOPE" and len(llm.requests) == 2
+
+
+def test_preset_button_questions_are_answered_as_before_when_templates_are_warmed():
     service, cache = make(ScriptedLlm())  # Claude 답이 없다 — 부르면 실패한다
-    asyncio.run(warm(cache, preset_items(presets() + context_templates())))
-    body = ask(service, "내일 건대입구 철의 심장 회차")
-    assert body["path"] == "CACHE_EXACT" and body["llm"]["calls"] == 0
-    assert body["presetId"] == "ctx_movie_date_theater"
-    assert body["rows"] == [["2026-11-18 14:00"]] and body["screeningIds"] == [7]
-    assert body["answer"].startswith("건대입구 철의 심장 회차: 1건입니다.")
-    # 기존 버튼 질문은 예전과 같은 프리셋으로 답한다
+    asyncio.run(warm(cache, preset_items(presets()) + internal_items(TEMPLATES)))
     schedule = ask(service, "내일 건대입구 편성표 보여줘")
-    assert schedule["presetId"] == "theater_schedule" and schedule["rowCount"] == 2
+    assert schedule["path"] == "CACHE_EXACT" and schedule["presetId"] == "theater_schedule"
     movie = ask(service, "철의 심장 어디서 몇 시에 해?")
     assert movie["presetId"] == "movie_theaters" and movie["rowCount"] == 4
+    after = ask(service, "오늘 밤 9시 넘어서 하는 영화 뭐 있어")
+    assert after["path"] == "CACHE_EXACT" and after["presetId"] == "today_after_time"

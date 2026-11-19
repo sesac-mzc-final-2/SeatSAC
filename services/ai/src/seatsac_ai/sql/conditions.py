@@ -109,6 +109,58 @@ def analyze(query: ValidatedSql, params: Mapping[str, Any] | None = None) -> Con
     )
 
 
+def analyze_only_fixed(
+    query: ValidatedSql, params: Mapping[str, Any] | None = None
+) -> Conditions | None:
+    """문맥 이어받기용: 「이 답은 이 날짜·극장·영화만 조회했다」고 말할 수 있을 때만 조건을 준다.
+
+    analyze 는 SQL 안의 모든 SELECT 의 조건을 합친다. 의미 검사(질문의 값이 SQL 어딘가에 있나)·
+    잔여석 갱신 범위에는 맞지만, 「이 답의 조건」으로 쓰면 뜻이 뒤집힌다 —
+    `movie_id NOT IN (SELECT … WHERE t.name = '건대입구')` 는 건대입구를 **뺀** 답이다.
+    그래서 아래일 때는 None(이 답에서는 이어받지 않는다):
+      - SELECT 가 둘 이상이다(서브쿼리·CTE·UNION 등) 또는 HAVING 이 있다
+      - 맨 바깥 조건에 날짜·극장·영화 「하나로 읽은 값」·「지금 이후」·JOIN 연결 말고 다른 것이 있다
+        (지역·상영관 종류·등급·시각 범위·OR·id 로 거른 영화 …) — 그 조건은 이어받지 못하므로
+        일부만 이어받으면 앞 답보다 넓은 답이 된다
+    한계: LIMIT(개수)·ORDER BY 는 보지 않는다 — "자리 많은 회차 5개"의 5개는 조건으로 치지 않는다.
+    """
+    tree = sqlglot.parse_one(query.sql, read="sqlite")
+    params = params or {}
+    if not isinstance(tree, exp.Select) or len(list(tree.find_all(exp.Select))) != 1:
+        return None
+    if tree.args.get("having") is not None:
+        return None
+    for predicate in _top_level_predicates(tree):
+        if not (_is_join_link(predicate) or _is_from_now(predicate, params)):
+            kinds = ("date", "theater", "theater_id", "movie")
+            found: dict[str, set[Any]] = {kind: set() for kind in kinds}
+            _collect(predicate, params, found)
+            if not any(found.values()):
+                return None
+    return analyze(query, params)
+
+
+def _is_join_link(predicate: exp.Expression) -> bool:
+    return isinstance(predicate, exp.EQ) and all(
+        isinstance(side, exp.Column) for side in (predicate.left, predicate.right)
+    )
+
+
+def _is_from_now(predicate: exp.Expression, params: Mapping[str, Any]) -> bool:
+    """모든 회차 SQL에 붙는 `starts_at > 지금`(:now 또는 지금과 같은 글자). 사용자 조건이 아니다."""
+    if isinstance(predicate, exp.GT | exp.GTE):
+        column, other = predicate.left, predicate.right
+    elif isinstance(predicate, exp.LT | exp.LTE):
+        column, other = predicate.right, predicate.left
+    else:
+        return False
+    if not isinstance(column, exp.Column) or column.name.lower() != "starts_at":
+        return False
+    if isinstance(other, exp.Placeholder):
+        return other.name == "now"
+    return isinstance(other, exp.Literal) and other.is_string and other.this == params.get("now")
+
+
 def _top_level_predicates(select: exp.Select) -> Iterator[exp.Expression]:
     where = select.args.get("where")
     if where is not None:

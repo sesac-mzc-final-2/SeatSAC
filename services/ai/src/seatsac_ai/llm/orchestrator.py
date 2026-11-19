@@ -62,6 +62,7 @@ from seatsac_ai.cache.slots import (
     normalize,
 )
 from seatsac_ai.cache.store import CacheEntry, ChatCache
+from seatsac_ai.cache.warm import INTERNAL_PRESET_PREFIX
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
 from seatsac_ai.common.metrics import (
     AI_CACHE_REQUESTS,
@@ -79,7 +80,7 @@ from seatsac_ai.resources import Preset, presets
 from seatsac_ai.snapshot.fresh import Fresh, SeatRefresher
 from seatsac_ai.snapshot.mapper import KST
 from seatsac_ai.snapshot.store import SnapshotNotReady, SnapshotStore
-from seatsac_ai.sql.conditions import Conditions, analyze
+from seatsac_ai.sql.conditions import Conditions, analyze, analyze_only_fixed
 from seatsac_ai.sql.executor import (
     SQL_ERROR,
     TIMEOUT,
@@ -266,10 +267,15 @@ class ChatService:
         ext: Extracted | None = None
         vector: list[float] | None = None
         made: _Made | None = None
+        # carried = 이 답은 앞 답의 조건을 이어받아 만든 답이다(응답 context.inherited 가 있다).
+        # 한 사용자의 앞 조건이 섞인 답이라 **공용 캐시에 저장하지 않는다**(모두가 같이 쓴다).
+        # 저장·학습 단계는 이 값을 보고 건너뛴다(아래 ⑧).
+        carried = False
         try:
             if carry is not None:
                 body = await self._carried(cache, carry, now, system_params, deadline)
-                if body is None:
+                carried = body is not None
+                if not carried:
                     carry = None  # 틀 실행 실패 — 이어받지 않고 평소 경로로 답한다
             # ② 개인 질문 — Claude·캐시 없이
             if body is not None:
@@ -287,8 +293,9 @@ class ChatService:
                 body, made, calls = await self._ask_claude(
                     ask, now, system_params, deadline, usage, previous if follow_up else None
                 )
-                # ⑧ 저장 (후속 질문은 직전 문맥에 기대므로 저장하지 않는다)
-                if made is not None and cache is not None and ext is not None and ext.cacheable:
+                # ⑧ 저장 (후속 질문은 직전 문맥에 기대므로 저장하지 않는다. 이어받은 답도 — carried)
+                storable = not carried and made is not None and ext is not None and ext.cacheable
+                if storable and cache is not None:
                     if await self._save(cache, ext, made, system_params, deadline, vector):
                         # 이번 답을 캐시에 넣었다 — 같은 항목에서 나올 다음 답과 entryId 가 같다
                         body["cache"] = _cache_info(ext.key_text, stored=True)
@@ -312,15 +319,15 @@ class ChatService:
             # (저장하지 않으니 곁가지 질문이 앞 답들의 조건 ctx 를 지우지도 않는다)
             if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS"):
                 # 이번 답의 조건을 ctx 뒤에 붙인다. 되묻기(CLARIFY)는 조건이 없어 기존 ctx 만 넘긴다
-                values = carry.values if carry else self._queried(body, made, system_params)
+                values = carry.values if carried else self._queried(body, made, system_params)
                 if values is not None:
                     entry = ctx.new_entry(known, values)
                     known = ctx.appended(known, entry)
-                    inherited = carry.inherited if carry else ()
+                    inherited = carry.inherited if carried else ()
                     body["context"] = ctx.response(entry, inherited, now.date())
                 session = {
                     # 이어받은 답은 완성 문장을 남긴다(후속 질문이 조건을 알게). 원문은 그대로 둔다
-                    "question": carry.sentence if carry else question,
+                    "question": carry.sentence if carried else question,
                     "sql": body["sql"],
                     "path": body["path"],
                     "ctx": known,
@@ -424,16 +431,16 @@ class ChatService:
     ) -> dict[str, Any] | None:
         """앞 답의 조건 + 고른 영화로 내부 틀을 실행한다. Claude 0번. 실패하면 None.
 
-        캐시는 조건이 다 찬 틀의 키로만 본다 — 예열된 항목이 있으면 CACHE_EXACT, 없으면(수명이
+        캐시는 내부 틀의 키(ctx …)로만 본다 — 예열된 항목이 있으면 CACHE_EXACT, 없으면(수명이
         지났거나 캐시가 비었으면) 틀을 직접 실행한다(PRESET). 원래의 짧은 메시지
         ("부활남 어디서 몇 시에 해?")의 키로는 조회도 저장도 하지 않는다 — 그 키는 조건 없는 답이다.
+        거꾸로 직접 친 질문은 내부 틀의 키를 보지 않는다(_from_cache).
         """
         template = plan.template
         params = system_params | plan.values
         sql, path = template.sql, "PRESET"
         cached = await cache.get_exact(plan.warm.key_text) if cache is not None else None
         if cached is not None and cached.preset_id == template.preset_id:
-            # 같은 키에 Claude가 답한 항목이 있으면 쓰지 않는다 — 표 열이 틀과 다를 수 있다
             sql, path = cached.sql, "CACHE_EXACT"
         try:
             ran = await self._execute(sql, params, deadline)
@@ -449,7 +456,11 @@ class ChatService:
         )
         # 계약: PRESET 은 sql null, 캐시 적중은 실행한 SQL
         shown = shown_sql if path == "CACHE_EXACT" else None
-        return self._result_body(path, answer, ran, shown, template.preset_id)
+        body = self._result_body(path, answer, ran, shown, template.preset_id)
+        if path == "CACHE_EXACT":
+            # 계약 cache: 캐시에서 나온 답은 그 항목을 가리킨다(예열 항목이라 같은 대화에 짝은 없다)
+            body["cache"] = _cache_info(plan.warm.key_text, stored=False)
+        return body
 
     def _queried(self, body: dict[str, Any], made: _Made | None, system_params) -> dict | None:
         """이번 답이 실제로 조회한 날짜·극장·영화(실행한 SQL의 조건). 확정된 칸이 없으면 None."""
@@ -459,14 +470,19 @@ class ChatService:
             if made is not None and made.preset is not None:
                 # 프리셋 답은 응답 sql 이 null 이다 — 프리셋 SQL과 빈칸 값으로 읽는다
                 validated = validate(made.preset.sql, self._s.max_rows)
-                conditions = analyze(validated, system_params | made.params)
+                conditions = analyze_only_fixed(validated, system_params | made.params)
             elif body["sql"]:
-                conditions = analyze(validate(body["sql"], self._s.max_rows))
+                conditions = analyze_only_fixed(
+                    validate(body["sql"], self._s.max_rows), system_params
+                )
             else:
                 return None
+            if conditions is None:
+                # 서브쿼리·UNION·CTE 이거나 이어받지 못하는 조건(지역·상영관 종류·시각 …)이 있다
+                return None
             values = ctx.from_conditions(conditions, *self._names())
-        except (SqlRejected, SqlglotError, SnapshotNotReady) as exc:
-            # 부가 정보라 답을 막지 않는다. 이 답에서는 이어받을 조건이 없을 뿐이다
+        except Exception as exc:  # noqa: BLE001 — 부가 정보라 무슨 오류든 답을 막지 않는다
+            # 이 답에서는 이어받을 조건이 없을 뿐이다. 질문·SQL 값이 섞이지 않게 예외 종류만 적는다
             log.warning("답의 조건을 읽지 못했다(%s)", type(exc).__name__)
             return None
         return values if any(values.values()) else None
@@ -528,6 +544,8 @@ class ChatService:
             # 키는 같은데 슬롯 종류나 뜻 묶음(이후/이전·많은/적은 …)이 다르면 쓰지 않는다
             # (hit로 세지 않음)
             entry = None
+        if _is_internal(entry):
+            entry = None  # 내부 틀은 이어받기 경로만 쓴다 — 직접 친 질문은 놓친 것으로(Claude로)
         AI_CACHE_REQUESTS.labels("exact", "hit" if entry else "miss").inc()
         path = "CACHE_EXACT"
         vector = None
@@ -536,7 +554,11 @@ class ChatService:
             vector = await self._embed(cache, ext.template)
             if vector is not None:
                 found = await cache.nearest(vector, ext.kinds)
-                if found is not None and _semantic_match(found[0], found[1], ext, cache.threshold):
+                if (
+                    found is not None
+                    and not _is_internal(found[0])
+                    and _semantic_match(found[0], found[1], ext, cache.threshold)
+                ):
                     entry, similarity = found
                 AI_CACHE_REQUESTS.labels("semantic", "hit" if entry else "miss").inc()
                 path = "CACHE_SEMANTIC"
@@ -1290,6 +1312,11 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
         "rejection": None,
         "choices": None,
     }
+
+
+def _is_internal(entry: CacheEntry | None) -> bool:
+    """문맥 이어받기 내부 틀의 캐시 항목인가(resources/context_templates.yaml)."""
+    return entry is not None and (entry.preset_id or "").startswith(INTERNAL_PRESET_PREFIX)
 
 
 def _cache_info(key_text: str, *, stored: bool, similarity: float | None = None) -> dict[str, Any]:

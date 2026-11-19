@@ -26,6 +26,11 @@ from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.cache.template import MAX_OFFSET
 from seatsac_ai.resources import Preset
 
+# 문맥 이어받기 내부 틀(resources/context_templates.yaml)의 캐시 키·presetId 머리말.
+# 키에 빈칸이 있다 — 질문의 키(slots.normalize)는 빈칸을 모두 지우므로 질문의 키와 겹칠 수 없다
+INTERNAL_KEY_PREFIX = "ctx "
+INTERNAL_PRESET_PREFIX = "ctx_"
+
 log = logging.getLogger(__name__)
 
 _SLOT = re.compile(r"\{([a-z]+)\}")
@@ -40,6 +45,7 @@ class WarmItem:
     key_text: str
     template: str
     entry: CacheEntry
+    semantic: bool = True  # False 면 정확 일치 키로만 넣는다(의미 색인에 넣지 않는다)
 
 
 def preset_items(presets: tuple[Preset, ...]) -> list[WarmItem]:
@@ -56,6 +62,21 @@ def preset_items(presets: tuple[Preset, ...]) -> list[WarmItem]:
                 )
             items[item.key_text] = item  # 다듬은 뒤 글자가 같으면 하나만
     return list(items.values())
+
+
+def internal_items(templates: tuple[Preset, ...]) -> list[WarmItem]:
+    """내부 틀마다 항목 하나. 이어받기 경로(orchestrator._carried)만 이 키를 조회한다.
+
+    직접 친 질문이 내부 틀로 답해지지 않게 두 가지를 지킨다(#3.4.22 리뷰):
+      - 키가 질문 말투가 아니라 `ctx {presetId}` 다 → 정확 일치 조회에 걸리지 않는다
+      - 의미 색인에 넣지 않는다 → 의미 캐시에 걸리지 않고, 프리셋 항목의 최근접 1등을 가리지 않는다
+    """
+    items = []
+    for template in templates:
+        base = _item(template, template.phrasings[0])
+        key = INTERNAL_KEY_PREFIX + template.preset_id
+        items.append(WarmItem(key, base.template, base.entry, semantic=False))
+    return items
 
 
 def _item(preset: Preset, phrasing: str) -> WarmItem:
@@ -106,7 +127,7 @@ async def warm(cache: ChatCache, items: list[WarmItem]) -> int:
     stored = 0
     for item in items:
         vector = None
-        if semantic:
+        if semantic and item.semantic:
             vector = await asyncio.to_thread(cache.embedder.embed, item.template)
         if not await cache.put(item.key_text, item.entry, vector):
             break

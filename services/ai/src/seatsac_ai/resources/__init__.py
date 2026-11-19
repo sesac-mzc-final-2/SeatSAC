@@ -72,7 +72,8 @@ def context_templates() -> tuple[Preset, ...]:
     """문맥 이어받기 내부 틀(context_templates.yaml). presets() 에 섞지 않는다.
 
     presets() 는 화면 버튼(GET /ai/presets)·Claude 프롬프트·도구 enum 으로 나간다. 내부 틀은
-    서버가 값으로 직접 실행하고(seatsac_ai/context.py) 캐시 예열에만 같이 넣는다(cache/warm.py).
+    서버가 값으로 직접 실행하고(seatsac_ai/context.py), 캐시에는 따로 된 키로만 예열한다
+    (cache/warm.py internal_items — 직접 친 질문은 이 틀에 적중하지 않는다).
     """
     raw = _load("context_templates.yaml")["templates"]
     return tuple(

@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from datetime import timedelta
@@ -15,13 +16,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from seatsac_ai import context as ctx
+from seatsac_ai.cache.slots import find_name
 from seatsac_ai.cache.store import session_key
-from seatsac_ai.cache.warm import preset_items, warm
+from seatsac_ai.cache.warm import internal_items, preset_items, warm
 from seatsac_ai.config import Settings
+from seatsac_ai.llm import orchestrator
 from seatsac_ai.llm.orchestrator import ChatService
 from seatsac_ai.main import create_app
 from seatsac_ai.resources import context_templates, presets
-from seatsac_ai.sql.conditions import analyze
+from seatsac_ai.sql.conditions import analyze, analyze_only_fixed
 from seatsac_ai.sql.validator import validate
 
 from .conftest import USER as USER_HEADERS
@@ -149,10 +152,12 @@ def test_warmed_cache_or_empty_cache_never_calls_claude():
     llm = ScriptedLlm(tomorrow_kondae())
     valkey = fakeredis.FakeAsyncRedis(decode_responses=True)
     service, cache = make(llm, valkey=valkey)
-    asyncio.run(warm(cache, preset_items(presets() + context_templates())))
+    asyncio.run(warm(cache, preset_items(presets()) + internal_items(context_templates())))
     first = ask(service, "건대입구 내일 영화 뭐해?")
     hit = pick(service, first)
     assert hit["path"] == "CACHE_EXACT" and hit["llm"]["calls"] == 0
+    # 계약 cache: 캐시에서 나온 답은 그 항목을 가리킨다(예열 항목이라 저장한 답은 아니다)
+    assert hit["cache"]["stored"] is False and hit["cache"]["similarity"] is None
     assert hit["presetId"] == "ctx_movie_date_theater" and "'2026-11-18'" in hit["sql"]
 
     async def drop_cache():
@@ -161,10 +166,44 @@ def test_warmed_cache_or_empty_cache_never_calls_claude():
 
     asyncio.run(drop_cache())  # 캐시 수명이 지났거나 ai Valkey가 재부팅됐다
     miss = pick(service, first)
-    assert miss["path"] == "PRESET" and miss["llm"]["calls"] == 0
+    assert miss["path"] == "PRESET" and miss["llm"]["calls"] == 0 and miss["cache"] is None
     assert miss["rows"] == hit["rows"] == [["2026-11-18 14:00"]]
     assert miss["context"]["inherited"] == hit["context"]["inherited"] == ["date", "theater"]
     assert len(llm.requests) == 1
+
+
+@pytest.mark.parametrize("warmed", [True, False], ids=["예열 항목만 있는 캐시", "빈 캐시"])
+def test_continued_answer_is_never_stored_in_the_shared_cache(warmed, monkeypatch):
+    """이어받은 답은 한 사용자의 앞 조건이 섞인 답이다 — 모두가 같이 쓰는 캐시에 남기지 않는다."""
+    valkey = fakeredis.FakeAsyncRedis(decode_responses=True)
+    service, cache = make(ScriptedLlm(tomorrow_kondae()), valkey=valkey)
+    if warmed:
+        asyncio.run(warm(cache, preset_items(presets()) + internal_items(context_templates())))
+    first = ask(service, "건대입구 내일 영화 뭐해?")  # 이 답(직접 친 질문)은 평소처럼 저장된다
+
+    def snapshot():
+        keys = sorted(asyncio.run(valkey.keys("ai:exact:*")) + asyncio.run(valkey.keys("ai:sem*")))
+        values = [asyncio.run(valkey.get(k)) for k in keys if "exact" in k]
+        return keys, values, dict(cache._index.docs)
+
+    before = snapshot()
+    writes: list[str] = []
+
+    async def no_put(*args, **kwargs):
+        writes.append("put")
+        return True
+
+    async def no_add(*args, **kwargs):
+        writes.append("index.add")
+
+    monkeypatch.setattr(cache, "put", no_put)
+    monkeypatch.setattr(cache._index, "add", no_add)
+    picked = pick(service, first)
+    again = pick(service, first, "고양이 탐정 어디서 몇 시에 해?")
+    assert picked["context"]["inherited"] == again["context"]["inherited"] == ["date", "theater"]
+    assert picked["path"] == ("CACHE_EXACT" if warmed else "PRESET") and picked["llm"]["calls"] == 0
+    assert writes == []  # cache.put·의미 색인 add 가 한 번도 불리지 않았다
+    assert snapshot() == before  # 캐시의 키·값·의미 색인이 그대로다
 
 
 def test_continued_answer_neither_reads_nor_writes_the_short_message_key():
@@ -355,6 +394,120 @@ def test_message_with_a_condition_the_templates_cannot_hold_is_not_continued():
     assert picked["llm"]["calls"] == 1 and picked["context"]["inherited"] == []
 
 
+# --- 이 답의 조건이라고 말할 수 없는 SQL ---------------------------------------------
+
+_JOINED = (
+    "FROM screening s JOIN movie m ON m.movie_id = s.movie_id "
+    "JOIN theater t ON t.theater_id = s.theater_id "
+)
+_KONDAE_TOMORROW = (
+    f"SELECT s.movie_id {_JOINED}WHERE t.name = '건대입구' AND s.business_date = '2026-11-18'"
+)
+# 건대입구·11/18 이 SQL 안에 있지만 이 답이 「건대입구 11/18」을 조회한 것은 아니다
+NOT_THE_ANSWERS_CONDITION = {
+    "NOT IN": (
+        f"SELECT m.title AS movie_title FROM movie m WHERE m.movie_id NOT IN ({_KONDAE_TOMORROW})"
+    ),
+    "NOT EXISTS": (
+        "SELECT m.title AS movie_title FROM movie m WHERE NOT EXISTS (SELECT 1 FROM screening s "
+        "JOIN theater t ON t.theater_id = s.theater_id WHERE s.movie_id = m.movie_id "
+        "AND t.name = '건대입구' AND s.business_date = '2026-11-18')"
+    ),
+    "IN (서브쿼리)": (
+        f"SELECT m.title AS movie_title, s.starts_at {_JOINED}"
+        f"WHERE t.name = '강남' AND s.movie_id IN ({_KONDAE_TOMORROW})"
+    ),
+    "UNION ALL": (
+        f"SELECT m.title AS movie_title, s.starts_at {_JOINED}"
+        "WHERE t.name = '건대입구' AND s.business_date = '2026-11-18' UNION ALL "
+        f"SELECT m.title AS movie_title, s.starts_at {_JOINED}WHERE m.title = '철의 심장'"
+    ),
+    "CTE": (
+        f"WITH k AS ({_KONDAE_TOMORROW}) "
+        "SELECT m.title AS movie_title FROM movie m JOIN k ON k.movie_id = m.movie_id"
+    ),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("shape", NOT_THE_ANSWERS_CONDITION)
+def test_conditions_inside_subquery_union_or_cte_are_not_this_answers_context(shape):
+    """서브쿼리·UNION·CTE 안의 조건은 뜻이 뒤집힐 수 있다(NOT IN = 그 극장을 뺀 답)."""
+    sql = NOT_THE_ANSWERS_CONDITION[shape]
+    assert analyze_only_fixed(validate(sql)) is None
+    # 의미 검사·잔여석 범위가 쓰는 analyze 는 그대로다 — SQL 어딘가의 건대입구를 읽는다
+    assert analyze(validate(sql)).has_theater("건대입구") is True
+    service, _ = make(ScriptedLlm(tool("run_sql", sql=sql, explanation="영화")))
+    body = ask(service, "건대입구 영화 관련 질문")
+    assert body["path"] == "NL2SQL" and body["context"] is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "t.region = '서울'",
+        "s.screen_type = 'RECLINER'",
+        "m.view_grade = '15'",
+        "s.starts_at >= '2026-11-18 20:00'",
+        "s.start_hour < 10",
+        "s.movie_id = 4",
+        "(m.title = '철의 심장' OR m.title = '한강의 밤')",
+        "s.remaining_seats > 10",
+    ],
+)
+def test_answer_with_a_condition_that_cannot_be_inherited_leaves_no_context(extra):
+    """지역·상영관 종류·등급·시각 등은 이어받지 못한다 — 일부만 이어받으면 앞 답보다 넓어진다."""
+    sql = (
+        f"SELECT m.title AS movie_title, s.starts_at {_JOINED}"
+        f"WHERE s.business_date = '2026-11-18' AND t.name = '건대입구' AND {extra} "
+        "AND s.starts_at > '2026-11-17 19:40'"
+    )
+    assert analyze_only_fixed(validate(sql), {"now": "2026-11-17 19:40"}) is None
+    plain = sql.replace(f"AND {extra} ", "")
+    assert analyze_only_fixed(validate(plain), {"now": "2026-11-17 19:40"}) is not None
+
+
+def test_time_of_day_preset_leaves_no_context():
+    """「오늘 20시 이후」 답은 시각을 이어받지 못한다 — 그 답에는 조건을 남기지 않는다."""
+    after_20 = tool("run_preset", presetId="today_after_time", params={"time": "20:00"})
+    service, _ = make(ScriptedLlm(after_20))
+    assert ask(service, "오늘 20시 이후 영화 알려줘")["context"] is None
+
+
+def test_failure_while_reading_conditions_never_breaks_the_answer(monkeypatch, caplog):
+    def boom(*_):
+        raise RuntimeError("건대입구 2026-11-18 SELECT")  # 메시지에 질문·SQL 값이 들어 있다고 치자
+
+    monkeypatch.setattr(orchestrator, "analyze_only_fixed", boom)
+    service, _ = make(ScriptedLlm(tomorrow_kondae()))
+    with caplog.at_level(logging.WARNING, logger="seatsac_ai.llm.orchestrator"):
+        body = ask(service, "건대입구 내일 영화 뭐해?")
+    assert body["path"] == "NL2SQL" and body["rowCount"] == 2 and body["context"] is None
+    assert "답의 조건을 읽지 못했다(RuntimeError)" in caplog.text
+    assert "건대입구" not in caplog.text and "SELECT" not in caplog.text
+
+
+def test_template_that_fails_to_run_falls_back_to_the_usual_path(monkeypatch):
+    llm = ScriptedLlm(tomorrow_kondae(), movie_everywhere())
+    service, _ = make(llm)
+    first = ask(service, "건대입구 내일 영화 뭐해?")
+    template_sql = next(
+        t.sql for t in context_templates() if t.preset_id == "ctx_movie_date_theater"
+    )
+    execute = service._execute
+
+    async def broken_template(sql, *args, **kwargs):
+        if sql == template_sql:
+            raise orchestrator._Retry("SQL 실행 오류")  # 스냅샷 모양이 바뀌었다고 치자
+        return await execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(service, "_execute", broken_template)
+    picked = pick(service, first)
+    # 이어받지 못했다 — 오류가 아니라 독립 질문으로(지금 동작) 답한다
+    assert picked["path"] == "PRESET" and picked["presetId"] == "movie_theaters"
+    assert picked["rowCount"] == 4 and picked["llm"]["calls"] == 1
+    assert picked["context"]["inherited"] == []
+
+
 # --- 값 다루기(context.py) --------------------------------------------------------
 
 
@@ -374,6 +527,15 @@ def test_value_said_in_the_new_message_wins_over_the_context():
     assert plan.values == {"movie": "철의 심장", "date": "2026-11-19", "theater": "건대입구"}
     assert plan.inherited == ("theater",)
     assert plan.sentence == "11월 19일 건대입구 철의 심장 회차"
+
+
+def test_two_titles_of_the_same_length_are_not_guessed():
+    """길이가 같은 제목이 둘 다 글에 있으면 고르지 않는다(실행할 때마다 달라지지 않게)."""
+    movies = ["한강의 밤", "철의 심장", "밤"]
+    assert find_name("철의 심장 한강의 밤 어디서 해?", movies) is None
+    assert find_name("한강의 밤 어디서 해?", movies) == ("한강의 밤", "한강의 밤")  # 긴 이름이 먼저
+    entry = {"id": "k7f2a1", "date": "2026-11-18", "theater": "건대입구", "movie": None}
+    assert ctx.plan(entry, "철의 심장 한강의 밤 어디서 해?", NOW, ["건대입구"], movies) is None
 
 
 def test_nothing_to_inherit_means_no_plan():

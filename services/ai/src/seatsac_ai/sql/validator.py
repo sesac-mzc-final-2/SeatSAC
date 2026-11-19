@@ -116,6 +116,106 @@ def exclude_started(query: ValidatedSql) -> ValidatedSql:
     )
 
 
+# 회차 ID를 얻으려고 서버가 덧붙이는 칸 이름.
+# 응답의 columns·rows 에는 나가지 않는다(계약 screeningIds)
+SCREENING_ID_COLUMN = "_screening_id"
+# sqlglot 이 집계로 알아보지 못하는 SQLite 집계 함수(이름으로 본다). 소문자로 비교
+_SQLITE_AGGREGATES = frozenset(
+    {"total", "group_concat", "string_agg", "json_group_array", "json_group_object"}
+)
+
+
+def with_screening_id(query: ValidatedSql) -> ValidatedSql | None:
+    """결과 행 하나가 회차 하나인 SQL이면 `<별칭>.screening_id AS _screening_id` 를 끝에 붙인다.
+
+    화면이 그 행의 좌석 선택 화면으로 넘어가려면 회차 ID가 필요하다. Claude·프리셋의 SQL은
+    그대로 두고(프롬프트·캐시 템플릿이 바뀌지 않게) 실행할 때만 붙인다
+    — exclude_started 와 같은 방식. 붙인 칸은 항상 결과의 마지막 칸이다.
+    행과 회차가 1:1 이고 표의 시작 시각이 그 회차의 것이라고 볼 수 없으면 None(붙이지 않는다):
+      - 바깥 문장이 UNION 등이거나, DISTINCT·GROUP BY·HAVING·집계 함수가 있다
+      - 바깥 FROM·JOIN 에 screening 이 없거나(서브쿼리·CTE 뒤에 숨음) 두 번 나온다
+      - 결과에 그 screening 의 starts_at 칸이 그대로 나오지 않는다 — 칸이 없거나,
+        다른 것에 starts_at 이름을 붙였거나(s.ends_at AS starts_at · CTE 의 min(starts_at)),
+        `*` 가 서브쿼리·CTE 와 섞여 어느 표의 칸인지 알 수 없다
+      - 결과 칸 이름이 이미 _screening_id 다
+    한계(안전한 쪽으로 None): 창 함수의 FILTER, 스칼라 서브쿼리 안의 집계도 집계로 본다.
+    칸을 끝에 붙이므로 ORDER BY 2 같은 위치 참조와 LIMIT 은 그대로다.
+    """
+    if "screening" not in query.tables:
+        return None
+    try:
+        tree = sqlglot.parse_one(query.sql, read="sqlite")
+    except SqlglotError:
+        return None  # 덧붙이지 않고 그대로 실행한다
+    if not isinstance(tree, exp.Select):
+        return None
+    if any(tree.args.get(key) for key in ("distinct", "group", "having")):
+        return None
+    from_ = tree.args.get("from_")
+    sources = [from_.this] if from_ else []
+    sources += [join.this for join in tree.args.get("joins") or []]
+    screenings = [source for source in sources if _is_screening(source)]
+    if len(screenings) != 1:
+        return None
+    alias = screenings[0].alias_or_name
+    others = [source for source in sources if source is not screenings[0]]
+    if not _shows_its_start(tree.expressions, alias, others):
+        return None
+    column = exp.column("screening_id", table=alias)
+    tree.select(exp.alias_(column, SCREENING_ID_COLUMN), append=True, copy=False)
+    return ValidatedSql(
+        sql=tree.sql(dialect="sqlite"), tables=query.tables, limit_capped=query.limit_capped
+    )
+
+
+def _shows_its_start(
+    projections: list[exp.Expression], alias: str, others: list[exp.Expression]
+) -> bool:
+    """결과에 바깥 screening(alias)의 starts_at 이 그대로 나오고, 행 수를 줄이는 칸이 없다."""
+    # movie·theater 에는 starts_at 이 없다. 서브쿼리·CTE 는 무슨 칸이 있는지 모른다
+    plain_tables = all(
+        isinstance(o, exp.Table) and o.name.lower() not in _ctes_in_scope(o) for o in others
+    )
+    shown = False
+    for projection in projections:
+        if _aggregates(projection):
+            return False
+        value = projection.unalias()
+        star = isinstance(value, exp.Star) or (
+            isinstance(value, exp.Column) and isinstance(value.this, exp.Star)
+        )
+        if star:
+            if not plain_tables:
+                return False
+            # `*` 는 모든 표, `s.*` 는 그 표의 칸
+            table = value.table if isinstance(value, exp.Column) else alias
+            shown = shown or table.lower() == alias.lower()
+            continue
+        name = projection.alias_or_name.lower()
+        if name == SCREENING_ID_COLUMN:
+            return False
+        if name != "starts_at":
+            continue
+        own = (
+            isinstance(value, exp.Column)
+            and value.name.lower() == "starts_at"
+            and value.table.lower() in ("", alias.lower())
+        )
+        if not own:
+            return False
+        shown = True
+    return shown
+
+
+def _aggregates(projection: exp.Expression) -> bool:
+    # sum(...) OVER (...) 같은 창 함수는 행 수를 줄이지 않는다
+    for func in projection.find_all(exp.AggFunc, exp.Anonymous):
+        known = isinstance(func, exp.AggFunc) or func.name.lower() in _SQLITE_AGGREGATES
+        if known and not isinstance(func.parent, exp.Window):
+            return True
+    return False
+
+
 def _is_screening(node: exp.Expression) -> bool:
     # 같은 이름의 CTE 는 실제 표가 아니다(그 CTE 안의 SELECT 가 따로 조건을 받는다)
     return (

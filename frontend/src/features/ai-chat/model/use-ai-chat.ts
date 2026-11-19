@@ -25,6 +25,8 @@ export function useAiChat() {
   const sessionId = useRef<string | undefined>(undefined);
   const nextId = useRef(1);
   const controller = useRef<AbortController | null>(null);
+  // 데모 합계를 이 id 뒤의 항목부터 센다(「여기부터 다시 세기」). 대화 기록은 그대로다
+  const [countAfterId, setCountAfterId] = useState(0);
 
   const mutation = useMutation({
     mutationFn: ({ message, signal }: { message: string; signal: AbortSignal }) =>
@@ -90,7 +92,11 @@ export function useAiChat() {
     resetMutation();
     sessionId.current = undefined;
     setEntries([]);
+    setCountAfterId(0);
   }, [resetMutation]);
 
-  return { entries, ask, restart, isPending, cooldownSeconds };
+  /** 데모 합계 기준만 지금으로 옮긴다 — 대화와 sessionId 는 둔다 */
+  const recount = useCallback(() => setCountAfterId(nextId.current - 1), []);
+
+  return { entries, ask, restart, isPending, cooldownSeconds, countAfterId, recount };
 }

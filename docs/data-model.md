@@ -107,6 +107,7 @@
 
 - 넣지 않는 것: `posterUrl`(롯데 포스터 표시 금지), 배치도·좌석 ID, 예매·결제·사용자 데이터
 - 시각은 모두 KST 문자열(질문이 KST 기준이라 LLM이 변환하지 않게). 공개 API는 시작한 회차를 제외하지만 적재 후 시간이 흐르므로, SQLite에서 회차를 반환하는 모든 질의는 현재 KST와 `starts_at`을 비교해 `starts_at > 현재 KST`인 회차만 반환한다
+- ⚠️AI 좌석 화면 넘기기(3.4.18): 결과 행 하나가 회차 하나인 질의(집계·DISTINCT·UNION 없이 `screening`을 한 번 읽고, 그 회차의 `starts_at`이 결과에 그대로 나옴)는 실행할 때만 `screening_id` 열을 끝에 덧붙였다가 떼어 응답 `screeningIds`(`rows`와 같은 순서)로 보낸다. 표(`columns`·`rows`)·응답 `sql`·캐시 템플릿에는 나오지 않는다. 그 밖의 질의는 `screeningIds: null`
 - 컬럼 한국어 설명·enum 뜻·few-shot은 `services/ai/src/seatsac_ai/resources/schema.yaml`(AI-10). 이 파일이 NL2SQL 정확도의 대부분을 정한다
 - 답에는 "○시 ○분 기준"(`fetched_at`)을 붙인다
 

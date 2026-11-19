@@ -1767,7 +1767,7 @@ terraform apply plan.out
 | --- | --- |
 | `FRONTEND_BUCKET` | `frontend_github_variables` 출력 |
 | `CLOUDFRONT_DISTRIBUTION_ID` | 〃 |
-| `VITE_COGNITO_REDIRECT_URI` | 〃 (`https://<배포 도메인>/callback`). Cognito 앱 클라이언트 콜백 URL에도 같은 값 |
+| `VITE_COGNITO_REDIRECT_URI` | 〃 (`https://<배포 도메인>/callback`). **3.1.23부터 빌드에 넘기지 않는다**(화면이 지금 주소 + `/callback` — 7-7). 배포 요약의 화면 주소 표시에만 쓴다(없어도 배포는 된다) |
 | `VITE_COGNITO_AUTHORITY` · `VITE_COGNITO_CLIENT_ID` · `VITE_COGNITO_DOMAIN` | 〃 (3.1.16 Cognito apply 뒤 출력에 생긴다, 7-6) |
 
 Secret `AWS_FRONTEND_DEPLOY_ROLE_ARN`은 2-4에서 이미 등록했다.
@@ -1911,8 +1911,56 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 4
 | --- | --- | --- |
 | `/api/users/me` 503 `IDENTITY_UNAVAILABLE`, user 로그 `GetUser rejected the token` | Access Token에 `aws.cognito.signin.user.admin` 범위가 없음(화면 `scope`) | frontend `scope`에 추가(런타임 계약 3장) → 다시 로그인 |
 | 가입 후 "User is not confirmed" | Pre sign-up 연결 안 됨·Lambda 오류 | `aws cognito-idp describe-user-pool --user-pool-id $POOL --query 'UserPool.LambdaConfig'`, Lambda 로그 |
-| Hosted UI `redirect_mismatch` | 콜백 URL이 클라이언트 목록과 다름(끝 `/`·http/https) | `VITE_COGNITO_REDIRECT_URI` = `https://<배포 도메인>/callback` |
+| Hosted UI `redirect_mismatch` | 콜백 URL이 클라이언트 목록과 다름(끝 `/`·http/https) | 화면은 지금 주소 + `/callback`을 보낸다 — 그 주소(기본 도메인·사용자 도메인·로컬)가 `cognito_app_origins`에 있는지(7-7) |
 | 모든 API 401 | gateway issuer·client_id와 토큰이 다름(풀을 다시 만들었는데 ConfigMap 그대로) | 7-6-2 다시 apply → ArgoCD gateway **Restart** |
+
+### 7-7. 사용자 도메인 (3.1.23, 선택) — ⬜
+
+CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메인 하나(apex만 — `www.<도메인>`은 만들지 않는다)를 더한다. 두 주소 모두 같은 배포로 간다(화면·`/api`·SSE 동일). `var.custom_domain`이 비어 있으면 Terraform은 아무것도 만들지 않는다.
+
+| 할 일 | 어디서 | 비고 |
+| --- | --- | --- |
+| 도메인 등록 | **Route 53 콘솔(사람)** | 구매라 Terraform 밖(콘솔 리소스 생성 금지의 예외 — 스크럼 공유). 등록자 연락처는 개인정보라 코드·tfvars·PR에 쓰지 않는다. 등록하면 퍼블릭 호스팅 영역이 자동으로 생긴다 |
+| 인증서(us-east-1 ACM) · DNS 검증 · 별칭 A/AAAA · CloudFront `aliases`·인증서 · Cognito 콜백 | Terraform `envs/staging`(`custom_domain.tf`) | `custom_domain = "<도메인>"` 한 줄 |
+| 화면 로그인 콜백 | 코드(바꿀 것 없음) | `frontend-deploy`가 `VITE_COGNITO_REDIRECT_URI`를 넘기지 않아 화면이 지금 주소 + `/callback`을 쓴다 |
+
+**비용·취소**
+
+- 도메인 등록: **1년 선불, 환불 없음**(TLD마다 값이 다르다 — 콘솔에서 확인. 싼 TLD는 수 달러). 등록 직후 **자동 갱신을 끄면** 1년 뒤 만료되고 더 내지 않는다. 일부 TLD는 도메인 삭제가 되지만 그래도 환불은 없다
+- 호스팅 영역: 월 $0.50(만든 지 12시간 안에 지우면 청구되지 않음). ACM 공개 인증서·CloudFront 별칭 조회: 무료
+- 발표 뒤 정리: `custom_domain = ""` → plan 기대: **삭제** 인증서 1·검증 레코드 1·검증 1·별칭 2, **변경** CloudFront 1(`aliases → []`·기본 인증서)·Cognito 앱 클라이언트 1, 추가 없음 → apply(CloudFront가 `Deployed`가 된 뒤 인증서가 지워진다) → 호스팅 영역 삭제(콘솔) → 자동 갱신 꺼 둔 도메인은 만료되게 둔다
+
+**순서**
+
+0. **먼저 `frontend-deploy`를 한 번 돈다**(GitHub Actions 수동 실행) → 기본 도메인에서 로그인·로그아웃 확인. 이 PR 전에 만든 빌드는 콜백 주소(`VITE_COGNITO_REDIRECT_URI`)가 기본 도메인으로 고정돼 있어, 사용자 도메인으로 들어와도 로그인 뒤 기본 도메인으로 돌아간다
+1. Route 53 → 도메인 등록 → **자동 갱신 끔**. 등록 완료 메일(수 분~수십 분) → 호스팅 영역 생성 확인
+   ```bash
+   aws route53 list-hosted-zones-by-name --dns-name <도메인> --query 'HostedZones[?Name==`<도메인>.`].[Id,Name]'
+   # 같은 이름 영역이 둘 이상이면: 등록 도메인 네임서버와 맞는 영역 ID를 staging.tfvars custom_domain_zone_id에
+   aws route53domains get-domain-detail --region us-east-1 --domain-name <도메인> --query 'Nameservers[].Name'
+   ```
+2. `envs/staging/staging.tfvars`에 `custom_domain = "<도메인>"` PR → `infra-plan` 확인(기대: **추가** 인증서 1·검증 레코드 1·검증 1·별칭 2, **변경** CloudFront 1(aliases·인증서)·Cognito 앱 클라이언트 1(콜백), 삭제 없음)
+3. 머지 뒤 `cinema-admin`으로 apply. 인증서 검증을 기다린다(보통 수 분). CloudFront 변경 배포는 10분 안팎 — **그동안에도 기본 도메인은 그대로 동작한다**
+4. 확인
+   ```bash
+   curl -sI https://<도메인>/ | head -1                      # 200
+   curl -s  https://<도메인>/api/movies?page=0 -o /dev/null -w '%{http_code}\n'   # 200
+   curl -sI https://<기본 도메인>/ | head -1                  # 200 (그대로)
+   ```
+   화면: 사용자 도메인으로 로그인 → 같은 도메인의 `/callback`으로 돌아온다 · 좌석 화면 SSE · 로그아웃
+
+| 증상 | 원인·해결 |
+| --- | --- |
+| plan에서 `no matching Route 53 Hosted Zone` | 등록이 끝나지 않았거나 이름 철자 — 1번 확인. `custom_domain`이 서브도메인(`app.<도메인>`)이면 그 이름의 영역이 없어 같은 오류 — 등록 도메인 영역 ID를 `custom_domain_zone_id`에 |
+| plan에서 `custom_domain은 스킴·경로·끝 점이 없는 …` | `https://`·끝 `/`·끝 `.`·대문자가 섞였다 — 도메인 이름만 소문자로 |
+| plan에서 `multiple Route 53 Hosted Zone matched` | 같은 이름 영역이 둘 — 네임서버가 맞는 쪽 ID를 `custom_domain_zone_id`에(1번) |
+| apply가 인증서 검증에서 오래 멈춤 | 등록 직후 네임서버 전파 중 — 기다린다(최대 수십 분). 등록 영역이 아닌 다른 영역에 검증 레코드가 들어갔는지 확인 |
+| 사용자 도메인에서 403·인증서 오류 | CloudFront 배포가 아직 진행 중(`aws cloudfront get-distribution --id <ID> --query Distribution.Status` → `Deployed`) |
+| 로그인 뒤 기본 도메인으로 튕김 | 화면이 아직 예전 빌드(`VITE_COGNITO_REDIRECT_URI` 포함) — `frontend-deploy` 수동 실행 |
+| Cognito `redirect_mismatch` | 앱 클라이언트 콜백에 사용자 도메인이 없다 — apply가 끝났는지 확인 |
+
+- 그대로 두는 것: ai `PUBLIC_API_BASE_URL`(기본 도메인), 포트원 웹훅 URL(기본 도메인), k6·`sse_lag.py` 주소. 바꿀 필요 없다
+- 결제(토스페이 결제창)는 화면 주소로 돌아오므로 사용자 도메인에서도 동작해야 한다 — 포트원 콘솔에 허용 도메인 설정이 있으면 사용자 도메인을 더한다(첫 결제로 확인)
 
 ## 8. staging 6) DB 스키마·계정·K8s Secret·시드 (3.1.12)
 

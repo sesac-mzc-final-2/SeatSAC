@@ -85,6 +85,7 @@ def test_calls_public_api_with_the_users_own_token_and_no_claude():
     assert seen[0].url.path == "/api/users/me/bookings"
     assert seen[0].headers["authorization"] == TOKEN
     assert body["path"] == "MY_BOOKINGS" and body["llm"]["calls"] == 0 and llm.requests == []
+    assert body["screeningIds"] is None  # 이미 예매한 회차 — 좌석 화면으로 넘기지 않는다
     assert body["rows"] == [
         [9876, "CONFIRMED", "별의 항해", "건대입구", "6관", "2026-11-18 14:30", "J7, J8", 30000]
     ]

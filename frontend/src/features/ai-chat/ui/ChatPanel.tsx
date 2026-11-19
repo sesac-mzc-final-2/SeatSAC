@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { ChatPreset } from "@/entities/ai-chat";
 import { nowShowingMoviesQuery } from "@/entities/movie";
 import { theaterListQuery } from "@/entities/theater";
 import { serverNow, todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
+import { cacheNotes, demoTotals, questionNumbers } from "../lib/cache-pairs";
 import {
   PICK_PROMPTS,
   answerMovieTitles,
@@ -47,6 +48,10 @@ interface Props {
 /** 아래 추천 질문 줄에 보이는 버튼 수. 나머지는 「…」로 연다(대화창 폭에서 잘리지 않게) */
 const BAR_PRESETS = 3;
 
+const n = (value: number) => value.toLocaleString("ko-KR");
+/** 합계의 토큰이 무엇을 세는지 (title · 스크린리더) */
+const TOKEN_SCOPE = "프롬프트 캐시 읽기·쓰기 토큰은 포함하지 않습니다";
+
 type Picker = { kind: PickKind; presetId: string } | { kind: "more" };
 
 /** 우하단 대화창 본문 (AI-01·AI-04). 열려 있는 동안만 마운트된다 */
@@ -66,7 +71,14 @@ export function ChatPanel({
   const demo = useDemoMode();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const { entries, ask, restart, isPending, cooldownSeconds } = chat;
+  const { entries, ask, restart, isPending, cooldownSeconds, countAfterId, recount } = chat;
+  // 데모 모드일 때만 캐시 짝을 찾는다 (꺼져 있으면 아무것도 계산·표시하지 않는다)
+  const notes = useMemo(() => (demo.enabled ? cacheNotes(entries) : null), [demo.enabled, entries]);
+  const numbers = useMemo(() => (demo.enabled ? questionNumbers(entries) : null), [demo.enabled, entries]);
+  const totals = useMemo(
+    () => (notes ? demoTotals(entries, notes, countAfterId) : null),
+    [notes, entries, countAfterId],
+  );
   const [picker, setPicker] = useState<Picker | null>(null);
   // 고르는 목록은 그 버튼을 눌렀을 때만 부른다
   const theaters = useQuery({ ...theaterListQuery(), enabled: picker?.kind === "theater" });
@@ -280,6 +292,27 @@ export function ChatPanel({
         </div>
       </header>
 
+      {totals && !disabled && entries.length > 0 && (
+        <div className={styles.totals} role="group" aria-label="이 대화의 토큰 합계">
+          <ul className={styles.totalsList}>
+            <li>질문 {n(totals.questions)}</li>
+            <li>Claude 답 {n(totals.claudeAnswers)}</li>
+            <li>캐시 답 {n(totals.cacheAnswers)}</li>
+            <li title={TOKEN_SCOPE}>
+              쓴 토큰 {n(totals.usedTokens)}(입력+출력)<span className="sr-only"> — {TOKEN_SCOPE}</span>
+            </li>
+            <li className={styles.totalsSaved} title={TOKEN_SCOPE}>
+              아낀 토큰 {n(totals.savedTokens)}(짝 질문이 실제로 쓴 양 기준)
+            </li>
+            {totals.unpairedCacheAnswers > 0 && <li>짝 없는 캐시 답 {n(totals.unpairedCacheAnswers)}건은 제외</li>}
+          </ul>
+          {/* 답이 오는 중에 기준을 옮기면 그 답만 질문 없이 세어진다 */}
+          <button type="button" className={styles.totalsReset} onClick={recount} disabled={isPending}>
+            여기부터 다시 세기
+          </button>
+        </div>
+      )}
+
       <div className={styles.log} ref={logRef} role="log" aria-live="polite" aria-label="대화 내용">
         {notReady ? (
           <div className={styles.intro}>
@@ -322,10 +355,11 @@ export function ChatPanel({
               entry={entry}
               hold={holdOf(entry)}
               onNavigate={onClose}
-              demo={demo.enabled}
+              demo={notes ? { note: notes.get(entry.id), questionNo: numbers?.get(entry.id) } : null}
               onRetry={blocked ? undefined : (question, link) => send(question, link)}
               onChoose={blocked ? undefined : (message) => send(message)}
               onPickMovie={blocked ? undefined : pickMovie}
+              onSeatNavigate={onClose}
             />
           ))
         )}

@@ -276,7 +276,7 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
-| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices}` — 모든 필드가 항상 있고 해당 없으면 null. `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖·되묻기도 **200**(`REJECTED`는 `rejection {reason, message, object?}`, `CLARIFY`는 `choices [{label, message}]` 버튼 0~7개 — 누르면 `message`를 같은 `sessionId`로 보낸다). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices}` — 모든 필드가 항상 있고 해당 없으면 null. `screeningIds`는 `rows`와 같은 순서의 회차 ID(행 하나가 회차 하나일 때만, 집계 결과는 null) — 화면이 좌석 선택 화면 링크를 만든다(ai는 화면 경로를 만들지 않음). `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖·되묻기도 **200**(`REJECTED`는 `rejection {reason, message, object?}`, `CLARIFY`는 `choices [{label, message}]` 버튼 0~7개 — 누르면 `message`를 같은 `sessionId`로 보낸다). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용) |
 | ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` — 버튼을 누르면 화면이 빈칸(시각·개수는 입력창에서 고치기, 극장·영화·날짜·등급은 고르는 버튼)을 사용자가 정하게 한 뒤 질문 문장을 `POST /ai/chat`의 `message`로 보낸다. 빈칸이 없는 질문과 화면이 모르는 프리셋은 `example`을 그대로. 화면은 **챗봇 창을 열 때** 이 API를 불러(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5) 404면 「준비 중」 안내 뒤 챗봇 버튼 숨김, 503이면 비활성 안내 |
 
 #### 내부 (`http://{service}:8080/internal/**`)
@@ -437,7 +437,7 @@
 | `VITE_COGNITO_AUTHORITY` | `https://cognito-idp.ap-northeast-2.amazonaws.com/{userPoolId}` |
 | `VITE_COGNITO_CLIENT_ID` | 공개 클라이언트 ID (시크릿 없음) |
 | `VITE_COGNITO_DOMAIN` | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` |
-| `VITE_COGNITO_REDIRECT_URI` | `https://{배포ID}.cloudfront.net/callback` (로컬 `http://localhost:5173/callback`) |
+| `VITE_COGNITO_REDIRECT_URI` | **넘기지 않는다**(3.1.23) — 비우면 화면이 지금 주소(`window.location.origin`) + `/callback`. CloudFront 기본 도메인·사용자 도메인 어느 쪽으로 들어와도 같은 주소로 돌아온다. 허용 목록은 Cognito 앱 클라이언트 콜백(`envs/staging/cognito.tf`, 두 도메인 + 로컬) |
 
 `frontend-deploy` 워크플로가 Terraform 출력에서 값을 넣는다(GitHub Variables). OIDC `scope`는 `openid email profile aws.cognito.signin.user.admin`으로 설정한다. 프로필 행이 없을 때 user 서비스가 같은 Access Token으로 Cognito `GetUser`를 호출하고, 기존 행이 있으면 호출하지 않는다. `NotAuthorizedException`은 401 `UNAUTHORIZED`(`details[].reason` `TOKEN_REJECTED`)로, 그 밖의 Cognito 실패는 503 `IDENTITY_UNAVAILABLE`로 반환한다. 토큰은 `react-oidc-context`가 관리하고 `Authorization: Bearer`로 보낸다. 저장소는 **메모리**(`InMemoryWebStorage`, localStorage 금지). 새로고침하면 `signinRedirect`로 Cognito 세션을 이용해 다시 받는다(비밀번호 재입력 없음, ADR-63).
 
@@ -617,6 +617,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 #### 9-2. 실행 규칙
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey
+- 회차 ID 넘기기(계약 `screeningIds`): 검증을 통과한 SQL을 실행할 때 행 하나가 회차 하나이면 회차 ID 열을 덧붙였다 떼어 `screeningIds`로 보낸다(프리셋·NL2SQL·캐시 적중 모두 같은 실행 경로, data-model 6-1). Claude에게 주는 프롬프트·스키마 설명과 로그 `sqlTemplate`은 덧붙이기 전 SQL 그대로다. 덧붙인 SQL만 실패하면 남은 시간 안에서 원래 SQL로 한 번 다시 실행해 답은 그대로 내고(`screeningIds: null`) WARNING 한 줄(오류 종류만)을 남긴다. ai는 화면 주소를 만들지 않는다
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
 - 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회, **잔여석을 읽는 질문마다 날짜 수 × 극장 수**(「오늘 건대입구」 1회, 극장을 안 정하면 4회, 확인 불가가 섞이면 한 번 더))은 CloudFront → gateway → catalog로 들어간다. 질문 시점 호출은 질문 하나에 최대 8회(날짜 2 × 극장 4 — 9-1)이고, 사용자당 동시 1건(`ai:inflight`)으로 묶이며(staging 한도는 11/18부터 분당 600·하루 300 — 9-1), 같은 범위 동시 질문은 한 번을 같이 쓴다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
 - `ng-ai`는 EventBridge Scheduler 평일 켜기 대상에서 **뺀다**(평소 0대). 켜기·끄기는 `cluster-scale.sh up ng-ai`·`down ng-ai`(cinema-admin). `cluster-scale.sh up`·`up 2`와 `cluster-schedule`의 `up`은 `ng-ai`를 켜지 않고 `down`은 `ng-ai`까지 끈다(켜 둔 채 잊어도 백업 끄기·수동 `down`이 끈다)
@@ -734,6 +735,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 - 넣지 않는 것: `posterUrl`(롯데 포스터 표시 금지), 배치도·좌석 ID, 예매·결제·사용자 데이터
 - 시각은 모두 KST 문자열(질문이 KST 기준이라 LLM이 변환하지 않게). 공개 API는 시작한 회차를 제외하지만 적재 후 시간이 흐르므로, SQLite에서 회차를 반환하는 모든 질의는 현재 KST와 `starts_at`을 비교해 `starts_at > 현재 KST`인 회차만 반환한다
+- ⚠️AI 좌석 화면 넘기기(3.4.18): 결과 행 하나가 회차 하나인 질의(집계·DISTINCT·UNION 없이 `screening`을 한 번 읽고, 그 회차의 `starts_at`이 결과에 그대로 나옴)는 실행할 때만 `screening_id` 열을 끝에 덧붙였다가 떼어 응답 `screeningIds`(`rows`와 같은 순서)로 보낸다. 표(`columns`·`rows`)·응답 `sql`·캐시 템플릿에는 나오지 않는다. 그 밖의 질의는 `screeningIds: null`
 - 컬럼 한국어 설명·enum 뜻·few-shot은 `services/ai/src/seatsac_ai/resources/schema.yaml`(AI-10). 이 파일이 NL2SQL 정확도의 대부분을 정한다
 - 답에는 "○시 ○분 기준"(`fetched_at`)을 붙인다
 
@@ -805,7 +807,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | --- | --- | --- |
 | 7 · 34 | (⚠️AI 86 보완: `ng-ai` 추가) EKS On-Demand **t3.xlarge 2대**(ng-a 1 · ng-c 1 — 11/14 t3.large에서 변경: 4.2.1 선점 p95가 파드 CPU에 묶여, 부족하면 한 단계씩 올림. `ng-ai`는 t3.large 그대로, 변수 분리). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14 — 실행은 EventBridge Scheduler, GitHub Actions는 백업·수동), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
 | 8 · 35 · 58 | Kustomize + ArgoCD. booking·gateway만 블루/그린(5xx 1%·결제 timeout/error 5% 롤백, scaleDown 60초), 나머지 롤링. 프로브·자원·HPA·메트릭·Secret·NetworkPolicy는 `docs/service-runtime-contract.md` | 동시 블루/그린 금지 |
-| 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음 | 31의 httpOnly 쿠키는 37·63으로 대체 |
+| 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음. 사용자 도메인은 **선택으로 추가**(3.1.23 — 기본 도메인은 그대로, Route 53 등록은 Terraform 밖, `var.custom_domain`, apex만. CloudFront → ALB 구간은 HTTP 그대로 — HTTPS 원본은 ALB 443·원본용 인증서가 더 필요해 범위 밖) | 31의 httpOnly 쿠키는 37·63으로 대체 |
 | 78 | (⚠️AI 86 보완: gateway 5xx 쿼리에 `uri!~"/ai.*"`) 블루/그린 분석 트래픽: 분석 중 AnalysisTemplate Job(k6, 조회만)이 `{svc}-preview`로 직접 요청, `/actuator` 제외 요청 ≥ 20건/분을 같이 판정(트래픽 0 = 실패). 실패하면 abort(전환 없음) → gitops 태그 revert PR. 실패 버전 시연은 gitops 설정 PR로 의존 서비스 주소를 깨뜨리는 방식 | ⏳ 남궁일 확인(결제 경로 트래픽·시연 방식) |
 | 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets는 확장. Loki는 113으로 보완 |
 | ⚠️AI 86 | AI 격리: 전용 노드그룹 **`ng-ai`**(t3.large 1대, 라벨·taint `cinema/workload=ai`, 평소 desired 0, 스케줄 대상 제외) · 별도 Application **`cinema-ai`**(`argocd_apps.tf`, 다른 Application 수정 없음) · gateway 플래그 `APP_AI_ENABLED`(꺼지면 `/api/ai/**` 404) · 분석 쿼리 `/ai` 제외 · `base/ai/networkpolicy.yaml`만 신규(gateway·monitoring → ai) · ai는 클러스터 안 gateway를 부르지 않고 CloudFront 공개 주소 사용 | 7·34·58·69·78 보완 |

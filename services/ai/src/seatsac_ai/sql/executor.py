@@ -49,6 +49,8 @@ class QueryResult:
     row_count: int
     truncated: bool
     as_of: datetime | None  # 스냅샷 기준 시각
+    # rows 와 같은 순서의 회차 ID (계약 screeningIds). 행이 회차 하나를 가리키지 않으면 None
+    screening_ids: list[int | None] | None = None
 
 
 def execute(

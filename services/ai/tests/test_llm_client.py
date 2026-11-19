@@ -7,6 +7,7 @@ import anthropic
 import httpx
 import pytest
 
+from seatsac_ai.common.metrics import UNMET_CATEGORIES
 from seatsac_ai.llm.client import AnthropicClient, LlmUnavailable
 from seatsac_ai.llm.prompt import system_blocks
 from seatsac_ai.llm.tools import tool_definitions
@@ -105,6 +106,17 @@ def test_preset_tool_lists_only_real_preset_ids():
     run_preset = tool_definitions()[0]
     ids = run_preset["input_schema"]["properties"]["presetId"]["enum"]
     assert len(ids) == 13 and "today_after_time" in ids
+
+
+def test_out_of_scope_tool_requires_a_fixed_category():
+    # chitchat 은 Claude가 고를 수 있지만 지표 ai_unmet_demand_total 의 라벨에는 없다(세지 않는다)
+    (out_of_scope,) = [t for t in tool_definitions() if t["name"] == "out_of_scope"]
+    schema = out_of_scope["input_schema"]
+    assert schema["required"] == ["category", "reason"]
+    assert schema["properties"]["category"]["enum"] == [
+        "action_request", "site_feature", "unrelated", "chitchat",
+    ]  # fmt: skip
+    assert "chitchat" not in UNMET_CATEGORIES
 
 
 def test_text_only_reply_is_reported_as_no_tool():

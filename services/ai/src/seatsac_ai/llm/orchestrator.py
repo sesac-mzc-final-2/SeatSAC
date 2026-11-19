@@ -28,6 +28,7 @@ REJECTED(조건 불일치였으면 CLARIFY — 사용자에게 조건을 확인�
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import hmac
 import logging
@@ -55,7 +56,14 @@ from seatsac_ai.cache.slots import (
 )
 from seatsac_ai.cache.store import CacheEntry, ChatCache
 from seatsac_ai.common.errors import ApiError, llm_unavailable, snapshot_not_ready
-from seatsac_ai.common.metrics import AI_CACHE_REQUESTS, AI_CHAT, AI_TOKENS
+from seatsac_ai.common.metrics import (
+    AI_CACHE_REQUESTS,
+    AI_CHAT,
+    AI_TOKENS,
+    AI_UNMET_DEMAND,
+    UNMET_CHITCHAT,
+    unmet_category_label,
+)
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
 from seatsac_ai.llm.client import NO_TOOL, LlmClient, LlmUnavailable, ToolCall, Usage
@@ -313,6 +321,7 @@ class ChatService:
                 if call.name == NO_TOOL:
                     # tool_choice=auto: 도구 없이 쓴 글은 표를 조회한 답이 아니라서 버린다.
                     # 한 번만 다시 시키고, 또 그러면 범위 밖 문구로 답한다
+                    # (모델 실패라 수요로 세지 않는다 — 범위 안 질문이 섞인다)
                     log.warning("Claude가 도구를 호출하지 않았다(%d번째 호출)", calls)
                     if not nudged and calls < self._s.llm_max_calls_per_query:
                         nudged = True
@@ -322,6 +331,11 @@ class ChatService:
                 failed_path = "preset" if call.name == RUN_PRESET else "nl2sql"
                 try:
                     body, made = await self._run_tool(call, ask, system_params, deadline)
+                    if call.name == OUT_OF_SCOPE:
+                        # ask.question = Claude에게 보여 준 질문(되묻기 답을 원래 질문에 붙인
+                        # 경우 포함). 「chat answered」 로그의 questionHash 와 같은 글자이고,
+                        # reason 이 베꼈는지도 Claude가 본 글자 전체와 견줘야 한다
+                        _record_unmet(ask.question, call.input)
                     return body, made, calls
                 except _Clarify as clarify:
                     return clarify.body, None, calls
@@ -843,7 +857,7 @@ class ChatService:
         path = body["path"].lower()
         AI_CHAT.labels(path, "ok").inc()
         _count_tokens(usage, path)
-        digest = hmac.new(_HASH_KEY, question.encode(), hashlib.sha256).hexdigest()[:16]
+        digest = _question_hash(question)
         log.info(
             "chat answered",
             extra={
@@ -865,6 +879,80 @@ class ChatService:
                 }
             },
         )
+
+
+_UNMET_REASON_MAX = 120
+# reason 이 질문을 베꼈다고 보는 기준: 겹치는 연속 글자 수가 max(8자, min(질문의 60%, 20자)) 이상
+_REASON_COPY_MIN_CHARS = 8
+_REASON_COPY_RATIO = 0.6
+_REASON_COPY_MAX_CHARS = 20  # 질문이 길어도 20자가 그대로 겹치면 베낀 것이다
+_REASON_COMPARE_MAX = 500  # 비교에 쓰는 reason 길이 상한(도구의 maxLength 는 힌트일 뿐이다)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_DIGIT_RUN = re.compile(r"\d(?:[\s.\-]*\d){2,}")  # 구분자를 끼고 숫자 3개 이상(전화·카드·예매 번호)
+
+
+def _question_hash(question: str) -> str:
+    return hmac.new(_HASH_KEY, question.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def _letters(text: str) -> str:
+    """비교용 정규화: 공백·문장부호를 빼고 소문자로."""
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def _copies_question(question: str, reason: str) -> bool:
+    """reason 에 질문 원문이 길게 그대로 들어 있는가.
+
+    짧은 질문("날씨")은 요약과 같을 수밖에 없어 8자 하한으로 걸리지 않게 둔다(의도).
+    """
+    q, r = _letters(question), _letters(reason[:_REASON_COMPARE_MAX])
+    longest = (
+        difflib.SequenceMatcher(None, q, r, autojunk=False)
+        .find_longest_match(0, len(q), 0, len(r))
+        .size
+    )
+    limit = min(len(q) * _REASON_COPY_RATIO, _REASON_COPY_MAX_CHARS)
+    return longest >= max(_REASON_COPY_MIN_CHARS, limit)
+
+
+def _mask_reason(reason: str) -> str | None:
+    """남기는 요약에서 이메일·숫자 연속을 가리고 120자로 자른다. 빈 글이면 None."""
+    masked = _DIGIT_RUN.sub("[숫자]", _EMAIL.sub("[이메일]", " ".join(reason.split())))
+    return masked[:_UNMET_REASON_MAX].strip() or None
+
+
+def _record_unmet(question: str, tool_input: object) -> None:
+    """답하지 못한 요청(out_of_scope 도구)의 분류를 세고, Claude가 요약한 사유를 로그로 남긴다.
+
+    질문 원문은 남기지 않는다(개인정보). 욕설·인사·잡담(chitchat)은 수요가 아니라 세지도
+    적지도 않는다. 부가 기록이라 여기서 난 오류가 답을 막지 않게 삼킨다.
+    """
+    try:
+        _write_unmet(question, tool_input if isinstance(tool_input, dict) else {})
+    except Exception as exc:  # 질문·reason 이 섞이지 않게 예외 종류만 적는다
+        log.warning("unmet demand 기록 실패(%s)", type(exc).__name__)
+
+
+def _write_unmet(question: str, raw: dict[str, Any]) -> None:
+    category = raw.get("category")
+    if isinstance(category, str):
+        category = category.strip().lower()
+    if category == UNMET_CHITCHAT:
+        return
+    category = unmet_category_label(category)
+    AI_UNMET_DEMAND.labels(category).inc()
+    reason = raw.get("reason")
+    fields: dict[str, Any] = {
+        "category": category,
+        "reason": _mask_reason(reason) if isinstance(reason, str) else None,
+        "questionHash": _question_hash(question),
+        "questionLength": len(question),
+    }
+    if isinstance(reason, str) and _copies_question(question, reason):
+        # Claude가 요약 대신 질문을 옮겨 적었다 → 원문이 로그에 남지 않게 버린다
+        fields["reason"] = None
+        fields["reasonDropped"] = True
+    log.info("unmet demand", extra={"fields": fields})
 
 
 def _feedback(call: ToolCall, message: str) -> list[dict[str, Any]]:

@@ -2,14 +2,21 @@ import { asOfLabel, chatPathLabel, hasResultTable, isTokenFree, type ChatRespons
 import { useState } from "react";
 import { Link } from "react-router";
 import { Badge, Chip, Icon, TraceCode } from "@/shared/ui";
+import { fasterLabel, type CacheNote } from "../lib/cache-pairs";
 import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/preset-actions";
 import type { ChatEntry } from "../model/use-ai-chat";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
 
+/** 데모 모드일 때 답 하나에 넘기는 정보. `note` = 캐시 짝·저장 설명(해당 없으면 없음) */
+export interface EntryDemo {
+  note?: CacheNote;
+}
+
 interface Props {
   entry: ChatEntry;
-  demo: boolean;
+  /** 데모 모드가 꺼져 있으면 null — 데모 정보를 그리지 않는다 */
+  demo: EntryDemo | null;
   /** 오류 항목의 「다시 묻기」 (보낼 수 없는 상태면 undefined) */
   onRetry?: (question: string, link?: ChatLink) => void;
   /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
@@ -20,8 +27,43 @@ interface Props {
 
 const n = (value: number) => value.toLocaleString("ko-KR");
 
-/** 데모 모드: 처리 경로 · Claude 호출 · 토큰 · 지연 · SQL */
-function DemoMeta({ response }: { response: ChatResponse }) {
+/**
+ * 캐시 설명 (3.4.20). 짝이 있으면 그 답과의 **실제 뺄셈**(토큰·걸린 시간)을, 없으면 숫자 없이 이유만 보여 준다.
+ * 화살표는 장식이라 읽지 않게 하고 나머지는 글자 그대로 읽힌다
+ */
+function CacheNoteLines({ note }: { note: CacheNote }) {
+  if (note.kind === "stored") {
+    return <p className={styles.dim}>이 답의 SQL 틀을 캐시에 저장함 — 같은 뜻의 다음 질문은 Claude 없이 답합니다</p>;
+  }
+  if (note.kind === "outside") {
+    return (
+      <p className={styles.dim}>
+        이 대화 밖에서 만들어진 캐시(다른 사용자의 질문 또는 미리 넣어 둔 질문) · Claude 호출 없음 · 토큰 0
+      </p>
+    );
+  }
+  const { pair } = note;
+  return (
+    <>
+      <p className={styles.pair}>
+        <span aria-hidden="true">↑ </span>
+        {pair.questionNo}번째 질문과 {note.semantic ? "같은 뜻으로 판단" : "같은 질문"}
+        {note.semantic && note.similarity !== null && ` · 유사도 ${note.similarity.toFixed(2)}`}{" "}
+        <span className={styles.pairQuestion}>「{pair.question}」</span>
+      </p>
+      <p className={styles.saved}>
+        토큰 {n(pair.savedTokens)} 절약 · {fasterLabel(pair.fasterMs)}
+      </p>
+      <p className={styles.dim}>
+        실측: {pair.questionNo}번째 질문은 입력 {n(pair.inputTokens)} + 출력 {n(pair.outputTokens)} 토큰 ·{" "}
+        {n(pair.pairLatencyMs)}ms, 이 답은 토큰 0 · {n(pair.latencyMs)}ms
+      </p>
+    </>
+  );
+}
+
+/** 데모 모드: 처리 경로 · Claude 호출 · 토큰 · 지연 · 캐시 짝 · SQL */
+function DemoMeta({ response, note }: { response: ChatResponse; note?: CacheNote }) {
   const { llm } = response;
   const free = isTokenFree(response);
   return (
@@ -36,6 +78,7 @@ function DemoMeta({ response }: { response: ChatResponse }) {
       {!free && llm.cacheReadTokens > 0 && (
         <p className={styles.dim}>프롬프트 캐시 읽기 {n(llm.cacheReadTokens)} 토큰 (절감과 별도)</p>
       )}
+      {note && <CacheNoteLines note={note} />}
       {response.rejection && (
         <p className={styles.dim}>
           거부 사유 <code>{response.rejection.reason}</code>
@@ -79,7 +122,7 @@ function Answer({
   onChoose,
 }: {
   response: ChatResponse;
-  demo: boolean;
+  demo: EntryDemo | null;
   link?: ChatLink;
   onPickMovie?: (title: string) => void;
   onChoose?: (message: string) => void;
@@ -124,7 +167,7 @@ function Answer({
           <Icon name="arrow-right" size={13} />
         </Link>
       )}
-      {demo && <DemoMeta response={response} />}
+      {demo && <DemoMeta response={response} note={demo.note} />}
     </div>
   );
 }

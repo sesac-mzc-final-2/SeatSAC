@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { ChatPreset } from "@/entities/ai-chat";
 import { nowShowingMoviesQuery } from "@/entities/movie";
 import { theaterListQuery } from "@/entities/theater";
 import { todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
+import { cacheNotes, demoTotals } from "../lib/cache-pairs";
 import {
   PICK_PROMPTS,
   answerMovieTitles,
@@ -46,6 +47,8 @@ interface Props {
 /** 아래 추천 질문 줄에 보이는 버튼 수. 나머지는 「…」로 연다(대화창 폭에서 잘리지 않게) */
 const BAR_PRESETS = 3;
 
+const n = (value: number) => value.toLocaleString("ko-KR");
+
 type Picker = { kind: PickKind; presetId: string } | { kind: "more" };
 
 /** 우하단 대화창 본문 (AI-01·AI-04). 열려 있는 동안만 마운트된다 */
@@ -65,7 +68,13 @@ export function ChatPanel({
   const demo = useDemoMode();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const { entries, ask, restart, isPending, cooldownSeconds } = chat;
+  const { entries, ask, restart, isPending, cooldownSeconds, countAfterId, recount } = chat;
+  // 데모 모드일 때만 캐시 짝을 찾는다 (꺼져 있으면 아무것도 계산·표시하지 않는다)
+  const notes = useMemo(() => (demo.enabled ? cacheNotes(entries) : null), [demo.enabled, entries]);
+  const totals = useMemo(
+    () => (notes ? demoTotals(entries, notes, countAfterId) : null),
+    [notes, entries, countAfterId],
+  );
   const [picker, setPicker] = useState<Picker | null>(null);
   // 고르는 목록은 그 버튼을 눌렀을 때만 부른다
   const theaters = useQuery({ ...theaterListQuery(), enabled: picker?.kind === "theater" });
@@ -258,6 +267,24 @@ export function ChatPanel({
         </div>
       </header>
 
+      {totals && !disabled && entries.length > 0 && (
+        <div className={styles.totals} role="group" aria-label="이 대화의 토큰 합계">
+          <p className={styles.totalsText}>
+            <span>질문 {n(totals.questions)}</span>
+            <span>Claude 답 {n(totals.claudeAnswers)}</span>
+            <span>캐시 답 {n(totals.cacheAnswers)}</span>
+            <span>쓴 토큰 {n(totals.usedTokens)}</span>
+            <span className={styles.totalsSaved}>실측으로 아낀 토큰 {n(totals.savedTokens)}</span>
+            {totals.unpairedCacheAnswers > 0 && (
+              <span>짝 없는 캐시 답 {n(totals.unpairedCacheAnswers)}건은 제외</span>
+            )}
+          </p>
+          <button type="button" className={styles.totalsReset} onClick={recount}>
+            여기부터 다시 세기
+          </button>
+        </div>
+      )}
+
       <div className={styles.log} ref={logRef} role="log" aria-live="polite" aria-label="대화 내용">
         {notReady ? (
           <div className={styles.intro}>
@@ -298,7 +325,7 @@ export function ChatPanel({
             <ChatEntryView
               key={entry.id}
               entry={entry}
-              demo={demo.enabled}
+              demo={notes ? { note: notes.get(entry.id) } : null}
               onRetry={blocked ? undefined : (question, link) => send(question, link)}
               onChoose={blocked ? undefined : (message) => send(message)}
               onPickMovie={blocked ? undefined : pickMovie}

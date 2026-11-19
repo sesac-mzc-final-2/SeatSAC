@@ -62,6 +62,18 @@
 .dim code {
   color: var(--color-muted-strong);
 }
+/* 캐시 짝(3.4.20): 어느 질문 덕분인지 · 실측 절약 */
+.pair {
+  color: var(--color-muted-strong);
+  overflow-wrap: anywhere;
+}
+.pairQuestion {
+  color: var(--color-text);
+}
+.saved {
+  color: var(--color-live);
+  font-weight: 600;
+}
 .sql summary {
   width: max-content;
   color: var(--color-muted);

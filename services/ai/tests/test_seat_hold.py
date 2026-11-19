@@ -729,27 +729,208 @@ def test_no_matching_screening():
     assert body["seatHold"]["reason"] == "SCREENING_NOT_FOUND" and api.seen == []
 
 
+@pytest.mark.parametrize(
+    ("said", "found"),
+    [
+        ("암살자들", [1]),  # 괄호 없이 말해도
+        ("암살자(들)", [1]),
+        ("암살자 들", [1]),
+        ("암살자", [1, 2]),  # 일부만 말하면 겹치는 것 전부(회차가 여럿이면 버튼으로 고른다)
+        ("별의항해!", [3]),
+        ("STAR wars: 에피소드1", [4]),
+        ("치이카와", [5]),  # 긴 제목의 일부
+        ("암살지들", []),  # 오타는 찾지 못한다
+        ("()", []),  # 글자가 없는 말은 아무것도 고르지 않는다
+    ],
+)
+def test_names_match_without_spaces_brackets_or_punctuation(said, found):
+    names = [
+        (1, "암살자(들)"),
+        (2, "암살자의 밤"),
+        (3, "별의 항해"),
+        (4, "Star Wars 에피소드 1"),
+        (5, "극장판 치이카와: 인어의 섬"),
+        (6, "!!!"),  # 글자가 없는 이름이 모든 말에 걸리지 않는다
+    ]
+    assert holds._match(names, said) == found
+
+
+def test_a_title_said_without_its_brackets_finds_the_screening(monkeypatch):
+    movies = [(1, "암살자(들)", "15", 140, "액션"), *sql_fixtures.MOVIES[1:]]
+    monkeypatch.setattr(sql_fixtures, "MOVIES", movies)
+    llm = ScriptedLlm(hold_tool(movie="암살자들"))
+    service, _, _ = make(llm, store=loaded_store())
+    body = ask(service, "오늘 20시 암살자들 건대입구 J7 J8 잡아줘")
+    assert body["path"] == "HOLD_CONFIRM" and body["seatHold"]["screeningId"] == 2
+    assert "암살자(들)" in body["answer"]
+
+
 def test_unknown_movie_is_named_in_the_answer():
     service, _, _ = make(ScriptedLlm(hold_tool(movie="부활남")))
     body = ask(service, "오늘 20시 부활남 건대입구 J7 J8 잡아줘")
     assert body["seatHold"]["reason"] == "SCREENING_NOT_FOUND" and "'부활남' 영화" in body["answer"]
 
 
-@pytest.mark.parametrize(
-    ("args", "word"),
-    [
-        ({}, "영화나 극장·날짜나 시각"),  # 좌석만
-        ({"date": "2026-11-17", "time": "20:00"}, "영화나 극장"),
-        ({"movie": "별의 항해", "theater": "건대입구"}, "날짜나 시각"),
-    ],
-)
-def test_too_few_conditions_ask_instead_of_guessing_a_screening(args, word):
-    """(영화 또는 극장) + (날짜 또는 시각)이 없으면 회차를 짐작으로 좁히지 않는다."""
-    service, api, valkey = make(ScriptedLlm(tool("hold_seats", **args, seats=["J7"])))
+# --- 빠진 조건은 버튼으로 되묻는다 (3.4.24) ---------------------------------------
+
+
+def test_no_conditions_at_all_asks_which_movie_with_buttons_from_the_snapshot():
+    """예전에는 "영화나 극장·날짜나 시각을 함께 말해 주세요" 글만 줬다 — 이제 있는 값으로 묻는다."""
+    llm = ScriptedLlm(tool("hold_seats", seats=["J7"]))
+    service, api, valkey = make(llm)
     body = ask(service, "J7 잡아줘")
     assert body["path"] == "HOLD_GUIDE" and body["seatHold"]["reason"] == "SCREENING_AMBIGUOUS"
-    assert word in body["answer"] and body["choices"] is None
+    assert "어느 영화" in body["answer"]
+    # 예매할 수 있는 회차가 있는 영화만, 회차가 많은 것부터
+    assert [c["label"] for c in body["choices"]] == [
+        "철의 심장", "고양이 탐정", "한강의 밤", "별의 항해",
+    ]  # fmt: skip
+    assert all(c["label"] == c["message"] for c in body["choices"])
+    assert body["seatHold"]["confirmExpiresAt"] == "2026-11-17T19:42:00+09:00"
+    assert body["seatHold"]["seatLabels"] == ["J7"] and body["seatHold"]["screeningId"] is None
+    stored = json.loads(asyncio.run(valkey.get(pending_key(USER, body["sessionId"]))))
+    assert stored["kind"] == "NARROW" and stored["userId"] == USER and stored["seats"] == ["J7"]
+    assert "Bearer" not in json.dumps(stored)
+    assert api.seen == []  # 묻기만 한다 — 좌석 현황도 선점도 부르지 않는다
+
+
+def grid(monkeypatch, movies=2):
+    """영화 movies 편 × 3일 × 극장 2곳 × 하루 4회차 — 조건을 하나씩 골라야 좁혀지는 편성."""
+    rows, n = [], 1000
+    for movie in range(1, movies + 1):
+        for day in ("2026-11-18", "2026-11-19", "2026-11-20"):
+            for theater in (10, 20):
+                for hour in (10, 13, 16, 19):
+                    start = f"{day} {hour:02d}:00"
+                    rows.append(
+                        (n, movie, theater, "1관", "NORMAL", day, start, hour, 50, 100, "BOOKING")
+                    )
+                    n += 1
+    monkeypatch.setattr(sql_fixtures, "SCREENINGS", rows)
+    return loaded_store()
+
+
+def test_buttons_narrow_movie_then_date_then_theater_then_screening_without_claude(monkeypatch):
+    llm = ScriptedLlm(tool("hold_seats", seats=["J7", "J8"]))
+    service, api, valkey = make(llm, store=grid(monkeypatch))
+    step = ask(service, "J7 J8 예매해줘")
+    session = step["sessionId"]
+    asked = []
+    for pick in ("한강의 밤", "11/19(목)", "강남", "한강의 밤 11/19(목) 16:00 강남 1관"):
+        assert step["path"] == "HOLD_GUIDE", step["answer"]
+        assert step["seatHold"]["reason"] == "SCREENING_AMBIGUOUS"
+        asked.append([c["label"] for c in step["choices"]])
+        assert pick in asked[-1]
+        step = ask(service, pick, session_id=session)
+        assert step["sessionId"] == session
+    assert asked[0] == ["별의 항해", "한강의 밤"]
+    assert asked[1] == ["11/18(수)", "11/19(목)", "11/20(금)"]
+    assert asked[2] == ["건대입구", "강남"]
+    assert len(asked[3]) == 4 and all("한강의 밤 11/19(목)" in x and "강남" in x for x in asked[3])
+    # 버튼 네 번 뒤에야 확인 요청 — 그때까지 선점은 한 번도 나가지 않았다
+    assert step["path"] == "HOLD_CONFIRM" and step["seatHold"]["seatLabels"] == ["J7", "J8"]
+    assert "한강의 밤 11/19(목) 16:00 강남" in step["answer"]
+    assert api.posts == [] and len(llm.requests) == 1  # Claude는 처음 한 번뿐
+    done = press(service, step)
+    assert done["path"] == "HOLD_RESULT" and len(api.posts) == 1
+
+
+def test_conditions_the_user_already_said_are_not_asked_again(monkeypatch):
+    llm = ScriptedLlm(tool("hold_seats", movie="별의 항해", theater="강남", seats=["J7"]))
+    service, _, _ = make(llm, store=grid(monkeypatch))
+    body = ask(service, "별의 항해 강남 J7 잡아줘")
+    assert "어느 날짜" in body["answer"]
+    assert [c["label"] for c in body["choices"]] == ["11/18(수)", "11/19(목)", "11/20(금)"]
+    picked = ask(service, "11/20(금)", session_id=body["sessionId"])
+    assert len(picked["choices"]) == 4 and "어느 회차" in picked["answer"]
+    assert all(c["label"].startswith("별의 항해 11/20(금)") for c in picked["choices"])
+
+
+def test_a_date_and_time_the_user_said_keep_filtering_after_a_button(monkeypatch):
+    llm = ScriptedLlm(tool("hold_seats", time="16:00", seats=["J7"]))
+    service, _, _ = make(llm, store=grid(monkeypatch))
+    body = ask(service, "16시 J7 잡아줘")  # 16시 회차 12개 → 영화부터 묻는다
+    picked = ask(service, "별의 항해", session_id=body["sessionId"])
+    assert len(picked["choices"]) == 6 and all(" 16:00 " in c["label"] for c in picked["choices"])
+
+
+def test_more_than_seven_values_show_seven_and_say_how_to_get_the_rest(monkeypatch):
+    movies = [(i, f"영화 {i}", "12", 120, "드라마") for i in range(1, 10)]
+    monkeypatch.setattr(sql_fixtures, "MOVIES", movies)
+    llm = ScriptedLlm(tool("hold_seats", seats=["J7"]))
+    service, _, _ = make(llm, store=grid(monkeypatch, movies=9))
+    body = ask(service, "J7 잡아줘")
+    assert len(body["choices"]) == 7 and "여기 없으면 영화까지" in body["answer"]
+
+
+def test_all_conditions_fixed_but_still_many_shows_the_nearest_seven(monkeypatch):
+    store = many_screenings(monkeypatch, open_count=9)
+    llm = ScriptedLlm(tool("hold_seats", theater="건대입구", date="2026-11-17", seats=["J7"]))
+    service, _, _ = make(llm, store=store)
+    body = ask(service, "오늘 건대입구 J7 잡아줘")
+    assert "가까운 회차 7개" in body["answer"]
+    assert [c["label"].split()[3] for c in body["choices"]] == [f"22:0{i}" for i in range(1, 8)]
+    picked = ask(service, body["choices"][6]["message"], session_id=body["sessionId"])
+    assert picked["path"] == "HOLD_CONFIRM" and picked["seatHold"]["screeningId"] == 506
+
+
+def test_typing_something_else_instead_of_a_button_is_an_ordinary_question(monkeypatch):
+    chat = tool("out_of_scope", category="chitchat", reason="인사")
+    llm = ScriptedLlm(tool("hold_seats", seats=["J7"]), chat, chat)
+    service, api, valkey = make(llm, store=grid(monkeypatch))
+    body = ask(service, "J7 잡아줘")
+    other = ask(service, "안녕", session_id=body["sessionId"])
+    assert other["path"] == "OUT_OF_SCOPE" and len(llm.requests) == 2
+    assert asyncio.run(valkey.keys("ai:pending:*")) == [] and api.seen == []
+    # 버튼을 뒤늦게 눌러도 이어지지 않는다(좌석 잡기 답이 아니라 평소 질문으로 간다)
+    late = ask(service, "별의 항해", session_id=body["sessionId"])
+    assert late["path"] == "OUT_OF_SCOPE" and len(llm.requests) == 3
+
+
+def test_narrowing_buttons_belong_to_one_user(monkeypatch):
+    chat = tool("out_of_scope", category="chitchat", reason="인사")
+    llm = ScriptedLlm(tool("hold_seats", seats=["J7"]), chat)
+    service, api, valkey = make(llm, store=grid(monkeypatch))
+    body = ask(service, "J7 잡아줘")
+    theirs = ask(service, "별의 항해", session_id=body["sessionId"], user="user-2")
+    assert theirs["path"] == "OUT_OF_SCOPE"  # 남의 버튼은 평소 질문일 뿐이다
+    mine = ask(service, "별의 항해", session_id=body["sessionId"])  # 내 버튼은 그대로 살아 있다
+    assert mine["path"] == "HOLD_GUIDE" and "어느 날짜" in mine["answer"]
+
+
+def test_without_seat_names_the_buttons_end_at_the_seat_screen_link(monkeypatch):
+    """「한강의 밤 예매해줘」 — 회차까지 버튼으로 고르고, 좌석은 좌석 화면에서(3.4.24 조각 5)."""
+    llm = ScriptedLlm(tool("hold_seats", movie="한강의 밤", theater="강남", seats=[]))
+    service, api, valkey = make(llm, store=grid(monkeypatch))
+    body = ask(service, "한강의 밤 강남 예매해줘")
+    body = ask(service, "11/18(수)", session_id=body["sessionId"])
+    body = ask(service, body["choices"][0]["message"], session_id=body["sessionId"])
+    assert body["path"] == "HOLD_GUIDE" and body["choices"] is None
+    hold = body["seatHold"]
+    # 화면은 reason SEATS_REQUIRED + screeningId 로 「좌석 화면에서 고르기」 링크를 그린다
+    assert hold["reason"] == "SEATS_REQUIRED" and isinstance(hold["screeningId"], int)
+    assert "한강의 밤 11/18(수) 10:00 강남" in body["answer"] and "좌석 화면" in body["answer"]
     assert api.seen == [] and asyncio.run(valkey.keys("ai:pending:*")) == []
+
+
+def test_buttons_are_not_offered_when_the_choice_cannot_be_remembered(monkeypatch):
+    service, _, valkey = make(ScriptedLlm(tool("hold_seats", seats=["J7"])))
+
+    async def failing_set(key, *args, **kwargs):
+        raise RedisConnectionError("down")
+
+    monkeypatch.setattr(valkey, "set", failing_set)
+    body = ask(service, "J7 잡아줘")
+    assert body["seatHold"]["reason"] == "SCREENING_AMBIGUOUS" and body["choices"] is None
+
+
+def test_one_candidate_goes_straight_to_the_confirm_request():
+    """조건이 적어도 예매할 수 있는 회차가 하나뿐이면 묻지 않는다 — 확인 요청이 회차를 보여 준다."""
+    llm = ScriptedLlm(tool("hold_seats", date="2026-11-17", time="20:00", seats=["J7"]))
+    service, api, _ = make(llm)
+    body = ask(service, "오늘 20시 J7 잡아줘")
+    assert body["path"] == "HOLD_CONFIRM" and "별의 항해 11/17(화) 20:00 건대입구" in body["answer"]
+    assert api.posts == []
 
 
 @pytest.mark.parametrize(
@@ -801,8 +982,8 @@ def test_many_past_screenings_do_not_hide_the_one_that_is_open(monkeypatch):
     assert body["path"] == "HOLD_CONFIRM" and body["seatHold"]["screeningId"] == 500
 
 
-@pytest.mark.parametrize(("open_count", "buttons"), [(2, 2), (7, 7), (8, None)])
-def test_screening_buttons_up_to_seven_then_ask_for_more(monkeypatch, open_count, buttons):
+@pytest.mark.parametrize(("open_count", "buttons"), [(2, 2), (7, 7), (8, 7)])
+def test_screening_buttons_up_to_seven_then_the_nearest_seven(monkeypatch, open_count, buttons):
     store = many_screenings(monkeypatch, open_count=open_count)
     llm = ScriptedLlm(tool("hold_seats", theater="건대입구", date="2026-11-17", seats=["J7"]))
     service, api, valkey = make(llm, store=store)

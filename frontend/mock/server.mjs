@@ -391,8 +391,8 @@ const aiMeaning = (template) =>
     .replace(/\s+/g, " ")
     .trim();
 const aiEntryId = (template) => createHash("sha256").update(template).digest("hex").slice(0, 12);
-/** 유사도 흉내: 항목마다 고정된 0.930~0.989 (실제 기준은 0.92 이상) */
-const aiSimilarity = (template) => (930 + (parseInt(aiEntryId(template).slice(0, 4), 16) % 60)) / 1000;
+/** 유사도 흉내: 항목마다 고정된 0.93~0.99, 소수 둘째 자리 (실제 기준은 0.92 이상) */
+const aiSimilarity = (template) => (93 + (parseInt(aiEntryId(template).slice(0, 4), 16) % 7)) / 100;
 const AI_WARMED = ["오늘 심야 영화 뭐 있어?", "조조 영화 뭐 있어?"];
 let aiInflight = false;
 

@@ -5,7 +5,7 @@ import { nowShowingMoviesQuery } from "@/entities/movie";
 import { theaterListQuery } from "@/entities/theater";
 import { todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
-import { cacheNotes, demoTotals } from "../lib/cache-pairs";
+import { cacheNotes, demoTotals, questionNumbers } from "../lib/cache-pairs";
 import {
   PICK_PROMPTS,
   answerMovieTitles,
@@ -48,6 +48,8 @@ interface Props {
 const BAR_PRESETS = 3;
 
 const n = (value: number) => value.toLocaleString("ko-KR");
+/** 합계의 토큰이 무엇을 세는지 (title · 스크린리더) */
+const TOKEN_SCOPE = "프롬프트 캐시 읽기·쓰기 토큰은 포함하지 않습니다";
 
 type Picker = { kind: PickKind; presetId: string } | { kind: "more" };
 
@@ -71,6 +73,7 @@ export function ChatPanel({
   const { entries, ask, restart, isPending, cooldownSeconds, countAfterId, recount } = chat;
   // 데모 모드일 때만 캐시 짝을 찾는다 (꺼져 있으면 아무것도 계산·표시하지 않는다)
   const notes = useMemo(() => (demo.enabled ? cacheNotes(entries) : null), [demo.enabled, entries]);
+  const numbers = useMemo(() => (demo.enabled ? questionNumbers(entries) : null), [demo.enabled, entries]);
   const totals = useMemo(
     () => (notes ? demoTotals(entries, notes, countAfterId) : null),
     [notes, entries, countAfterId],
@@ -269,17 +272,20 @@ export function ChatPanel({
 
       {totals && !disabled && entries.length > 0 && (
         <div className={styles.totals} role="group" aria-label="이 대화의 토큰 합계">
-          <p className={styles.totalsText}>
-            <span>질문 {n(totals.questions)}</span>
-            <span>Claude 답 {n(totals.claudeAnswers)}</span>
-            <span>캐시 답 {n(totals.cacheAnswers)}</span>
-            <span>쓴 토큰 {n(totals.usedTokens)}</span>
-            <span className={styles.totalsSaved}>실측으로 아낀 토큰 {n(totals.savedTokens)}</span>
-            {totals.unpairedCacheAnswers > 0 && (
-              <span>짝 없는 캐시 답 {n(totals.unpairedCacheAnswers)}건은 제외</span>
-            )}
-          </p>
-          <button type="button" className={styles.totalsReset} onClick={recount}>
+          <ul className={styles.totalsList}>
+            <li>질문 {n(totals.questions)}</li>
+            <li>Claude 답 {n(totals.claudeAnswers)}</li>
+            <li>캐시 답 {n(totals.cacheAnswers)}</li>
+            <li title={TOKEN_SCOPE}>
+              쓴 토큰 {n(totals.usedTokens)}(입력+출력)<span className="sr-only"> — {TOKEN_SCOPE}</span>
+            </li>
+            <li className={styles.totalsSaved} title={TOKEN_SCOPE}>
+              아낀 토큰 {n(totals.savedTokens)}(짝 질문이 실제로 쓴 양 기준)
+            </li>
+            {totals.unpairedCacheAnswers > 0 && <li>짝 없는 캐시 답 {n(totals.unpairedCacheAnswers)}건은 제외</li>}
+          </ul>
+          {/* 답이 오는 중에 기준을 옮기면 그 답만 질문 없이 세어진다 */}
+          <button type="button" className={styles.totalsReset} onClick={recount} disabled={isPending}>
             여기부터 다시 세기
           </button>
         </div>
@@ -325,7 +331,7 @@ export function ChatPanel({
             <ChatEntryView
               key={entry.id}
               entry={entry}
-              demo={notes ? { note: notes.get(entry.id) } : null}
+              demo={notes ? { note: notes.get(entry.id), questionNo: numbers?.get(entry.id) } : null}
               onRetry={blocked ? undefined : (question, link) => send(question, link)}
               onChoose={blocked ? undefined : (message) => send(message)}
               onPickMovie={blocked ? undefined : pickMovie}

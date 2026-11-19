@@ -9,6 +9,8 @@
   ④ 확인 요청(HOLD_CONFIRM): 잡을 내용을 ai Valkey에 '대기 중인 행동'으로 저장(2분) + 확인/취소 버튼
   ⑤ 확인 버튼이 직전 응답의 sessionId 로 오면 Claude 없이 대기 행동을 꺼내(한 번만) POST /seats/hold
   ⑥ 결과(HOLD_RESULT): 예매 요약 또는 오류 코드별 안내. 결제는 화면에서 한다(ai는 bookingId 만 준다)
+  ⑦ 선점에 성공하면 그 결과를 '방금 끝난 선점'(ai:held, 선점이 남은 동안·5분 이내)으로 남긴다.
+     응답이 화면에 닿지 못해 같은 확인 ID가 다시 오면 booking 을 다시 부르지 않고 같은 결과를 준다
 
 지키는 것
   - 확인 없이 선점하는 길이 없다: POST /seats/hold 는 SeatHoldFlow._confirmed 에서만 부르고,
@@ -16,6 +18,7 @@
   - 확인한 것만 잡는다: 확인 요청마다 일회용 확인 ID를 만들어 버튼 message 에 싣는다
     ("좌석 잡기 #k7f2a1"). ID가 대기 행동의 것과 같을 때만 실행한다 — 지난 확인 요청의 버튼·재전송이
     새 확인 요청을 확정하지 못한다. ID 없는 "좌석 잡기" 타이핑은 확인으로 받지 않는다
+    (대기 행동이 있으면 버튼을 누르라고 안내, 없으면 평소 질문처럼 Claude로 — 어느 쪽도 잡지 않는다)
   - 좌석은 사용자가 말한 것만: Claude가 준 좌석 이름 중 이번 메시지 원문에 있는 것만 쓴다
   - 사용자 토큰은 저장하지 않는다. 확인 요청에 실려 온 Authorization 을 그대로 넘긴다
     (bookings.py 와 같은 길: 공개 주소 PUBLIC_API_BASE_URL — 클러스터 안 주소를 부르지 않는다)
@@ -292,14 +295,33 @@ class SeatHoldFlow:
         reply = _REPLY.fullmatch(message.strip())
         verb, confirm_id = (reply.group(1), reply.group(2)) if reply else (None, None)
         if verb == CONFIRM_MESSAGE and confirm_id is None:
-            # 버튼 없이 타이핑한 "좌석 잡기" — 확인으로 받지 않는다. 대기 행동은 건드리지 않는다
+            # 버튼 없이 타이핑한 "좌석 잡기" — 확인으로 받지 않는다. 대기 행동은 건드리지 않는다.
+            # 대기 행동이 없으면 좌석 잡기의 답이 아니다 — 평소 질문처럼 처리한다(선점하지 않는다)
+            if not sent_session_id or not await self._cache.has_pending(user_id, sent_session_id):
+                return None, False
             return _guide(
-                "좌석을 잡으려면 확인 요청의 「잡기」 버튼을 눌러 주세요. "
-                "확인 요청이 없으면 잡을 회차와 좌석을 다시 말해 주세요.",
-                NOT_CONFIRMED,
+                "좌석을 잡으려면 확인 요청의 「잡기」 버튼을 눌러 주세요.", NOT_CONFIRMED
             ), False
         if verb == CONFIRM_MESSAGE and not authorization:
             raise unauthorized("TOKEN_REQUIRED")  # 대기 행동을 꺼내기 전에 — 꺼낸 뒤 401이면 헛소모
+        if verb == CONFIRM_MESSAGE and sent_session_id:
+            # 방금 성공한 그 확인의 재전송(응답이 화면에 닿지 못했다) — booking 을 다시 부르지 않고
+            # 같은 결과를 준다. 대기 행동보다 먼저 본다(그 사이 만든 새 확인 요청을 지우지 않게)
+            held = await self._cache.get_held(user_id, sent_session_id)
+            if (
+                held is not None
+                and held.get("userId") == user_id
+                and held.get("confirmId") == confirm_id
+                and held.get("replayUntil", 0) > now.timestamp()
+                and isinstance(held.get("bookingId"), int)
+            ):
+                return _held(
+                    held.get("screeningId"),
+                    held["bookingId"],
+                    [str(x) for x in held.get("seatLabels") or []],
+                    held.get("amount"),
+                    held.get("expiresAt"),
+                ), True
         pending = None
         if sent_session_id:
             pending = await self._cache.take_pending(user_id, sent_session_id)
@@ -310,9 +332,10 @@ class SeatHoldFlow:
                 None  # 키가 사용자별이라 올 수 없는 값이지만 한 번 더 본다 · TTL이 늦게 지운 경우
             )
         if pending is None or sent_session_id is None:
-            if verb is None:
+            if verb is None or confirm_id is None:
+                # 좌석 잡기의 답이 아니다. ID 없이 타이핑한 「취소」도 대기 행동이 없으면 평소 질문
                 return None, False
-            # 대기 행동 없이 온 확인·취소 — 아무것도 하지 않는다(Claude도 부르지 않는다)
+            # 대기 행동 없이 온 확인·취소 버튼 — 아무것도 하지 않는다(Claude도 부르지 않는다)
             return _guide(
                 "확인할 좌석 요청이 없어요(확인 시간이 지났을 수 있어요). "
                 "잡을 회차와 좌석을 다시 말해 주세요.",
@@ -372,19 +395,27 @@ class SeatHoldFlow:
         if outcome.code is None:
             booking = outcome.booking
             held = [str(x) for x in booking.get("seatLabels") or labels]
+            reply = _held(
+                screening_id, booking["bookingId"], held, booking.get("amount"),
+                booking.get("expiresAt"),
+            )  # fmt: skip
+            # 같은 확인 ID가 다시 오면(응답만 실패) 같은 결과를 주려고 남긴다 — 선점이 남은 동안만
             expires = _iso(booking.get("expiresAt"))
-            until = f"{expires:%H:%M}까지 " if expires else f"{HOLD_MINUTES}분 안에 "
-            return HoldReply(
-                HOLD_RESULT,
-                f"{'·'.join(held)} 좌석을 잡았습니다. {until}결제를 마쳐 주세요.",
-                _seat_hold(
-                    screening_id,
-                    booking_id=booking["bookingId"],
-                    labels=held,
-                    amount=booking.get("amount"),
-                    expires_at=booking.get("expiresAt"),
-                ),
-            )
+            left = int(expires.timestamp() - now.timestamp()) if expires else HOLD_MINUTES * 60
+            ttl = min(left, HOLD_MINUTES * 60)
+            if ttl > 0:
+                await self._cache.put_held(
+                    user_id,
+                    session_id,
+                    {
+                        "userId": user_id,
+                        "confirmId": pending.get("confirmId"),
+                        "replayUntil": now.timestamp() + ttl,
+                        **{k: reply.seat_hold[k] for k in _HELD_FIELDS},
+                    },
+                    ttl,
+                )
+            return reply
         if outcome.code == HOLD_NOT_SENT:
             # 요청이 나가지 않았다(좌석은 잡히지 않았다). 남은 확인 시간이 있으면 대기 행동을 되돌려
             # 같은 버튼(같은 확인 ID·같은 Idempotency-Key)으로 다시 누를 수 있게 한다
@@ -499,6 +530,7 @@ class SeatHoldFlow:
             )
         if len(rows) > 1:
             choices = [{"label": _label(r), "message": _label(r)} for r in rows]
+            expires_at = now.timestamp() + self._ttl
             stored = await self._cache.put_pending(
                 user_id,
                 session_id,
@@ -509,7 +541,7 @@ class SeatHoldFlow:
                     "options": {
                         c["message"]: r["screening_id"] for c, r in zip(choices, rows, strict=True)
                     },
-                    "expiresAt": now.timestamp() + self._ttl,
+                    "expiresAt": expires_at,
                 },
                 self._ttl,
             )
@@ -520,10 +552,16 @@ class SeatHoldFlow:
                     SCREENING_AMBIGUOUS,
                     labels=seats,
                 )
+            # 회차 버튼도 대기 행동(2분)에 묶여 있다 — 만료 시각을 같이 알려 화면이 버튼을 막게 한다
             return HoldReply(
                 HOLD_GUIDE,
                 "어느 회차인가요? 골라 주세요.",
-                _seat_hold(None, labels=seats, reason=SCREENING_AMBIGUOUS),
+                _seat_hold(
+                    None,
+                    labels=seats,
+                    reason=SCREENING_AMBIGUOUS,
+                    confirm_expires_at=_at(expires_at),
+                ),
                 choices,
             )
         return await self._propose(rows[0], seats, user_id, session_id, now, deadline)
@@ -741,6 +779,29 @@ def _seat_hold(
         "confirmExpiresAt": confirm_expires_at,
         "reason": reason,
     }
+
+
+# '방금 끝난 선점'(ai:held)에 남기는 칸 — 토큰·seatIds·Idempotency-Key 는 남기지 않는다
+_HELD_FIELDS = ("screeningId", "bookingId", "seatLabels", "amount", "expiresAt")
+
+
+def _held(
+    screening_id: int | None, booking_id: int, labels: list[str], amount: Any, expires_at: Any
+) -> HoldReply:
+    """선점 성공의 답. 처음 답과 같은 확인의 재전송에 주는 답이 글자까지 같게 한곳에서 만든다."""
+    expires = _iso(expires_at)
+    until = f"{expires:%H:%M}까지 " if expires else f"{HOLD_MINUTES}분 안에 "
+    return HoldReply(
+        HOLD_RESULT,
+        f"{'·'.join(labels)} 좌석을 잡았습니다. {until}결제를 마쳐 주세요.",
+        _seat_hold(
+            screening_id,
+            booking_id=booking_id,
+            labels=labels,
+            amount=amount,
+            expires_at=expires_at,
+        ),
+    )
 
 
 def _guide(

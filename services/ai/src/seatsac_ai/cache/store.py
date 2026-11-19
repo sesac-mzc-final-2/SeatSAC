@@ -9,6 +9,7 @@
   v2 (#140) 잔여석 칸은 잔여석을 물었을 때만 SELECT — v1 템플릿에는 묻지 않은 잔여석이 들어 있다
   ai:session:{userId}:{sessionId}          30분   후속 질문 문맥(직전 질문·SQL)
   ai:pending:{userId}:{sessionId}          2분    좌석 잡기 확인 대기 행동(seat_hold.py)
+  ai:held:{userId}:{sessionId}             ≤5분   방금 끝난 선점 결과(같은 확인이 다시 오면 같은 답)
 
 캐시는 비용을 줄이는 장치일 뿐이다. Valkey가 실패하면 **놓친 것(miss)으로 보고** Claude로 답한다
 (사용 한도는 quota/limiter.py 가 따로 503으로 막는다).
@@ -105,6 +106,10 @@ def session_key(user_id: str, session_id: str) -> str:
 
 def pending_key(user_id: str, session_id: str) -> str:
     return f"ai:pending:{user_id}:{session_id}"
+
+
+def held_key(user_id: str, session_id: str) -> str:
+    return f"ai:held:{user_id}:{session_id}"
 
 
 class ValkeySearchIndex:
@@ -352,6 +357,37 @@ class ChatCache:
         except ValueError:
             return None
         return action if isinstance(action, dict) else None
+
+    async def has_pending(self, user_id: str, session_id: str) -> bool:
+        """대기 행동이 있는지만 본다(지우지 않는다). Valkey 실패면 False."""
+        try:
+            return bool(await self._v.exists(pending_key(user_id, session_id)))
+        except RedisError as exc:
+            log.warning("대기 행동 확인 실패: %s", exc)
+            return False
+
+    # --- 방금 끝난 선점(같은 확인의 재전송에 같은 결과를 돌려준다) ----------------------
+    async def put_held(self, user_id: str, session_id: str, result: dict[str, Any], ttl: int):
+        """실패해도 넘어간다 — 선점은 이미 끝났고, 재전송에 같은 답을 못 줄 뿐이다."""
+        try:
+            await self._v.set(
+                held_key(user_id, session_id), json.dumps(result, ensure_ascii=False), ex=ttl
+            )
+        except RedisError as exc:
+            log.warning("선점 결과 저장 실패: %s", exc)
+
+    async def get_held(self, user_id: str, session_id: str) -> dict[str, Any] | None:
+        """지우지 않고 읽는다(TTL 안에서는 몇 번 다시 와도 같은 답). 없거나 실패면 None."""
+        try:
+            raw = await self._v.get(held_key(user_id, session_id))
+        except RedisError as exc:
+            log.warning("선점 결과 조회 실패: %s", exc)
+            return None
+        try:
+            result = json.loads(raw) if raw else None
+        except ValueError:
+            return None
+        return result if isinstance(result, dict) else None
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:

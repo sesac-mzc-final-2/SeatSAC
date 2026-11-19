@@ -17,7 +17,7 @@ import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from seatsac_ai import seat_hold as holds
-from seatsac_ai.cache.store import ChatCache, MemoryIndex, pending_key
+from seatsac_ai.cache.store import ChatCache, MemoryIndex, held_key, pending_key
 from seatsac_ai.common.errors import ApiError
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
@@ -343,10 +343,126 @@ def test_confirm_button_holds_exactly_once_with_the_stored_key_and_users_token()
     assert json.loads(post.content) == {"screeningId": 2, "seatIds": [1007, 1008]}
     assert post.headers["authorization"] == TOKEN
     assert post.headers["idempotency-key"] == stored["idempotencyKey"]
-    # 대기 행동은 한 번 쓰고 지운다 — 버튼을 또 눌러도 다시 잡지 않는다
+    # 대기 행동은 한 번 쓰고 지운다 — 버튼을 또 눌러도 다시 잡지 않는다(같은 결과만 다시 준다)
+    assert asyncio.run(valkey.get(pending_key(USER, first["sessionId"]))) is None
     again = press(service, first)
-    assert again["path"] == "HOLD_GUIDE" and again["seatHold"]["reason"] == "NOT_CONFIRMED"
+    assert again["path"] == "HOLD_RESULT" and again["seatHold"] == body["seatHold"]
     assert len(api.posts) == 1 and len(llm.requests) == 1
+
+
+# --- 확인은 닿았는데 응답만 실패한 뒤 같은 확인 ID 재전송 ('방금 끝난 선점') --------------
+
+
+def test_resending_the_same_confirm_after_success_returns_the_same_result_without_a_new_hold():
+    """gateway 시간 초과 등으로 화면은 오류를 봤지만 ai는 선점을 마친 경우 — 「다시 묻기」."""
+    llm = ScriptedLlm(hold_tool())
+    service, api, valkey = make(llm)
+    first = confirmed(service)
+    done = press(service, first)
+    seen = len(api.seen)
+    for _ in range(2):  # TTL 안에서는 몇 번 다시 와도 같다
+        again = press(service, first)
+        drop = ("latencyMs",)
+        assert {k: v for k, v in again.items() if k not in drop} == {
+            k: v for k, v in done.items() if k not in drop
+        }
+    assert again["path"] == "HOLD_RESULT" and again["seatHold"]["bookingId"] == 9876
+    assert again["llm"]["calls"] == 0 and len(llm.requests) == 1
+    assert len(api.posts) == 1 and len(api.seen) == seen  # booking 을 다시 부르지 않았다
+    key = held_key(USER, first["sessionId"])
+    stored = json.loads(asyncio.run(valkey.get(key)))
+    assert set(stored) == {
+        "userId", "confirmId", "replayUntil",
+        "screeningId", "bookingId", "seatLabels", "amount", "expiresAt",
+    }  # fmt: skip
+    assert "Bearer" not in json.dumps(stored) and "idempotencyKey" not in stored
+    assert 0 < asyncio.run(valkey.ttl(key)) <= 300  # 선점 유지 시간(5분) 이내
+
+
+@pytest.mark.parametrize("case", ["other_user", "other_session", "no_session", "other_id"])
+def test_a_finished_hold_is_replayed_only_to_the_same_user_session_and_confirm_id(case):
+    service, api, _ = make(ScriptedLlm(hold_tool()))
+    first = confirmed(service)
+    assert press(service, first)["seatHold"]["bookingId"] == 9876
+    if case == "other_user":
+        body = ask(service, yes(first), session_id=first["sessionId"], user="user-2")
+    elif case == "other_session":
+        body = ask(service, yes(first), session_id="0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a")
+    elif case == "no_session":
+        body = ask(service, yes(first))
+    else:
+        body = ask(service, "좌석 잡기 #000000", session_id=first["sessionId"])
+    assert body["path"] == "HOLD_GUIDE" and body["seatHold"]["reason"] == "NOT_CONFIRMED"
+    assert body["seatHold"]["bookingId"] is None and len(api.posts) == 1
+
+
+def test_a_finished_hold_under_my_key_that_names_another_user_is_not_replayed():
+    service, api, valkey = make(ScriptedLlm(hold_tool()))
+    first = confirmed(service)
+    press(service, first)
+    stolen = asyncio.run(valkey.get(held_key(USER, first["sessionId"])))
+    asyncio.run(valkey.set(held_key("user-2", first["sessionId"]), stolen))
+    body = ask(service, yes(first), session_id=first["sessionId"], user="user-2")
+    assert body["seatHold"]["reason"] == "NOT_CONFIRMED" and len(api.posts) == 1
+
+
+def test_a_finished_hold_is_not_replayed_after_its_ttl():
+    service, api, valkey = make(ScriptedLlm(hold_tool()))
+    first = confirmed(service)
+    press(service, first)
+    # 값이 남아 있어도(TTL이 늦게 지운 경우) 시각으로 한 번 더 본다
+    late = press(service, first, now=NOW + timedelta(seconds=301))
+    assert late["path"] == "HOLD_GUIDE" and late["seatHold"]["reason"] == "NOT_CONFIRMED"
+    # 키가 사라진 뒤에도 같다
+    asyncio.run(valkey.delete(held_key(USER, first["sessionId"])))
+    gone = press(service, first)
+    assert gone["seatHold"]["reason"] == "NOT_CONFIRMED" and len(api.posts) == 1
+
+
+def test_a_finished_hold_lives_no_longer_than_the_hold_itself():
+    """booking 이 준 결제 기한이 5분보다 짧으면 그때까지만 남긴다."""
+    soon = HELD | {"expiresAt": "2026-11-17T19:41:00+09:00"}
+    service, _, valkey = make(ScriptedLlm(hold_tool()), Api(hold=(201, soon)))
+    first = confirmed(service)
+    press(service, first)
+    assert 0 < asyncio.run(valkey.ttl(held_key(USER, first["sessionId"]))) <= 60
+    late = press(service, first, now=NOW + timedelta(seconds=61))
+    assert late["seatHold"]["reason"] == "NOT_CONFIRMED"
+
+
+def test_resending_an_old_success_does_not_drop_a_newer_confirm_request():
+    llm = ScriptedLlm(hold_tool(["J7", "J8"]), hold_tool(["A1"]))
+    service, api, valkey = make(llm)
+    a = confirmed(service)
+    press(service, a)
+    b = confirmed(service, "오늘 20시 별의 항해 건대입구 A1 잡아줘", session_id=a["sessionId"])
+    again = press(service, a)
+    assert again["path"] == "HOLD_RESULT" and again["seatHold"]["seatLabels"] == ["J7", "J8"]
+    assert asyncio.run(valkey.get(pending_key(USER, b["sessionId"]))) is not None
+    assert len(api.posts) == 1
+
+
+def test_failed_or_unknown_holds_leave_nothing_to_replay():
+    for hold in ((409, error("SEAT_UNAVAILABLE")), httpx.ReadTimeout("slow")):
+        service, api, valkey = make(ScriptedLlm(hold_tool()), Api(hold=hold))
+        first = confirmed(service)
+        press(service, first)
+        assert asyncio.run(valkey.keys("ai:held:*")) == []
+
+
+def test_valkey_failure_when_remembering_the_result_still_answers(monkeypatch):
+    service, api, valkey = make(ScriptedLlm(hold_tool()))
+    first = confirmed(service)
+    real_set = valkey.set
+
+    async def failing_set(key, *args, **kwargs):
+        if key.startswith("ai:held:"):
+            raise RedisConnectionError("down")
+        return await real_set(key, *args, **kwargs)
+
+    monkeypatch.setattr(valkey, "set", failing_set)
+    assert press(service, first)["seatHold"]["bookingId"] == 9876
+    assert press(service, first)["seatHold"]["reason"] == "NOT_CONFIRMED" and len(api.posts) == 1
 
 
 # --- 확인한 것만 잡는다 (확인 ID) --------------------------------------------------
@@ -395,12 +511,37 @@ def test_typing_instead_of_pressing_the_button_never_holds(typed):
 
 
 def test_confirm_without_any_pending_action_does_nothing():
+    """버튼이 보낸 문장(ID 있음)인데 대기 행동이 없다 — Claude도 부르지 않고 안내만."""
     llm = ScriptedLlm()
     service, api, _ = make(llm)
-    for message in ("좌석 잡기", "좌석 잡기 #abc123", "취소", "취소 #abc123"):
+    for message in ("좌석 잡기 #abc123", "취소 #abc123"):
         body = ask(service, message)
         assert body["path"] == "HOLD_GUIDE" and body["seatHold"]["reason"] == "NOT_CONFIRMED"
     assert api.seen == [] and llm.requests == []
+
+
+@pytest.mark.parametrize("typed", ["취소", "좌석 잡기", " 취소 "])
+@pytest.mark.parametrize("session", ["none", "fresh", "used"])
+def test_typed_reply_without_a_pending_action_is_an_ordinary_question(typed, session):
+    """ID 없이 타이핑한 「취소」·「좌석 잡기」는 대기 행동이 없으면 평소 경로(Claude)로 간다.
+
+    Claude로 가도 선점하지 않는다 — POST 는 ID가 맞는 확인에서만 나간다.
+    """
+    out = tool("out_of_scope", reason="x")
+    llm = ScriptedLlm(hold_tool(), out) if session == "used" else ScriptedLlm(out)
+    service, api, valkey = make(llm)
+    session_id = None
+    if session == "fresh":
+        session_id = "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a"
+    elif session == "used":
+        first = confirmed(service)
+        session_id = first["sessionId"]
+        assert ask(service, no(first), session_id=session_id)["seatHold"]["reason"] == "CANCELED"
+    before = len(llm.requests)
+    body = ask(service, typed, session_id=session_id)
+    assert body["path"] != "HOLD_GUIDE" and body["seatHold"] is None
+    assert len(llm.requests) == before + 1 and api.posts == []
+    assert asyncio.run(valkey.keys("ai:pending:*")) == []
 
 
 @pytest.mark.parametrize("case", ["other_session", "other_user", "no_session"])
@@ -475,7 +616,9 @@ def test_two_confirms_at_once_hold_only_once():
         return await asyncio.gather(send, again)
 
     bodies = asyncio.run(both())
-    assert sorted(b["path"] for b in bodies) == ["HOLD_GUIDE", "HOLD_RESULT"]
+    # 진 쪽은 「확인할 요청이 없다」거나, 이긴 쪽이 이미 끝났으면 같은 결과를 받는다 — POST 는 한 번
+    paths = sorted(b["path"] for b in bodies)
+    assert paths in (["HOLD_GUIDE", "HOLD_RESULT"], ["HOLD_RESULT", "HOLD_RESULT"])
     assert len(api.posts) == 1
 
 
@@ -610,6 +753,14 @@ def test_screening_buttons_up_to_seven_then_ask_for_more(monkeypatch, open_count
     body = ask(service, "오늘 건대입구 J7 잡아줘")
     assert body["path"] == "HOLD_GUIDE" and body["seatHold"]["reason"] == "SCREENING_AMBIGUOUS"
     assert (len(body["choices"]) if body["choices"] else None) == buttons
+    # 기한은 회차 버튼이 있을 때만(대기 행동의 만료 시각과 같다)
+    assert body["seatHold"]["confirmExpiresAt"] == (
+        "2026-11-17T19:42:00+09:00" if buttons else None
+    )
+    if buttons:
+        (key,) = asyncio.run(valkey.keys("ai:pending:*"))
+        stored = json.loads(asyncio.run(valkey.get(key)))
+        assert stored["expiresAt"] == (NOW + timedelta(seconds=120)).timestamp()
     assert api.seen == []
     assert len(asyncio.run(valkey.keys("ai:pending:*"))) == (1 if buttons else 0)
 
@@ -620,6 +771,8 @@ def test_several_screenings_ask_which_one_then_continue_without_claude():
     service, api, _ = make(llm)
     first = ask(service, "오늘 건대 J7 J8 잡아줘")
     assert first["path"] == "HOLD_GUIDE" and first["seatHold"]["reason"] == "SCREENING_AMBIGUOUS"
+    # 회차 버튼도 대기 행동(2분)에 묶여 있다 — 그 만료 시각이 같이 온다
+    assert first["seatHold"]["confirmExpiresAt"] == "2026-11-17T19:42:00+09:00"
     assert [c["label"] for c in first["choices"]] == [
         "별의 항해 11/17(화) 20:00 건대입구 1관",
         "한강의 밤 11/17(화) 21:00 건대입구 2관",
@@ -654,6 +807,7 @@ def test_screening_buttons_are_not_offered_when_the_choice_cannot_be_remembered(
     monkeypatch.setattr(valkey, "set", failing_set)
     body = ask(service, "오늘 건대 J7 잡아줘")
     assert body["seatHold"]["reason"] == "SCREENING_AMBIGUOUS" and body["choices"] is None
+    assert body["seatHold"]["confirmExpiresAt"] is None  # 버튼이 없으면 기한도 없다
 
 
 def test_midnight_screening_is_found_by_the_date_the_user_said():
@@ -801,6 +955,24 @@ def error(code, details=()):
             {"bookingId": 9001, "expiresAt": "2026-11-17T19:44:00+09:00"},
             1,
         ),
+        # booking 은 ACTIVE_HOLD_EXISTS 를 세 모양으로 준다 — 예매 ID를 알려 주지 않으면 null
+        (
+            (
+                409,
+                error(
+                    "ACTIVE_HOLD_EXISTS", [{"field": "screeningId", "reason": "HOLD_IN_PROGRESS"}]
+                ),
+            ),
+            "ACTIVE_HOLD_EXISTS",
+            {"bookingId": None, "expiresAt": None, "screeningId": 2},
+            1,
+        ),
+        (
+            (409, error("ACTIVE_HOLD_EXISTS")),
+            "ACTIVE_HOLD_EXISTS",
+            {"bookingId": None, "expiresAt": None, "screeningId": 2},
+            1,
+        ),
         ((400, error("SCREENING_STARTED")), "SCREENING_STARTED", {"bookingId": None}, 1),
         ((400, error("VALIDATION_FAILED")), "HOLD_FAILED", {"screeningId": 2}, 1),
         ((503, error("SERVICE_UNAVAILABLE")), "UPSTREAM_UNAVAILABLE", {"screeningId": 2}, 1),
@@ -897,9 +1069,9 @@ def test_booking_result_and_seat_status_never_reach_claude_or_the_cache(caplog):
     assert len(llm.requests) == 2 and again["path"] == "HOLD_CONFIRM"  # 캐시로 답하지 않는다
     sent = json.dumps([r["messages"] for r in llm.requests], ensure_ascii=False, default=str)
     assert "9876" not in sent and "AVAILABLE" not in sent and "1007" not in sent
-    # 조회 문맥(세션)·캐시에 남기지 않는다
+    # 조회 문맥(세션)·캐시에 남기지 않는다 — 좌석 잡기 자신의 키(대기 행동·방금 끝난 선점)뿐이다
     keys = asyncio.run(valkey.keys("*"))
-    assert [k for k in keys if not k.startswith("ai:pending:")] == []
+    assert [k for k in keys if not k.startswith(("ai:pending:", "ai:held:"))] == []
     # 로그: 결과 코드만 — 좌석 이름·예매 ID·토큰 없음
     fields = [getattr(r, "fields", {}) for r in caplog.records if r.message == "chat answered"]
     assert [f["path"] for f in fields] == ["HOLD_CONFIRM", "HOLD_RESULT", "HOLD_CONFIRM"]

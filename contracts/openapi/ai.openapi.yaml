@@ -49,7 +49,8 @@ paths:
         ⑥에서 Claude가 도구 `hold_seats`(영화·극장·날짜·시각·좌석 이름)를 고르면 ai가
         - 좌석 이름은 Claude가 준 것 중 **이번 `message` 원문에 적힌 것만** 쓴다(좌석을 골라 주지 않는다, 최대 4석)
         - (영화 또는 극장) + (날짜 또는 시각)이 없으면 회차를 좁히지 않고 되묻는다. 스냅샷에서 예매할 수 있는(시작 5분 전까지) 회차가
-          하나면 진행, 2~7개면 `HOLD_GUIDE` + `choices` 회차 버튼, 8개 이상이면 조건을 더 묻는다
+          하나면 진행, 2~7개면 `HOLD_GUIDE` + `choices` 회차 버튼(확인 버튼과 같은 2분 기한 — `seatHold.confirmExpiresAt`),
+          8개 이상이면 조건을 더 묻는다
         - 공개 API `GET /screenings/{id}/seats` → `GET /auditoriums/{id}/layout?version=`(좌석 현황이 말한 배치 버전)로
           좌석 이름 → `seatId`·빈 좌석인지 확인한 뒤 **확인 요청**(`HOLD_CONFIRM`)을 돌려준다. 이때는 선점하지 않는다.
         확인 요청마다 일회용 확인 ID를 만들어 `choices` 두 버튼의 `message`에 싣는다(`좌석 잡기 #c7f2a1`·`취소 #c7f2a1`, 버튼 글자는
@@ -57,7 +58,11 @@ paths:
         화면이 확인 버튼의 `message`를 **직전 응답의 `sessionId`**로 보내면 ai는 Claude 없이 그 대기 행동을 꺼내(한 번 쓰면 사라진다)
         **확인 ID가 같을 때만** `POST {PUBLIC_API_BASE_URL}/seats/hold`를 요청의 `Authorization` 그대로 + 저장해 둔 `Idempotency-Key`로
         부르고 결과를 `HOLD_RESULT`로 답한다(시간 초과·연결 오류면 같은 키로 1회만 재시도). 대기 행동이 없거나(만료·취소·다른 세션·
-        다른 사용자·그 사이 다른 질문) 확인 ID가 다르면(지난 확인 요청의 버튼) 선점하지 않는다. ID 없이 타이핑한 「좌석 잡기」는 확인이 아니다.
+        다른 사용자·그 사이 다른 질문) 확인 ID가 다르면(지난 확인 요청의 버튼) 선점하지 않는다. ID 없이 타이핑한 「좌석 잡기」는 확인이 아니다
+        (대기 행동이 있으면 버튼을 누르라는 안내, 없으면 평소 질문으로 처리 — ID 없이 타이핑한 「취소」도 대기 행동이 있을 때만 취소로 받는다).
+        선점에 **성공하면** 그 결과(확인 ID·`bookingId`·좌석 이름·금액·만료 시각 — 토큰 없음)를 `ai:held:{userId}:{sessionId}`에 선점이
+        남은 동안(5분 이내)만 둔다. 응답이 화면에 닿지 못해(예: gateway 시간 초과) **같은 확인 ID가 같은 `sessionId`로 다시 오면**
+        booking을 다시 부르지 않고 같은 `HOLD_RESULT`를 돌려준다(다른 사용자·다른 세션·다른 확인 ID·기한 뒤에는 `NOT_CONFIRMED`).
         좌석 잡기 흐름 동안 응답의 `sessionId`는 바뀌지 않는다. 결제는 채팅에서 하지 않는다 — 화면이 `seatHold.bookingId`로 결제 화면 링크를,
         `seatHold.screeningId`로 좌석 화면 링크를 만든다. 좌석 현황·예매 결과는 Claude에 보내지 않고 캐시·세션 문맥에도 남기지 않는다.
       security: [ { bearerAuth: [] } ]
@@ -99,6 +104,7 @@ paths:
                 holdConfirm: { $ref: "./examples/ai/chat-hold-confirm.json" }
                 holdResult: { $ref: "./examples/ai/chat-hold-result.json" }
                 holdGuide: { $ref: "./examples/ai/chat-hold-guide.json" }
+                holdGuideScreenings: { $ref: "./examples/ai/chat-hold-guide-screenings.json" }
         "400":
           description: |
             VALIDATION_FAILED — `message` 없음·빈 문자열(공백만)·300자 초과(`details[{ field: "message", reason: LENGTH }]`),
@@ -331,11 +337,11 @@ components:
       required: [screeningId, bookingId, seatLabels, amount, expiresAt, confirmExpiresAt, reason]
       properties:
         screeningId: { type: [integer, "null"], format: int64, description: "회차 ID(좌석 화면 링크용). 회차를 하나로 정하지 못했으면 null" }
-        bookingId: { type: [integer, "null"], format: int64, description: "HOLD_RESULT 성공이면 새 PENDING 예매 ID(결제 화면 링크용). `reason: ACTIVE_HOLD_EXISTS`면 이미 진행 중인 예매 ID. 그 밖은 null" }
+        bookingId: { type: [integer, "null"], format: int64, description: "HOLD_RESULT 성공이면 새 PENDING 예매 ID(결제 화면 링크용). `reason: ACTIVE_HOLD_EXISTS`면 진행 중인 예매 ID(booking이 알려 주지 않으면 null — 화면은 null이면 결제 화면 링크를 만들지 않는다). 그 밖은 null" }
         seatLabels: { type: array, maxItems: 4, items: { type: string }, description: "좌석 이름(예: J7). 사용자가 이번 message에 적은 것(대문자), 성공이면 booking이 확정한 것" }
         amount: { type: [integer, "null"], description: "HOLD_RESULT 성공일 때만 booking이 확정한 금액(원). 확인 요청에는 금액을 적지 않는다(요금 규칙은 booking의 것) — null" }
-        expiresAt: { type: [string, "null"], format: date-time, description: "선점 만료 시각(+09:00, 결제 기한). HOLD_RESULT 성공·ACTIVE_HOLD_EXISTS일 때만" }
-        confirmExpiresAt: { type: [string, "null"], format: date-time, description: "확인 버튼을 누를 수 있는 기한(+09:00, 확인 요청 뒤 2분). HOLD_CONFIRM·HOLD_RESULT `HOLD_NOT_SENT`(버튼이 다시 올 때)에만. 화면은 지나면 버튼을 막는다" }
+        expiresAt: { type: [string, "null"], format: date-time, description: "선점 만료 시각(+09:00, 결제 기한). HOLD_RESULT 성공·ACTIVE_HOLD_EXISTS(booking이 알려 줄 때)일 때만. 화면은 지나면 결제 화면 링크를 숨긴다" }
+        confirmExpiresAt: { type: [string, "null"], format: date-time, description: "`choices` 버튼을 누를 수 있는 기한(+09:00, 버튼을 낸 뒤 2분 — 대기 행동 `ai:pending`의 만료 시각). HOLD_CONFIRM·회차 고르기 HOLD_GUIDE(`reason: SCREENING_AMBIGUOUS` + `choices`)·HOLD_RESULT `HOLD_NOT_SENT`(버튼이 다시 올 때)에만. 화면은 이 값이 있으면 지난 뒤 버튼을 막는다" }
         reason:
           type: [string, "null"]
           pattern: "^[A-Z_]+$"

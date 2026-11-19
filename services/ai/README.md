@@ -21,8 +21,11 @@ gateway를 거치지 않고 직접 부를 때는 gateway가 넣어 주는 헤더
 결제는 채팅에서 하지 않는다(`seat_hold.py`, 계약 `ai.openapi.yaml`의 `HOLD_*`·`seatHold`).
 
 - **기본 켜짐.** 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(로컬 `.env`, staging은 gitops `overlays/staging/ai`의 `ai-config`).
+  **staging은 gitops에서 `false`로 두고(끄는 gitops PR을 이 코드보다 먼저 머지), 로컬 확인 뒤 켠다**
   끄면 Claude에 가는 system·도구가 좌석 잡기가 없던 때와 글자 하나 다르지 않다(`tests/test_seat_hold.py`)
 - 켜져 있어도 ai Valkey(`AI_VALKEY_HOST`)나 `PUBLIC_API_BASE_URL`이 없으면 꺼진 것으로 동작한다
+- 확인은 닿았는데 응답만 실패해(예: gateway 시간 초과) 같은 확인 버튼 문장이 다시 오면, 성공한 선점의 결과를
+  `ai:held:{userId}:{sessionId}`(선점이 남은 동안, 최대 5분)에서 꺼내 같은 답을 준다 — booking을 다시 부르지 않는다
 - 로컬에서 켠 채 `PUBLIC_API_BASE_URL`을 staging 주소로 두면 확인 버튼이 **staging 좌석을 실제로 잡는다** — 로컬 gateway 주소로 두고 쓴다
 - `eval.run`은 좌석 잡기 클라이언트를 붙이지 않아 도구 4개(꺼진 상태)의 정확도를 잰다
 

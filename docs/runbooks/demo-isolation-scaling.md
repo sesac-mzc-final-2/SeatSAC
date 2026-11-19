@@ -28,13 +28,13 @@ export AWS_PROFILE=cinema-admin && kubectl config use-context cinema-admin
 | #33 | `overlays/staging/payment` `replicas: 0` [원복 예정] |
 | #34 | #33 되돌림(replicas 1) — #33 머지 뒤 base를 main으로 바꿔 Draft를 푼다 |
 
-1. **#33 머지** → `kubectl -n cinema-staging get deploy payment` `0/0` (ArgoCD `cinema-payment` Synced)
-2. 화면: 메인·상영시간 → 좌석 현황 → **선점 성공** → 결제 → **실패 안내**(503 `PAYMENT_RESULT_UNKNOWN` — booking이 payment에 연결하지 못하고 1회 재시도·조회 뒤 포기). 몇 번 반복하면 booking의 `payment` 서킷이 열려 바로 실패한다
-3. 신호등: **payment 회색**(트래픽 없음), booking은 결제 503으로 노랑·빨강일 수 있다, **catalog·user·gateway 초록** — 「장애가 결제에만 갇혔다」 장면. ⑤ 「결제 호출 결과 / 초」에 `error`
-4. **복구 — #34 머지** → payment `1/1` Ready(약 1분) → 10초쯤 뒤 서킷 반열림 → 결제 재시도 성공
+1. **#33 머지**(11/20 07:00 머지 마감 전에 #34 복구까지 끝낼 수 있을 때만 시작한다 — 마감 뒤에는 복구 revert만 머지할 수 있다) → `kubectl -n cinema-staging get deploy payment` `0/0` (ArgoCD `cinema-payment` Synced). payment가 0개인 동안 포트원 웹훅(`POST /api/webhooks/portone`)도 gateway 503 — 녹화 중 실제 결제창(토스페이)은 쓰지 않는다
+2. 화면: 메인·상영시간 → 좌석 현황 → **선점 성공** → 결제 → **실패 안내**(503 `PAYMENT_RESULT_UNKNOWN` — booking이 payment에 연결하지 못하고 1회 재시도·조회 뒤 포기). 서킷(`payment`, 최소 10건·실패율 50%)은 **화면 반복만으로는 열리지 않을 수 있다** — 503 뒤 화면이 예매를 재확인할 때의 결제 조회(`find()`)는 연결 실패를 「모름」으로 돌려 서킷에 성공으로 세기 때문이다(결제 1회 ≈ 실패 1 : 성공 최대 5). 열렸으면 응답이 503 `SERVICE_UNAVAILABLE`(booking `PAYMENT_UNAVAILABLE`)로 바뀐다 — 기록할 때 둘을 구분한다
+3. 신호등: **payment 회색**(트래픽 없음), booking은 결제 503으로 노랑·빨강일 수 있다, **catalog·user·gateway 초록** — 「장애가 결제에만 갇혔다」 장면. ⑤ 「결제 호출 결과 / 초」에 `timeout`(연결 실패도 「결과 미확인」으로 센다. `error`는 400 거부·취소 실패 때만, 서킷이 열린 뒤에는 아무 라벨도 오르지 않는다)
+4. **복구 — #34 머지** → payment `1/1` Ready(약 1분) → 결제 재시도 성공(서킷이 열려 있었다면 10초쯤 뒤 반열림을 거쳐 닫힌다)
 5. 남은 PENDING 예매는 만료 스캔이 결제 상태를 조회해 정리한다(몇 분). 그래도 남으면 `demo-zero-downtime.md` 1장
 
-기록: 녹화 시각 · 결제 실패 응답(코드·reason) · 복구에 걸린 시간(#34 머지 → 결제 성공)
+기록: 녹화 시각 · 결제 실패 응답(`PAYMENT_RESULT_UNKNOWN`인지 서킷 열림 `SERVICE_UNAVAILABLE`인지) · 복구에 걸린 시간(#34 머지 → 결제 성공)
 
 ## 2. 독립 확장 (5.1.6) — catalog만 늘린다
 

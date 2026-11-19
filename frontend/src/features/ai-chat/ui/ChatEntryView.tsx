@@ -9,6 +9,7 @@ import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/pres
 import { hasHoldButtons, isHoldConfirm, isHoldReply, type HoldState } from "../lib/seat-hold";
 import { seatLinks } from "../lib/seat-links";
 import type { ChatEntry } from "../model/use-ai-chat";
+import { CONTEXT_EXPIRED_NOTICE, continueFromOf, inheritedLabel, isContextExpired } from "../lib/context-carry";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
 
@@ -27,8 +28,13 @@ interface Props {
   demo: EntryDemo | null;
   /** 오류 항목의 「다시 묻기」 (보낼 수 없는 상태면 undefined) */
   onRetry?: (question: string, link?: ChatLink) => void;
-  /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
-  onPickMovie?: (title: string) => void;
+  /**
+   * 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성).
+   * continueFrom = 그 버튼이 달린 답의 `context.id` — 그 답의 날짜·극장·시각(○시 이후/이전)을 이어받는다(없으면 예전처럼 독립 질문)
+   */
+  onPickMovie?: (title: string, continueFrom?: string) => void;
+  /** 이어받은 답의 「조건 지우기」 — 같은 질문을 `continueFrom` 없이 다시 보낸다 (보낼 수 없는 상태면 undefined) */
+  onClearContext?: (question: string, link?: ChatLink) => void;
   /** 되묻기(`CLARIFY`) 버튼 — 누르면 그 `message` 를 보낸다 (보낼 수 없는 상태면 undefined) */
   onChoose?: (message: string) => void;
   /**
@@ -231,7 +237,10 @@ function Answer({
   response,
   demo,
   link,
+  question,
+  continueFrom,
   onPickMovie,
+  onClearContext,
   onChoose,
   hold,
   onNavigate,
@@ -240,13 +249,18 @@ function Answer({
   response: ChatResponse;
   demo: EntryDemo | null;
   link?: ChatLink;
-  onPickMovie?: (title: string) => void;
+  question?: string;
+  continueFrom?: string;
+  onPickMovie?: (title: string, continueFrom?: string) => void;
+  onClearContext?: (question: string, link?: ChatLink) => void;
   onChoose?: (message: string) => void;
   hold?: Props["hold"];
   onNavigate?: () => void;
   onSeatNavigate?: () => void;
 }) {
   const movieTitles = answerMovieTitles(response);
+  // 좌석 잡기 답(HOLD_*)은 조회 답이 아니다 — 조건 표시를 붙이지 않는다
+  const carried = response.path.startsWith("HOLD_") ? null : inheritedLabel(response);
   const choices = response.choices ?? [];
   // 좌석 잡기 확인·취소·회차 고르기: 지금 유효한 요청의 버튼만 누를 수 있다(지난 것·시간이 지난 것은 막는다).
   // 막을지는 응답 값(path·confirmExpiresAt)으로 정한다 — 버튼 문장의 모양은 주/보조 버튼 구분에만 쓴다.
@@ -259,6 +273,23 @@ function Answer({
   return (
     <div className={styles.answer}>
       <p className={styles.text}>{response.answer}</p>
+      {/* 앞 답의 조건을 이어받은 답 — 무엇을 기준으로 찾았는지 보여 주고, 지우면 같은 질문을 전체 기준으로 다시 묻는다 */}
+      {carried && (
+        <p className={styles.carried}>
+          <span className={styles.carriedLabel}>{carried} 기준</span>
+          <button
+            type="button"
+            className={styles.clear}
+            aria-label={`${carried} 조건 지우기`}
+            disabled={!onClearContext || !question}
+            onClick={() => question && onClearContext?.(question, link)}
+          >
+            <Icon name="x" size={12} />
+            조건 지우기
+          </button>
+        </p>
+      )}
+      {isContextExpired(response, continueFrom) && <p className={styles.note}>{CONTEXT_EXPIRED_NOTICE}</p>}
       {response.rejection && <p className={styles.note}>{response.rejection.message}</p>}
       {choices.length > 0 && (
         <div className={styles.choices} role="group" aria-label="답 고르기">
@@ -310,7 +341,12 @@ function Answer({
         {table && ` · ${n(response.rowCount)}건`}
         {response.truncated && " · 500건까지만 보여요"}
       </p>
-      {movieTitles.length > 0 && <MovieChoices titles={movieTitles} onPick={onPickMovie} />}
+      {movieTitles.length > 0 && (
+        <MovieChoices
+          titles={movieTitles}
+          onPick={onPickMovie && ((title) => onPickMovie(title, continueFromOf(response)))}
+        />
+      )}
       {/* 추천 질문으로 고른 극장·영화·날짜면 그 화면으로 바로 간다 */}
       {link && response.path !== "OUT_OF_SCOPE" && response.path !== "REJECTED" && (
         <Link className={styles.link} to={link.href}>
@@ -323,7 +359,17 @@ function Answer({
   );
 }
 
-export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, hold, onNavigate, onSeatNavigate }: Props) {
+export function ChatEntryView({
+  entry,
+  demo,
+  onRetry,
+  onPickMovie,
+  onClearContext,
+  onChoose,
+  hold,
+  onNavigate,
+  onSeatNavigate,
+}: Props) {
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
@@ -344,7 +390,10 @@ export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, hol
         response={entry.response}
         demo={demo}
         link={entry.link}
+        question={entry.question}
+        continueFrom={entry.continueFrom}
         onPickMovie={onPickMovie}
+        onClearContext={onClearContext}
         onChoose={onChoose}
         hold={hold}
         onNavigate={onNavigate}

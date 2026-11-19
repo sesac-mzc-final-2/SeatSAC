@@ -77,6 +77,30 @@ export interface ChatCacheRef {
 export interface ChatRequest {
   message: string;
   sessionId?: string;
+  /** 답 아래 영화 버튼을 눌렀을 때만: 그 답의 `context.id`. 모르는 값이면 서버가 무시한다 */
+  continueFrom?: string;
+}
+
+/**
+ * 이 답이 실제로 조회한 조건 (문맥 이어받기 3.4.22). 하나로 확정된 값만 있고 나머지는 null.
+ * `inherited` 가 비어 있지 않으면 앞 답의 조건을 이어받은 답이다
+ */
+export interface ChatContext {
+  /** 이 답 아래 영화 버튼을 누를 때 `continueFrom` 으로 보낸다 */
+  id: string;
+  date: string | null;
+  theater: string | null;
+  movie: string | null;
+  /**
+   * 「○시 이후/이전」 하나를 조회한 답만 `HH:MM` (그 `date` 의 시각). 그 밖은 null.
+   * 배포 순서상 옛 ai 는 이 두 칸을 보내지 않을 수 있어 선택 필드로 둔다 — 화면은 `label` 만 그린다
+   */
+  time?: string | null;
+  /** `time` 의 방향: after = 그 시각 이후, before = 그 시각 이전 */
+  timeDirection?: "after" | "before" | null;
+  /** 화면 표시용 (예: `내일 11/20(금) · 부산본점`, `오늘 11/19(목) · 20시 이후`) */
+  label: string;
+  inherited: ("date" | "theater" | "time")[];
 }
 
 export interface ChatResponse {
@@ -94,6 +118,8 @@ export interface ChatResponse {
   truncated: boolean;
   sql: string | null;
   presetId: string | null;
+  /** 이 답이 조회한 조건. 해당 없으면 null (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
+  context?: ChatContext | null;
   /** 스냅샷 기준 시각 `+09:00` */
   asOf: string;
   llm: LlmUsage;

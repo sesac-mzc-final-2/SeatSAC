@@ -379,3 +379,22 @@ def _find_prefix(text: str, names: Iterable[str]) -> tuple[str, str] | None:
         if len(matches) == 1:
             return matches[0], word
     return None
+
+
+def find_name(text: str, names: Iterable[str]) -> tuple[str, str] | None:
+    """글 안의 스냅샷 이름(가장 긴 것) → (이름, 글에 적힌 글자). 띄어쓰기는 무시한다.
+
+    extract 는 시각·날짜를 먼저 뽑아 "7일의 왕비" 같은 제목을 놓친다. 제목부터 봐야 하는 곳
+    (문맥 이어받기, seatsac_ai/context.py)이 쓴다. 가장 긴 이름이 둘이면(길이가 같은 제목이
+    둘 다 글에 있다) 어느 쪽인지 정하지 않고 None — 실행할 때마다 답이 달라지지 않게.
+    """
+    hits = []
+    for name in sorted({n for n in names if n and n.strip()}):
+        m = _loose(name).search(text)
+        if m:
+            hits.append((name, m.group(0)))
+    if not hits:
+        return None
+    longest = max(len(name) for name, _ in hits)
+    best = [hit for hit in hits if len(hit[0]) == longest]
+    return best[0] if len(best) == 1 else None

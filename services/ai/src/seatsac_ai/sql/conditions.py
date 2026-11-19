@@ -13,8 +13,9 @@ SQL 검증기(validator.py)는 「위험한가」만 본다. 이 모듈은 「�
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import sqlglot
@@ -42,6 +43,18 @@ class Match:
 
 
 @dataclass(frozen=True)
+class TimeBound:
+    """시각 하한/상한 하나 — `starts_at >= '<날짜> HH:MM'`(after) 또는 `starts_at < …`(before).
+
+    문맥 이어받기(analyze_only_fixed)만 읽는다. 날짜(day)는 그 답의 날짜와 같을 때만 남는다.
+    """
+
+    day: str  # 'YYYY-MM-DD'
+    time: str  # 'HH:MM'
+    direction: str  # after(>=, >) | before(<, <=)
+
+
+@dataclass(frozen=True)
 class Conditions:
     """확정 조건(맨 바깥 AND 의 = · IN · LIKE)과, 조건 칸이 어디든 나오기는 했는지(referenced).
 
@@ -60,6 +73,7 @@ class Conditions:
     seat_aggregate: bool = (
         False  # sum(remaining_seats) 처럼 묶어 센다 — 확인 불가(NULL) 행이 빠진다
     )
+    time: TimeBound | None = None  # analyze_only_fixed 만 채운다(analyze 는 늘 None)
 
     def has_date(self, day: str) -> bool | None:
         """True 일치 · False 빠졌거나 다름 · None 읽지 못해 판단 보류."""
@@ -107,6 +121,116 @@ def analyze(query: ValidatedSql, params: Mapping[str, Any] | None = None) -> Con
         seat_outputs=_seat_outputs(tree),
         seat_aggregate=_seat_aggregate(tree),
     )
+
+
+def analyze_only_fixed(
+    query: ValidatedSql, params: Mapping[str, Any] | None = None
+) -> Conditions | None:
+    """문맥 이어받기용: 「이 답은 이 날짜·극장·영화만 조회했다」고 말할 수 있을 때만 조건을 준다.
+
+    analyze 는 SQL 안의 모든 SELECT 의 조건을 합친다. 의미 검사(질문의 값이 SQL 어딘가에 있나)·
+    잔여석 갱신 범위에는 맞지만, 「이 답의 조건」으로 쓰면 뜻이 뒤집힌다 —
+    `movie_id NOT IN (SELECT … WHERE t.name = '건대입구')` 는 건대입구를 **뺀** 답이다.
+    그래서 아래일 때는 None(이 답에서는 이어받지 않는다):
+      - SELECT 가 둘 이상이다(서브쿼리·CTE·UNION 등) 또는 HAVING 이 있다
+      - 맨 바깥 조건에 날짜·극장·영화 「하나로 읽은 값」·「지금 이후」·「○시 이후/이전 하나」·
+        JOIN 연결 말고 다른 것이 있다(지역·상영관 종류·등급·start_hour·OR·id 로 거른 영화 …)
+        — 그 조건은 이어받지 못하므로 일부만 이어받으면 앞 답보다 넓은 답이 된다
+      - 시각 조건(_time_bound)이 둘 이상이거나(20시~22시), 그 날짜 부분이 이 답의 하나뿐인 날짜
+        (business_date)와 다르다(날짜 없음·날짜 둘·내일 20시인데 답은 오늘·'다음 날 01:00')
+    시각 조건이 하나면 Conditions.time 에 담는다. 그 시각이 「사용자가 말한 시각」인지는 여기서
+    모른다(지금 시각을 조금 다르게 적은 글자일 수 있다) — 부르는 쪽이 질문의 시각과 견준다
+    (context.confirmed_time).
+    한계: LIMIT(개수)·ORDER BY 는 보지 않는다 — "자리 많은 회차 5개"의 5개는 조건으로 치지 않는다.
+    """
+    tree = sqlglot.parse_one(query.sql, read="sqlite")
+    params = params or {}
+    if not isinstance(tree, exp.Select) or len(list(tree.find_all(exp.Select))) != 1:
+        return None
+    if tree.args.get("having") is not None:
+        return None
+    bounds: list[TimeBound] = []
+    for predicate in _top_level_predicates(tree):
+        if not (_is_join_link(predicate) or _is_from_now(predicate, params)):
+            kinds = ("date", "theater", "theater_id", "movie")
+            found: dict[str, set[Any]] = {kind: set() for kind in kinds}
+            _collect(predicate, params, found)
+            if any(found.values()):
+                continue
+            bound = _time_bound(predicate, params)
+            if bound is None:
+                return None
+            bounds.append(bound)
+    conditions = analyze(query, params)
+    if not bounds:
+        return conditions
+    if len(bounds) != 1 or conditions.dates != frozenset({bounds[0].day}):
+        return None
+    return replace(conditions, time=bounds[0])
+
+
+def _is_join_link(predicate: exp.Expression) -> bool:
+    return isinstance(predicate, exp.EQ) and all(
+        isinstance(side, exp.Column) for side in (predicate.left, predicate.right)
+    )
+
+
+def _is_from_now(predicate: exp.Expression, params: Mapping[str, Any]) -> bool:
+    """모든 회차 SQL에 붙는 `starts_at > 지금`(:now 또는 지금과 같은 글자). 사용자 조건이 아니다."""
+    if isinstance(predicate, exp.GT | exp.GTE):
+        column, other = predicate.left, predicate.right
+    elif isinstance(predicate, exp.LT | exp.LTE):
+        column, other = predicate.right, predicate.left
+    else:
+        return False
+    if not isinstance(column, exp.Column) or column.name.lower() != "starts_at":
+        return False
+    if isinstance(other, exp.Placeholder):
+        return other.name == "now"
+    return isinstance(other, exp.Literal) and other.is_string and other.this == params.get("now")
+
+
+_DAY_AND_TIME = re.compile(r"(\d{4}-\d{2}-\d{2}) ((?:[01]\d|2[0-3]):[0-5]\d)")
+
+
+def _time_bound(predicate: exp.Expression, params: Mapping[str, Any]) -> TimeBound | None:
+    """`starts_at >= '<날짜> HH:MM'` 한 줄만 읽는다. 다른 모양은 None(읽지 못함).
+
+    오른쪽은 글자 하나(`'2026-11-19 20:00'`)이거나 글자·:빈칸을 || 로 이은 것
+    (`:today || ' ' || :time` — 프리셋 today_after_time)이고, 이으면 꼭 '날짜 HH:MM' 이어야 한다.
+    start_hour·time(starts_at)·초까지 적은 글자·BETWEEN 은 읽지 않는다.
+    """
+    if isinstance(predicate, exp.GT | exp.GTE):
+        after = True
+    elif isinstance(predicate, exp.LT | exp.LTE):
+        after = False
+    else:
+        return None
+    column, other = predicate.left, predicate.right
+    if not isinstance(column, exp.Column):
+        column, other, after = other, column, not after  # '…' <= starts_at
+    if not isinstance(column, exp.Column) or column.name.lower() != "starts_at":
+        return None
+    text = _text(other, params)
+    match = _DAY_AND_TIME.fullmatch(text) if text is not None else None
+    if match is None:
+        return None
+    return TimeBound(match.group(1), match.group(2), "after" if after else "before")
+
+
+def _text(node: exp.Expression, params: Mapping[str, Any]) -> str | None:
+    """글자 리터럴 · 값이 글자인 :빈칸 · 그것들을 || 로 이은 것 → 이은 글자. 그 밖은 None."""
+    if isinstance(node, exp.Paren):
+        return _text(node.this, params)
+    if isinstance(node, exp.Literal):
+        return node.this if node.is_string else None
+    if isinstance(node, exp.Placeholder):
+        value = params.get(node.name)
+        return value if isinstance(value, str) else None
+    if isinstance(node, exp.DPipe):
+        left, right = _text(node.left, params), _text(node.right, params)
+        return None if left is None or right is None else left + right
+    return None
 
 
 def _top_level_predicates(select: exp.Select) -> Iterator[exp.Expression]:

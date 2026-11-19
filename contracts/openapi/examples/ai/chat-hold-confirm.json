@@ -11,6 +11,7 @@
     "truncated": false,
     "sql": null,
     "presetId": null,
+    "context": null,
     "asOf": "2026-11-17T19:40:00+09:00",
     "llm": {
       "calls": 1,

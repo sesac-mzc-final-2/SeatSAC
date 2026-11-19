@@ -1,0 +1,28 @@
+{
+  "summary": "문맥 이어받기 — 「내일 건대입구 편성표」 답(context.id k7f2a1) 아래 영화 버튼을 눌러 continueFrom: k7f2a1 로 보냄. 그 답의 날짜·극장 + 고른 영화로 내부 틀을 바로 실행(Claude 호출 0). 예열된 캐시에 없으면 path 가 PRESET, sql 은 null",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "내일 11/18(수) 건대입구 영화 제목 회차: 2건입니다. (19시 41분 기준)",
+    "path": "CACHE_EXACT",
+    "columns": [
+      { "name": "starts_at", "type": "text" }
+    ],
+    "rows": [
+      [ "2026-11-18 14:30" ],
+      [ "2026-11-18 19:00" ]
+    ],
+    "screeningIds": [ 770004021, 770004033 ],
+    "rowCount": 2,
+    "truncated": false,
+    "sql": "SELECT s.starts_at FROM screening AS s JOIN movie AS m ON m.movie_id = s.movie_id JOIN theater AS t ON t.theater_id = s.theater_id WHERE s.business_date = '2026-11-18' AND t.name = '건대입구' AND m.title = '영화 제목' AND s.starts_at > '2026-11-17 19:41' ORDER BY s.starts_at LIMIT 500",
+    "presetId": "ctx_movie_date_theater",
+    "context": { "id": "p93x0d", "date": "2026-11-18", "theater": "건대입구", "movie": "영화 제목", "time": null, "timeDirection": null, "label": "내일 11/18(수) · 건대입구", "inherited": [ "date", "theater" ] },
+    "asOf": "2026-11-17T19:41:00+09:00",
+    "llm": { "calls": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0 },
+    "latencyMs": 12,
+    "rejection": null,
+    "choices": null,
+    "cache": { "entryId": "5e1a90c27b34", "stored": false, "similarity": null },
+    "seatHold": null
+  }
+}

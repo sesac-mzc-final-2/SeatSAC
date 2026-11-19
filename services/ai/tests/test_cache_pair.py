@@ -264,7 +264,7 @@ def test_cache_entry_session_and_log_are_unchanged(caplog):
         "anchors", "template", "meaning",
     }  # fmt: skip
     session = json.loads(asyncio.run(cache._v.get(f"ai:session:user-1:{first['sessionId']}")))
-    assert set(session) == {"question", "sql", "path"}
+    assert set(session) == {"question", "sql", "path", "ctx"}  # ctx = 문맥 이어받기(3.4.22)
     answered = [r.fields for r in caplog.records if r.getMessage() == "chat answered"]
     assert len(answered) == 2
     for fields in answered:

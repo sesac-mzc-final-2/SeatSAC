@@ -155,7 +155,7 @@ _HTTP_STATUS_CODE = {
 
 
 # 계약(ai.openapi.yaml POST /ai/chat 400)의 필드별 사유. 그 밖은 pydantic 오류 종류를 그대로 쓴다
-_FIELD_REASON = {"message": "LENGTH", "sessionId": "FORMAT"}
+_FIELD_REASON = {"message": "LENGTH", "sessionId": "FORMAT", "continueFrom": "LENGTH"}
 
 
 def _validation_details(exc: RequestValidationError) -> list[ErrorDetail]:

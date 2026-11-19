@@ -20,6 +20,7 @@
     "truncated": false,
     "sql": null,
     "presetId": "theater_schedule",
+    "context": { "id": "k7f2a1", "date": "2026-11-18", "theater": "건대입구", "movie": null, "time": null, "timeDirection": null, "label": "내일 11/18(수) · 건대입구", "inherited": [] },
     "asOf": "2026-11-17T19:40:00+09:00",
     "llm": { "calls": 1, "inputTokens": 412, "outputTokens": 58, "cacheReadTokens": 3810, "cacheWriteTokens": 0 },
     "latencyMs": 1860,

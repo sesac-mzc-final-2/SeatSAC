@@ -33,7 +33,7 @@ NOW = datetime(2026, 11, 17, 19, 40, tzinfo=KST)
 USER = "user-1"
 TOKEN = "Bearer user-access-token"
 CONTRACT_KEYS = {
-    "answer", "path", "columns", "rows", "rowCount", "truncated", "sql",
+    "answer", "path", "columns", "rows", "screeningIds", "rowCount", "truncated", "sql",
     "presetId", "asOf", "llm", "latencyMs", "rejection", "choices", "seatHold",
 }  # fmt: skip
 # sql_fixtures 회차 2: 별의 항해 · 건대입구 1관(auditorium 101) · 2026-11-17 20:00

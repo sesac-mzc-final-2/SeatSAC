@@ -6,6 +6,7 @@
     "path": "HOLD_CONFIRM",
     "columns": null,
     "rows": null,
+    "screeningIds": null,
     "rowCount": 0,
     "truncated": false,
     "sql": null,

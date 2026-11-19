@@ -7,8 +7,10 @@ from seatsac_ai.sql.validator import (
     NOT_SELECT,
     PARSE_ERROR,
     SqlRejected,
+    ValidatedSql,
     exclude_started,
     validate,
+    with_screening_id,
 )
 
 
@@ -150,6 +152,101 @@ def test_exclude_started_filters_inside_a_cte_not_the_cte_reference():
         "WITH upcoming AS (SELECT movie_id FROM screening WHERE screening.starts_at > :now) "
         "SELECT COUNT(*) FROM upcoming LIMIT 500"
     )
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        # 행 하나 = 회차 하나 → 끝에 붙인다(ORDER BY·LIMIT 은 그대로)
+        (
+            "SELECT m.title AS movie_title, s.starts_at FROM screening s "
+            "JOIN movie m ON m.movie_id = s.movie_id ORDER BY 2 LIMIT 5",
+            "SELECT m.title AS movie_title, s.starts_at, s.screening_id AS _screening_id "
+            "FROM screening AS s JOIN movie AS m ON m.movie_id = s.movie_id ORDER BY 2 LIMIT 5",
+        ),
+        # 별칭 없음 · JOIN 쪽의 screening
+        (
+            "SELECT title, starts_at FROM movie JOIN screening USING (movie_id)",
+            "SELECT title, starts_at, screening.screening_id AS _screening_id "
+            "FROM movie JOIN screening USING (movie_id) LIMIT 500",
+        ),
+        # 창 함수는 행 수를 줄이지 않는다
+        (
+            "SELECT s.starts_at, count(*) OVER () AS total FROM screening s",
+            "SELECT s.starts_at, COUNT(*) OVER () AS total, s.screening_id AS _screening_id "
+            "FROM screening AS s LIMIT 500",
+        ),
+        # `*` · `s.*` 는 screening 의 starts_at 이 그대로 나온다(movie·theater 에는 그 칸이 없다)
+        (
+            "SELECT * FROM screening",
+            "SELECT *, screening.screening_id AS _screening_id FROM screening LIMIT 500",
+        ),
+        (
+            "SELECT s.*, m.title FROM screening s JOIN movie m ON m.movie_id = s.movie_id",
+            "SELECT s.*, m.title, s.screening_id AS _screening_id "
+            "FROM screening AS s JOIN movie AS m ON m.movie_id = s.movie_id LIMIT 500",
+        ),
+        # CTE 가 있어도 시작 시각이 바깥 screening 의 것이면 된다
+        (
+            "WITH hit AS (SELECT movie_id FROM movie WHERE view_grade = 'ALL') "
+            "SELECT s.starts_at AS starts_at FROM hit "
+            "JOIN screening s ON s.movie_id = hit.movie_id",
+            "WITH hit AS (SELECT movie_id FROM movie WHERE view_grade = 'ALL') "
+            "SELECT s.starts_at AS starts_at, s.screening_id AS _screening_id "
+            "FROM hit JOIN screening AS s ON s.movie_id = hit.movie_id LIMIT 500",
+        ),
+    ],
+)
+def test_with_screening_id_adds_a_trailing_column(sql, expected):
+    assert with_screening_id(validate(sql)).sql == expected
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT title FROM movie",  # screening 을 읽지 않는다
+        "SELECT count(*) FROM screening",  # 집계
+        "SELECT s.screen_type, min(s.starts_at) FROM screening s GROUP BY s.screen_type",
+        "SELECT DISTINCT s.starts_at FROM screening s",
+        "SELECT starts_at FROM screening UNION SELECT starts_at FROM screening",
+        # screening 이 서브쿼리·CTE 뒤에 있다
+        "SELECT starts_at FROM (SELECT starts_at FROM screening)",
+        "WITH up AS (SELECT starts_at FROM screening) SELECT starts_at FROM up",
+        "SELECT title FROM movie WHERE movie_id IN (SELECT movie_id FROM screening)",
+        # 두 번 나오면 어느 회차인지 정할 수 없다
+        "SELECT a.starts_at FROM screening a JOIN screening b ON b.movie_id = a.movie_id",
+        # 표에 시작 시각이 없으면 어느 회차인지 보고 고를 수 없다
+        "SELECT m.title FROM screening s JOIN movie m ON m.movie_id = s.movie_id",
+        "SELECT m.* FROM screening s JOIN movie m ON m.movie_id = s.movie_id",
+        # 표의 starts_at 이 그 회차의 시작 시각이 아니다 — 시각과 링크의 회차가 달라진다
+        "WITH nxt AS (SELECT movie_id, min(starts_at) AS starts_at FROM screening "
+        "GROUP BY movie_id) "
+        "SELECT m.title, nxt.starts_at, s.auditorium_name FROM nxt "
+        "JOIN screening s ON s.movie_id = nxt.movie_id JOIN movie m ON m.movie_id = s.movie_id",
+        "SELECT s.ends_at AS starts_at FROM screening s",
+        "SELECT x.starts_at, s.auditorium_name FROM screening s "
+        "JOIN (SELECT movie_id, min(starts_at) AS starts_at FROM screening GROUP BY movie_id) x "
+        "ON x.movie_id = s.movie_id",
+        "SELECT substr(s.starts_at, 12) AS starts_at FROM screening s",
+        # `*` 가 서브쿼리와 섞이면 starts_at 이 어느 쪽 것인지 알 수 없다
+        "SELECT * FROM screening s "
+        "JOIN (SELECT movie_id, min(starts_at) AS starts_at FROM screening GROUP BY movie_id) x "
+        "ON x.movie_id = s.movie_id",
+        # 덧붙일 칸과 같은 이름을 이미 쓰고 있다
+        "SELECT s.movie_id AS _screening_id, s.starts_at FROM screening s",
+        # sqlglot 이 집계로 알아보지 못하는 SQLite 집계 함수
+        "SELECT s.starts_at, total(s.remaining_seats) FROM screening s",
+        "SELECT s.starts_at, group_concat(s.auditorium_name) FROM screening s",
+    ],
+)
+def test_with_screening_id_skips_rows_that_are_not_one_screening(sql):
+    assert with_screening_id(validate(sql)) is None
+
+
+def test_with_screening_id_gives_up_quietly_when_the_sql_cannot_be_parsed():
+    """다시 읽지 못하면 덧붙이지 않는다(그대로 실행하게 None) — 예외를 올리지 않는다."""
+    broken = ValidatedSql("SELECT FROM WHERE (", frozenset({"screening"}), False)
+    assert with_screening_id(broken) is None
 
 
 @pytest.mark.parametrize(

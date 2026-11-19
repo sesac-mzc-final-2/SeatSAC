@@ -12,7 +12,7 @@
 // AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.MOCK_PORT ?? 8089);
 /** 화면에서 오류 상태를 재현할 때: 이 경로는 항상 MOCK_FAIL_STATUS(기본 503)로 응답 (예: MOCK_FAIL_PATH=/api/screenings) */
@@ -368,8 +368,32 @@ const AI_PRESETS = [
   { presetId: "theater_counts_today", title: "극장별 오늘 회차 수", example: "오늘 극장별로 남은 회차 몇 개야?" },
 ];
 
-/** 정확 일치 캐시 흉내: 같은 문장을 다시 물으면 CACHE_EXACT(토큰 0) */
+/**
+ * 캐시 흉내 (3.4.20 데모 — 처음 → 같은 질문 → 다른 말투). 실제 ai 처럼 질문의 「틀」(시각 숫자를 뺀 모양)이 항목이다.
+ *   처음 묻기                         → PRESET·NL2SQL + cache {stored: true}
+ *   같은 질문·시각만 다른 질문          → CACHE_EXACT + 같은 entryId {stored: false}
+ *   말투만 다른 질문("넘어서 하는 … 보여줘") → CACHE_SEMANTIC + 같은 entryId + similarity
+ * 틀 → entryId. 서버가 켜질 때 미리 넣어 둔 항목(AI_WARMED)은 같은 대화에 짝이 없는 캐시 답이 된다
+ */
 const aiAsked = new Map();
+/** 뜻 묶음(말투를 지운 틀) → entryId : 의미 캐시 흉내 */
+const aiMeanings = new Map();
+const aiTemplate = (message) =>
+  message
+    .toLowerCase()
+    .replace(/\d{1,2}\s*시/g, "{time}")
+    .replace(/[?!.,~\s]+/g, " ")
+    .trim();
+const aiMeaning = (template) =>
+  template
+    .replace(/넘어서|부터|이후에/g, "이후")
+    .replace(/시작하는|하는|알려\s*줘|보여\s*줘|뭐\s*있어|있어|목록|좀|요$/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+const aiEntryId = (template) => createHash("sha256").update(template).digest("hex").slice(0, 12);
+/** 유사도 흉내: 항목마다 고정된 0.93~0.99, 소수 둘째 자리 (실제 기준은 0.92 이상) */
+const aiSimilarity = (template) => (93 + (parseInt(aiEntryId(template).slice(0, 4), 16) % 7)) / 100;
+const AI_WARMED = ["오늘 심야 영화 뭐 있어?", "조조 영화 뭐 있어?"];
 let aiInflight = false;
 
 const kstMinute = (iso) => iso.slice(0, 16).replace("T", " ");
@@ -396,6 +420,7 @@ function aiAnswer(message, sessionId) {
     sessionId,
     columns: null,
     rows: null,
+    screeningIds: null,
     rowCount: 0,
     truncated: false,
     sql: null,
@@ -407,6 +432,11 @@ function aiAnswer(message, sessionId) {
   };
   const at = `(${hhmm(asOf)} 기준)`;
   const table = (columns, rows) => ({ columns, rows, rowCount: rows.length });
+  /** 회차 한 줄인 표: screeningIds(rows 와 같은 순서)로 화면이 좌석 선택 링크를 만든다 */
+  const screeningTable = (columns, screenings, toRow) => ({
+    ...table(columns, screenings.map(toRow)),
+    screeningIds: screenings.length > 0 ? screenings.map((s) => s.screeningId) : null,
+  });
 
   if (/내\s*예매|예매\s*내역/.test(message)) {
     const mine = bookings.filter((b) => b.status === "CONFIRMED" && b.screening).slice(0, 5);
@@ -444,7 +474,7 @@ function aiAnswer(message, sessionId) {
       rejection: { reason: "FORBIDDEN_OBJECT", message: "허용되지 않은 테이블을 조회하는 SQL입니다.", object: "snapshot_meta" },
     };
   }
-  const hour = /(\d{1,2})\s*시\s*이후/.exec(message);
+  const hour = /(\d{1,2})\s*시\s*(?:이후|넘어서|부터)/.exec(message);
   if (hour) {
     const h = Number(hour[1]);
     const rows = upcoming(todayIso()).filter((s) => Number(s.startsAt.slice(11, 13)) >= h);
@@ -453,7 +483,7 @@ function aiAnswer(message, sessionId) {
       path: "PRESET",
       presetId: "today_after_time",
       answer: `오늘 ${h}시 이후 시작하는 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+      ...screeningTable(SCREENING_COLUMNS, rows, screeningRow),
     };
   }
   const theater = theaters.find((t) => t.hasLayout && message.includes(t.name));
@@ -465,7 +495,7 @@ function aiAnswer(message, sessionId) {
       path: "PRESET",
       presetId: "theater_schedule",
       answer: `${Number(date.slice(5, 7))}월 ${Number(date.slice(8))}일 ${theater.name} 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(
+      ...screeningTable(
         [
           { name: "movie_title", type: "text" },
           { name: "auditorium_name", type: "text" },
@@ -474,7 +504,8 @@ function aiAnswer(message, sessionId) {
           { name: "ends_at", type: "text" },
           { name: "remaining_seats", type: "integer" },
         ],
-        rows.map((s) => [s.movie.title, s.auditorium.name, s.auditorium.screenType, kstMinute(s.startsAt), kstMinute(s.endsAt), s.remainingSeats]),
+        rows,
+        (s) => [s.movie.title, s.auditorium.name, s.auditorium.screenType, kstMinute(s.startsAt), kstMinute(s.endsAt), s.remainingSeats],
       ),
     };
   }
@@ -486,18 +517,16 @@ function aiAnswer(message, sessionId) {
       path: "PRESET",
       presetId: "movie_theaters",
       answer: `오늘 ${movie.title} 남은 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+      ...screeningTable(SCREENING_COLUMNS, rows, screeningRow),
     };
   }
   if (/비율|매진/.test(message)) {
-    const rows = upcoming(todayIso())
-      .filter((s) => s.totalSeats > 0 && s.remainingSeats / s.totalSeats <= 0.5)
-      .map((s) => [s.movie.title, s.theater.name, kstMinute(s.startsAt), s.remainingSeats, s.totalSeats, Math.round((s.remainingSeats / s.totalSeats) * 1000) / 1000]);
+    const rows = upcoming(todayIso()).filter((s) => s.totalSeats > 0 && s.remainingSeats / s.totalSeats <= 0.5);
     return {
       ...base,
       path: "NL2SQL",
       answer: `잔여석이 절반 이하인 오늘 회차는 ${rows.length}개입니다. ${at}`,
-      ...table(
+      ...screeningTable(
         [
           { name: "movie_title", type: "text" },
           { name: "theater_name", type: "text" },
@@ -507,6 +536,7 @@ function aiAnswer(message, sessionId) {
           { name: "remaining_ratio", type: "real" },
         ],
         rows,
+        (s) => [s.movie.title, s.theater.name, kstMinute(s.startsAt), s.remainingSeats, s.totalSeats, Math.round((s.remainingSeats / s.totalSeats) * 1000) / 1000],
       ),
       sql: "SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats, s.total_seats, ROUND(1.0 * s.remaining_seats / s.total_seats, 3) AS remaining_ratio FROM screening s JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id WHERE s.business_date = date('now') AND s.total_seats > 0 AND 1.0 * s.remaining_seats / s.total_seats <= 0.5 ORDER BY remaining_ratio LIMIT 500",
       llm: { calls: 1, inputTokens: 455, outputTokens: 212, cacheReadTokens: 3810, cacheWriteTokens: 0 },
@@ -520,8 +550,14 @@ function aiAnswer(message, sessionId) {
     path: "PRESET",
     presetId: "most_remaining_today",
     answer: `오늘 자리가 많이 남은 회차 ${rows.length}개입니다. ${at}`,
-    ...table(SCREENING_COLUMNS, rows.map(screeningRow)),
+    ...screeningTable(SCREENING_COLUMNS, rows, screeningRow),
   };
+}
+
+for (const message of AI_WARMED) {
+  const template = aiTemplate(message);
+  aiAsked.set(template, aiEntryId(template));
+  aiMeanings.set(aiMeaning(template), aiEntryId(template));
 }
 
 async function handleAi(req, res, path) {
@@ -558,14 +594,22 @@ async function handleAi(req, res, path) {
     }
 
     const sessionId = body.sessionId ?? randomUUID();
-    const key = message.replace(/\s+/g, " ").toLowerCase();
-    let answer = aiAnswer(message, sessionId);
-    const personal = answer.path === "MY_BOOKINGS";
+    const template = aiTemplate(message);
+    const meaning = aiMeaning(template);
+    let answer = { ...aiAnswer(message, sessionId), cache: null };
     const cacheable = answer.path === "PRESET" || answer.path === "NL2SQL";
-    if (!personal && aiAsked.has(key)) {
-      answer = { ...answer, path: "CACHE_EXACT", llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }, latencyMs: 31 };
+    const free = { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
+    if (cacheable && aiAsked.has(template)) {
+      const cache = { entryId: aiAsked.get(template), stored: false, similarity: null };
+      answer = { ...answer, path: "CACHE_EXACT", llm: free, latencyMs: 31, cache };
+    } else if (cacheable && aiMeanings.has(meaning)) {
+      const cache = { entryId: aiMeanings.get(meaning), stored: false, similarity: aiSimilarity(template) };
+      answer = { ...answer, path: "CACHE_SEMANTIC", llm: free, latencyMs: 38, cache };
     } else if (cacheable) {
-      aiAsked.set(key, true);
+      const entryId = aiEntryId(template);
+      aiAsked.set(template, entryId);
+      aiMeanings.set(meaning, entryId);
+      answer = { ...answer, cache: { entryId, stored: true, similarity: null } };
     }
     aiInflight = true;
     await sleep(Math.min(answer.latencyMs, 2500));

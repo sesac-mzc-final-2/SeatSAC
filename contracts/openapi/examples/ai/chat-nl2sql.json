@@ -15,6 +15,7 @@
     "rows": [
       [ "영화 제목", "건대입구", "2026-11-17 20:40", 12, 184, 0.065 ]
     ],
+    "screeningIds": [ 769004032 ],
     "rowCount": 1,
     "truncated": false,
     "sql": "SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats, s.total_seats, ROUND(1.0 * s.remaining_seats / s.total_seats, 3) AS remaining_ratio FROM screening s JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id WHERE s.business_date = '2026-11-17' AND s.starts_at > '2026-11-17 19:42' AND s.total_seats > 0 AND 1.0 * s.remaining_seats / s.total_seats <= 0.1 ORDER BY remaining_ratio LIMIT 500",

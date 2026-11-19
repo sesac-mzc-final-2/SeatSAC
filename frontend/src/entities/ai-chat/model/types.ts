@@ -41,6 +41,17 @@ export interface ChatChoice {
   message: string;
 }
 
+/**
+ * 이 답과 이어진 캐시 항목 (3.4.20 데모). 질문 글자는 없다 — `entryId` 가 같은 두 답을 화면이 짝짓는다.
+ * `stored: true` = Claude 가 답하고 캐시에 저장함(다음 질문의 짝) · `false` = 그 캐시 항목에서 나온 답
+ */
+export interface ChatCacheRef {
+  entryId: string;
+  stored: boolean;
+  /** 의미 캐시(`CACHE_SEMANTIC`)일 때만 0~1, 그 밖은 null */
+  similarity: number | null;
+}
+
 export interface ChatRequest {
   message: string;
   sessionId?: string;
@@ -52,6 +63,11 @@ export interface ChatResponse {
   path: ChatPath;
   columns: ChatColumn[] | null;
   rows: ChatCell[][] | null;
+  /**
+   * `rows` 와 같은 순서의 회차 ID — 그 행의 좌석 선택 화면으로 넘길 때 쓴다. 행이 회차 하나가 아니면(집계 등) null.
+   * 계약(#150)에서 추가되는 필드. 그 전의 ai 응답에는 없어서 선택 필드로 둔다
+   */
+  screeningIds?: (number | null)[] | null;
   rowCount: number;
   truncated: boolean;
   sql: string | null;
@@ -63,6 +79,8 @@ export interface ChatResponse {
   rejection: ChatRejection | null;
   /** `CLARIFY` 일 때만 버튼 목록 (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
   choices?: ChatChoice[] | null;
+  /** 캐시에서 나왔거나 캐시에 저장한 답만. 그 밖은 null (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
+  cache?: ChatCacheRef | null;
 }
 
 export interface ChatPreset {

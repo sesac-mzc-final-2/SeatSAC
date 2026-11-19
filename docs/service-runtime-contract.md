@@ -99,7 +99,7 @@
 | `VITE_COGNITO_AUTHORITY` | `https://cognito-idp.ap-northeast-2.amazonaws.com/{userPoolId}` |
 | `VITE_COGNITO_CLIENT_ID` | 공개 클라이언트 ID (시크릿 없음) |
 | `VITE_COGNITO_DOMAIN` | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` |
-| `VITE_COGNITO_REDIRECT_URI` | `https://{배포ID}.cloudfront.net/callback` (로컬 `http://localhost:5173/callback`) |
+| `VITE_COGNITO_REDIRECT_URI` | **넘기지 않는다**(3.1.23) — 비우면 화면이 지금 주소(`window.location.origin`) + `/callback`. CloudFront 기본 도메인·사용자 도메인 어느 쪽으로 들어와도 같은 주소로 돌아온다. 허용 목록은 Cognito 앱 클라이언트 콜백(`envs/staging/cognito.tf`, 두 도메인 + 로컬) |
 
 `frontend-deploy` 워크플로가 Terraform 출력에서 값을 넣는다(GitHub Variables). OIDC `scope`는 `openid email profile aws.cognito.signin.user.admin`으로 설정한다. 프로필 행이 없을 때 user 서비스가 같은 Access Token으로 Cognito `GetUser`를 호출하고, 기존 행이 있으면 호출하지 않는다. `NotAuthorizedException`은 401 `UNAUTHORIZED`(`details[].reason` `TOKEN_REJECTED`)로, 그 밖의 Cognito 실패는 503 `IDENTITY_UNAVAILABLE`로 반환한다. 토큰은 `react-oidc-context`가 관리하고 `Authorization: Bearer`로 보낸다. 저장소는 **메모리**(`InMemoryWebStorage`, localStorage 금지). 새로고침하면 `signinRedirect`로 Cognito 세션을 이용해 다시 받는다(비밀번호 재입력 없음, ADR-63).
 
@@ -284,6 +284,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 ### 9-2. 실행 규칙
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey
+- 회차 ID 넘기기(계약 `screeningIds`): 검증을 통과한 SQL을 실행할 때 행 하나가 회차 하나이면 회차 ID 열을 덧붙였다 떼어 `screeningIds`로 보낸다(프리셋·NL2SQL·캐시 적중 모두 같은 실행 경로, data-model 6-1). Claude에게 주는 프롬프트·스키마 설명과 로그 `sqlTemplate`은 덧붙이기 전 SQL 그대로다. 덧붙인 SQL만 실패하면 남은 시간 안에서 원래 SQL로 한 번 다시 실행해 답은 그대로 내고(`screeningIds: null`) WARNING 한 줄(오류 종류만)을 남긴다. ai는 화면 주소를 만들지 않는다
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
 - 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회, **잔여석을 읽는 질문마다 날짜 수 × 극장 수**(「오늘 건대입구」 1회, 극장을 안 정하면 4회, 확인 불가가 섞이면 한 번 더))은 CloudFront → gateway → catalog로 들어간다. 질문 시점 호출은 질문 하나에 최대 8회(날짜 2 × 극장 4 — 9-1)이고, 사용자당 동시 1건(`ai:inflight`)으로 묶이며(staging 한도는 11/18부터 분당 600·하루 300 — 9-1), 같은 범위 동시 질문은 한 번을 같이 쓴다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
 - **채팅으로 좌석 잡기**(`APP_AI_SEAT_HOLD_ENABLED` **기본 켜짐**, 3.4.19 — ADR 번호는 노션 등록 후 확정. 끄려면 gitops `overlays/staging/ai`의 `ai-config`에 `APP_AI_SEAT_HOLD_ENABLED=false` 한 줄 — ai만 롤링 재시작, gateway 블루/그린 없음): ai가 쓰기 API(`POST /seats/hold`)를 부르는 **유일한** 경우. 사용자의 확인 버튼 없이는 부르지 않는다 — 확인 요청 때 잡을 내용과 일회용 확인 ID를 `ai:pending:{userId}:{sessionId}`(2분)에 두고, 같은 사용자·같은 세션에서 그 확인 ID가 실린 확인이 오면 한 번 꺼내 쓰고 지운다(`GETDEL`). 사용자 토큰은 저장하지 않고 확인 요청에 실려 온 `Authorization`을 그대로 넘긴다. 호출은 공개 주소(`PUBLIC_API_BASE_URL`)로만. 좌석 현황·예매 결과는 Claude에 보내지 않는다. 결제는 채팅에서 하지 않는다. 좌석 데모·부하 테스트·전환 테스트 중에는 위 스냅샷 규칙대로 `ng-ai` 0대(부하·전환 테스트는 gateway 플래그 off까지)라 ai 자체가 답하지 않으므로 기본 켜짐이어도 좌석 잡기가 나가지 않는다 — 이 플래그를 따로 끌 필요는 없다. `ng-ai`를 켠 채 좌석 측정을 해야 하면 그때만 `false`로 끈다

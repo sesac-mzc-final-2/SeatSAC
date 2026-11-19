@@ -133,4 +133,15 @@ describe("좌석 잡기 확인 (3.4.19 초안)", () => {
     expect(state(failedS, third, UNTIL + 1)).toBe("expired");
     expect(state(failedS, [...third, answer(10)], UNTIL - 1)).toBe("stale");
   });
+
+  // 원격에 먼저 올라간 리뷰 반영(ae90086)의 테스트 — 문장이 바뀌어도 확인 요청으로 본다
+  it("버튼을 막는 조건은 문장 형식이 아니라 응답 값으로 본다", () => {
+    // ai 가 확인 문장을 바꿔도(대문자 ID 등) 확인 요청으로 본다 → 지난 것·시간이 지난 것은 막힌다
+    const changed = confirm(2, "AAAAAA");
+    expect(isHoldReply("좌석 잡기 #AAAAAA")).toBe(false);
+    expect(hasHoldButtons(changed.response)).toBe(true);
+    expect(activeHold([changed])?.messages).toEqual(["좌석 잡기 #AAAAAA", "취소 #AAAAAA"]);
+    // 기한이 없는 안내·평소 되묻기 버튼은 막지 않는다
+    expect(hasHoldButtons(answer(4, { path: "CLARIFY", choices: [{ label: "오늘", message: "오늘" }] }).response)).toBe(false);
+  });
 });

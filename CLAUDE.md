@@ -28,7 +28,7 @@
 - 클러스터를 `kubectl apply/edit/delete`로 직접 고치지 않는다(GitOps만). 사람이 ECR·frontend S3에 직접 올리지 않는다(CI만)
 - 계약(`contracts/`)을 먼저 PR로 합의하고 구현한다. 필드 추가만, 깨는 변경은 새 엔드포인트·`.v2`
 - 이름·설정·메트릭은 아래 표에 있는 것만 쓰고, 새로 만들면 표에 먼저 추가한다
-- ⚠️AI ai는 기존 MSA DB(RDS)·기존 Valkey·기존 NetworkPolicy·다른 Application을 건드리지 않는다. M6(11/9~13)에는 ai 경로(와 ADR-87의 예외 — 테스트 준비·3.3.7 AI 화면)만 머지할 수 있고, 부하·전환 테스트 중에는 `ng-ai` 0대·플래그 off, 좌석 데모 중에는 `ng-ai` 0대·AI 질의 금지(플래그는 rc2에서 켜 둔 채)
+- ⚠️AI ai는 기존 MSA DB(RDS)·기존 Valkey·기존 NetworkPolicy·다른 Application을 건드리지 않는다. ai가 부르는 쓰기 API는 사용자가 확인 버튼을 누른 뒤의 `POST /seats/hold` 하나뿐이다(플래그 `APP_AI_SEAT_HOLD_ENABLED` 기본 켜짐 — `false`로 끈다, 확인 버튼 없이는 부르지 않는다, 공개 주소로만·사용자 토큰 그대로 — 결제·취소는 부르지 않는다. 5장 ADR 보완 행). M6(11/9~13)에는 ai 경로(와 ADR-87의 예외 — 테스트 준비·3.3.7 AI 화면)만 머지할 수 있고, 부하·전환 테스트 중에는 `ng-ai` 0대·플래그 off, 좌석 데모 중에는 `ng-ai` 0대·AI 질의 금지(플래그는 rc2에서 켜 둔 채)
 
 ---
 
@@ -120,11 +120,13 @@
 | `ai:exact:v2:{sha256(정규화 질문)}` | 1시간 | 정확 일치 캐시: SQL 템플릿 + 슬롯 + 경로(프리셋·NL2SQL). **결과는 캐시하지 않는다**(스냅샷에서 다시 실행). `v2`는 캐시 버전 — 저장 SQL의 뜻이 바뀌면 올리고 옛 키는 TTL로 사라진다(#140: 잔여석은 물었을 때만) |
 | `ai:semcache:v2:{id}` (HASH, 인덱스 `ai_semcache_v2_idx`) | 1시간 | 의미 캐시: 슬롯을 `{time}`·`{date}`·`{theater}`·`{movie}`·`{n}`으로 바꾼 질문의 임베딩(384차원 FLOAT32, COSINE) + SQL 템플릿 + 슬롯 종류 |
 | `ai:session:{userId}:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·슬롯). 파드가 바뀌어도 유지. **키에 `X-User-Id`를 넣어 사용자별로 격리**한다 — 다른 사용자의 `sessionId`를 보내도 그 사용자 키에는 닿지 않는다. `sessionId`는 서버가 UUID로 발급하고, 요청의 `sessionId`가 이 사용자 키에 없으면(만료·남의 것·위조) 새 세션으로 시작한다(오류 아님) |
+| `ai:pending:{userId}:{sessionId}` | **2분**(`APP_AI_SEAT_HOLD_CONFIRM_TTL`) | **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 쓴다. 채팅으로 좌석 잡기의 확인을 기다리는 행동(확인 ID·회차 ID·`seatIds`·좌석 이름·ai가 만든 `Idempotency-Key`·사용자 ID, 또는 회차 고르기 목록). `GETDEL`로 한 번만 꺼낸다. 사용자 토큰은 넣지 않는다 |
+| `ai:held:{userId}:{sessionId}` | **선점이 남은 동안, 최대 5분**(booking이 준 `expiresAt`까지 — 선점 TTL 300초를 넘지 않는다) | 좌석 잡기 플래그가 켜져 있을 때만 쓴다. 방금 **성공한** 선점의 결과(확인 ID·사용자 ID·회차 ID·`bookingId`·좌석 이름·금액·만료 시각). 응답이 화면에 닿지 못해 같은 확인 ID가 같은 세션으로 다시 오면 booking을 다시 부르지 않고 같은 `HOLD_RESULT`를 준다(지우지 않고 읽는다). 사용자 토큰·`seatIds`·`Idempotency-Key`는 넣지 않는다. 실패·결과 모름(`UPSTREAM_UNAVAILABLE`)은 남기지 않는다 |
 | `ai:quota:min:{userId}:{yyyyMMddHHmm}` · `ai:quota:day:{userId}:{yyyyMMdd}` | 60초 · 1일 | 사용 한도 카운터(설계 값 분당 10·하루 100, staging은 11/18부터 분당 600·하루 300 — 런타임 계약 9-1). gateway 요청 수 제한(ADR-62)과 별개인 **ai 앱 안** 한도 |
 | `ai:inflight:{userId}` | **40초** | 사용자당 동시 1건. `SET NX PX 40000`, 값은 요청마다 새 토큰. 끝나면 **값이 내 토큰일 때만** 지운다(Lua 비교 후 `DEL` — 늦게 끝난 요청이 다음 요청의 잠금을 지우지 않게). TTL 40초가 gateway 라우트 28초·요청 전체 기한 25초(`APP_AI_REQUEST_DEADLINE_SECONDS`)보다 길어 갱신 없이도 처리 중 만료되지 않는다. 파드가 죽어 못 지운 경우만 TTL로 풀린다 |
 | `ai:semcheck:0~2` (HASH, 인덱스 `ai_semcheck_idx`) | 120초 | 확인용(런북 6-G-6 의미 캐시 벡터 검색 확인). `HSET`·`EXPIRE`를 `MULTI/EXEC`로 함께 걸고 실행 끝에 키·인덱스를 지운다. 앱은 쓰지 않는다 |
 
-- "내 예매" 같은 **개인 질문은 캐시하지 않는다**(다른 사용자에게 적중 방지)
+- "내 예매" 같은 **개인 질문은 캐시하지 않는다**(다른 사용자에게 적중 방지). 좌석 잡기 답도 캐시·세션 문맥에 남기지 않는다
 - 파라미터 그룹: `maxmemory-policy noeviction`, `reserved-memory-percent 50`(t4g.micro에서 벡터 검색 필수 조건), TLS. `allkeys-lru`로 두면 메모리가 찰 때 한도·동시 1건 키(`ai:quota:*`·`ai:inflight:*`)도 지워져 한도를 우회할 수 있어서 **아무 키도 지우지 않는** `noeviction`으로 한다
 - 그래서 **모든 `ai:*` 키에 TTL**을 단다(위 표). 의미 캐시는 앱이 최대 5,000건으로 제한(넘으면 저장하지 않음 — 1건 약 2.5KB, 합 약 13MB로 가용 메모리 약 250MB의 5%)
 - 메모리가 차서 쓰기가 실패하면: 캐시 저장 실패는 **무시**(적중 안 됨과 같음), 한도·동시 1건 키 쓰기 실패는 **거부**(503 `AI_LLM_UNAVAILABLE`, `reason` `QUOTA_STORE_UNAVAILABLE`) — 한도 확인 없이 Claude를 부르지 않는다. 경보: 메모리 80%
@@ -243,7 +245,7 @@
 | `openapi/booking.openapi.yaml` | 외부 7개 (좌석 현황·SSE·선점·해제·결제·조회·취소) | 남궁일 |
 | `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장) | 한채연 |
 | ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`) | 김서현 · 한채연 |
-| ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
+| ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED) + CLARIFY(#140) + 좌석 잡기 3종(HOLD_CONFIRM·HOLD_RESULT·HOLD_GUIDE). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 3개 | 남궁일 |
@@ -276,7 +278,7 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
-| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices, cache}` — 모든 필드가 항상 있고 해당 없으면 null. `screeningIds`는 `rows`와 같은 순서의 회차 ID(행 하나가 회차 하나일 때만, 집계 결과는 null) — 화면이 좌석 선택 화면 링크를 만든다(ai는 화면 경로를 만들지 않음). `cache {entryId, stored, similarity}`는 이 답과 이어진 캐시 항목(`stored: true` = Claude가 답하고 저장함, `false` = 그 항목에서 나온 답, `similarity`는 `CACHE_SEMANTIC`일 때만 0~1) — 데모 화면이 같은 대화에서 `entryId`가 같은 두 답을 짝지어 실제로 아낀 토큰·시간을 보여 준다(`entryId`는 ai 파드가 다시 뜨면 바뀐다). 저장하지 않은 답은 null이고 질문 글자는 싣지 않는다. `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖·되묻기도 **200**(`REJECTED`는 `rejection {reason, message, object?}`, `CLARIFY`는 `choices [{label, message}]` 버튼 0~7개 — 누르면 `message`를 같은 `sessionId`로 보낸다). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices, cache, seatHold}` — 모든 필드가 항상 있고 해당 없으면 null. `screeningIds`는 `rows`와 같은 순서의 회차 ID(행 하나가 회차 하나일 때만, 집계 결과는 null) — 화면이 좌석 선택 화면 링크를 만든다(ai는 화면 경로를 만들지 않음). `cache {entryId, stored, similarity}`는 이 답과 이어진 캐시 항목(`stored: true` = Claude가 답하고 저장함, `false` = 그 항목에서 나온 답, `similarity`는 `CACHE_SEMANTIC`일 때만 0~1) — 데모 화면이 같은 대화에서 `entryId`가 같은 두 답을 짝지어 실제로 아낀 토큰·시간을 보여 준다(`entryId`는 ai 파드가 다시 뜨면 바뀐다). 저장하지 않은 답은 null이고 질문 글자는 싣지 않는다. `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY`(+ 좌석 잡기 플래그 `APP_AI_SEAT_HOLD_ENABLED`(기본 켜짐)가 켜져 있을 때만 `HOLD_CONFIRM`·`HOLD_RESULT`·`HOLD_GUIDE`, `seatHold {screeningId, bookingId, seatLabels, amount, expiresAt, confirmExpiresAt, reason}` — 그 밖은 null). `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖·되묻기도 **200**(`REJECTED`는 `rejection {reason, message, object?}`, `CLARIFY`는 `choices [{label, message}]` 버튼 0~7개 — 누르면 `message`를 같은 `sessionId`로 보낸다). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용. 좌석 잡기에서도 화면은 보내지 않는다 — ai가 확인 요청 때 만든 키로 `POST /seats/hold`를 부른다) |
 | ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` — 버튼을 누르면 화면이 빈칸(시각·개수는 입력창에서 고치기, 극장·영화·날짜·등급은 고르는 버튼)을 사용자가 정하게 한 뒤 질문 문장을 `POST /ai/chat`의 `message`로 보낸다. 빈칸이 없는 질문과 화면이 모르는 프리셋은 `example`을 그대로. 화면은 **챗봇 창을 열 때** 이 API를 불러(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5) 404면 「준비 중」 안내 뒤 챗봇 버튼 숨김, 503이면 비활성 안내 |
 
 #### 내부 (`http://{service}:8080/internal/**`)
@@ -295,6 +297,8 @@
 공통: 재시도 없음(위 1건 제외), Resilience4j 서킷(실패율 50%·10초), 호출 깊이 1, `X-Trace-Id`·`X-User-Id` 전달.
 
 ⚠️AI ai는 내부 API를 부르지 않는다. 공개 API(`GET /movies`·`/movies/{id}`·`/theaters`·`/screenings`, 사용자 토큰으로 `GET /users/me/bookings`)를 CloudFront 주소로 호출한다(ADR-84). 기존 계약 변경 없음.
+
+⚠️AI 채팅으로 좌석 잡기(ai 플래그 `APP_AI_SEAT_HOLD_ENABLED` 기본 `true` — `false`로 끈다, 3.4.19 — ADR 번호는 노션 등록 후 확정): 켜져 있을 때 ai가 공개 API를 3개 더 부른다 — `GET /screenings/{screeningId}/seats` · `GET /auditoriums/{auditoriumId}/layout`(인증 없음, 좌석 이름 → `seatId`), 그리고 **사용자가 확인 버튼을 누른 뒤에만** `POST /seats/hold`(요청의 `Authorization` 그대로 + ai가 만든 `Idempotency-Key`, 시간 초과·연결 오류 시 같은 키로 1회 재시도). ai가 쓰기 API를 부르는 유일한 경우다. booking·catalog 계약은 바뀌지 않는다.
 
 ### 3. 확정 결정 (10/22)
 
@@ -393,7 +397,7 @@
 | `COGNITO_CLIENT_ID` | 앱 클라이언트 ID (Cognito 전에는 빈 값) | gateway `APP_COGNITO_CLIENT_ID` |
 
 | ⚠️AI `AI_VALKEY_HOST` | ai Valkey primary 엔드포인트(`cinema-staging-ai-valkey`) | ai (이름 그대로 읽음) |
-| ⚠️AI `PUBLIC_API_BASE_URL` | `https://{배포ID}.cloudfront.net/api` (CloudFront 기본 도메인, Terraform 출력) | ai — 스냅샷 적재·"내 예매" 호출 |
+| ⚠️AI `PUBLIC_API_BASE_URL` | `https://{배포ID}.cloudfront.net/api` (CloudFront 기본 도메인, Terraform 출력) | ai — 스냅샷 적재·"내 예매" 호출·좌석 잡기(좌석 현황·배치도·확인 뒤 선점 — 플래그 `APP_AI_SEAT_HOLD_ENABLED` 기본 켜짐) |
 | `PORTONE_STORE_ID` | 포트원 Store ID (공개 값 — 결제창에 노출, Terraform 변수 `portone_store_id`, ADR-112) | payment `APP_PORTONE_STORE_ID=${PORTONE_STORE_ID}` |
 | `PORTONE_CHANNEL_KEY_TOSSPAY` | 포트원 토스페이 채널 키 (공개 값, Terraform 변수 `portone_channel_key_tosspay`) | payment `APP_PORTONE_CHANNEL_KEY_TOSSPAY=${PORTONE_CHANNEL_KEY_TOSSPAY}` — gitops가 Public이라 외부 계정 식별자도 gitops에 쓰지 않는다 |
 
@@ -480,7 +484,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | `catalog_seat_counts_fallback_total` | counter | — | catalog | 300ms 초과 대체 횟수 |
 | `payment_request_total` | counter | `result`=`approved`·`declined`·`processing`·`canceled` | payment | 모의 결제 결과 분포(OPS-05). 자동 롤백은 booking 쪽 `booking_payment_call_total`을 쓴다 |
 | `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
-| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다 |
+| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`·`hold_confirm`·`hold_result`·`hold_guide`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다. `hold_*`(채팅으로 좌석 잡기)는 **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 0으로 등록되고, 조회 답이 아니므로 **토큰 절감 계산의 분모·분자에서 `hold_*`를 제외**한다(`path!~"hold_.*"`) |
 | ⚠️AI `ai_tokens_total` | counter | `kind`=`input`·`output`·`cache_read`·`cache_write`, `path` | ai | 토큰 사용량. 절감 그래프는 `input+output`(우리 캐시 효과), 프롬프트 캐싱은 `cache_read`로 **따로** 표시 |
 | ⚠️AI `ai_cache_requests_total` | counter | `layer`=`exact`·`semantic`, `result`=`hit`·`miss` | ai | 캐시 적중률 |
 | ⚠️AI `ai_llm_call_seconds` | histogram | `result`=`ok`·`timeout`·`overloaded`·`rate_limited`·`error` | ai | Claude API 지연·장애 |
@@ -515,7 +519,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | NetworkPolicy | 앱 namespace **ingress 기본 거부**(`default-deny-ingress`) + 허용: ALB(**public 서브넷 CIDR 2개**, VPC CIDR 전체가 아님 — 같은 VPC의 파드가 gateway에 붙지 못하게) → gateway, gateway → catalog·booking·user, catalog → booking, booking → catalog·payment, user → booking·catalog, 분석 트래픽 Job(`app.kubernetes.io/name: rollout-smoke`) → booking·gateway(3.1.6), 부하 테스트 Job(`app.kubernetes.io/name: k6-loadtest`) → gateway(4.2.1, 실행 중에만 — 런북 6-H), `monitoring` → 전체(8080). egress는 막지 않음. L4(포트)까지라 허용된 호출자는 `/internal/**`도 부를 수 있다(외부 `/api/internal/**`는 gateway가 404). kubelet 프로브·port-forward·exec는 대상 아님. 확인 `infra/scripts/np-check.sh`(런북 6-E) |
 | 전제 | EKS VPC CNI `enableNetworkPolicy=true` (3.1.2) |
 | 보안그룹 | RDS 3306·Valkey 6379는 노드 보안그룹에서만. ALB는 CloudFront 관리형 접두사 목록만 |
-| 외부 호출 | booking → SQS, user → Cognito `GetUser`, gateway → Cognito JWKS: NAT 경유 HTTPS. ⚠️AI ai → Claude API(`api.anthropic.com`), ai → **CloudFront `PUBLIC_API_BASE_URL`**(공개 API — 스냅샷·내 예매): NAT 경유 HTTPS. ai는 클러스터 안에서 gateway를 직접 부르지 않는다(gateway NetworkPolicy는 public 서브넷만 허용, 기존 정책은 수정하지 않음) |
+| 외부 호출 | booking → SQS, user → Cognito `GetUser`, gateway → Cognito JWKS: NAT 경유 HTTPS. ⚠️AI ai → Claude API(`api.anthropic.com`), ai → **CloudFront `PUBLIC_API_BASE_URL`**(공개 API — 스냅샷·내 예매, 좌석 잡기(플래그 기본 켜짐) `GET /screenings/{id}/seats` · `GET /auditoriums/{id}/layout` · 확인 뒤 `POST /seats/hold`): NAT 경유 HTTPS. ai는 클러스터 안에서 gateway를 직접 부르지 않는다(gateway NetworkPolicy는 public 서브넷만 허용, 기존 정책은 수정하지 않음) |
 | ⚠️AI ai NetworkPolicy | **`base/ai/networkpolicy.yaml`만 신규**: gateway → ai(8080), `monitoring` → ai(8080). 기존 `base/{svc}/networkpolicy.yaml`은 수정하지 않는다. `np-check.sh` `SERVICES`에 `ai` 추가(gateway → ai ALLOWED, catalog → ai BLOCKED 확인) |
 | ⚠️AI ai Valkey 보안그룹 | 6379는 노드 보안그룹에서만(기존 Valkey와 같은 방식), TLS |
 | SSE | 아래 4가지가 **한 세트**(하나라도 빠지면 연결이 끊기거나 이벤트가 몰려서 온다): ① Gateway 라우트 `/screenings/*/seats/stream` 응답 타임아웃 없음(한채연) ② ALB 유휴 120초 — gateway Ingress 주석 `load-balancer-attributes: idle_timeout.timeout_seconds=120`, 대상 그룹 `deregistration_delay.timeout_seconds=30`(내려가는 파드의 SSE를 35초 종료 유예 안에 정리, 3.1.5) ③ CloudFront 경로 `/api/screenings/*/seats/stream` 캐시 정책 CachingDisabled·**압축 끔**, 원본 응답 대기 30초 > heartbeat 15초(3.1.11) ④ booking 응답 헤더 `Content-Type: text/event-stream`, `Cache-Control: no-cache`(남궁일) |
@@ -577,7 +581,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 포트·헬스·메트릭 | 8080. `/actuator/health/liveness`(프로세스만), `/actuator/health/readiness`(스냅샷 첫 적재 완료 + ai Valkey PING), `/actuator/prometheus` | Java 서비스와 같은 프로브·PodMonitor 템플릿(`app.kubernetes.io/name: ai`, 포트 `http`, 15초). startupProbe 5초 × 30회(임베딩 모델·첫 스냅샷 적재) |
 | 이미지 | `python:3.12-slim`, UID 10001, 임베딩 모델(`paraphrase-multilingual-MiniLM-L12-v2`, ONNX, fastembed)을 **빌드 때** `/app/models`에 넣는다(실행 중 다운로드 없음). 시드·스냅샷 파일은 이미지에 넣지 않는다 | `build-push`가 ECR `cinema/ai:{sha7}` → gitops `overlays/staging/ai/image-tag`. Trivy 동일 기준 |
 | 비루트·파일 | 쓰기 경로 `/tmp`만. SQLite는 **메모리 DB(`:memory:`)** — 디스크에 남기지 않음 | `runAsNonRoot`, `readOnlyRootFilesystem` + `/tmp` emptyDir |
-| 로그 | stdout JSON 한 줄(`timestamp`·`level`·`service=ai`·`traceId`·`userId`·`path`·`latencyMs`·`tokens`·`questionLength`·`questionHash`·`sqlTemplate`·`rowCount`). **질문 원문·SQL 리터럴 값·결과 행·Claude 응답 본문은 남기지 않는다** — 질문에 이메일·전화번호 같은 개인정보가 들어올 수 있다. `questionHash` = HMAC-SHA256(질문, 파드 기동 때 만든 임의 키) 앞 16자(같은 파드 안 반복 질문 추적용, 되돌릴 수 없음), `sqlTemplate` = 리터럴을 `?`로 바꾼 SQL(sqlglot). 디버깅에 원문이 필요하면 로컬에서 재현한다. **예외 — `unmet demand` 로그**(`category`·`reason`·`reasonDropped`·`questionHash`·`questionLength`): 범위 밖 요청의 `reason`은 Claude가 쓴 120자 이하 요약으로 예외 허용. 질문을 베낀 요약은 버리고(`reason: null`, `reasonDropped: true`) 숫자 연속·이메일은 가린다(`[숫자]`·`[이메일]`). `chitchat`은 기록하지 않는다 | `kubectl logs` |
+| 로그 | stdout JSON 한 줄(`timestamp`·`level`·`service=ai`·`traceId`·`userId`·`path`·`latencyMs`·`tokens`·`questionLength`·`questionHash`·`sqlTemplate`·`rowCount`, 좌석 잡기일 때 `holdReason` — 결과 코드만). **질문 원문·SQL 리터럴 값·결과 행·Claude 응답 본문·사용자 토큰·좌석 이름·예매 ID는 남기지 않는다** — 질문에 이메일·전화번호 같은 개인정보가 들어올 수 있다. `questionHash` = HMAC-SHA256(질문, 파드 기동 때 만든 임의 키) 앞 16자(같은 파드 안 반복 질문 추적용, 되돌릴 수 없음), `sqlTemplate` = 리터럴을 `?`로 바꾼 SQL(sqlglot). 디버깅에 원문이 필요하면 로컬에서 재현한다. **예외 — `unmet demand` 로그**(`category`·`reason`·`reasonDropped`·`questionHash`·`questionLength`): 범위 밖 요청의 `reason`은 Claude가 쓴 120자 이하 요약으로 예외 허용. 질문을 베낀 요약은 버리고(`reason: null`, `reasonDropped: true`) 숫자 연속·이메일은 가린다(`[숫자]`·`[이메일]`). `chitchat`은 기록하지 않는다 | `kubectl logs` |
 | 오류·traceId | `error.v1.json` 형식 그대로, `X-Trace-Id` 받으면 그대로·없으면 32자리 생성. 코드는 `services/ai` 안(conventions 6장 ⚠️AI 행). `libs/` 변경 없음 | — |
 | 배포 | 별도 ArgoCD Application `cinema-ai` | `argocd_apps.tf` `argocd_services`에 `ai` 추가. **다른 Application 파일은 수정하지 않는다** |
 
@@ -597,6 +601,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `APP_AI_SNAPSHOT_TODAY_INTERVAL` / `APP_AI_SNAPSHOT_OTHER_INTERVAL` / `APP_AI_SNAPSHOT_DAYS` | `60s` / `600s` / `7` | 오늘 회차 1분, 나머지 10분, 오늘~+6일 |
 | `APP_AI_SNAPSHOT_REFRESH_ON_CHAT` / `APP_AI_SNAPSHOT_REFRESH_TIMEOUT_SECONDS` | `true` / `2.0` | 질문 시점 잔여석 갱신: SQL이 `remaining_seats`를 읽으면 실행 직전에 **그 SQL의 날짜 × 극장** 회차만 새로 받는다(SQL 조건 분석기 `sql/conditions.py`, 극장 조건이 없으면 극장 전부). 날짜는 2개까지 — 날짜 조건을 읽지 못하면(범위 비교·OR) 오늘만, 3개 이상이면 앞의 2개만 새로 받고 나머지는 주기 갱신 값으로 답하며 답 문장에 알린다(catalog 호출 최대 8번). 같은 범위 동시 질문은 한 번만, 확인 불가(TOTAL)가 섞이면 한 번 더. 2초 안에 못 받거나 실패하면 기존 스냅샷으로 답하고 답 문장에 알린다. 잔여석은 물었을 때만 SELECT 하고, 날짜가 없으면 되묻는다(`CLARIFY`) |
 | `APP_AI_CACHE_TTL` / `APP_AI_SESSION_TTL` | `1h` / `30m` | |
+| `APP_AI_SEAT_HOLD_ENABLED` | `true` | **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)**. 채팅으로 좌석 잡기 — 확인 버튼을 누른 뒤에만 선점한다. ConfigMap에 넣지 않으면 앱 기본값(켜짐)으로 동작하고, 끌 때만 gitops `overlays/staging/ai`의 `ai-config`에 `APP_AI_SEAT_HOLD_ENABLED=false` 한 줄을 넣는다. **staging은 gitops에서 `false`로 두고(끄는 gitops PR을 이 코드보다 먼저 머지), 로컬 확인 뒤 켠다.** 꺼져 있으면 Claude 도구 목록·system·처리 경로가 좌석 잡기가 없던 때와 같다. 켜져 있어도 ai Valkey나 `PUBLIC_API_BASE_URL`이 없으면 꺼진 것으로 동작한다 |
+| `APP_AI_SEAT_HOLD_CONFIRM_TTL` | `120s` | 좌석 잡기(위 행)가 켜져 있을 때만 쓴다. 확인 버튼을 기다리는 시간. 지나면 대기 행동(`ai:pending:*`)이 사라져 확인을 눌러도 잡지 않는다 |
 | `APP_AI_CACHE_WARM_PRESETS` | `true` | 프리셋 `phrasings`(버튼 질문 말투)를 기동 때·캐시 TTL 절반마다 정확 일치·의미 캐시에 넣는다(`cache/warm.py`). 버튼 질문은 첫 사용자부터 토큰 0. 끄면 첫 질문은 Claude. 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_SEMANTIC_CACHE_ENABLED` / `APP_AI_SEMANTIC_THRESHOLD` | `true` / `0.92` | rc2까지 의미 캐시가 안 되면 `false`로 정확 일치 캐시만(B1) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |
@@ -612,6 +618,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | └ Claude 호출 1회 | min(15초, 남은 시간) × 최대 3회 | 다음 호출 없이 위 503 |
 | └ 잔여석 갱신 1회 | min(2초, 남은 시간) | 기존 스냅샷으로 답하고 답 문장에 알린다(남은 시간이 없으면 갱신하지 않는다) |
 | └ SQLite 실행 1회 | min(5초, 남은 시간) | `REJECTED` 또는 SQL 오류 재요청 |
+| └ 좌석 잡기 공개 API 1회(플래그 `APP_AI_SEAT_HOLD_ENABLED`, 기본 켜짐) | min(전체 3초·연결 1초, 남은 시간) — 확인 요청 때 좌석 현황 + 배치도 2회, 확인 뒤 선점 1회(+ 시간 초과·연결 오류 시 같은 키로 재시도 1회) | 좌석 화면으로 안내(`HOLD_GUIDE`·`HOLD_RESULT` `reason` `UPSTREAM_UNAVAILABLE`·`HOLD_NOT_SENT`) |
 | `ai:inflight:{userId}` 잠금 | 40초 | 25초 기한보다 길어 처리 중 풀리지 않는다 |
 
 #### 9-2. 실행 규칙
@@ -620,6 +627,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - 회차 ID 넘기기(계약 `screeningIds`): 검증을 통과한 SQL을 실행할 때 행 하나가 회차 하나이면 회차 ID 열을 덧붙였다 떼어 `screeningIds`로 보낸다(프리셋·NL2SQL·캐시 적중 모두 같은 실행 경로, data-model 6-1). Claude에게 주는 프롬프트·스키마 설명과 로그 `sqlTemplate`은 덧붙이기 전 SQL 그대로다. 덧붙인 SQL만 실패하면 남은 시간 안에서 원래 SQL로 한 번 다시 실행해 답은 그대로 내고(`screeningIds: null`) WARNING 한 줄(오류 종류만)을 남긴다. ai는 화면 주소를 만들지 않는다
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
 - 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회, **잔여석을 읽는 질문마다 날짜 수 × 극장 수**(「오늘 건대입구」 1회, 극장을 안 정하면 4회, 확인 불가가 섞이면 한 번 더))은 CloudFront → gateway → catalog로 들어간다. 질문 시점 호출은 질문 하나에 최대 8회(날짜 2 × 극장 4 — 9-1)이고, 사용자당 동시 1건(`ai:inflight`)으로 묶이며(staging 한도는 11/18부터 분당 600·하루 300 — 9-1), 같은 범위 동시 질문은 한 번을 같이 쓴다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
+- **채팅으로 좌석 잡기**(`APP_AI_SEAT_HOLD_ENABLED` **기본 켜짐**, 3.4.19 — ADR 번호는 노션 등록 후 확정. 끄려면 gitops `overlays/staging/ai`의 `ai-config`에 `APP_AI_SEAT_HOLD_ENABLED=false` 한 줄 — ai만 롤링 재시작, gateway 블루/그린 없음): ai가 쓰기 API(`POST /seats/hold`)를 부르는 **유일한** 경우. 사용자의 확인 버튼 없이는 부르지 않는다 — 확인 요청 때 잡을 내용과 일회용 확인 ID를 `ai:pending:{userId}:{sessionId}`(2분)에 두고, 같은 사용자·같은 세션에서 그 확인 ID가 실린 확인이 오면 한 번 꺼내 쓰고 지운다(`GETDEL`). 선점에 성공하면 그 결과를 `ai:held:{userId}:{sessionId}`(선점이 남은 동안, 최대 5분)에 두어, 응답만 실패해 같은 확인 ID가 다시 오면 booking을 다시 부르지 않고 같은 결과를 준다. 사용자 토큰은 저장하지 않고 확인 요청에 실려 온 `Authorization`을 그대로 넘긴다. 호출은 공개 주소(`PUBLIC_API_BASE_URL`)로만. 좌석 현황·예매 결과는 Claude에 보내지 않는다. 결제는 채팅에서 하지 않는다. 좌석 데모·부하 테스트·전환 테스트 중에는 위 스냅샷 규칙대로 `ng-ai` 0대(부하·전환 테스트는 gateway 플래그 off까지)라 ai 자체가 답하지 않으므로 기본 켜짐이어도 좌석 잡기가 나가지 않는다 — 이 플래그를 따로 끌 필요는 없다. `ng-ai`를 켠 채 좌석 측정을 해야 하면 그때만 `false`로 끈다
 - `ng-ai`는 EventBridge Scheduler 평일 켜기 대상에서 **뺀다**(평소 0대). 켜기·끄기는 `cluster-scale.sh up ng-ai`·`down ng-ai`(cinema-admin). `cluster-scale.sh up`·`up 2`와 `cluster-schedule`의 `up`은 `ng-ai`를 켜지 않고 `down`은 `ng-ai`까지 끈다(켜 둔 채 잊어도 백업 끄기·수동 `down`이 끈다)
 - 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 이후 플래그·ai 코드 변경도 시연·측정 중이 아닐 때 머지할 수 있다(11/14 동결 삭제). 단 발표 당일 머지 마감(플래그는 gateway 블루/그린이라 **11/20 05:00**, ai 코드는 **11/20 07:00**, `docs/repo-workflow.md` 2장 동결) 뒤에는 시연·측정 중이 아니어도 머지하지 않는다
 
@@ -741,7 +749,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 #### 6-2. 개인 데이터
 
-"내 예매"는 SQLite에 넣지 않고 요청마다 `GET {PUBLIC_API_BASE_URL}/users/me/bookings`를 **사용자의 토큰 그대로** 호출해 답한다. 캐시하지 않고, Claude API에는 예매 행을 보내지 않는다(템플릿 문장으로 답).
+"내 예매"는 SQLite에 넣지 않고 요청마다 `GET {PUBLIC_API_BASE_URL}/users/me/bookings`를 **사용자의 토큰 그대로** 호출해 답한다. 캐시하지 않고, Claude API에는 예매 행을 보내지 않는다(템플릿 문장으로 답). 채팅으로 좌석 잡기(플래그 `APP_AI_SEAT_HOLD_ENABLED` 기본 켜짐)도 같은 길(공개 주소 + 사용자 토큰 그대로)로 `POST /seats/hold`를 부르되 **사용자의 확인 버튼 뒤에만** 부른다.
 
 #### 6-3. ai Valkey 키
 
@@ -800,6 +808,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 24 | 결제는 예매당 1회, 실패하면 PAYMENT_FAILED + 좌석 해제 | 20 폐기 |
 | 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외 |
 | 30 · 51 | 예매 완료 알림: booking만 SQS 발행(아웃박스 + 릴레이) → Lambda(로그), DLQ 3회. **OPS-08 일별 집계는 제외** | |
+| ⚠️AI (번호 미정 — 노션 등록 후 확정) | **채팅으로 좌석 잡기**(3.4.19): ai가 **사용자 확인 뒤에만** 공개 API `POST /seats/hold`를 대신 부른다 — ai가 부르는 쓰기 API는 이것 하나(결제·취소·예매 변경은 계속 금지). 조건: ① 확인 버튼 + 일회용 확인 ID(대기 행동 `ai:pending:{userId}:{sessionId}` 2분, 한 번만 — 타이핑한 「좌석 잡기」는 확인이 아님) ② 플래그 `APP_AI_SEAT_HOLD_ENABLED` **기본 켜짐**(머지·배포 = 사용자에게 열림). 끄는 방법: gitops `overlays/staging/ai`의 `ai-config`에 `APP_AI_SEAT_HOLD_ENABLED=false` 한 줄(ai만 롤링 재시작) — 끄면 Claude 도구·system·처리 경로가 좌석 잡기가 없던 때와 같다. 켜져 있어도 ai Valkey·`PUBLIC_API_BASE_URL`이 없으면 꺼진 것으로 동작 ③ `PUBLIC_API_BASE_URL`(CloudFront → gateway)로만 — 클러스터 안 주소·내부 API·RDS·기존 Valkey 금지 ④ 확인 요청에 실려 온 사용자 `Authorization` 그대로(저장·로그 금지, ai 자체 권한으로 예매하지 않음) ⑤ 결제는 화면에서(ai는 `bookingId`·`screeningId`만 주고 화면이 링크를 만든다) ⑥ 좌석은 사용자 메시지 원문에 적힌 것만(추천·자동 선택 없음, 최대 4석) ⑦ 좌석 현황·예매 결과는 Claude에 보내지 않고 캐시·세션 문맥·로그에도 좌석 이름·예매 ID를 남기지 않는다(결과 코드만) ⑧ 확인 요청 때 만든 `Idempotency-Key` 하나로만, 시간 초과·연결 오류면 같은 키로 1회 재시도 | **⏳ 팀 합의 필요**(기본 켜짐이라 합의 뒤에 머지한다). 82(사용자 챗봇 = 조회)·84(ai는 공개 API를 읽는다) 보완. booking·catalog·gateway 변경 없음. 하나라도 못 지키면 `false`로 끈다 — 끄면 즉시 기존 동작(코드 제거 없이). 확인 1번에 booking 쓰기 1~2회 + 확인 요청 1건당 공개 API 읽기 2회, 좌석 데모·부하 테스트 중에는 기존 규칙대로 `ng-ai` 0대라 좌석 잡기도 나가지 않는다(런타임 계약 9-2). `.coderabbit.yaml` Authorization 규칙·런타임 계약 6·9장 함께 수정 |
 
 ### 4. 인프라·배포
 

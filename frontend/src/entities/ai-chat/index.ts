@@ -10,6 +10,7 @@ export type {
   ChatRejection,
   ChatRequest,
   ChatResponse,
+  ChatSeatHold,
   LlmUsage,
 } from "./model/types";
 export { listChatPresets, sendChatMessage } from "./api/ai-chat-api";

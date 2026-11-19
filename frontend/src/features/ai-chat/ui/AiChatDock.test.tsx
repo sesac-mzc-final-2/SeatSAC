@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,126 @@ import cacheSemantic from "../../../../../contracts/openapi/examples/ai/chat-cac
 import clarify from "../../../../../contracts/openapi/examples/ai/chat-clarify.json";
 
 const TRACE = "0123456789abcdef0123456789abcdef";
+
+// 좌석 잡기 응답 예시 (3.4.19). 계약 예시 contracts/openapi/examples/ai/chat-hold-*.json 은 ai 쪽 PR 에 있어
+// 이 PR 만으로도 테스트가 돌도록 같은 값을 여기에 둔다 — 계약 PR 이 머지되면 그 파일을 import 하도록 바꾼다
+const holdConfirm = {
+  value: {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "별의 항해 11/17(화) 20:00 건대입구 1관 J7·J8 — 2석. 이 좌석을 5분간 잡을까요? (2분 안에 눌러 주세요)",
+    "path": "HOLD_CONFIRM",
+    "columns": null,
+    "rows": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 1,
+      "inputTokens": 420,
+      "outputTokens": 48,
+      "cacheReadTokens": 4100,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 1480,
+    "rejection": null,
+    "choices": [
+      {
+        "label": "J7·J8 잡기",
+        "message": "좌석 잡기 #c7f2a1"
+      },
+      {
+        "label": "취소",
+        "message": "취소 #c7f2a1"
+      }
+    ],
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": null,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": null,
+      "expiresAt": null,
+      "confirmExpiresAt": "2026-11-17T19:42:00+09:00",
+      "reason": null
+    }
+  },
+};
+const holdResult = {
+  value: {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "J7·J8 좌석을 잡았습니다. 19:45까지 결제를 마쳐 주세요.",
+    "path": "HOLD_RESULT",
+    "columns": null,
+    "rows": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 210,
+    "rejection": null,
+    "choices": null,
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": 9876,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": 30000,
+      "expiresAt": "2026-11-17T19:45:05+09:00",
+      "confirmExpiresAt": null,
+      "reason": null
+    }
+  },
+};
+const holdGuide = {
+  value: {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "J8 좌석은 이미 다른 분이 잡았어요. 좌석 화면에서 직접 골라 주세요.",
+    "path": "HOLD_GUIDE",
+    "columns": null,
+    "rows": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 1,
+      "inputTokens": 420,
+      "outputTokens": 48,
+      "cacheReadTokens": 4100,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 1390,
+    "rejection": null,
+    "choices": null,
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": null,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": null,
+      "expiresAt": null,
+      "confirmExpiresAt": null,
+      "reason": "SEAT_UNAVAILABLE"
+    }
+  },
+};
 /** 챗봇 질문 요청 본문만 (영화 목록 등 다른 요청은 뺀다) */
 const chatBodies = (mock: { mock: { calls: unknown[][] } }) =>
   mock.mock.calls
@@ -151,6 +271,307 @@ describe("AiChatDock (3.3.7)", () => {
       message: "내일 잔여석 많은 회차",
       sessionId: clarify.value.sessionId,
     });
+  });
+
+  /** 확인 요청 예시 — 확인 기한은 지금부터 afterMs 뒤(예시의 고정 시각은 이미 지났다) */
+  const confirmRequest = (afterMs = 120_000, id = "c7f2a1", seats = ["J7", "J8"]) => ({
+    ...holdConfirm.value,
+    choices: [
+      { label: `${seats.join("·")} 잡기`, message: `좌석 잡기 #${id}` },
+      { label: "취소", message: `취소 #${id}` },
+    ],
+    seatHold: {
+      ...holdConfirm.value.seatHold,
+      seatLabels: seats,
+      confirmExpiresAt: new Date(Date.now() + afterMs).toISOString(),
+    },
+  });
+  /** 좌석 잡기 예시의 시각(확인 19:42 · 결제 19:45:05)이 아직 오지 않은 때로 시계를 맞춘다 — Date 만, 타이머는 그대로 */
+  const HOLD_NOW = "2026-11-17T19:40:00+09:00";
+  const freezeClock = () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(HOLD_NOW));
+  };
+  /**
+   * 기한을 직접 넘기는 테스트용 — 타이머까지 가짜로 두고(실제 시간이 흐르는 만큼은 같이 흐른다:
+   * userEvent·findBy 가 그대로 돈다) `passTime` 으로 기한을 건너뛴다. 실제로 기다리지 않는다
+   */
+  const fakeClock = () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(HOLD_NOW));
+  };
+  const passTime = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  /** 회차 고르기 예시 — 회차 버튼도 확인 버튼과 같은 기한(confirmExpiresAt)을 받는다 */
+  const screeningChoices = (afterMs = 120_000) => ({
+    ...holdGuide.value,
+    answer: "어느 회차인가요? 골라 주세요.",
+    choices: [
+      { label: "별의 항해 11/17(화) 20:00 건대입구 1관", message: "별의 항해 11/17(화) 20:00 건대입구 1관" },
+      { label: "한강의 밤 11/17(화) 21:00 건대입구 2관", message: "한강의 밤 11/17(화) 21:00 건대입구 2관" },
+    ],
+    seatHold: {
+      ...holdGuide.value.seatHold,
+      screeningId: null,
+      reason: "SCREENING_AMBIGUOUS",
+      confirmExpiresAt: new Date(Date.now() + afterMs).toISOString(),
+    },
+  });
+  const gatewayTimeout = () => json(504, { code: "GATEWAY_TIMEOUT", message: "x", traceId: TRACE, details: [] });
+  const openAndAsk = async (question: string) => {
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "질문" }), `${question}{Enter}`);
+  };
+
+  it("좌석 잡기: 확인 버튼을 누르면 확인 ID가 실린 문장을 같은 sessionId 로 보내고, 결제 링크를 누르면 창이 닫힌다", async () => {
+    freezeClock();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      return json(200, chatBodies(fetchMock).length <= 1 ? confirmRequest() : holdResult.value);
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+
+    // 확인 요청: 아직 결제 링크가 없다 — 확인(좌석이 적힌 주 버튼)·취소 버튼만
+    expect(await screen.findByText(holdConfirm.value.answer)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /결제하러 가기/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "취소" })).toBeEnabled();
+    expect(chatBodies(fetchMock)).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "J7·J8 잡기" }));
+
+    expect(await screen.findByText(holdResult.value.answer)).toBeInTheDocument();
+    expect(chatBodies(fetchMock)[1]).toEqual({ message: "좌석 잡기 #c7f2a1", sessionId: holdConfirm.value.sessionId });
+    const card = screen.getByLabelText("잡은 좌석");
+    expect(within(card).getByText("J7, J8")).toBeInTheDocument();
+    expect(within(card).getByText("30,000원")).toBeInTheDocument();
+    expect(within(card).getByText("19:45까지")).toBeInTheDocument();
+    // 지난 확인 요청의 버튼은 다시 누를 수 없다
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "취소" })).toBeDisabled();
+
+    // 결제 링크에 결제 기한이 같이 보인다
+    const pay = screen.getByRole("link", { name: /결제하러 가기 \(19:45까지\)/ });
+    expect(pay).toHaveAttribute("href", "/bookings/9876/pay");
+    await userEvent.click(pay);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(chatBodies(fetchMock)).toHaveLength(2);
+  });
+
+  it("좌석 잡기: 새 확인 요청(B)이 오면 앞선 확인(A)의 버튼과 A의 실패한 「다시 묻기」는 눌리지 않는다", async () => {
+    const a = confirmRequest(120_000, "aaaaaa", ["J7", "J8"]);
+    const b = confirmRequest(120_000, "bbbbbb", ["A1"]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      const sent = chatBodies(fetchMock).length;
+      if (sent === 1) return json(200, a);
+      // A의 확인이 서버 오류로 실패한다 → 오류 항목에 「다시 묻기」
+      if (sent === 2) return json(503, { code: "SERVICE_UNAVAILABLE", message: "x", traceId: TRACE, details: [] });
+      return json(200, b);
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    await userEvent.click(await screen.findByRole("button", { name: "J7·J8 잡기" }));
+    // A가 아직 최신 확인 요청일 때는 다시 물을 수 있다
+    expect(await screen.findByRole("button", { name: "다시 묻기" })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "오늘 20시 건대입구 A1 잡아줘{Enter}");
+    expect(await screen.findByRole("button", { name: "A1 잡기" })).toBeEnabled();
+    // 이제 A의 것은 전부 막힌다 — A의 「다시 묻기」가 B를 확정할 수 없다
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "다시 묻기" })).not.toBeInTheDocument();
+    expect(chatBodies(fetchMock).map((body) => body.message)).toEqual([
+      "오늘 20시 건대입구 J7 J8 잡아줘",
+      "좌석 잡기 #aaaaaa",
+      "오늘 20시 건대입구 A1 잡아줘",
+    ]);
+  });
+
+  it("좌석 잡기: 확인 시간이 지나면 버튼을 막고 안내한다", async () => {
+    fakeClock();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/ai/presets" ? json(200, presets) : json(200, confirmRequest()),
+    );
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    expect(await screen.findByRole("button", { name: "J7·J8 잡기" })).toBeEnabled();
+    expect(screen.queryByText(/확인 시간이 지났어요/)).not.toBeInTheDocument();
+    // 기한 직전까지는 그대로
+    await passTime(110_000);
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeEnabled();
+    await passTime(11_000);
+    // 만료 안내는 화면 낭독기에도 알린다
+    expect(screen.getByText(/확인 시간이 지났어요/)).toHaveAttribute("role", "status");
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "취소" })).toBeDisabled();
+    expect(chatBodies(fetchMock)).toHaveLength(1);
+  });
+
+  it("좌석 잡기: 버튼 문장의 모양이 달라도 확인 요청(path·기한)이면 기한 뒤·지난 요청의 버튼을 막는다", async () => {
+    fakeClock();
+    // 서버가 버튼 문장 형식을 바꿨다고 쳐도(ID 자리수·글자) 안전장치는 응답 값으로 건다
+    const odd = (id: string) => ({
+      ...confirmRequest(),
+      choices: [
+        { label: "J7·J8 잡기", message: `hold-confirm:${id}` },
+        { label: "취소", message: `hold-cancel:${id}` },
+      ],
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      return json(200, chatBodies(fetchMock).length <= 1 ? odd("A") : nl2sql.value);
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    expect(await screen.findByRole("button", { name: "J7·J8 잡기" })).toBeEnabled();
+    await passTime(121_000);
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "취소" })).toBeDisabled();
+    expect(screen.getByText(/확인 시간이 지났어요/)).toHaveAttribute("role", "status");
+    // 다른 답이 온 뒤에도(지난 요청) 막힌 채다
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "오늘 상영작{Enter}");
+    expect(await screen.findByText(nl2sql.value.answer)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(chatBodies(fetchMock)).toHaveLength(2);
+  });
+
+  it("좌석 잡기: 회차 고르기 버튼도 기한(confirmExpiresAt)이 지나면 막고 안내한다 — 기한 안에는 그 회차를 보낸다", async () => {
+    fakeClock();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      const sent = chatBodies(fetchMock).length;
+      if (sent === 1) return json(200, screeningChoices());
+      if (sent === 2) return json(200, confirmRequest());
+      return json(200, screeningChoices());
+    });
+    await openAndAsk("오늘 건대 J7 J8 잡아줘");
+    const first = await screen.findByRole("button", { name: "별의 항해 11/17(화) 20:00 건대입구 1관" });
+    expect(first).toBeEnabled();
+    await userEvent.click(first);
+    expect(await screen.findByRole("button", { name: "J7·J8 잡기" })).toBeEnabled();
+    expect(chatBodies(fetchMock)[1]).toEqual({
+      message: "별의 항해 11/17(화) 20:00 건대입구 1관",
+      sessionId: holdGuide.value.sessionId,
+    });
+    // 확인 요청이 온 뒤에는 앞의 회차 버튼이 지난 것이다
+    expect(screen.getByRole("button", { name: "한강의 밤 11/17(화) 21:00 건대입구 2관" })).toBeDisabled();
+
+    // 다시 회차를 고르게 됐는데 2분이 지나면 — 버튼을 막고 안내한다
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "오늘 건대 J7 J8 잡아줘{Enter}");
+    await waitFor(() => expect(chatBodies(fetchMock)).toHaveLength(3));
+    await waitFor(() =>
+      expect(screen.getAllByRole("button", { name: "한강의 밤 11/17(화) 21:00 건대입구 2관" })[1]).toBeEnabled(),
+    );
+    await passTime(121_000);
+    for (const button of screen.getAllByRole("button", { name: /건대입구 [12]관$/ })) expect(button).toBeDisabled();
+    expect(screen.getByText(/확인 시간이 지났어요/)).toHaveAttribute("role", "status");
+    expect(chatBodies(fetchMock)).toHaveLength(3);
+  });
+
+  it("좌석 잡기: 확인이 응답만 실패하면(시간 초과) 「다시 묻기」가 같은 확인 문장을 보내고, 결과가 오면 결제 카드를 보여 준다", async () => {
+    freezeClock();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      const sent = chatBodies(fetchMock).length;
+      if (sent === 1) return json(200, confirmRequest());
+      // 확인은 서버에 닿아 선점까지 끝났지만 화면은 gateway 시간 초과를 본다
+      if (sent === 2) return gatewayTimeout();
+      // 같은 확인 ID가 다시 오면 ai 가 같은 결과를 돌려준다(booking 을 다시 부르지 않는다)
+      return json(200, holdResult.value);
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    await userEvent.click(await screen.findByRole("button", { name: "J7·J8 잡기" }));
+    await userEvent.click(await screen.findByRole("button", { name: "다시 묻기" }));
+
+    expect(await screen.findByText(holdResult.value.answer)).toBeInTheDocument();
+    const sent = chatBodies(fetchMock);
+    expect(sent).toHaveLength(3);
+    expect(sent[2]).toEqual({ message: "좌석 잡기 #c7f2a1", sessionId: holdConfirm.value.sessionId });
+    expect(sent[2]).toEqual(sent[1]);
+    expect(within(screen.getByLabelText("잡은 좌석")).getByText("J7, J8")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /결제하러 가기/ })).toHaveAttribute("href", "/bookings/9876/pay");
+    // 결과가 온 뒤에는 그 확인의 버튼·「다시 묻기」가 지난 것이다
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "다시 묻기" })).not.toBeInTheDocument();
+  });
+
+  it("좌석 잡기: 실패한 확인의 「다시 묻기」도 확인 시간이 지나면 사라지고 같은 안내를 보여 준다", async () => {
+    fakeClock();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      return chatBodies(fetchMock).length === 1 ? json(200, confirmRequest()) : gatewayTimeout();
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    await userEvent.click(await screen.findByRole("button", { name: "J7·J8 잡기" }));
+    expect(await screen.findByRole("button", { name: "다시 묻기" })).toBeInTheDocument();
+    expect(screen.queryByText(/확인 시간이 지났어요/)).not.toBeInTheDocument();
+
+    await passTime(121_000);
+    expect(screen.queryByRole("button", { name: "다시 묻기" })).not.toBeInTheDocument();
+    // 확인 요청의 답과 오류 항목 양쪽에 같은 안내
+    const notes = screen.getAllByText("확인 시간이 지났어요. 잡을 회차와 좌석을 다시 말해 주세요.");
+    expect(notes).toHaveLength(2);
+    for (const note of notes) expect(note).toHaveAttribute("role", "status");
+    expect(notes.filter((note) => note.closest('[role="alert"]'))).toHaveLength(1);
+    expect(chatBodies(fetchMock)).toHaveLength(2);
+  });
+
+  it("좌석 잡기: 결제 기한이 지나면 「결제하러 가기」를 숨기고 안내한다", async () => {
+    fakeClock();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      return json(200, chatBodies(fetchMock).length <= 1 ? confirmRequest() : holdResult.value);
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    await userEvent.click(await screen.findByRole("button", { name: "J7·J8 잡기" }));
+    expect(await screen.findByRole("link", { name: /결제하러 가기 \(19:45까지\)/ })).toBeInTheDocument();
+    expect(screen.queryByText(/결제 시간이 지났어요/)).not.toBeInTheDocument();
+
+    // 결제 기한 19:45:05 — 지금 19:40 무렵
+    await passTime(4 * 60_000);
+    expect(screen.getByRole("link", { name: /결제하러 가기/ })).toBeInTheDocument();
+    await passTime(70_000);
+    expect(screen.queryByRole("link", { name: /결제하러 가기/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/결제 시간이 지났어요/)).toHaveAttribute("role", "status");
+    // 잡았던 좌석 요약은 남는다
+    expect(within(screen.getByLabelText("잡은 좌석")).getByText("J7, J8")).toBeInTheDocument();
+  });
+
+  it("좌석 잡기: 진행 중인 예매가 있다는데 예매 ID가 없으면 링크 없이 안내만, 있으면 그 예매로 가는 링크", async () => {
+    freezeClock();
+    const activeHoldExists = (bookingId: number | null, expiresAt: string | null) => ({
+      ...holdResult.value,
+      answer: "이미 진행 중인 예매(선점)가 있어요. 그 예매를 먼저 결제하거나 취소해 주세요.",
+      seatHold: { ...holdResult.value.seatHold, bookingId, seatLabels: [], amount: null, expiresAt, reason: "ACTIVE_HOLD_EXISTS" },
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      const sent = chatBodies(fetchMock).length;
+      if (sent % 2 === 1) return json(200, confirmRequest(120_000, sent === 1 ? "aaaaaa" : "bbbbbb"));
+      return json(200, sent === 2 ? activeHoldExists(null, null) : activeHoldExists(9001, "2026-11-17T19:44:00+09:00"));
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    await userEvent.click(await screen.findByRole("button", { name: "J7·J8 잡기" }));
+    expect(await screen.findByText(/이미 진행 중인 예매/)).toBeInTheDocument();
+    // booking 이 예매 ID를 알려 주지 않았다 — /bookings/null/pay 같은 링크를 만들지 않는다
+    expect(screen.queryByRole("link", { name: /진행 중인 예매로 가기/ })).not.toBeInTheDocument();
+    expect(document.querySelector('a[href*="null"]')).toBeNull();
+    expect(screen.getByText("진행 중인 예매는 마이페이지 예매 내역에서 확인해 주세요.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("잡은 좌석")).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "오늘 20시 건대입구 J7 J8 잡아줘{Enter}");
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "J7·J8 잡기" })[1]).toBeEnabled());
+    await userEvent.click(screen.getAllByRole("button", { name: "J7·J8 잡기" })[1]);
+    const link = await screen.findByRole("link", { name: /진행 중인 예매로 가기 \(19:44까지\)/ });
+    expect(link).toHaveAttribute("href", "/bookings/9001/pay");
+  });
+
+  it("좌석 잡기: 못 잡는 좌석이면 좌석 화면 링크를 보여 주고, 누르면 창이 닫힌다", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/ai/presets" ? json(200, presets) : json(200, holdGuide.value),
+    );
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    expect(await screen.findByText(holdGuide.value.answer)).toBeInTheDocument();
+    expect(screen.queryByLabelText("잡은 좌석")).not.toBeInTheDocument();
+    const seats = screen.getByRole("link", { name: /좌석 화면에서 고르기/ });
+    expect(seats).toHaveAttribute("href", "/screenings/5123");
+    await userEvent.click(seats);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("데모 정보를 켜면 경로·토큰을 보여 준다", async () => {

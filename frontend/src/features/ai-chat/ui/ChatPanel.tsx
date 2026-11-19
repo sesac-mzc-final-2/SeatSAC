@@ -3,7 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type Keybo
 import type { ChatPreset } from "@/entities/ai-chat";
 import { nowShowingMoviesQuery } from "@/entities/movie";
 import { theaterListQuery } from "@/entities/theater";
-import { todayKst } from "@/shared/lib";
+import { serverNow, todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
 import { cacheNotes, demoTotals, questionNumbers } from "../lib/cache-pairs";
 import {
@@ -20,6 +20,7 @@ import {
   type PickKind,
   type PresetChoice,
 } from "../lib/preset-actions";
+import { activeHold, holdMessages, holdStateOf } from "../lib/seat-hold";
 import { MAX_MESSAGE_LENGTH, useAiChat } from "../model/use-ai-chat";
 import { useDemoMode } from "../model/use-demo-mode";
 import { ChatEntryView } from "./ChatEntryView";
@@ -92,6 +93,20 @@ export function ChatPanel({
       picker?.kind === "movie" ||
       entries.some((entry) => entry.kind === "answer" && answerMovieTitles(entry.response).length > 0),
   });
+
+  // 좌석 잡기: 지금 눌러도 되는 버튼(가장 최근 답의 확인·취소·회차)과 그 기한(2분). 지나면 버튼을 막는다
+  const pendingHold = activeHold(entries);
+  const knownHoldMessages = holdMessages(entries);
+  const [clock, setClock] = useState(() => serverNow());
+  const holdExpiresAt = pendingHold?.expiresAt ?? null;
+  useEffect(() => {
+    if (holdExpiresAt === null) return;
+    // 기한이 지나는 때에 한 번 다시 그린다(이미 지났으면 곧바로)
+    const left = Math.max(0, holdExpiresAt - serverNow());
+    const timer = window.setTimeout(() => setClock(serverNow()), left + 100);
+    return () => window.clearTimeout(timer);
+  }, [holdExpiresAt]);
+  const holdOf = (entry: (typeof entries)[number]) => holdStateOf(entry, pendingHold, knownHoldMessages, clock);
 
   const disabled = notReady || unavailable;
   const blocked = disabled || checking || isPending || cooldownSeconds > 0;
@@ -336,6 +351,8 @@ export function ChatPanel({
             <ChatEntryView
               key={entry.id}
               entry={entry}
+              hold={holdOf(entry)}
+              onNavigate={onClose}
               demo={notes ? { note: notes.get(entry.id), questionNo: numbers?.get(entry.id) } : null}
               onRetry={blocked ? undefined : (question, link) => send(question, link, retryContinueFrom(entry))}
               onChoose={blocked ? undefined : (message) => send(message)}

@@ -370,6 +370,75 @@ const AI_PRESETS = [
 ];
 
 /**
+ * 채팅으로 좌석 잡기 흉내 (초안 3.4.19, ai.openapi.yaml HOLD_*). 실제 선점은 없다 — 화면 흐름만.
+ * "오늘 20시 J7 J8 잡아줘" → 확인 요청(버튼) → 「좌석 잡기」 → 결과 카드(결제 화면 /bookings/7xxx/pay 는 아래 가짜 예매)
+ * 버튼 message 에 확인 ID가 실린다(`좌석 잡기 #c7f2a1`) — ID가 맞을 때만 잡고, 타이핑한 「좌석 잡기」는 확인이 아니다.
+ * 좌석 이름에 Z 가 있으면 「없는 좌석」, X 가 있으면 「이미 잡힌 좌석」 안내(좌석 화면 링크). MOCK_AI_HOLD=off 면 이 흐름을 끈다
+ */
+const MOCK_AI_HOLD = process.env.MOCK_AI_HOLD !== "off";
+/** 확인 버튼을 누를 수 있는 시간(초). 만료 화면을 빨리 보려면 MOCK_AI_HOLD_CONFIRM_SECONDS=10 */
+const MOCK_AI_HOLD_CONFIRM_SECONDS = Number(process.env.MOCK_AI_HOLD_CONFIRM_SECONDS ?? 120);
+const HOLD_CONFIRM_MESSAGE = "좌석 잡기";
+const HOLD_CANCEL_MESSAGE = "취소";
+/** sessionId → 확인을 기다리는 행동 (2분, 한 번 쓰면 지운다) */
+const aiPendingHolds = new Map();
+let aiHoldBookingId = 7100;
+const seatHold = (over = {}) => ({ screeningId: null, bookingId: null, seatLabels: [], amount: null, expiresAt: null, confirmExpiresAt: null, reason: null, ...over });
+const HOLD_REPLY = /^(좌석 잡기|취소)(?:\s*#([0-9a-f]{6}))?$/;
+
+function aiHoldAnswer(message, sessionId, base) {
+  const free = { llm: { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, latencyMs: 180 };
+  const reply = HOLD_REPLY.exec(message);
+  const none = (answer) => ({ ...base, ...free, path: "HOLD_GUIDE", choices: null, seatHold: seatHold({ reason: "NOT_CONFIRMED" }), answer });
+  // 버튼 없이 타이핑한 「좌석 잡기」는 확인이 아니다 — 대기 행동은 그대로 둔다
+  if (reply && reply[1] === HOLD_CONFIRM_MESSAGE && !reply[2]) {
+    return none("좌석을 잡으려면 확인 요청의 「잡기」 버튼을 눌러 주세요. 확인 요청이 없으면 잡을 회차와 좌석을 다시 말해 주세요.");
+  }
+  const pending = aiPendingHolds.get(sessionId);
+  aiPendingHolds.delete(sessionId); // 무엇이 오든 대기 행동은 한 번만
+  const alive = pending && pending.until > Date.now() ? pending : null;
+  if (reply) {
+    if (!alive) return none("확인할 좌석 요청이 없어요(확인 시간이 지났을 수 있어요). 잡을 회차와 좌석을 다시 말해 주세요.");
+    if (reply[1] === HOLD_CANCEL_MESSAGE) {
+      return { ...base, ...free, path: "HOLD_GUIDE", choices: null, seatHold: seatHold({ screeningId: alive.screeningId, reason: "CANCELED" }), answer: "좌석을 잡지 않았습니다." };
+    }
+    // 확인 ID가 다르면(지난 확인 요청의 버튼) 잡지 않는다
+    if (reply[2] !== alive.confirmId) return none("지난 확인 요청의 버튼이에요. 좌석을 잡지 않았습니다. 잡을 회차와 좌석을 다시 말해 주세요.");
+    const expiresAt = toKstIso(new Date(Date.now() + 5 * 60000));
+    return {
+      ...base,
+      ...free,
+      path: "HOLD_RESULT",
+      choices: null,
+      answer: `${alive.seatLabels.join("·")} 좌석을 잡았습니다. ${expiresAt.slice(11, 16)}까지 결제를 마쳐 주세요.`,
+      seatHold: seatHold({ screeningId: alive.screeningId, bookingId: aiHoldBookingId++, seatLabels: alive.seatLabels, amount: alive.seatLabels.length * 15000, expiresAt }),
+    };
+  }
+  const seatLabels = [...new Set((message.match(/(?<![A-Za-z])[A-Za-z]\s?\d{1,2}(?!\d)/g) ?? []).map((s) => s.replace(/\s/g, "").toUpperCase()))];
+  if (seatLabels.length === 0 || !/잡아|예매해|예약해|선점/.test(message)) return null;
+  const s = upcoming(todayIso()).find((x) => new Date(x.startsAt).getTime() > Date.now() + 10 * 60000) ?? upcoming(dateOffset(1))[0];
+  const guide = (reason, answer) => ({ ...base, path: "HOLD_GUIDE", choices: null, answer, seatHold: seatHold({ screeningId: s.screeningId, seatLabels, reason }) });
+  if (seatLabels.length > 4) return { ...guide("TOO_MANY_SEATS", "한 번에 최대 4석까지 잡을 수 있어요. 좌석을 줄여서 다시 말해 주세요."), seatHold: seatHold({ reason: "TOO_MANY_SEATS" }) };
+  const missing = seatLabels.filter((l) => l.startsWith("Z"));
+  if (missing.length) return guide("SEAT_NOT_FOUND", `${missing.join("·")} 좌석은 이 상영관에 없어요. 좌석 화면에서 직접 골라 주세요.`);
+  const taken = seatLabels.filter((l) => l.startsWith("X"));
+  if (taken.length) return guide("SEAT_UNAVAILABLE", `${taken.join("·")} 좌석은 이미 다른 분이 잡았어요. 좌석 화면에서 직접 골라 주세요.`);
+  const confirmId = randomUUID().replace(/-/g, "").slice(0, 6);
+  const until = Date.now() + MOCK_AI_HOLD_CONFIRM_SECONDS * 1000;
+  aiPendingHolds.set(sessionId, { screeningId: s.screeningId, seatLabels, confirmId, until });
+  return {
+    ...base,
+    path: "HOLD_CONFIRM",
+    answer: `${s.movie.title} ${kstMinute(s.startsAt).slice(5).replace("-", "/")} ${s.theater.name} ${s.auditorium.name} ${seatLabels.join("·")} — ${seatLabels.length}석. 이 좌석을 5분간 잡을까요? (2분 안에 눌러 주세요)`,
+    choices: [
+      { label: `${seatLabels.join("·")} 잡기`, message: `${HOLD_CONFIRM_MESSAGE} #${confirmId}` },
+      { label: HOLD_CANCEL_MESSAGE, message: `${HOLD_CANCEL_MESSAGE} #${confirmId}` },
+    ],
+    seatHold: seatHold({ screeningId: s.screeningId, seatLabels, confirmExpiresAt: toKstIso(new Date(until)) }),
+  };
+}
+
+/**
  * 캐시 흉내 (3.4.20 데모 — 처음 → 같은 질문 → 다른 말투). 실제 ai 처럼 질문의 「틀」(시각 숫자를 뺀 모양)이 항목이다.
  *   처음 묻기                         → PRESET·NL2SQL + cache {stored: true}
  *   같은 질문·시각만 다른 질문          → CACHE_EXACT + 같은 entryId {stored: false}
@@ -430,6 +499,8 @@ function aiAnswer(message, sessionId) {
     llm: { calls: 1, inputTokens: 412, outputTokens: 58, cacheReadTokens: 3810, cacheWriteTokens: 0 },
     latencyMs: 1860,
     rejection: null,
+    choices: null,
+    seatHold: null,
   };
   const at = `(${hhmm(asOf)} 기준)`;
   const table = (columns, rows) => ({ columns, rows, rowCount: rows.length });
@@ -438,6 +509,11 @@ function aiAnswer(message, sessionId) {
     ...table(columns, screenings.map(toRow)),
     screeningIds: screenings.length > 0 ? screenings.map((s) => s.screeningId) : null,
   });
+
+  if (MOCK_AI_HOLD) {
+    const hold = aiHoldAnswer(message, sessionId, base);
+    if (hold) return hold;
+  }
 
   if (/내\s*예매|예매\s*내역/.test(message)) {
     const mine = bookings.filter((b) => b.status === "CONFIRMED" && b.screening).slice(0, 5);

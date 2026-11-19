@@ -16,6 +16,7 @@
     "latencyMs": 4120,
     "rejection": { "reason": "FORBIDDEN_OBJECT", "message": "허용되지 않은 테이블을 조회하는 SQL입니다.", "object": "snapshot_meta" },
     "choices": null,
-    "cache": null
+    "cache": null,
+    "seatHold": null
   }
 }

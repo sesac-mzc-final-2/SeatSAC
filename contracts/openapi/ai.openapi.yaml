@@ -60,7 +60,7 @@ paths:
         "200":
           description: |
             답. `path`로 처리 경로를 구분하고 화면은 `answer` 문장 + `columns`/`rows` 표 + "`asOf` 기준"을 보여준다.
-            `screeningIds`가 있으면 표의 그 행에 좌석 선택 화면(`/screenings/{screeningId}`)으로 가는 링크를 붙인다.
+            `screeningIds`가 있으면 표의 그 행에 좌석 선택 화면(화면 라우트 `/screenings/{screeningId}` — API 경로가 아님)으로 가는 링크를 붙인다.
             `llm.calls`가 0이면 Claude API를 부르지 않은 것(캐시·내 예매) — 데모 화면에 그대로 표시.
             `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)·`CLARIFY`(되묻기)도 200이며 `columns`·`rows`는 null.
             `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다(버튼 없이 안내 문장만 올 수도 있다 — 빈 배열).

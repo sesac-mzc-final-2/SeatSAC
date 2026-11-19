@@ -117,8 +117,8 @@
 
 | 키 | TTL | 값·비고 |
 | --- | --- | --- |
-| `ai:exact:{sha256(정규화 질문)}` | 1시간 | 정확 일치 캐시: SQL 템플릿 + 슬롯 + 경로(프리셋·NL2SQL). **결과는 캐시하지 않는다**(스냅샷에서 다시 실행) |
-| `ai:semcache:{id}` (HASH, 인덱스 `ai_semcache_idx`) | 1시간 | 의미 캐시: 슬롯을 `{time}`·`{date}`·`{theater}`·`{movie}`·`{n}`으로 바꾼 질문의 임베딩(384차원 FLOAT32, COSINE) + SQL 템플릿 + 슬롯 종류 |
+| `ai:exact:v2:{sha256(정규화 질문)}` | 1시간 | 정확 일치 캐시: SQL 템플릿 + 슬롯 + 경로(프리셋·NL2SQL). **결과는 캐시하지 않는다**(스냅샷에서 다시 실행). `v2`는 캐시 버전 — 저장 SQL의 뜻이 바뀌면 올리고 옛 키는 TTL로 사라진다(#140: 잔여석은 물었을 때만) |
+| `ai:semcache:v2:{id}` (HASH, 인덱스 `ai_semcache_v2_idx`) | 1시간 | 의미 캐시: 슬롯을 `{time}`·`{date}`·`{theater}`·`{movie}`·`{n}`으로 바꾼 질문의 임베딩(384차원 FLOAT32, COSINE) + SQL 템플릿 + 슬롯 종류 |
 | `ai:session:{userId}:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·슬롯). 파드가 바뀌어도 유지. **키에 `X-User-Id`를 넣어 사용자별로 격리**한다 — 다른 사용자의 `sessionId`를 보내도 그 사용자 키에는 닿지 않는다. `sessionId`는 서버가 UUID로 발급하고, 요청의 `sessionId`가 이 사용자 키에 없으면(만료·남의 것·위조) 새 세션으로 시작한다(오류 아님) |
 | `ai:quota:min:{userId}:{yyyyMMddHHmm}` · `ai:quota:day:{userId}:{yyyyMMdd}` | 60초 · 1일 | 사용 한도 카운터(설계 값 분당 10·하루 100, staging은 11/18부터 분당 600·하루 300 — 런타임 계약 9-1). gateway 요청 수 제한(ADR-62)과 별개인 **ai 앱 안** 한도 |
 | `ai:inflight:{userId}` | **40초** | 사용자당 동시 1건. `SET NX PX 40000`, 값은 요청마다 새 토큰. 끝나면 **값이 내 토큰일 때만** 지운다(Lua 비교 후 `DEL` — 늦게 끝난 요청이 다음 요청의 잠금을 지우지 않게). TTL 40초가 gateway 라우트 28초·요청 전체 기한 25초(`APP_AI_REQUEST_DEADLINE_SECONDS`)보다 길어 갱신 없이도 처리 중 만료되지 않는다. 파드가 죽어 못 지운 경우만 TTL로 풀린다 |
@@ -208,10 +208,10 @@
 | 관리자 namespace | `cinema-ops` (팀원 조회 범위 밖, Terraform이 만드는 운영 Job·그 입력 Secret) | `db-bootstrap-*` Job (3.1.12) |
 | AWS 리소스 | `cinema-staging-{대상}` | `cinema-staging-eks`, `cinema-staging-valkey`, `cinema-staging-users`(Cognito), ⚠️AI `cinema-staging-ai-valkey`, `cinema-staging-ng-ai`(노드그룹) |
 | 계정 단위 리소스 | `cinema-{대상}` | `cinema-admin`, `cinema-developer`, `cinema-gha-ecr-push`, `cinema-tfstate-{계정ID}` |
-| S3 버킷 | `cinema-staging-frontend-{계정ID}`, `cinema-tfstate-{계정ID}` | — |
+| S3 버킷 | `cinema-staging-frontend-{계정ID}`, `cinema-tfstate-{계정ID}`, `cinema-staging-loki-{계정ID}`(3.1.24 로그) | — |
 | ECR | `cinema/{service}` (frontend 없음) | `cinema/booking`, ⚠️AI `cinema/ai` |
 | 이미지 태그 | git SHA 7자리, 불변 | `cinema/booking:3f9a1c2` |
-| Pod Identity 역할 | `cinema-staging-{대상}-pod` | `cinema-staging-booking-pod` |
+| Pod Identity 역할 | `cinema-staging-{대상}-pod` | `cinema-staging-booking-pod`, `cinema-staging-loki-pod`(3.1.24) |
 | Lambda | `cinema-staging-{기능}` | `cinema-staging-notification`, `cinema-staging-cognito-presignup` |
 | K8s 리소스 | `{service}`, Rollout 미리보기 Service `{service}-preview`, Flyway Job `{service}-flyway` | `booking-preview` |
 | 공통 라벨 | `app.kubernetes.io/name={service}`, `app.kubernetes.io/part-of=cinema` | — |
@@ -276,7 +276,7 @@
 | USER | `GET /users/me`, `PATCH /users/me` | — | 첫 호출 때 프로필 생성 |
 | USER | `GET /users/me/bookings` | USR-04 | 페이징 |
 | USER | `GET /users/me/preferences`, `PUT /users/me/preferences` | USR-05 | |
-| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection}` — 모든 필드가 항상 있고 해당 없으면 null. `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖도 **200**(`REJECTED`는 `rejection {reason, message, object?}`). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용) |
+| ⚠️AI USER | `POST /ai/chat` | AI-01 | **ai**, 플래그 `APP_AI_ENABLED` 꺼지면 404(gateway, 유효한 토큰으로 인증됐을 때 — 토큰이 없거나 잘못되면 인증이 라우팅보다 먼저라 401). `{message 1~300자, sessionId?}` → `{sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices}` — 모든 필드가 항상 있고 해당 없으면 null. `path` `CACHE_EXACT`·`CACHE_SEMANTIC`·`PRESET`·`NL2SQL`·`MY_BOOKINGS`·`REJECTED`·`OUT_OF_SCOPE`·`CLARIFY`. `sessionId`는 서버가 발급하며, 이 사용자의 세션이 아니면 새 세션으로 시작한다. SQL 거부·범위 밖·되묻기도 **200**(`REJECTED`는 `rejection {reason, message, object?}`, `CLARIFY`는 `choices [{label, message}]` 버튼 0~7개 — 누르면 `message`를 같은 `sessionId`로 보낸다). 409 `AI_QUERY_IN_PROGRESS` · 429 `AI_QUOTA_EXCEEDED`(`Retry-After`, `details[{field: quota, value: 10/min·100/day, reason: PER_MINUTE·PER_DAY}]`) · 503 `AI_LLM_UNAVAILABLE`(`details[{field: provider, value: anthropic, reason}]`)·`AI_SNAPSHOT_NOT_READY`·`SERVICE_UNAVAILABLE`(내 예매 공개 API 실패 `upstream: user`, 또는 ai 파드 없음). `Idempotency-Key` 없음(조회 전용) |
 | ⚠️AI USER | `GET /ai/presets` | AI-04 | **ai**, 추천 질문 목록 `{items:[{presetId, title, example}]}` — 버튼을 누르면 화면이 빈칸(시각·개수는 입력창에서 고치기, 극장·영화·날짜·등급은 고르는 버튼)을 사용자가 정하게 한 뒤 질문 문장을 `POST /ai/chat`의 `message`로 보낸다. 빈칸이 없는 질문과 화면이 모르는 프리셋은 `example`을 그대로. 화면은 **챗봇 창을 열 때** 이 API를 불러(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5) 404면 「준비 중」 안내 뒤 챗봇 버튼 숨김, 503이면 비활성 안내 |
 
 #### 내부 (`http://{service}:8080/internal/**`)
@@ -352,7 +352,7 @@
 | 헬스 | `management.endpoint.health.probes.enabled=true`. readiness 그룹 = `readinessState,db` (gateway는 `readinessState`만). liveness에 외부 의존 넣지 않음 | 프로브(아래 2장) |
 | 메트릭 | `micrometer-registry-prometheus`, `/actuator/prometheus` 노출, 공통 태그 `application={svc}`. `http.server.requests` 히스토그램 켜기(`management.metrics.distribution.percentiles-histogram.http.server.requests=true`) | PodMonitor `{svc}`(라벨 `app.kubernetes.io/name`, 포트 `http`, 15초, 파드 라벨 `rollouts-pod-template-hash`를 메트릭에 붙임). ServiceMonitor는 active·preview Service가 같은 파드를 두 번 수집해서 쓰지 않는다 |
 | 종료 | `server.shutdown=graceful`, `spring.lifecycle.timeout-per-shutdown-phase=20s`. booking은 SIGTERM 때 SSE 연결을 정상 종료 | `preStop: sleep 5`, `terminationGracePeriodSeconds: 35` |
-| 로그 | stdout JSON 한 줄(`libs/common-web` logback). 파일 로그 금지 | `kubectl logs`로 traceId 검색 (Loki 없음, OPS-09 P3) |
+| 로그 | stdout JSON 한 줄(`libs/common-web` logback). 파일 로그 금지 | `kubectl logs`로 traceId 검색. 3.1.24(ADR-113 가번호, 런북 6-J) 적용 뒤에는 Grafana Explore(Loki)에서 `{namespace="cinema-staging"} \| json \| traceId="…"` 한 줄로 모든 서비스 로그를 시각순으로 본다(Alloy 수집, S3 7일 보존, 지워진 파드 로그도 남음, `clientIp`는 가림) |
 | 공통 코드 | `libs/common-core`·`common-web` 의존 → 오류 형식·traceId·`@CurrentUser`·내부 호출 클라이언트 자동 적용 | `libs/**` 변경 시 `pr-check`가 5개 전부 테스트, 배포는 안 함 |
 | 시간 | JDBC URL에 `connectionTimeZone=UTC`, `Clock.systemUTC()` 주입 | RDS 파라미터 그룹 `time_zone=UTC` |
 | 설정 주입 | 아래 3장 이름만 읽는다. 기본값은 `application-local.yml`에만. `${DB_HOST}` 같은 자리 표시는 Spring이 기동 때 치환한다(앱 코드 변경 없음) | `envFrom`: ConfigMap `cinema-infra-endpoints`(Terraform, 엔드포인트) + `{svc}-config`(gitops) + Secret `{svc}-secrets` |
@@ -480,7 +480,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | `catalog_seat_counts_fallback_total` | counter | — | catalog | 300ms 초과 대체 횟수 |
 | `payment_request_total` | counter | `result`=`approved`·`declined`·`processing`·`canceled` | payment | 모의 결제 결과 분포(OPS-05). 자동 롤백은 booking 쪽 `booking_payment_call_total`을 쓴다 |
 | `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
-| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모** |
+| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다 |
 | ⚠️AI `ai_tokens_total` | counter | `kind`=`input`·`output`·`cache_read`·`cache_write`, `path` | ai | 토큰 사용량. 절감 그래프는 `input+output`(우리 캐시 효과), 프롬프트 캐싱은 `cache_read`로 **따로** 표시 |
 | ⚠️AI `ai_cache_requests_total` | counter | `layer`=`exact`·`semantic`, `result`=`hit`·`miss` | ai | 캐시 적중률 |
 | ⚠️AI `ai_llm_call_seconds` | histogram | `result`=`ok`·`timeout`·`overloaded`·`rate_limited`·`error` | ai | Claude API 지연·장애 |
@@ -567,6 +567,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] ⚠️AI gitops `base/ai`(Deployment·Service·NetworkPolicy·PodMonitor, HPA·Flyway Job 없음) · `overlays/staging/ai` · `np-check.sh` · 저장소 변수 `AI_BUILD_PUSH_ENABLED=true` (3.1.20). CI(`changed-services.sh`·`pr-check` `python`·`build-push` ai)는 #79에서 먼저
 - [ ] ⚠️AI gateway 분석 쿼리 `uri!~"/ai.*"` (3.1.21, **rc1 전**)
 - [ ] ⚠️AI AI 대시보드 `SeatSAC AI` + 런북 6-G(켜기·끄기·질의 금지 구간) (3.1.22, gitops `observability/dashboards/seatsac-ai.json` — 코드 11/17 · **런북 6-G-8 확인 후 체크**)
+- [ ] 로그 저장소 Loki·수집 Alloy·Grafana 데이터소스 `loki` · S3 `cinema-staging-loki-{계정ID}`(보존 7일·수명 주기 14일)·Pod Identity `cinema-staging-loki-pod`(monitoring/loki)·ConfigMap `monitoring/loki-storage` (3.1.24, ADR-113 가번호, `envs/staging/loki.tf`·`envs/staging-k8s/loki.tf`·gitops `platform/{loki,alloy}` — 코드 11/18 · **런북 6-J 적용·확인 후 체크**)
 
 ### 9. ⚠️AI ai 서비스 (Python, ADR-82~87)
 
@@ -594,6 +595,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `APP_AI_PROMPT_CACHE_ENABLED` | `true` | 스키마 설명(system)에 프롬프트 캐싱. 지표 `kind=cache_read`로 따로 |
 | `APP_AI_SQL_TIMEOUT_SECONDS` / `APP_AI_MAX_ROWS` | `5` / `500` | progress handler로 5초 중단(전체 기한이 더 짧으면 그쪽), `fetchmany(500)`. 읽기 전용 방식은 9-2 |
 | `APP_AI_SNAPSHOT_TODAY_INTERVAL` / `APP_AI_SNAPSHOT_OTHER_INTERVAL` / `APP_AI_SNAPSHOT_DAYS` | `60s` / `600s` / `7` | 오늘 회차 1분, 나머지 10분, 오늘~+6일 |
+| `APP_AI_SNAPSHOT_REFRESH_ON_CHAT` / `APP_AI_SNAPSHOT_REFRESH_TIMEOUT_SECONDS` | `true` / `2.0` | 질문 시점 잔여석 갱신: SQL이 `remaining_seats`를 읽으면 실행 직전에 **그 SQL의 날짜 × 극장** 회차만 새로 받는다(SQL 조건 분석기 `sql/conditions.py`, 극장 조건이 없으면 극장 전부). 날짜는 2개까지 — 날짜 조건을 읽지 못하면(범위 비교·OR) 오늘만, 3개 이상이면 앞의 2개만 새로 받고 나머지는 주기 갱신 값으로 답하며 답 문장에 알린다(catalog 호출 최대 8번). 같은 범위 동시 질문은 한 번만, 확인 불가(TOTAL)가 섞이면 한 번 더. 2초 안에 못 받거나 실패하면 기존 스냅샷으로 답하고 답 문장에 알린다. 잔여석은 물었을 때만 SELECT 하고, 날짜가 없으면 되묻는다(`CLARIFY`) |
 | `APP_AI_CACHE_TTL` / `APP_AI_SESSION_TTL` | `1h` / `30m` | |
 | `APP_AI_CACHE_WARM_PRESETS` | `true` | 프리셋 `phrasings`(버튼 질문 말투)를 기동 때·캐시 TTL 절반마다 정확 일치·의미 캐시에 넣는다(`cache/warm.py`). 버튼 질문은 첫 사용자부터 토큰 0. 끄면 첫 질문은 Claude. 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_SEMANTIC_CACHE_ENABLED` / `APP_AI_SEMANTIC_THRESHOLD` | `true` / `0.92` | rc2까지 의미 캐시가 안 되면 `false`로 정확 일치 캐시만(B1) |
@@ -608,6 +610,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | gateway `/api/ai/**` 라우트 `response-timeout` | **28초** (`28000`) | 503 `SERVICE_UNAVAILABLE`(`details[{field: service, value: ai, reason: UPSTREAM_TIMEOUT}]`) — gateway는 하위 서비스의 연결 실패·시간 초과를 모두 503으로 준다(3.3.1, `GatewayErrorHandler`). ai 파드가 없을 때는 같은 503에 `reason` `UPSTREAM_UNAVAILABLE` |
 | ai 요청 전체 기한 `APP_AI_REQUEST_DEADLINE_SECONDS` | **25초** | 503 `AI_LLM_UNAVAILABLE` `TIMEOUT` — 정상 경로에서는 여기서 먼저 끝나 화면이 ai의 오류 형식을 받는다 |
 | └ Claude 호출 1회 | min(15초, 남은 시간) × 최대 3회 | 다음 호출 없이 위 503 |
+| └ 잔여석 갱신 1회 | min(2초, 남은 시간) | 기존 스냅샷으로 답하고 답 문장에 알린다(남은 시간이 없으면 갱신하지 않는다) |
 | └ SQLite 실행 1회 | min(5초, 남은 시간) | `REJECTED` 또는 SQL 오류 재요청 |
 | `ai:inflight:{userId}` 잠금 | 40초 | 25초 기한보다 길어 처리 중 풀리지 않는다 |
 
@@ -615,7 +618,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
-- 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회)은 CloudFront → gateway → catalog로 들어간다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
+- 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회, **잔여석을 읽는 질문마다 날짜 수 × 극장 수**(「오늘 건대입구」 1회, 극장을 안 정하면 4회, 확인 불가가 섞이면 한 번 더))은 CloudFront → gateway → catalog로 들어간다. 질문 시점 호출은 질문 하나에 최대 8회(날짜 2 × 극장 4 — 9-1)이고, 사용자당 동시 1건(`ai:inflight`)으로 묶이며(staging 한도는 11/18부터 분당 600·하루 300 — 9-1), 같은 범위 동시 질문은 한 번을 같이 쓴다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
 - `ng-ai`는 EventBridge Scheduler 평일 켜기 대상에서 **뺀다**(평소 0대). 켜기·끄기는 `cluster-scale.sh up ng-ai`·`down ng-ai`(cinema-admin). `cluster-scale.sh up`·`up 2`와 `cluster-schedule`의 `up`은 `ng-ai`를 켜지 않고 `down`은 `ng-ai`까지 끈다(켜 둔 채 잊어도 백업 끄기·수동 `down`이 끈다)
 - 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 이후 플래그·ai 코드 변경도 시연·측정 중이 아닐 때 머지할 수 있다(11/14 동결 삭제). 단 발표 당일 머지 마감(플래그는 gateway 블루/그린이라 **11/20 05:00**, ai 코드는 **11/20 07:00**, `docs/repo-workflow.md` 2장 동결) 뒤에는 시연·측정 중이 아니어도 머지하지 않는다
 
@@ -804,12 +807,13 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 8 · 35 · 58 | Kustomize + ArgoCD. booking·gateway만 블루/그린(5xx 1%·결제 timeout/error 5% 롤백, scaleDown 60초), 나머지 롤링. 프로브·자원·HPA·메트릭·Secret·NetworkPolicy는 `docs/service-runtime-contract.md` | 동시 블루/그린 금지 |
 | 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음 | 31의 httpOnly 쿠키는 37·63으로 대체 |
 | 78 | (⚠️AI 86 보완: gateway 5xx 쿼리에 `uri!~"/ai.*"`) 블루/그린 분석 트래픽: 분석 중 AnalysisTemplate Job(k6, 조회만)이 `{svc}-preview`로 직접 요청, `/actuator` 제외 요청 ≥ 20건/분을 같이 판정(트래픽 0 = 실패). 실패하면 abort(전환 없음) → gitops 태그 revert PR. 실패 버전 시연은 gitops 설정 PR로 의존 서비스 주소를 깨뜨리는 방식 | ⏳ 남궁일 확인(결제 경로 트래픽·시연 방식) |
-| 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets·Loki는 확장 |
+| 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets는 확장. Loki는 113으로 보완 |
 | ⚠️AI 86 | AI 격리: 전용 노드그룹 **`ng-ai`**(t3.large 1대, 라벨·taint `cinema/workload=ai`, 평소 desired 0, 스케줄 대상 제외) · 별도 Application **`cinema-ai`**(`argocd_apps.tf`, 다른 Application 수정 없음) · gateway 플래그 `APP_AI_ENABLED`(꺼지면 `/api/ai/**` 404) · 분석 쿼리 `/ai` 제외 · `base/ai/networkpolicy.yaml`만 신규(gateway·monitoring → ai) · ai는 클러스터 안 gateway를 부르지 않고 CloudFront 공개 주소 사용 | 7·34·58·69·78 보완 |
 | 36 · 39 | AWS 아키텍처 = 위 결정들의 합. 노션 ADR-36(10/18 v3)은 이전 스냅샷 | |
 | 46 | GitHub Actions → AWS OIDC. 역할 `cinema-gha-ecr-push`·`cinema-gha-tf-plan`·`cinema-gha-frontend-deploy`·`cinema-gha-cluster-schedule`(3.1.14). CI는 apply 안 함 | `infra/terraform/global` |
 | 47 | 팀 접근: IAM 역할 + MFA(Identity Center 미사용). `cinema-admin` = 김종식 + **백업 남궁일**, `cinema-developer` = 전원. 프로필 `seatsac-user`·`cinema-dev`·`cinema-admin` | 회의록3 |
 | 74 | ⚠️ `SeatSAC-gitops` **Public**(GitHub 무료 플랜은 Private 레포에 ruleset을 적용하지 않음). 계정 ID·엔드포인트는 gitops에 두지 않는다: 엔드포인트 = Terraform ConfigMap `cinema-infra-endpoints` + `${키}`, ECR 레지스트리 = Terraform이 만드는 서비스 ArgoCD Application의 `kustomize.images`, gitops에는 태그만. ArgoCD는 HTTPS로 읽음(자격 증명 없음) | 10/25. 대안: Private + ruleset 없이 운영(직접 push 위험), 유료 플랜 |
+| 113 (가번호) | 로그 저장소 **Loki**(SingleBinary 1개, 청크·인덱스 S3 `cinema-staging-loki-{계정ID}` — EBS CSI가 없어 PVC 대신 S3, Pod Identity `cinema-staging-loki-pod`, 보존 7일·수명 주기 14일) + 수집 **Alloy**(파드 1개가 Kubernetes API로 `cinema-staging` 파드 로그만 읽음 — DaemonSet·hostPath 없음, Role 범위, gateway `clientIp`는 저장 전 `***`). 라벨은 `namespace`·`app`·`container`·`pod`만(traceId·userId는 `\| json`). 조회는 NetworkPolicy로 Grafana·Alloy만. 로컬 디스크가 emptyDir라 파드 교체 때 삭제 대기 청크는 S3 수명 주기(14일)가 지운다. 버킷 이름은 계정 ID가 들어가 Terraform ConfigMap `monitoring/loki-storage` → Loki `-config.expand-env`. Grafana 데이터소스 uid `loki`. 알림 Lambda 로그는 CloudWatch 그대로. **발표 전(11/18~19) 적용** — 시연·측정·녹화가 없는 시간에, 머지 마감(11/20 07:00) 전. 새 파드 2개는 requests 합 250m·640Mi로 작고 서비스 경로 밖이다. 이미 잰 p95·HPA는 Loki 없는 환경 기준으로 그대로 둔다(런북 6-J) | 10 보완. 노션 등록 후 번호 확정 |
 
 ### 5. 인증·화면·코드·프로세스
 

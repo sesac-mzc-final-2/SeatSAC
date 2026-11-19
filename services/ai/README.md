@@ -69,7 +69,7 @@ readiness는 각 작업이 `app.state.readiness.register(이름, 점검)`으로 
 | --- | --- |
 | Claude 없이 답한 비율 | `sum(increase(ai_chat_total{result="ok",path=~"cache_exact\|cache_semantic\|my_bookings"}[1h])) / sum(increase(ai_chat_total{result="ok"}[1h]))` |
 | 캐시 적중률(층별) | `sum by (layer) (increase(ai_cache_requests_total{result="hit"}[1h])) / sum by (layer) (increase(ai_cache_requests_total[1h]))` |
-| Claude 답 1건당 토큰(input+output) | `sum(increase(ai_tokens_total{kind=~"input\|output"}[1h])) / sum(increase(ai_chat_total{path=~"preset\|nl2sql\|rejected\|out_of_scope"}[1h]))` |
+| Claude 답 1건당 토큰(input+output) | `sum(increase(ai_tokens_total{kind=~"input\|output"}[1h])) / sum(increase(ai_chat_total{path=~"preset\|nl2sql\|rejected\|out_of_scope\|clarify"}[1h]))` |
 | 캐시로 아낀 토큰(추정) | 위 "1건당 토큰" × `sum(increase(ai_chat_total{result="ok",path=~"cache_exact\|cache_semantic"}[1h]))` |
 | 프롬프트 캐싱으로 싸게 읽은 토큰 | `sum(increase(ai_tokens_total{kind="cache_read"}[1h]))` |
 | 못 답한 요청(분류별, 24시간) | `sum by (category) (increase(ai_unmet_demand_total[24h]))` |
@@ -81,7 +81,7 @@ readiness는 각 작업이 `app.state.readiness.register(이름, 점검)`으로 
 # Claude 없이 답한 비율
 sum(increase(ai_chat_total{result="ok",path=~"cache_exact|cache_semantic|my_bookings"}[1h])) / sum(increase(ai_chat_total{result="ok"}[1h]))
 # Claude 답 1건당 토큰(input+output)
-sum(increase(ai_tokens_total{kind=~"input|output"}[1h])) / sum(increase(ai_chat_total{path=~"preset|nl2sql|rejected|out_of_scope"}[1h]))
+sum(increase(ai_tokens_total{kind=~"input|output"}[1h])) / sum(increase(ai_chat_total{path=~"preset|nl2sql|rejected|out_of_scope|clarify"}[1h]))
 # 캐시로 답한 건수(아낀 토큰 = 1건당 토큰 × 이 값)
 sum(increase(ai_chat_total{result="ok",path=~"cache_exact|cache_semantic"}[1h]))
 ```

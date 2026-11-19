@@ -9,12 +9,11 @@
       { "name": "auditorium_name", "type": "text" },
       { "name": "screen_type", "type": "text" },
       { "name": "starts_at", "type": "text" },
-      { "name": "ends_at", "type": "text" },
-      { "name": "remaining_seats", "type": "integer" }
+      { "name": "ends_at", "type": "text" }
     ],
     "rows": [
-      [ "영화 제목", "6관", "NORMAL", "2026-11-18 14:30", "2026-11-18 16:25", 171 ],
-      [ "다른 영화", "2관", "RECLINER", "2026-11-18 19:00", "2026-11-18 21:10", 40 ]
+      [ "영화 제목", "6관", "NORMAL", "2026-11-18 14:30", "2026-11-18 16:25" ],
+      [ "다른 영화", "2관", "RECLINER", "2026-11-18 19:00", "2026-11-18 21:10" ]
     ],
     "rowCount": 2,
     "truncated": false,
@@ -23,6 +22,7 @@
     "asOf": "2026-11-17T19:40:00+09:00",
     "llm": { "calls": 1, "inputTokens": 412, "outputTokens": 58, "cacheReadTokens": 3810, "cacheWriteTokens": 0 },
     "latencyMs": 1860,
-    "rejection": null
+    "rejection": null,
+    "choices": null
   }
 }

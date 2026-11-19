@@ -11,11 +11,19 @@ from dataclasses import dataclass
 from seatsac_ai.common.metrics import AI_SNAPSHOT_AGE_SECONDS
 from seatsac_ai.config import Settings
 from seatsac_ai.snapshot.client import PublicApiClient
+from seatsac_ai.snapshot.fresh import Fresh, SeatRefresher
 from seatsac_ai.snapshot.loader import SnapshotLoader
 from seatsac_ai.snapshot.scheduler import SnapshotScheduler
 from seatsac_ai.snapshot.store import SCOPES, SnapshotNotReady, SnapshotStore
 
-__all__ = ["Snapshot", "SnapshotNotReady", "SnapshotStore", "build_snapshot"]
+__all__ = [
+    "Snapshot",
+    "SnapshotNotReady",
+    "SnapshotStore",
+    "Fresh",
+    "SeatRefresher",
+    "build_snapshot",
+]
 
 
 @dataclass
@@ -23,6 +31,7 @@ class Snapshot:
     store: SnapshotStore
     scheduler: SnapshotScheduler
     client: PublicApiClient
+    refresher: SeatRefresher | None = None  # 질문 시점 잔여석 갱신(끄면 None)
 
     def start(self) -> None:
         self.scheduler.start()
@@ -46,4 +55,9 @@ def build_snapshot(settings: Settings, base_url: str) -> Snapshot:
     # 스크랩할 때마다 계산한다(마지막 성공 적재 이후 경과 초). 한 번도 못 했으면 기동 이후 경과 초.
     for scope in SCOPES:
         AI_SNAPSHOT_AGE_SECONDS.labels(scope).set_function(lambda s=scope: store.age_seconds(s))
-    return Snapshot(store=store, scheduler=scheduler, client=client)
+    refresher = (
+        SeatRefresher(loader.refresh_screenings, settings.snapshot_refresh_timeout_seconds)
+        if settings.snapshot_refresh_on_chat
+        else None
+    )
+    return Snapshot(store=store, scheduler=scheduler, client=client, refresher=refresher)

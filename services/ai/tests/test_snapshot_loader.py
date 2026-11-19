@@ -1,4 +1,5 @@
 import asyncio
+from datetime import date
 
 import pytest
 
@@ -166,3 +167,59 @@ def test_movie_dropped_from_list_is_removed():
     client.movies = [movie_summary(1)]
     asyncio.run(loader.refresh_other())
     assert rows(store, "SELECT movie_id FROM movie") == [(1,)]
+
+
+def test_seat_refresh_replaces_only_the_asked_day_and_theater():
+    """질문 시점 갱신: 「내일 극장10」만 바꾸고 오늘 회차·다른 극장·주기 갱신 시각은 그대로."""
+    clock = {"now": NOW}
+    client = FakeClient()
+    client.theaters = [theater(10), theater(20)]
+    store = SnapshotStore(clock=lambda: clock["now"])
+    loader = SnapshotLoader(client, store, days=3, clock=lambda: clock["now"])
+    tomorrow, end = "2026-11-07T10:00:00+09:00", "2026-11-07T12:00:00+09:00"
+    client.screenings[("2026-11-06", 10)] = [screening(1)]
+    client.screenings[("2026-11-07", 10)] = [screening(2, tomorrow, endsAt=end, remainingSeats=100)]
+    client.screenings[("2026-11-07", 20)] = [
+        screening(
+            3, tomorrow, endsAt=end, remainingSeats=50, theater={"theaterId": 20, "name": "극장20"}
+        )
+    ]
+    asyncio.run(refresh_all(loader))
+    as_of = store.as_of()
+
+    clock["now"] = kst(2026, 11, 6, 12, 5)
+    client.screenings[("2026-11-07", 10)] = [screening(2, tomorrow, endsAt=end, remainingSeats=98)]
+    client.screenings[("2026-11-07", 20)] = [
+        screening(
+            3, tomorrow, endsAt=end, remainingSeats=1, theater={"theaterId": 20, "name": "극장20"}
+        )
+    ]
+    result = asyncio.run(loader.refresh_screenings([date(2026, 11, 7)], [10]))
+    assert rows(store, "SELECT screening_id, remaining_seats FROM screening ORDER BY 1") == [
+        (1, 40),
+        (2, 98),  # 새로 받음
+        (3, 50),  # 묻지 않은 극장은 그대로
+    ]
+    assert result.rows == 1 and result.unknown == 0 and result.at == clock["now"]
+    assert store.as_of() == as_of  # 주기 갱신 시각은 건드리지 않는다(답의 asOf는 따로)
+
+
+def test_total_seats_are_stored_as_unknown():
+    """booking이 늦게 답해 catalog가 전체 좌석 수(TOTAL)로 채운 값은 잔여석이 아니다 → NULL."""
+    client, store, loader = make()
+    client.screenings[("2026-11-06", 10)] = [
+        screening(1, remainingSeats=100, remainingSeatsSource="TOTAL")
+    ]
+    asyncio.run(refresh_all(loader))
+    result = asyncio.run(loader.refresh_screenings([date(2026, 11, 6)], None))
+    assert rows(store, "SELECT remaining_seats, remaining_seats_source FROM screening") == [
+        (None, "TOTAL")
+    ]
+    assert result.unknown == 1
+
+
+def test_seat_refresh_ignores_days_outside_the_snapshot():
+    client, store, loader = make()
+    asyncio.run(refresh_all(loader))
+    result = asyncio.run(loader.refresh_screenings([date(2026, 12, 25)], None))
+    assert result.rows == 0  # 7일 밖은 받지 않는다(어차피 스냅샷에 없다)

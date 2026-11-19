@@ -300,6 +300,7 @@ export function ChatPanel({
               entry={entry}
               demo={demo.enabled}
               onRetry={blocked ? undefined : (question, link) => send(question, link)}
+              onChoose={blocked ? undefined : (message) => send(message)}
               onPickMovie={blocked ? undefined : pickMovie}
             />
           ))

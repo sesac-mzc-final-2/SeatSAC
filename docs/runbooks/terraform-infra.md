@@ -1276,7 +1276,7 @@ infra/scripts/cluster-scale.sh down ng-ai
 
 - 조건: 6-G-5 「staging에서 ai 확인(M6 중)」 — 4.2.1·4.2.2가 돌지 않는 시간, 스크럼에 시간 공유. 노드 켜짐 시간(평일 08:23~23:07)
 - 방법: ai Valkey는 노드 보안그룹에서만 열려 있어 **이미 떠 있는 ai 파드 안에서** `kubectl exec`로 확인한다(새 리소스를 만들지 않는다). 지금 staging ai 이미지에는 `redis` 패키지가 없어(#93에서 추가) **표준 라이브러리만 쓰는** 스크립트를 stdin으로 넘긴다
-- 쓰는 키: 확인용 인덱스 `ai_semcheck_idx` · 키 `ai:semcheck:0~2`(TTL 120초, conventions 4장 ai Valkey 표). 끝나면 바로 지운다. 앱의 `ai_semcache_idx`·`ai:semcache:*`는 건드리지 않는다
+- 쓰는 키: 확인용 인덱스 `ai_semcheck_idx` · 키 `ai:semcheck:0~2`(TTL 120초, conventions 4장 ai Valkey 표). 끝나면 바로 지운다. 앱의 `ai_semcache_v2_idx`·`ai:semcache:v2:*`는 건드리지 않는다
 
 ```bash
 export AWS_PROFILE=cinema-admin
@@ -1398,7 +1398,7 @@ PY
 
 - 시간: 11/15까지 · 평일 노드 켜짐 시간 · 4.2.1·4.2.2·좌석 데모 리허설과 겹치지 않게(스크럼 공유) · `up ng-ai`(6-G-2 A) 상태
 - 방법: ai Valkey 노드를 재부팅해 몇 분간 응답이 없게 만든다(새 리소스를 만들지 않는다. ai 전용 클러스터라 좌석 선점·기존 Valkey와 무관). 그동안 챗봇 질문을 보낸다
-- ⚠️ 재부팅하면 ai Valkey의 **데이터가 모두 사라진다**(복제본·영속화 없음): 캐시·세션·한도 카운터와 의미 캐시 인덱스 `ai_semcache_idx`. 캐시·세션·한도는 TTL 데이터라 괜찮다. 하지만 지금 ai 코드(`cache/store.py`)는 인덱스를 **기동 때 한 번만** 만들고, 검색이 실패해도 「놓침」으로만 처리한다 → 재부팅 뒤에는 파드를 다시 띄울 때까지 **의미 캐시가 계속 적중하지 않는다**(2차 데모 「의미 캐시 적중」이 안 됨). 그래서 확인 끝에 반드시 아래 「복구」를 한다. AI 데모 당일(11/17)에는 하지 않는다
+- ⚠️ 재부팅하면 ai Valkey의 **데이터가 모두 사라진다**(복제본·영속화 없음): 캐시·세션·한도 카운터와 의미 캐시 인덱스 `ai_semcache_v2_idx`. 캐시·세션·한도는 TTL 데이터라 괜찮다. 하지만 지금 ai 코드(`cache/store.py`)는 인덱스를 **기동 때 한 번만** 만들고, 검색이 실패해도 「놓침」으로만 처리한다 → 재부팅 뒤에는 파드를 다시 띄울 때까지 **의미 캐시가 계속 적중하지 않는다**(2차 데모 「의미 캐시 적중」이 안 됨). 그래서 확인 끝에 반드시 아래 「복구」를 한다. AI 데모 당일(11/17)에는 하지 않는다
 
 ```bash
 export AWS_PROFILE=cinema-admin
@@ -1649,6 +1649,74 @@ kubectl -n cinema-staging get secret booking-secrets -o json | jq -r '.data.APP_
 - CloudFront는 바꿀 것 없음(`/api` origin request policy가 모든 viewer 헤더 전달 → `webhook-*` 서명 헤더 통과, POST 허용). payment → `api.portone.io`는 NAT 경유(egress 막지 않음)
 - 모의 결제 키: k6 `deploy` 시나리오는 `run-in-cluster.sh`가 `booking-secrets`를 `secretKeyRef`로 넣는다(값을 꺼내지 않는다). 블루/그린 분석 Job은 지금 결제 경로가 없어 바꿀 것 없음 — 넣으려면 `SMOKE_PAY_SCREENING_ID`가 **미래 회차**여야 한다(시작 5분 전 마감 → 지나면 모든 booking 배포 abort)
 - 발표 후 Public 전환 전: 포트원 API Secret·웹훅 시크릿 폐기(포트원 콘솔)
+
+### 6-J. 로그 저장소 Loki · 수집 Alloy (3.1.24, ADR-113 가번호) — ⬜ 발표 전(11/18~19) 적용
+
+> **언제**: 시연·측정·녹화(5.1.4~5.1.6·리허설, k6, 블루/그린)가 돌지 않는 시간에, 스크럼에 「Loki 적용 ○시」를 공유하고 한다. 머지 마감은 **11/20 07:00**(블루/그린 아님 — 그 밖의 변경). 적용 뒤 녹화가 남아 있으면 6-J-2 확인까지 끝낸 다음에 시작한다.
+> **영향**: monitoring에 파드 2개(Loki 200m·512Mi·한도 1Gi, Alloy 50m·128Mi·한도 256Mi — requests 합 250m·640Mi, t3.xlarge 2대 기준 약 3%·4%)가 새로 뜬다. 서비스 요청 경로 밖이라 앱 응답에는 끼지 않는다. Alloy는 Kubernetes API로 로그를 읽으므로 API 서버 요청이 조금 는다. 이미 잰 p95·HPA 장면은 Loki 없는 환경 기준으로 그대로 둔다(다시 재지 않는다).
+> **발표 중 문제가 생기면**: gitops PR revert 하나로 `loki`·`alloy`가 지워진다(서비스·대시보드·신호등 영향 없음, 6-J-3). Terraform 리소스(버킷·역할·ConfigMap)는 남겨도 아무것도 하지 않는다.
+
+무엇이 좋아지나: 파드가 지워져도(블루/그린 전환·abort 뒤 이전 버전) 로그가 남는다 · Grafana Explore에서 traceId 한 줄로 모든 서비스 로그를 시각순으로 · 팀원이 kubectl 권한 없이 Grafana에서 조회 · 지표와 로그를 나란히(5xx가 튄 시각의 로그).
+
+| 구성 | 어디 | 내용 |
+| --- | --- | --- |
+| S3 버킷 `cinema-staging-loki-{계정ID}` | `envs/staging/loki.tf` | 비공개·SSE-S3·수명 주기 14일(안전망)·`force_destroy`(로그만) |
+| Pod Identity `cinema-staging-loki-pod` | 같은 파일 | 이 버킷 `ListBucket`·`Get/Put/DeleteObject`만 ↔ ServiceAccount `monitoring/loki` |
+| ConfigMap `monitoring/loki-storage` | `envs/staging-k8s/loki.tf` | `LOKI_S3_BUCKET`·`AWS_REGION` — 버킷 이름에 계정 ID가 있어 Public gitops에 쓰지 않는다 |
+| Application `loki`(wave 5) | gitops `apps/staging/platform-loki.yaml` · `platform/loki/values.yaml` | grafana/loki 7.5.0, SingleBinary 1개, 로컬 디스크 emptyDir, 보존 7일(compactor), RBAC 없음 |
+| Application `alloy`(wave 6) | gitops `apps/staging/platform-alloy.yaml` · `platform/alloy/values.yaml` | grafana/alloy 1.15.0, Deployment 1개, Kubernetes API로 `cinema-staging` 파드 로그 읽기(Role `pods`·`pods/log`만), `clientIp` → `***` |
+| Grafana 데이터소스 `loki` | gitops `platform/kube-prometheus-stack/values.yaml` | `http://loki.monitoring.svc.cluster.local:3100` |
+
+#### 6-J-1. 적용 (순서가 중요 — 권한 연결보다 먼저 뜬 Loki 파드는 S3에 쓰지 못한다)
+
+```bash
+export AWS_PROFILE=cinema-admin
+cd infra/terraform/envs/staging
+terraform init -backend-config=backend.hcl       # 새 모듈(loki_pod_identity) 설치 — 빼면 plan이 모듈을 못 찾아 멈춘다
+terraform plan -var-file=staging.tfvars          # 기대: 9 to add (버킷 5 + Pod Identity 4), 그 밖 변경 없음
+terraform apply -var-file=staging.tfvars
+cd ../staging-k8s
+terraform init -backend-config=backend.hcl
+terraform plan -var-file=staging-k8s.tfvars      # 기대: 1 to add (ConfigMap loki-storage)
+terraform apply -var-file=staging-k8s.tfvars
+```
+
+3. SeatSAC-gitops PR(`infra/3.1.24-loki`) 머지 → root 앱이 `loki`(5) → `alloy`(6) 순서로 sync. kube-prometheus-stack도 데이터소스 추가로 sync된다(Grafana 재시작 없음 — 데이터소스 사이드카가 다시 읽는다)
+
+#### 6-J-2. 확인
+
+```bash
+cd "$(git rev-parse --show-toplevel)"                                        # 레포 루트에서 (6-J-1 뒤 셸은 staging-k8s에 있다)
+kubectl -n argocd get application loki alloy                                   # Synced / Healthy
+kubectl -n monitoring get pods -l 'app.kubernetes.io/name in (loki,alloy)'      # Running, loki-0 1/1
+kubectl -n monitoring logs loki-0 -c loki | grep -iE 'AccessDenied|NoSuchBucket|level=error' | head   # 없어야 정상
+kubectl -n monitoring logs deploy/alloy -c alloy | grep -iE 'level=error|forbidden' | head            # 없어야 정상
+aws s3 ls "s3://$(terraform -chdir=infra/terraform/envs/staging output -raw loki_bucket_name)/" --recursive | head   # 몇 분 뒤 index/·fake/ 객체
+```
+
+Grafana(6-F-2와 같은 접속) → Explore → 데이터소스 **Loki**:
+
+| 확인 | 쿼리 | 기대 |
+| --- | --- | --- |
+| 수집 | `{namespace="cinema-staging"}` | 서비스별(`app`) 로그가 보인다 |
+| traceId 한 줄 | `{namespace="cinema-staging"} \| json \| traceId="<응답 헤더 X-Trace-Id>"` | gateway → catalog 등 한 요청의 로그가 시각순 |
+| 개인정보 가림 | `{app="gateway"} \|= "clientIp"` | `"clientIp":"***"` |
+| 지워진 파드 | 블루/그린 한 번 뒤 이전 `pod` 라벨로 조회 | 이전 버전 파드 로그가 남아 있다 |
+
+#### 6-J-3. 문제 해결
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| Loki 로그 `AccessDenied` | Pod Identity 연결보다 Loki 파드가 먼저 떴다 · ServiceAccount 이름 불일치 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace monitoring`에 `loki` 확인 → ArgoCD에서 `loki` StatefulSet Restart |
+| `NoSuchBucket`·버킷 이름이 `${LOKI_S3_BUCKET}` 그대로 | ConfigMap `loki-storage` 없음(6-J-1의 staging-k8s apply 전) | staging-k8s apply → Restart |
+| Alloy `forbidden … pods/log` | Role이 cinema-staging에 없음 | `kubectl -n cinema-staging get role,rolebinding -l app.kubernetes.io/name=alloy` → 없으면 `alloy` 앱 sync |
+| Grafana에 Loki 데이터소스 없음 | kube-prometheus-stack sync 전 | ArgoCD `kube-prometheus-stack` Synced 확인, 그래도 없으면 Grafana Deployment Restart |
+| 같은 줄이 두 번 | 컨테이너 포트가 8080 말고 더 있다 | Alloy `discovery.relabel`의 포트 필터(`\|8080`)에 맞게 고치는 gitops PR |
+
+- 되돌리기: gitops PR revert → `cinema-root`가 `loki`·`alloy` Application을 prune하고, 두 Application의 finalizer(`resources-finalizer.argocd.argoproj.io`)가 StatefulSet·Deployment·Role·NetworkPolicy까지 지운다(서비스·대시보드 영향 없음). `kubectl -n monitoring get statefulset loki`·`kubectl -n cinema-staging get role alloy`가 NotFound면 끝. 버킷은 남겨도 청크가 14일 뒤 비워진다. 버킷까지 지우려면 **한 PR에서** `envs/staging/loki.tf`·`envs/staging/outputs.tf`의 `loki_bucket_name`·`envs/staging-k8s/loki.tf`를 함께 지우고 apply(출력만 남기면 plan이 없는 리소스를 참조해 실패한다)
+- Loki 파드가 다시 뜨면 compactor가 지우려고 표시해 둔 청크 목록(로컬 marker, emptyDir)이 사라진다 → 그 청크는 조회되지 않은 채 S3 수명 주기(`fake/` 14일)가 지울 때까지 남는다(보존이 최대 약 7일 늘어남). PVC가 없어(EBS CSI 없음) 받아들인 한계
+- 비용: S3 수 GB·요청 수 수준(월 1달러 미만). 노드 추가 없음
+- 알림 Lambda 로그는 CloudWatch에 있다 — Loki로 옮기지 않는다
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 

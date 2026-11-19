@@ -29,6 +29,7 @@ CONTRACT_KEYS = {
     "context",
     "answer", "path", "columns", "rows", "screeningIds", "rowCount", "truncated", "sql",
     "presetId", "asOf", "llm", "latencyMs", "rejection", "choices",
+    "cache",
 }  # fmt: skip
 AFTER_20 = (
     "SELECT m.title AS movie_title, s.starts_at FROM screening s "

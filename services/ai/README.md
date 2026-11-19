@@ -70,6 +70,9 @@ uv run pytest
 readiness는 각 작업이 `app.state.readiness.register(이름, 점검)`으로 점검을 붙인다
 (3.4.9 `snapshot`, 3.4.5 `valkey`). 점검이 없으면 UP이다.
 
+응답의 `cache.entryId`(3.4.20 데모 화면의 캐시 짝)는 캐시 키 해시를 파드 기동 때 만든 임의 키로 HMAC 한 값이다.
+파드가 다시 뜨면 값이 바뀌어 그 전 답과는 짝이 끊긴다(같은 대화 안 짝만 필요). 캐시 항목 자체는 그대로 쓴다.
+
 ## 지표 읽는 법 (3.4.7 · 대시보드 3.1.22)
 
 지표 정의는 `docs/service-runtime-contract.md` 5장. 절감 데모의 숫자는 아래 식으로 만든다.

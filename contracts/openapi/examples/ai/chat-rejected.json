@@ -16,6 +16,7 @@
     "llm": { "calls": 2, "inputTokens": 921, "outputTokens": 164, "cacheReadTokens": 7620, "cacheWriteTokens": 0 },
     "latencyMs": 4120,
     "rejection": { "reason": "FORBIDDEN_OBJECT", "message": "허용되지 않은 테이블을 조회하는 SQL입니다.", "object": "snapshot_meta" },
-    "choices": null
+    "choices": null,
+    "cache": null
   }
 }

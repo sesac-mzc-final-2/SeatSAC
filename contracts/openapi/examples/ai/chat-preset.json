@@ -25,6 +25,7 @@
     "llm": { "calls": 1, "inputTokens": 412, "outputTokens": 58, "cacheReadTokens": 3810, "cacheWriteTokens": 0 },
     "latencyMs": 1860,
     "rejection": null,
-    "choices": null
+    "choices": null,
+    "cache": { "entryId": "c03d58e1f6a9", "stored": true, "similarity": null }
   }
 }

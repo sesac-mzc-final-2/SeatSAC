@@ -3,15 +3,26 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { serverNow } from "@/shared/lib";
 import { Badge, Chip, Icon, TraceCode } from "@/shared/ui";
+import { basisLabel, savedLabel, type CacheNote, type PairMatch } from "../lib/cache-pairs";
 import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/preset-actions";
 import { seatLinks } from "../lib/seat-links";
 import type { ChatEntry } from "../model/use-ai-chat";
 import { ResultTable } from "./ResultTable";
 import styles from "./ChatEntryView.module.css";
 
+/**
+ * 데모 모드일 때 항목 하나에 넘기는 정보.
+ * `note` = 답의 캐시 짝·저장 설명(해당 없으면 없음) · `questionNo` = 질문 말풍선에 붙일 번호(대화 전체 기준)
+ */
+export interface EntryDemo {
+  note?: CacheNote;
+  questionNo?: number;
+}
+
 interface Props {
   entry: ChatEntry;
-  demo: boolean;
+  /** 데모 모드가 꺼져 있으면 null — 데모 정보를 그리지 않는다 */
+  demo: EntryDemo | null;
   /** 오류 항목의 「다시 묻기」 (보낼 수 없는 상태면 undefined) */
   onRetry?: (question: string, link?: ChatLink) => void;
   /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
@@ -22,24 +33,74 @@ interface Props {
   onSeatNavigate?: () => void;
 }
 
-const n = (value: number) => value.toLocaleString("ko-KR");
+/** 응답에 값이 빠졌으면(계약 밖) 숫자 대신 「–」 — 데모 정보 때문에 답 전체가 깨지지 않게 */
+const n = (value: number) => (Number.isFinite(value) ? value.toLocaleString("ko-KR") : "–");
 
-/** 데모 모드: 처리 경로 · Claude 호출 · 토큰 · 지연 · SQL */
-function DemoMeta({ response }: { response: ChatResponse }) {
-  const { llm } = response;
-  const free = isTokenFree(response);
+/** ai 의 `APP_AI_CACHE_TTL`(기본 1h) — 응답에 TTL 이 없어 화면에 적어 둔 값. ai 설정을 바꾸면 같이 고친다 */
+const CACHE_TTL_TEXT = "1시간";
+
+const MATCH_TEXT: Record<PairMatch, string> = {
+  same: "같은 질문",
+  template: "같은 틀의 질문(말투·값만 다름)",
+  semantic: "같은 뜻으로 판단",
+};
+
+/**
+ * 캐시 설명 (3.4.20). 짝이 있으면 그 답과의 뺄셈(토큰·서버 처리 시간)과 무엇에서 무엇을 뺐는지를,
+ * 없으면 숫자 없이 이유만 보여 준다. 화살표는 장식이라 읽지 않게 하고 나머지는 글자 그대로 읽힌다
+ */
+function CacheNoteLines({ note }: { note: CacheNote }) {
+  if (note.kind === "stored") {
+    return (
+      <p className={styles.dim}>
+        이 답의 SQL 틀을 캐시에 저장함 — {CACHE_TTL_TEXT} 동안 같은 틀의 질문은 Claude 없이 답할 수 있습니다
+      </p>
+    );
+  }
+  if (note.kind === "outside") {
+    return (
+      <p className={styles.dim}>
+        이 대화에서 짝을 찾지 못한 캐시(이전 대화 · 다른 사용자 · 미리 넣어 둔 질문 · ai 재시작)
+      </p>
+    );
+  }
+  const { pair } = note;
+  const saved = savedLabel(pair);
+  const basis = basisLabel(pair);
+  return (
+    <>
+      <p className={styles.pair}>
+        <span aria-hidden="true">↑ </span>
+        {pair.questionNo}번째 질문과 {MATCH_TEXT[note.match]}
+        {note.match === "semantic" && note.similarity !== null && ` · 유사도 ${note.similarity.toFixed(2)}`}{" "}
+        <span className={styles.pairQuestion}>「{pair.question}」</span>
+      </p>
+      {saved && <p className={styles.saved}>{saved}</p>}
+      {basis && <p className={styles.dim}>{basis}</p>}
+    </>
+  );
+}
+
+/** 데모 모드: 처리 경로 · Claude 호출 · 토큰 · 지연 · 캐시 짝 · SQL */
+function DemoMeta({ response, note }: { response: ChatResponse; note?: CacheNote }) {
+  // llm·latencyMs 는 계약상 항상 있지만, 빠진 응답이 와도 그 칸만 생략한다
+  const llm: ChatResponse["llm"] | null | undefined = response.llm;
+  const free = Boolean(llm) && isTokenFree(response);
   return (
     <div className={styles.demo} aria-label="처리 정보">
       <div className={styles.demoRow}>
         <Badge tone={free ? "accent" : "neutral"}>{chatPathLabel(response.path)}</Badge>
-        <span className={free ? styles.free : undefined}>
-          {free ? "Claude 호출 없음 · 토큰 0" : `Claude ${llm.calls}회 · 입력 ${n(llm.inputTokens)} · 출력 ${n(llm.outputTokens)}`}
-        </span>
-        <span className={styles.dim}>{n(response.latencyMs)}ms</span>
+        {llm && (
+          <span className={free ? styles.free : undefined}>
+            {free ? "Claude 호출 없음 · 토큰 0" : `Claude ${llm.calls}회 · 입력 ${n(llm.inputTokens)} · 출력 ${n(llm.outputTokens)}`}
+          </span>
+        )}
+        {Number.isFinite(response.latencyMs) && <span className={styles.dim}>{n(response.latencyMs)}ms</span>}
       </div>
-      {!free && llm.cacheReadTokens > 0 && (
+      {llm && !free && llm.cacheReadTokens > 0 && (
         <p className={styles.dim}>프롬프트 캐시 읽기 {n(llm.cacheReadTokens)} 토큰 (절감과 별도)</p>
       )}
+      {note && <CacheNoteLines note={note} />}
       {response.rejection && (
         <p className={styles.dim}>
           거부 사유 <code>{response.rejection.reason}</code>
@@ -84,7 +145,7 @@ function Answer({
   onSeatNavigate,
 }: {
   response: ChatResponse;
-  demo: boolean;
+  demo: EntryDemo | null;
   link?: ChatLink;
   onPickMovie?: (title: string) => void;
   onChoose?: (message: string) => void;
@@ -138,7 +199,7 @@ function Answer({
           <Icon name="arrow-right" size={13} />
         </Link>
       )}
-      {demo && <DemoMeta response={response} />}
+      {demo && <DemoMeta response={response} note={demo.note} />}
     </div>
   );
 }
@@ -147,7 +208,13 @@ export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, onS
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
-        <span className="sr-only">내 질문: </span>
+        {/* 데모 모드: 「n번째 질문」을 세지 않아도 되게 번호를 붙인다 (숫자만 있는 배지는 읽지 않고 글자로 읽힌다) */}
+        {demo?.questionNo !== undefined && (
+          <span className={styles.questionNo} aria-hidden="true">
+            {demo.questionNo}
+          </span>
+        )}
+        <span className="sr-only">{demo?.questionNo !== undefined ? `내 질문 ${demo.questionNo}번: ` : "내 질문: "}</span>
         {entry.text}
       </div>
     );

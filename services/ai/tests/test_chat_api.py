@@ -41,6 +41,8 @@ def test_preset_answer_has_every_contract_field():
     assert body["path"] == "PRESET" and body["rowCount"] == 4
     assert body["asOf"].endswith("+09:00")
     assert body["columns"][0] == {"name": "movie_title", "type": "text"}
+    # 캐시 없이 만든 ChatService 라 값은 null — 그래도 칸은 HTTP 응답에 있다(계약: 항상 있음)
+    assert "cache" in body and body["cache"] is None
 
 
 def test_eleventh_question_in_a_minute_is_429():

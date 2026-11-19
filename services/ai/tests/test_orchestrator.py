@@ -38,6 +38,10 @@ AFTER_20 = (
 )
 
 
+ACTION_REQUEST_ANSWER = orchestrator._OUT_OF_SCOPE_ANSWERS["action_request"]
+SITE_FEATURE_ANSWER = orchestrator._OUT_OF_SCOPE_ANSWERS["site_feature"]
+
+
 def ask(llm, question="질문", store=None, **settings):
     service = ChatService(store or loaded_store(), llm, Settings(_env_file=None, **settings))
     return asyncio.run(service.answer(question, now=NOW))
@@ -88,6 +92,52 @@ def test_out_of_scope():
     assert body["path"] == "OUT_OF_SCOPE" and body["rows"] is None and body["llm"]["calls"] == 1
 
 
+@pytest.mark.parametrize(
+    ("given", "answer"),
+    [
+        ({"category": "action_request"}, ACTION_REQUEST_ANSWER),
+        ({"category": " Action_Request\n"}, ACTION_REQUEST_ANSWER),
+        ({"category": "site_feature"}, SITE_FEATURE_ANSWER),
+        ({"category": "SITE_FEATURE "}, SITE_FEATURE_ANSWER),
+        ({"category": "unrelated"}, orchestrator.OUT_OF_SCOPE_ANSWER),
+        ({"category": "chitchat"}, orchestrator.OUT_OF_SCOPE_ANSWER),
+        ({"category": "주차 문의"}, orchestrator.OUT_OF_SCOPE_ANSWER),
+        ({"category": 3}, orchestrator.OUT_OF_SCOPE_ANSWER),
+        ({"category": ["action_request"]}, orchestrator.OUT_OF_SCOPE_ANSWER),
+        ({}, orchestrator.OUT_OF_SCOPE_ANSWER),
+    ],
+)
+def test_out_of_scope_answer_follows_the_category(given, answer):
+    # 3.4.21: 행동 요청은 "준비 중", 없는 정보는 "아직 제공하지 않음", 나머지는 기본 문장
+    body = ask(ScriptedLlm(tool("out_of_scope", reason="요약", **given)), "아무 질문")
+    assert body["path"] == "OUT_OF_SCOPE" and set(body) == CONTRACT_KEYS
+    assert body["answer"] == answer and body["rows"] is None
+
+
+def test_out_of_scope_answers_are_the_fixed_sentences():
+    assert ACTION_REQUEST_ANSWER == (
+        "그 기능은 아직 준비 중이에요. 지금은 화면에서 해 주세요."
+    )
+    assert SITE_FEATURE_ANSWER == (
+        "그 정보는 아직 제공하지 않아요. 영화·극장·상영 시간은 물어보실 수 있어요."
+    )
+    assert orchestrator.OUT_OF_SCOPE_ANSWER == "영화·극장·상영 시간에 대한 질문에만 답할 수 있어요."
+    assert set(orchestrator._OUT_OF_SCOPE_ANSWERS) == {"action_request", "site_feature"}
+
+
+def test_out_of_scope_answer_never_carries_what_claude_wrote():
+    # reason 은 로그에만 남는다 — 답은 고정 문장이라 Claude가 쓴 글이 화면에 나가지 않는다
+    reason = "결제를 대신 해 달라고 함 <b>지금 바로 됩니다</b>"
+    llm = ScriptedLlm(tool("out_of_scope", category="action_request", reason=reason))
+    assert ask(llm, "결제해 줘")["answer"] == ACTION_REQUEST_ANSWER
+
+
+def test_tool_input_that_is_not_a_dict_gets_the_default_answer():
+    assert orchestrator._out_of_scope_answer(["category", "action_request"]) == (
+        orchestrator.OUT_OF_SCOPE_ANSWER
+    )
+
+
 def _unmet(category: str) -> float:
     return AI_UNMET_DEMAND.labels(category)._value.get()
 
@@ -97,10 +147,13 @@ def _unmet_logs(caplog) -> list[dict]:
 
 
 @pytest.mark.parametrize("category", ["action_request", "site_feature", "unrelated"])
-def test_out_of_scope_counts_unmet_demand_by_category(category):
+def test_out_of_scope_counts_unmet_demand_by_category(category, caplog):
     before = _unmet(category)
-    ask(ScriptedLlm(tool("out_of_scope", category=category, reason="요약")), "아무 질문")
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        ask(ScriptedLlm(tool("out_of_scope", category=category, reason="요약")), "아무 질문")
     assert _unmet(category) == before + 1
+    (fields,) = _unmet_logs(caplog)  # 답 문장이 분류별로 달라져도 기록은 그대로다(3.4.21)
+    assert fields["category"] == category and fields["reason"] == "요약"
 
 
 @pytest.mark.parametrize("given", [{"category": "주차 문의"}, {"category": 3}, {}])
@@ -122,6 +175,7 @@ def test_chitchat_is_neither_counted_nor_logged(caplog):
     with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
         body = ask(llm, "안녕")
     assert body["path"] == "OUT_OF_SCOPE" and set(body) == CONTRACT_KEYS
+    assert body["answer"] == orchestrator.OUT_OF_SCOPE_ANSWER
     assert {c: _unmet(c) for c in before} == before and _unmet_logs(caplog) == []
     assert "chitchat" not in {s.labels["category"] for s in AI_UNMET_DEMAND.collect()[0].samples}
 
@@ -200,8 +254,11 @@ def test_category_is_matched_ignoring_case_and_spaces(caplog):
     with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
         ask(ScriptedLlm(tool("out_of_scope", category="CHITCHAT", reason="인사")), "안녕")
         assert _unmet_logs(caplog) == [] and {c: _unmet(c) for c in before} == before
-        ask(ScriptedLlm(tool("out_of_scope", category=" Site_Feature ", reason="주차")), "주차?")
+        body = ask(
+            ScriptedLlm(tool("out_of_scope", category=" Site_Feature ", reason="주차")), "주차?"
+        )
     assert _unmet("site_feature") == before["site_feature"] + 1
+    assert body["answer"] == SITE_FEATURE_ANSWER  # 답 문장과 기록이 같은 분류를 쓴다
     assert _unmet("unknown") == before["unknown"]
 
 
@@ -497,7 +554,7 @@ def test_text_only_twice_falls_back_to_out_of_scope():
     llm = ScriptedLlm(text_only(), text_only())
     body = ask(llm, "오늘 20시 이후 영화")
     assert body["path"] == "OUT_OF_SCOPE" and body["rows"] is None
-    assert body["llm"]["calls"] == 2 and "세 편" not in body["answer"]
+    assert body["llm"]["calls"] == 2 and body["answer"] == orchestrator.OUT_OF_SCOPE_ANSWER
 
 
 def test_text_only_fallback_is_not_unmet_demand(caplog):

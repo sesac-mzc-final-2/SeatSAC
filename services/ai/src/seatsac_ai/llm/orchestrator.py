@@ -116,6 +116,13 @@ log = logging.getLogger(__name__)
 _HASH_KEY = secrets.token_bytes(32)
 
 OUT_OF_SCOPE_ANSWER = "영화·극장·상영 시간에 대한 질문에만 답할 수 있어요."
+# 범위 밖 답은 분류(out_of_scope 도구의 category)에 따라 고정 문장 중 하나다(3.4.21).
+# 여기 없는 분류(unrelated·chitchat·unknown)와 도구 없이 끝난 폴백은 위 기본 문장.
+# Claude가 쓴 글(reason)은 답에 넣지 않는다 — 로그에만 남는다
+_OUT_OF_SCOPE_ANSWERS = {
+    "action_request": "그 기능은 아직 준비 중이에요. 지금은 화면에서 해 주세요.",
+    "site_feature": "그 정보는 아직 제공하지 않아요. 영화·극장·상영 시간은 물어보실 수 있어요.",
+}
 REJECTED_ANSWER = "그 질문은 지금 데이터로 답하기 어렵습니다. 영화·극장·회차에 대해 물어봐 주세요."
 _REJECTION_MESSAGE = {
     "NOT_SELECT": "조회가 아닌 SQL입니다.",
@@ -707,7 +714,7 @@ class ChatService:
         self, call: ToolCall, ask: _Ask, system_params, deadline
     ) -> tuple[dict[str, Any], _Made | None]:
         if call.name == OUT_OF_SCOPE:
-            return _empty("OUT_OF_SCOPE", OUT_OF_SCOPE_ANSWER, self._as_of()), None
+            return _empty("OUT_OF_SCOPE", _out_of_scope_answer(call.input), self._as_of()), None
         if call.name == ASK_USER:
             # Claude가 「잔여석을 묻는데 날짜를 알 수 없다」고 판단했다
             return self._clarify_date(ask), None
@@ -1165,13 +1172,28 @@ def _record_unmet(question: str, tool_input: object) -> None:
         log.warning("unmet demand 기록 실패(%s)", type(exc).__name__)
 
 
-def _write_unmet(question: str, raw: dict[str, Any]) -> None:
-    category = raw.get("category")
+def _out_of_scope_category(tool_input: object) -> str:
+    """out_of_scope 도구의 category → chitchat 또는 지표 라벨(정해 둔 값이 아니면 unknown).
+
+    답 문장과 기록(지표·로그)이 같은 분류를 쓰도록 한곳에서 다듬는다(대소문자·앞뒤 공백 무시).
+    """
+    category = tool_input.get("category") if isinstance(tool_input, dict) else None
     if isinstance(category, str):
         category = category.strip().lower()
     if category == UNMET_CHITCHAT:
+        return UNMET_CHITCHAT
+    return unmet_category_label(category)
+
+
+def _out_of_scope_answer(tool_input: object) -> str:
+    """분류별 고정 안내 문장. 정해 둔 분류가 아니면 기본 문장."""
+    return _OUT_OF_SCOPE_ANSWERS.get(_out_of_scope_category(tool_input), OUT_OF_SCOPE_ANSWER)
+
+
+def _write_unmet(question: str, raw: dict[str, Any]) -> None:
+    category = _out_of_scope_category(raw)
+    if category == UNMET_CHITCHAT:
         return
-    category = unmet_category_label(category)
     AI_UNMET_DEMAND.labels(category).inc()
     reason = raw.get("reason")
     fields: dict[str, Any] = {

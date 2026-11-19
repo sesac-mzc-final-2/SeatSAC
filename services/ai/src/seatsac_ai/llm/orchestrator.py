@@ -97,7 +97,7 @@ OUT_OF_SCOPE_ANSWER = "영화·극장·상영 시간에 대한 질문에만 답�
 # 여기 없는 분류(unrelated·chitchat·unknown)와 도구 없이 끝난 폴백은 위 기본 문장.
 # Claude가 쓴 글(reason)은 답에 넣지 않는다 — 로그에만 남는다
 _OUT_OF_SCOPE_ANSWERS = {
-    "action_request": "그 기능은 에이전트에서 아직 준비 중이에요. 지금은 화면에서 해 주세요.",
+    "action_request": "그 기능은 아직 준비 중이에요. 지금은 화면에서 해 주세요.",
     "site_feature": "그 정보는 아직 제공하지 않아요. 영화·극장·상영 시간은 물어보실 수 있어요.",
 }
 REJECTED_ANSWER = "그 질문은 지금 데이터로 답하기 어렵습니다. 영화·극장·회차에 대해 물어봐 주세요."

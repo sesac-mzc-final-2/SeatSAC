@@ -115,7 +115,7 @@ def test_out_of_scope_answer_follows_the_category(given, answer):
 
 def test_out_of_scope_answers_are_the_fixed_sentences():
     assert ACTION_REQUEST_ANSWER == (
-        "그 기능은 에이전트에서 아직 준비 중이에요. 지금은 화면에서 해 주세요."
+        "그 기능은 아직 준비 중이에요. 지금은 화면에서 해 주세요."
     )
     assert SITE_FEATURE_ANSWER == (
         "그 정보는 아직 제공하지 않아요. 영화·극장·상영 시간은 물어보실 수 있어요."

@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent 
 import type { ChatPreset } from "@/entities/ai-chat";
 import { nowShowingMoviesQuery } from "@/entities/movie";
 import { theaterListQuery } from "@/entities/theater";
-import { todayKst } from "@/shared/lib";
+import { serverNow, todayKst } from "@/shared/lib";
 import { Button, Chip, Icon } from "@/shared/ui";
 import {
   PICK_PROMPTS,
@@ -19,6 +19,7 @@ import {
   type PickKind,
   type PresetChoice,
 } from "../lib/preset-actions";
+import { activeHold, isHoldReply } from "../lib/seat-hold";
 import { MAX_MESSAGE_LENGTH, useAiChat } from "../model/use-ai-chat";
 import { useDemoMode } from "../model/use-demo-mode";
 import { ChatEntryView } from "./ChatEntryView";
@@ -76,6 +77,27 @@ export function ChatPanel({
       picker?.kind === "movie" ||
       entries.some((entry) => entry.kind === "answer" && answerMovieTitles(entry.response).length > 0),
   });
+
+  // 좌석 잡기: 지금 눌러도 되는 확인 요청(가장 최근 답)과 그 확인 시간(2분). 지나면 버튼을 막는다
+  const pendingHold = activeHold(entries);
+  const [clock, setClock] = useState(() => serverNow());
+  const holdExpiresAt = pendingHold?.expiresAt ?? null;
+  useEffect(() => {
+    if (holdExpiresAt === null) return;
+    // 기한이 지나는 때에 한 번 다시 그린다(이미 지났으면 곧바로)
+    const left = Math.max(0, holdExpiresAt - serverNow());
+    const timer = window.setTimeout(() => setClock(serverNow()), left + 100);
+    return () => window.clearTimeout(timer);
+  }, [holdExpiresAt]);
+  const holdOf = (entry: (typeof entries)[number]): "active" | "expired" | "stale" => {
+    const mine =
+      pendingHold !== null &&
+      (entry.kind === "answer"
+        ? entry.id === pendingHold.entryId
+        : entry.kind === "error" && isHoldReply(entry.question) && pendingHold.messages.includes(entry.question));
+    if (!mine) return "stale";
+    return pendingHold.expiresAt <= clock ? "expired" : "active";
+  };
 
   const disabled = notReady || unavailable;
   const blocked = disabled || checking || isPending || cooldownSeconds > 0;
@@ -298,6 +320,8 @@ export function ChatPanel({
             <ChatEntryView
               key={entry.id}
               entry={entry}
+              hold={holdOf(entry)}
+              onNavigate={onClose}
               demo={demo.enabled}
               onRetry={blocked ? undefined : (question, link) => send(question, link)}
               onChoose={blocked ? undefined : (message) => send(message)}

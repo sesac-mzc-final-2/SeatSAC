@@ -10,6 +10,126 @@ import cacheSemantic from "../../../../../contracts/openapi/examples/ai/chat-cac
 import clarify from "../../../../../contracts/openapi/examples/ai/chat-clarify.json";
 
 const TRACE = "0123456789abcdef0123456789abcdef";
+
+// 좌석 잡기 응답 예시 (3.4.19). 계약 예시 contracts/openapi/examples/ai/chat-hold-*.json 은 ai 쪽 PR 에 있어
+// 이 PR 만으로도 테스트가 돌도록 같은 값을 여기에 둔다 — 계약 PR 이 머지되면 그 파일을 import 하도록 바꾼다
+const holdConfirm = {
+  value: {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "별의 항해 11/17(화) 20:00 건대입구 1관 J7·J8 — 2석. 이 좌석을 5분간 잡을까요? (2분 안에 눌러 주세요)",
+    "path": "HOLD_CONFIRM",
+    "columns": null,
+    "rows": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 1,
+      "inputTokens": 420,
+      "outputTokens": 48,
+      "cacheReadTokens": 4100,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 1480,
+    "rejection": null,
+    "choices": [
+      {
+        "label": "J7·J8 잡기",
+        "message": "좌석 잡기 #c7f2a1"
+      },
+      {
+        "label": "취소",
+        "message": "취소 #c7f2a1"
+      }
+    ],
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": null,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": null,
+      "expiresAt": null,
+      "confirmExpiresAt": "2026-11-17T19:42:00+09:00",
+      "reason": null
+    }
+  },
+};
+const holdResult = {
+  value: {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "J7·J8 좌석을 잡았습니다. 19:45까지 결제를 마쳐 주세요.",
+    "path": "HOLD_RESULT",
+    "columns": null,
+    "rows": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 210,
+    "rejection": null,
+    "choices": null,
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": 9876,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": 30000,
+      "expiresAt": "2026-11-17T19:45:05+09:00",
+      "confirmExpiresAt": null,
+      "reason": null
+    }
+  },
+};
+const holdGuide = {
+  value: {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "J8 좌석은 이미 다른 분이 잡았어요. 좌석 화면에서 직접 골라 주세요.",
+    "path": "HOLD_GUIDE",
+    "columns": null,
+    "rows": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 1,
+      "inputTokens": 420,
+      "outputTokens": 48,
+      "cacheReadTokens": 4100,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 1390,
+    "rejection": null,
+    "choices": null,
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": null,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": null,
+      "expiresAt": null,
+      "confirmExpiresAt": null,
+      "reason": "SEAT_UNAVAILABLE"
+    }
+  },
+};
 /** 챗봇 질문 요청 본문만 (영화 목록 등 다른 요청은 뺀다) */
 const chatBodies = (mock: { mock: { calls: unknown[][] } }) =>
   mock.mock.calls
@@ -149,6 +269,110 @@ describe("AiChatDock (3.3.7)", () => {
       message: "내일 잔여석 많은 회차",
       sessionId: clarify.value.sessionId,
     });
+  });
+
+  /** 확인 요청 예시 — 확인 기한은 지금부터 afterMs 뒤(예시의 고정 시각은 이미 지났다) */
+  const confirmRequest = (afterMs = 120_000, id = "c7f2a1", seats = ["J7", "J8"]) => ({
+    ...holdConfirm.value,
+    choices: [
+      { label: `${seats.join("·")} 잡기`, message: `좌석 잡기 #${id}` },
+      { label: "취소", message: `취소 #${id}` },
+    ],
+    seatHold: {
+      ...holdConfirm.value.seatHold,
+      seatLabels: seats,
+      confirmExpiresAt: new Date(Date.now() + afterMs).toISOString(),
+    },
+  });
+  const openAndAsk = async (question: string) => {
+    renderDock();
+    await userEvent.click(await screen.findByRole("button", { name: "AI 상영 도우미 열기" }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "질문" }), `${question}{Enter}`);
+  };
+
+  it("좌석 잡기: 확인 버튼을 누르면 확인 ID가 실린 문장을 같은 sessionId 로 보내고, 결제 링크를 누르면 창이 닫힌다", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      return json(200, chatBodies(fetchMock).length <= 1 ? confirmRequest() : holdResult.value);
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+
+    // 확인 요청: 아직 결제 링크가 없다 — 확인(좌석이 적힌 주 버튼)·취소 버튼만
+    expect(await screen.findByText(holdConfirm.value.answer)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /결제하러 가기/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "취소" })).toBeEnabled();
+    expect(chatBodies(fetchMock)).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "J7·J8 잡기" }));
+
+    expect(await screen.findByText(holdResult.value.answer)).toBeInTheDocument();
+    expect(chatBodies(fetchMock)[1]).toEqual({ message: "좌석 잡기 #c7f2a1", sessionId: holdConfirm.value.sessionId });
+    const card = screen.getByLabelText("잡은 좌석");
+    expect(within(card).getByText("J7, J8")).toBeInTheDocument();
+    expect(within(card).getByText("30,000원")).toBeInTheDocument();
+    expect(within(card).getByText("19:45까지")).toBeInTheDocument();
+    // 지난 확인 요청의 버튼은 다시 누를 수 없다
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "취소" })).toBeDisabled();
+
+    // 결제 링크에 결제 기한이 같이 보인다
+    const pay = screen.getByRole("link", { name: /결제하러 가기 \(19:45까지\)/ });
+    expect(pay).toHaveAttribute("href", "/bookings/9876/pay");
+    await userEvent.click(pay);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(chatBodies(fetchMock)).toHaveLength(2);
+  });
+
+  it("좌석 잡기: 새 확인 요청(B)이 오면 앞선 확인(A)의 버튼과 A의 실패한 「다시 묻기」는 눌리지 않는다", async () => {
+    const a = confirmRequest(120_000, "aaaaaa", ["J7", "J8"]);
+    const b = confirmRequest(120_000, "bbbbbb", ["A1"]);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/api/ai/presets") return json(200, presets);
+      const sent = chatBodies(fetchMock).length;
+      if (sent === 1) return json(200, a);
+      // A의 확인이 서버 오류로 실패한다 → 오류 항목에 「다시 묻기」
+      if (sent === 2) return json(503, { code: "SERVICE_UNAVAILABLE", message: "x", traceId: TRACE, details: [] });
+      return json(200, b);
+    });
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    await userEvent.click(await screen.findByRole("button", { name: "J7·J8 잡기" }));
+    // A가 아직 최신 확인 요청일 때는 다시 물을 수 있다
+    expect(await screen.findByRole("button", { name: "다시 묻기" })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("textbox", { name: "질문" }), "오늘 20시 건대입구 A1 잡아줘{Enter}");
+    expect(await screen.findByRole("button", { name: "A1 잡기" })).toBeEnabled();
+    // 이제 A의 것은 전부 막힌다 — A의 「다시 묻기」가 B를 확정할 수 없다
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "다시 묻기" })).not.toBeInTheDocument();
+    expect(chatBodies(fetchMock).map((body) => body.message)).toEqual([
+      "오늘 20시 건대입구 J7 J8 잡아줘",
+      "좌석 잡기 #aaaaaa",
+      "오늘 20시 건대입구 A1 잡아줘",
+    ]);
+  });
+
+  it("좌석 잡기: 확인 시간이 지나면 버튼을 막고 안내한다", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/ai/presets" ? json(200, presets) : json(200, confirmRequest(400)),
+    );
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    expect(await screen.findByRole("button", { name: "J7·J8 잡기" })).toBeEnabled();
+    expect(await screen.findByText(/확인 시간이 지났어요/, undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "J7·J8 잡기" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "취소" })).toBeDisabled();
+    expect(chatBodies(fetchMock)).toHaveLength(1);
+  });
+
+  it("좌석 잡기: 못 잡는 좌석이면 좌석 화면 링크를 보여 주고, 누르면 창이 닫힌다", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      String(input) === "/api/ai/presets" ? json(200, presets) : json(200, holdGuide.value),
+    );
+    await openAndAsk("오늘 20시 건대입구 J7 J8 잡아줘");
+    expect(await screen.findByText(holdGuide.value.answer)).toBeInTheDocument();
+    expect(screen.queryByLabelText("잡은 좌석")).not.toBeInTheDocument();
+    const seats = screen.getByRole("link", { name: /좌석 화면에서 고르기/ });
+    expect(seats).toHaveAttribute("href", "/screenings/5123");
+    await userEvent.click(seats);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("데모 정보를 켜면 경로·토큰을 보여 준다", async () => {

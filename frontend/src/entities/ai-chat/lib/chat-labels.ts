@@ -10,6 +10,9 @@ const PATH_LABELS: Record<ChatPath, string> = {
   REJECTED: "SQL 거부",
   OUT_OF_SCOPE: "범위 밖",
   CLARIFY: "되묻기",
+  HOLD_CONFIRM: "좌석 잡기 확인",
+  HOLD_RESULT: "좌석 잡기 결과",
+  HOLD_GUIDE: "좌석 잡기 안내",
 };
 
 /** 데모 모드의 처리 경로 표시 */

@@ -8,7 +8,11 @@ export type ChatPath =
   | "MY_BOOKINGS"
   | "REJECTED"
   | "OUT_OF_SCOPE"
-  | "CLARIFY";
+  | "CLARIFY"
+  // 채팅으로 좌석 잡기 (초안 3.4.19 — ai 플래그가 켜졌을 때만 온다)
+  | "HOLD_CONFIRM"
+  | "HOLD_RESULT"
+  | "HOLD_GUIDE";
 
 export type ChatColumnType = "text" | "integer" | "real";
 
@@ -39,6 +43,24 @@ export interface ChatRejection {
 export interface ChatChoice {
   label: string;
   message: string;
+}
+
+/**
+ * 채팅으로 좌석 잡기 요약 (초안 3.4.19). ai 는 URL 을 만들지 않는다 —
+ * 화면이 `bookingId` 로 결제 화면, `screeningId` 로 좌석 선택 화면 링크를 만든다
+ */
+export interface ChatSeatHold {
+  screeningId: number | null;
+  /** 선점 성공이면 새 PENDING 예매, `reason: ACTIVE_HOLD_EXISTS` 면 진행 중인 예매(booking 이 알려 주지 않으면 null) */
+  bookingId: number | null;
+  seatLabels: string[];
+  amount: number | null;
+  /** 선점 만료 시각 `+09:00` (결제 기한) */
+  expiresAt: string | null;
+  /** 버튼을 누를 수 있는 기한 `+09:00` (버튼을 낸 뒤 2분). 확인·취소·회차 고르기 버튼이 달린 답에만 */
+  confirmExpiresAt?: string | null;
+  /** 선점하지 않았거나 못한 까닭 (성공·확인 요청은 null) */
+  reason: string | null;
 }
 
 /**
@@ -79,6 +101,8 @@ export interface ChatResponse {
   rejection: ChatRejection | null;
   /** `CLARIFY` 일 때만 버튼 목록 (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
   choices?: ChatChoice[] | null;
+  /** `HOLD_*` 일 때만 객체, 그 밖은 null (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
+  seatHold?: ChatSeatHold | null;
   /** 캐시에서 나왔거나 캐시에 저장한 답만. 그 밖은 null (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
   cache?: ChatCacheRef | null;
 }

@@ -162,6 +162,26 @@
   gap: 6px;
   margin-top: 8px;
 }
+/* 좌석 잡기 결과 — 좌석 · 금액 · 결제 기한 */
+.hold {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  font-size: 13px;
+}
+.hold dt {
+  color: var(--color-dim);
+  font-size: 11px;
+}
+.hold dd {
+  margin: 2px 0 0;
+  font-weight: 600;
+}
 .link {
   display: inline-flex;
   align-items: center;

@@ -34,7 +34,7 @@ USER = "user-1"
 TOKEN = "Bearer user-access-token"
 CONTRACT_KEYS = {
     "answer", "path", "columns", "rows", "screeningIds", "rowCount", "truncated", "sql",
-    "presetId", "asOf", "llm", "latencyMs", "rejection", "choices", "seatHold",
+    "presetId", "asOf", "llm", "latencyMs", "rejection", "choices", "cache", "seatHold",
 }  # fmt: skip
 # sql_fixtures 회차 2: 별의 항해 · 건대입구 1관(auditorium 101) · 2026-11-17 20:00
 SEATS = {"J7": 1007, "J8": 1008, "J9": 1009, "A1": 1001, "A2": 1002}

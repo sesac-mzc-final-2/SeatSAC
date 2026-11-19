@@ -22,6 +22,7 @@
     "latencyMs": 1390,
     "rejection": null,
     "choices": null,
+    "cache": null,
     "seatHold": {
       "screeningId": 5123,
       "bookingId": null,

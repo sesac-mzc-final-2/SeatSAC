@@ -338,7 +338,8 @@ class SeatHoldFlow:
             # 대기 행동 없이 온 확인·취소 버튼 — 아무것도 하지 않는다(Claude도 부르지 않는다)
             return _guide(
                 "확인할 좌석 요청이 없어요(확인 시간이 지났을 수 있어요). "
-                "잡을 회차와 좌석을 다시 말해 주세요.",
+                "방금 누른 확인의 결과를 받지 못했다면 마이페이지 예매 내역을 먼저 확인해 주세요. "
+                "아니면 잡을 회차와 좌석을 다시 말해 주세요.",
                 NOT_CONFIRMED,
             ), False
         return await self._answer_pending(

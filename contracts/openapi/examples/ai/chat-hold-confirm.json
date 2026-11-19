@@ -31,6 +31,7 @@
         "message": "취소 #c7f2a1"
       }
     ],
+    "cache": null,
     "seatHold": {
       "screeningId": 5123,
       "bookingId": null,

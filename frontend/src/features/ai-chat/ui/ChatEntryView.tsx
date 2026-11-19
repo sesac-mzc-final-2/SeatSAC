@@ -1,10 +1,12 @@
 import { asOfLabel, chatPathLabel, hasResultTable, isTokenFree, type ChatResponse } from "@/entities/ai-chat";
-import { useState } from "react";
+import { routes } from "@/shared/config";
+import { formatWon, serverNow, timeOfIso } from "@/shared/lib";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { serverNow } from "@/shared/lib";
-import { Badge, Chip, Icon, TraceCode } from "@/shared/ui";
+import { Badge, Button, Chip, Icon, TraceCode } from "@/shared/ui";
 import { basisLabel, savedLabel, type CacheNote, type PairMatch } from "../lib/cache-pairs";
 import { MOVIE_CHOICE_STEP, answerMovieTitles, type ChatLink } from "../lib/preset-actions";
+import { hasHoldButtons, isHoldConfirm, isHoldReply, type HoldState } from "../lib/seat-hold";
 import { seatLinks } from "../lib/seat-links";
 import type { ChatEntry } from "../model/use-ai-chat";
 import { ResultTable } from "./ResultTable";
@@ -29,6 +31,13 @@ interface Props {
   onPickMovie?: (title: string) => void;
   /** 되묻기(`CLARIFY`) 버튼 — 누르면 그 `message` 를 보낸다 (보낼 수 없는 상태면 undefined) */
   onChoose?: (message: string) => void;
+  /**
+   * 좌석 잡기 버튼(확인·취소·회차)과 그 문장의 「다시 묻기」를 눌러도 되는지 — 지금 유효한 요청의 것일 때만.
+   * `expired` 는 유효한 요청인데 기한(2분)이 지난 경우. 좌석 잡기와 상관없는 항목이면 undefined
+   */
+  hold?: HoldState;
+  /** 결제·좌석 화면 링크를 눌렀을 때 (대화창 닫기) */
+  onNavigate?: () => void;
   /** 표의 좌석 링크로 좌석 선택 화면에 넘어갈 때 (대화창 닫기) */
   onSeatNavigate?: () => void;
 }
@@ -136,12 +145,96 @@ function MovieChoices({ titles, onPick }: { titles: string[]; onPick?: (title: s
   );
 }
 
+const HOLD_EXPIRED_TEXT = "확인 시간이 지났어요. 잡을 회차와 좌석을 다시 말해 주세요.";
+
+/** 기한(ms)이 지났는지 — 지나는 때에 한 번 다시 그린다(확인 기한과 같은 방식, 서버 시각 기준) */
+function usePassed(deadline: number | null): boolean {
+  const [now, setNow] = useState(() => serverNow());
+  useEffect(() => {
+    if (deadline === null) return;
+    const left = Math.max(0, deadline - serverNow());
+    const timer = window.setTimeout(() => setNow(serverNow()), left + 100);
+    return () => window.clearTimeout(timer);
+  }, [deadline]);
+  return deadline !== null && deadline <= now;
+}
+
+/**
+ * 채팅으로 좌석 잡기 (초안 3.4.19). 선점 성공이면 예매 요약 + 「결제하러 가기」,
+ * 못 잡았으면 「좌석 화면에서 고르기」(또는 진행 중인 예매로). 결제는 채팅에서 하지 않는다
+ */
+function SeatHoldCard({ response, onNavigate }: { response: ChatResponse; onNavigate?: () => void }) {
+  const hold = response.seatHold;
+  // 결제 기한(선점 만료)이 지나면 결제 링크를 숨긴다 — 그 예매는 이미 풀렸다
+  const payUntil = Date.parse(hold?.expiresAt ?? "");
+  const payPassed = usePassed(Number.isFinite(payUntil) ? payUntil : null);
+  if (!hold) return null;
+  // 예매 ID가 없으면(booking 이 진행 중인 예매를 알려 주지 않은 경우 포함) 결제 화면 링크를 만들지 않는다
+  const bookingId = typeof hold.bookingId === "number" ? hold.bookingId : null;
+  const held = response.path === "HOLD_RESULT" && hold.reason === null && bookingId !== null;
+  const activeElsewhere = hold.reason === "ACTIVE_HOLD_EXISTS";
+  // 확인 요청·취소·만료에는 링크를 붙이지 않는다 — 버튼(확인/취소)이나 다시 말하기가 다음 행동이다
+  const toSeats =
+    hold.screeningId !== null &&
+    hold.reason !== null &&
+    !["CANCELED", "NOT_CONFIRMED", "ACTIVE_HOLD_EXISTS", "SCREENING_STARTED"].includes(hold.reason);
+  return (
+    <>
+      {held && (
+        <dl className={styles.hold} aria-label="잡은 좌석">
+          <div>
+            <dt>좌석</dt>
+            <dd>{hold.seatLabels.join(", ")}</dd>
+          </div>
+          {hold.amount !== null && (
+            <div>
+              <dt>금액</dt>
+              <dd>{formatWon(hold.amount)}</dd>
+            </div>
+          )}
+          {hold.expiresAt && (
+            <div>
+              <dt>결제 기한</dt>
+              <dd>{timeOfIso(hold.expiresAt)}까지</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      {bookingId !== null && (held || activeElsewhere) && !payPassed && (
+        <Link className={styles.link} to={routes.bookingPay(bookingId)} onClick={onNavigate}>
+          {held ? "결제하러 가기" : "진행 중인 예매로 가기"}
+          {hold.expiresAt && ` (${timeOfIso(hold.expiresAt)}까지)`}
+          <Icon name="arrow-right" size={13} />
+        </Link>
+      )}
+      {(held || activeElsewhere) && payPassed && (
+        <p className={styles.note} role="status">
+          {held
+            ? "결제 시간이 지났어요. 잡을 회차와 좌석을 다시 말해 주세요."
+            : "진행 중이던 예매의 결제 시간이 지났어요. 잡을 회차와 좌석을 다시 말해 주세요."}
+        </p>
+      )}
+      {activeElsewhere && bookingId === null && (
+        <p className={styles.note}>진행 중인 예매는 마이페이지 예매 내역에서 확인해 주세요.</p>
+      )}
+      {toSeats && hold.screeningId !== null && (
+        <Link className={styles.link} to={routes.screening(hold.screeningId)} onClick={onNavigate}>
+          좌석 화면에서 고르기
+          <Icon name="arrow-right" size={13} />
+        </Link>
+      )}
+    </>
+  );
+}
+
 function Answer({
   response,
   demo,
   link,
   onPickMovie,
   onChoose,
+  hold,
+  onNavigate,
   onSeatNavigate,
 }: {
   response: ChatResponse;
@@ -149,10 +242,17 @@ function Answer({
   link?: ChatLink;
   onPickMovie?: (title: string) => void;
   onChoose?: (message: string) => void;
+  hold?: Props["hold"];
+  onNavigate?: () => void;
   onSeatNavigate?: () => void;
 }) {
   const movieTitles = answerMovieTitles(response);
   const choices = response.choices ?? [];
+  // 좌석 잡기 확인·취소·회차 고르기: 지금 유효한 요청의 버튼만 누를 수 있다(지난 것·시간이 지난 것은 막는다).
+  // 막을지는 응답 값(path·confirmExpiresAt)으로 정한다 — 버튼 문장의 모양은 주/보조 버튼 구분에만 쓴다.
+  // 서버도 확인 ID가 맞는 대기 행동이 있을 때만 잡지만, 다른 것을 확정하는 일이 없게 화면에서도 막는다
+  const holdButtons = hasHoldButtons(response);
+  const canChoose = holdButtons && hold !== "active" ? undefined : onChoose;
   const table = hasResultTable(response);
   // 매진·마감은 이 답을 그린 시각 기준(대화창을 다시 열면 새로 본다). 그 뒤에 마감되면 좌석 화면·선점이 막는다
   const [shownAt] = useState(() => serverNow());
@@ -162,19 +262,38 @@ function Answer({
       {response.rejection && <p className={styles.note}>{response.rejection.message}</p>}
       {choices.length > 0 && (
         <div className={styles.choices} role="group" aria-label="답 고르기">
-          {choices.map((choice) => (
-            <Chip
-              key={choice.message}
-              size="sm"
-              disabled={!onChoose}
-              title={choice.message}
-              onClick={() => onChoose?.(choice.message)}
-            >
-              {choice.label}
-            </Chip>
-          ))}
+          {choices.map((choice) =>
+            holdButtons && isHoldReply(choice.message) ? (
+              // 확인은 주 버튼, 취소는 보조 버튼
+              <Button
+                key={choice.message}
+                size="sm"
+                variant={isHoldConfirm(choice.message) ? "primary" : "ghost"}
+                disabled={!canChoose}
+                onClick={() => canChoose?.(choice.message)}
+              >
+                {choice.label}
+              </Button>
+            ) : (
+              <Chip
+                key={choice.message}
+                size="sm"
+                disabled={!canChoose}
+                title={choice.message}
+                onClick={() => canChoose?.(choice.message)}
+              >
+                {choice.label}
+              </Chip>
+            ),
+          )}
         </div>
       )}
+      {holdButtons && hold === "expired" && (
+        <p className={styles.note} role="status">
+          {HOLD_EXPIRED_TEXT}
+        </p>
+      )}
+      <SeatHoldCard response={response} onNavigate={onNavigate} />
       {/* 0건이면 머리글만 남은 빈 표를 그리지 않는다 — 답 문장이 이유를 말한다 */}
       {table && response.columns && response.rows && response.rows.length > 0 && (
         <ResultTable
@@ -204,7 +323,7 @@ function Answer({
   );
 }
 
-export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, onSeatNavigate }: Props) {
+export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, hold, onNavigate, onSeatNavigate }: Props) {
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
@@ -227,18 +346,29 @@ export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose, onS
         link={entry.link}
         onPickMovie={onPickMovie}
         onChoose={onChoose}
+        hold={hold}
+        onNavigate={onNavigate}
         onSeatNavigate={onSeatNavigate}
       />
     );
   }
+  // 좌석 잡기 버튼 문장의 「다시 묻기」는 그 요청이 아직 유효할 때만 — 지난 확인이 새 확인을 확정하지 않게.
+  // 어느 답의 버튼인지 알 수 없는 확인·취소 문장(hold 없음)도 막는다
+  const retryBlocked = hold !== undefined ? hold !== "active" : isHoldReply(entry.question);
   return (
     <div className={styles.error} role="alert">
       <p className={styles.errorText}>
         <Icon name="alert-circle" size={15} />
         {entry.info.message}
       </p>
+      {/* 기한이 지나 「다시 묻기」가 사라질 때 — 확인 요청의 답과 같은 안내 */}
+      {entry.info.retryable && hold === "expired" && (
+        <p className={styles.note} role="status">
+          {HOLD_EXPIRED_TEXT}
+        </p>
+      )}
       <div className={styles.errorActions}>
-        {entry.info.retryable && onRetry && (
+        {entry.info.retryable && onRetry && !retryBlocked && (
           <button type="button" className={styles.retry} onClick={() => onRetry(entry.question, entry.link)}>
             <Icon name="rotate-cw" size={13} />
             다시 묻기

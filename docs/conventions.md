@@ -86,11 +86,13 @@
 | `ai:exact:v2:{sha256(정규화 질문)}` | 1시간 | 정확 일치 캐시: SQL 템플릿 + 슬롯 + 경로(프리셋·NL2SQL). **결과는 캐시하지 않는다**(스냅샷에서 다시 실행). `v2`는 캐시 버전 — 저장 SQL의 뜻이 바뀌면 올리고 옛 키는 TTL로 사라진다(#140: 잔여석은 물었을 때만) |
 | `ai:semcache:v2:{id}` (HASH, 인덱스 `ai_semcache_v2_idx`) | 1시간 | 의미 캐시: 슬롯을 `{time}`·`{date}`·`{theater}`·`{movie}`·`{n}`으로 바꾼 질문의 임베딩(384차원 FLOAT32, COSINE) + SQL 템플릿 + 슬롯 종류 |
 | `ai:session:{userId}:{sessionId}` | 30분 | 후속 질문 문맥(직전 질문·SQL·경로) + 최근 답 5개가 조회한 조건 `ctx [{id, date, theater, movie}]`(문맥 이어받기 3.4.22 — 답 아래 영화 버튼이 `continueFrom`으로 그 `id`를 보낸다. 값은 날짜·극장명·영화 제목뿐). 파드가 바뀌어도 유지. **키에 `X-User-Id`를 넣어 사용자별로 격리**한다 — 다른 사용자의 `sessionId`를 보내도 그 사용자 키에는 닿지 않는다. `sessionId`는 서버가 UUID로 발급하고, 요청의 `sessionId`가 이 사용자 키에 없으면(만료·남의 것·위조) 새 세션으로 시작한다(오류 아님) |
+| `ai:pending:{userId}:{sessionId}` | **2분**(`APP_AI_SEAT_HOLD_CONFIRM_TTL`) | **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 쓴다. 채팅으로 좌석 잡기의 확인을 기다리는 행동(확인 ID·회차 ID·`seatIds`·좌석 이름·ai가 만든 `Idempotency-Key`·사용자 ID, 또는 회차 고르기 목록). `GETDEL`로 한 번만 꺼낸다. 사용자 토큰은 넣지 않는다 |
+| `ai:held:{userId}:{sessionId}` | **선점이 남은 동안, 최대 5분**(booking이 준 `expiresAt`까지 — 선점 TTL 300초를 넘지 않는다) | 좌석 잡기 플래그가 켜져 있을 때만 쓴다. 방금 **성공한** 선점의 결과(확인 ID·사용자 ID·회차 ID·`bookingId`·좌석 이름·금액·만료 시각). 응답이 화면에 닿지 못해 같은 확인 ID가 같은 세션으로 다시 오면 booking을 다시 부르지 않고 같은 `HOLD_RESULT`를 준다(지우지 않고 읽는다). 사용자 토큰·`seatIds`·`Idempotency-Key`는 넣지 않는다. 실패·결과 모름(`UPSTREAM_UNAVAILABLE`)은 남기지 않는다 |
 | `ai:quota:min:{userId}:{yyyyMMddHHmm}` · `ai:quota:day:{userId}:{yyyyMMdd}` | 60초 · 1일 | 사용 한도 카운터(설계 값 분당 10·하루 100, staging은 11/18부터 분당 600·하루 300 — 런타임 계약 9-1). gateway 요청 수 제한(ADR-62)과 별개인 **ai 앱 안** 한도 |
 | `ai:inflight:{userId}` | **40초** | 사용자당 동시 1건. `SET NX PX 40000`, 값은 요청마다 새 토큰. 끝나면 **값이 내 토큰일 때만** 지운다(Lua 비교 후 `DEL` — 늦게 끝난 요청이 다음 요청의 잠금을 지우지 않게). TTL 40초가 gateway 라우트 28초·요청 전체 기한 25초(`APP_AI_REQUEST_DEADLINE_SECONDS`)보다 길어 갱신 없이도 처리 중 만료되지 않는다. 파드가 죽어 못 지운 경우만 TTL로 풀린다 |
 | `ai:semcheck:0~2` (HASH, 인덱스 `ai_semcheck_idx`) | 120초 | 확인용(런북 6-G-6 의미 캐시 벡터 검색 확인). `HSET`·`EXPIRE`를 `MULTI/EXEC`로 함께 걸고 실행 끝에 키·인덱스를 지운다. 앱은 쓰지 않는다 |
 
-- "내 예매" 같은 **개인 질문은 캐시하지 않는다**(다른 사용자에게 적중 방지)
+- "내 예매" 같은 **개인 질문은 캐시하지 않는다**(다른 사용자에게 적중 방지). 좌석 잡기 답도 캐시·세션 문맥에 남기지 않는다
 - 파라미터 그룹: `maxmemory-policy noeviction`, `reserved-memory-percent 50`(t4g.micro에서 벡터 검색 필수 조건), TLS. `allkeys-lru`로 두면 메모리가 찰 때 한도·동시 1건 키(`ai:quota:*`·`ai:inflight:*`)도 지워져 한도를 우회할 수 있어서 **아무 키도 지우지 않는** `noeviction`으로 한다
 - 그래서 **모든 `ai:*` 키에 TTL**을 단다(위 표). 의미 캐시는 앱이 최대 5,000건으로 제한(넘으면 저장하지 않음 — 1건 약 2.5KB, 합 약 13MB로 가용 메모리 약 250MB의 5%)
 - 메모리가 차서 쓰기가 실패하면: 캐시 저장 실패는 **무시**(적중 안 됨과 같음), 한도·동시 1건 키 쓰기 실패는 **거부**(503 `AI_LLM_UNAVAILABLE`, `reason` `QUOTA_STORE_UNAVAILABLE`) — 한도 확인 없이 Claude를 부르지 않는다. 경보: 메모리 80%

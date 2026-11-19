@@ -28,6 +28,10 @@ REJECTED(조건 불일치였으면 CLARIFY — 사용자에게 조건을 확인�
 실행 직전에 공개 API에서 새로 받는다(snapshot/fresh.py).
 잔여석 질문인데 날짜가 없으면 실행하지 않고 날짜를 되묻는다(CLARIFY).
 전체 기한 25초(APP_AI_REQUEST_DEADLINE_SECONDS) 안에서만 — 매 단계 남은 시간으로 상한을 줄인다.
+
+좌석 잡기(플래그 APP_AI_SEAT_HOLD_ENABLED, 기본 켜짐 — seat_hold.py): 켜져 있을 때만
+  ⓪ 확인·취소·회차 버튼의 답이면 Claude·캐시보다 먼저 처리(대기 중인 행동이 있을 때만 선점)
+  ⑥ 도구 hold_seats → 확인 요청(HOLD_CONFIRM). 캐시·세션 문맥에 남기지 않는다.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ from sqlglot.errors import SqlglotError
 
 from seatsac_ai import bookings as my_bookings
 from seatsac_ai import context as ctx
+from seatsac_ai import seat_hold as holds
 from seatsac_ai.cache import template as tpl
 from seatsac_ai.cache.slots import (
     RELATIVE_DAYS,
@@ -75,7 +80,14 @@ from seatsac_ai.common.metrics import (
 from seatsac_ai.config import Settings
 from seatsac_ai.llm import prompt
 from seatsac_ai.llm.client import NO_TOOL, LlmClient, LlmUnavailable, ToolCall, Usage
-from seatsac_ai.llm.tools import ASK_USER, OUT_OF_SCOPE, RUN_PRESET, RUN_SQL, tool_definitions
+from seatsac_ai.llm.tools import (
+    ASK_USER,
+    HOLD_SEATS,
+    OUT_OF_SCOPE,
+    RUN_PRESET,
+    RUN_SQL,
+    tool_definitions,
+)
 from seatsac_ai.resources import Preset, presets
 from seatsac_ai.snapshot.fresh import Fresh, SeatRefresher
 from seatsac_ai.snapshot.mapper import KST
@@ -159,6 +171,10 @@ class _Ask:
     question: str
     ext: Extracted
     today: date
+    # 좌석 잡기(hold_seats)에만 쓴다: 대기 행동을 누구의 어느 세션에 둘지
+    now: datetime | None = None
+    user_id: str | None = None
+    session_id: str | None = None
 
     def days(self) -> list[str]:
         """질문이 말한 날짜(YYYY-MM-DD). 없으면 빈 목록."""
@@ -206,6 +222,7 @@ class ChatService:
         cache: ChatCache | None = None,
         bookings: my_bookings.MyBookingsClient | None = None,
         refresher: SeatRefresher | None = None,
+        seat_hold: holds.SeatHoldClient | None = None,
     ) -> None:
         self._store = store
         self._refresher = refresher  # 잔여석을 읽는 SQL 직전에 회차를 새로 받는다
@@ -215,7 +232,12 @@ class ChatService:
         self._llm = llm
         self._s = settings
         self._presets = {p.preset_id: p for p in presets()}
-        self._tools = tool_definitions()
+        # 좌석 잡기: 플래그 + 공개 API 클라이언트 + ai Valkey(대기 행동을 둘 곳)가 모두 있을 때만.
+        # 하나라도 없으면 None — 도구 목록·system·응답이 플래그를 끈 때와 같다
+        self._hold: holds.SeatHoldFlow | None = None
+        if settings.seat_hold_enabled and seat_hold is not None and cache is not None:
+            self._hold = holds.SeatHoldFlow(store, cache, seat_hold, settings.seat_hold_confirm_ttl)
+        self._tools = tool_definitions(seat_hold=self._hold is not None)
 
     def ready(self) -> bool:
         """스냅샷 첫 적재가 끝났다. api/chat.py 가 사용 한도를 깎기 전에 먼저 본다."""
@@ -243,10 +265,28 @@ class ChatService:
         sid, previous = session_id, None
         if cache is not None and user_id is not None:
             sid, previous = await cache.load_session(user_id, session_id)
-        # 문맥 이어받기: continueFrom 이 가리킨 답의 조건 + 이 메시지의 영화. 없으면 평소 경로
+        # ⓪ 좌석 잡기 확인·취소·회차 버튼 — 원문 그대로 본다(아래 되묻기 답 붙이기보다 먼저).
+        # 문맥 이어받기보다도 먼저다 — 대기 행동은 한 번만 꺼낼 수 있다(GETDEL)
+        held: holds.HoldReply | None = None
+        if self._hold is not None and user_id is not None and sid is not None:
+            held, keep = await self._hold.resume(
+                question,
+                user_id=user_id,
+                sent_session_id=session_id,
+                session_id=sid,
+                authorization=authorization,
+                now=now,
+                deadline=deadline,
+            )
+            if keep and session_id is not None:
+                sid = session_id  # 좌석 잡기 흐름 동안 sessionId 를 바꾸지 않는다
+        # 문맥 이어받기: continueFrom 이 가리킨 답의 조건 + 이 메시지의 영화. 없으면 평소 경로.
+        # 좌석 잡기가 처리한 요청이면 이어받지 않는다(continueFrom 이 실려 와도)
         known = ctx.entries(previous)
-        carry = self._carry_plan(ctx.find(known, continue_from), question, now)
-        if previous is not None and previous.get("path") == "CLARIFY":
+        carry = None
+        if held is None:
+            carry = self._carry_plan(ctx.find(known, continue_from), question, now)
+        if held is None and previous is not None and previous.get("path") == "CLARIFY":
             # 되묻기에 짧게 답했으면("내일") 원래 질문에 붙인다. 버튼은 완성된 질문을 보내므로
             # 원래 질문이 이미 들어 있으면 붙이지 않는다(짧은 질문의 버튼이 두 번 붙었다, #140 리뷰)
             if (
@@ -260,6 +300,8 @@ class ChatService:
         follow_up = previous is not None and is_followup(question)
         # 문맥(세션)이 없어도 "그중 …" 말투는 캐시를 보지도 저장하지도 않는다(#94 리뷰)
         skip_cache = is_followup(question)
+        if self._hold is not None and holds.looks_like_hold(question):
+            skip_cache = True  # 좌석을 잡아 달라는 말은 캐시된 조회 답으로 대신하지 않는다
 
         usage = Usage()
         calls = 0
@@ -272,14 +314,16 @@ class ChatService:
         # 저장·학습 단계는 이 값을 보고 건너뛴다(아래 ⑧).
         carried = False
         try:
-            if carry is not None:
+            if held is not None:
+                body = _hold_body(held, now)
+            elif carry is not None:
                 body = await self._carried(cache, carry, now, system_params, deadline)
                 carried = body is not None
                 if not carried:
                     carry = None  # 틀 실행 실패 — 이어받지 않고 평소 경로로 답한다
             # ② 개인 질문 — Claude·캐시 없이
             if body is not None:
-                pass  # 이어받은 조건으로 이미 답했다
+                pass  # 좌석 잡기 또는 이어받은 조건으로 이미 답했다
             elif self._bookings is not None and my_bookings.is_personal(question):
                 body = await self._my_bookings(authorization, now)
             # ③④⑤ 캐시
@@ -289,7 +333,9 @@ class ChatService:
                     body, vector = await self._from_cache(cache, ext, system_params, deadline)
             # ⑥⑦ Claude
             if body is None:
-                ask = _Ask(question, ext or self._extract(question, now), now.date())
+                ask = _Ask(
+                    question, ext or self._extract(question, now), now.date(), now, user_id, sid
+                )
                 body, made, calls = await self._ask_claude(
                     ask, now, system_params, deadline, usage, previous if follow_up else None
                 )
@@ -317,7 +363,8 @@ class ChatService:
         if cache is not None and user_id is not None and sid is not None:
             # MY_BOOKINGS도 저장하지 않는다 — SQL 없는 문맥이라 후속 질문에 못 쓴다(#96 리뷰)
             # (저장하지 않으니 곁가지 질문이 앞 답들의 조건 ctx 를 지우지도 않는다)
-            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS"):
+            # 좌석 잡기(HOLD_*)도 저장하지 않는다 — 조회 문맥이 아니다
+            if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS", *holds.HOLD_PATHS):
                 # 이번 답의 조건을 ctx 뒤에 붙인다. 되묻기(CLARIFY)는 조건이 없어 기존 ctx 만 넘긴다
                 values = carry.values if carried else self._queried(body, made, system_params)
                 if values is not None:
@@ -340,7 +387,7 @@ class ChatService:
         self, ask: _Ask, now, system_params, deadline, usage, previous
     ) -> tuple[dict[str, Any], _Made | None, int]:
         calls = 0
-        system = prompt.system_blocks(self._s.prompt_cache_enabled)
+        system = prompt.system_blocks(self._s.prompt_cache_enabled, self._hold is not None)
         messages: list[dict[str, Any]] = [
             {
                 "role": "user",
@@ -513,6 +560,7 @@ class ChatService:
             "asOf": as_of,
             "rejection": None,
             "choices": None,
+            "seatHold": None,
         }
 
     # --- 캐시 -----------------------------------------------------------------
@@ -641,6 +689,22 @@ class ChatService:
         if call.name == ASK_USER:
             # Claude가 「잔여석을 묻는데 날짜를 알 수 없다」고 판단했다
             return self._clarify_date(ask), None
+        if call.name == HOLD_SEATS and self._hold is not None and ask.now is not None:
+            if ask.user_id is None or ask.session_id is None:
+                raise _Retry("hold_seats 는 지금 쓸 수 없다")
+            # 여기서는 선점하지 않는다 — 확인 요청만 만든다. 좌석 현황은 Claude에게 돌려주지 않는다
+            try:
+                reply = await self._hold.start(
+                    call.input,
+                    question=ask.question,
+                    user_id=ask.user_id,
+                    session_id=ask.session_id,
+                    now=ask.now,
+                    deadline=deadline,
+                )
+            except holds.BadHoldInput as exc:
+                raise _Retry(str(exc)) from exc
+            return _hold_body(reply, ask.now), None
         if call.name == RUN_PRESET:
             preset, slots = self._resolve_preset(call.input)
             ran = await self._execute(preset.sql, system_params | slots, deadline, ask=ask)
@@ -990,6 +1054,7 @@ class ChatService:
             "asOf": as_of,
             "rejection": None,
             "choices": None,
+            "seatHold": None,
         }
 
     def _record(self, question: str, body: dict[str, Any], usage: Usage) -> None:
@@ -1016,6 +1081,12 @@ class ChatService:
                     "rowCount": body["rowCount"],
                     "rejection": (body["rejection"] or {}).get("reason"),
                 }
+                # 좌석 잡기일 때만: 결과 코드(좌석 이름·예매 ID는 남기지 않는다)
+                | (
+                    {"holdReason": body["seatHold"]["reason"]}
+                    if body["seatHold"] is not None
+                    else {}
+                )
             },
         )
 
@@ -1311,12 +1382,21 @@ def _empty(path: str, answer: str, as_of: str) -> dict[str, Any]:
         "asOf": as_of,
         "rejection": None,
         "choices": None,
+        "seatHold": None,  # 좌석 잡기(HOLD_*)일 때만 객체
     }
 
 
 def _is_internal(entry: CacheEntry | None) -> bool:
     """문맥 이어받기 내부 틀의 캐시 항목인가(resources/context_templates.yaml)."""
     return entry is not None and (entry.preset_id or "").startswith(INTERNAL_PRESET_PREFIX)
+
+
+def _hold_body(reply: holds.HoldReply, now: datetime) -> dict[str, Any]:
+    """좌석 잡기 답. 기준 시각은 스냅샷이 아니라 지금(내 예매와 같다)."""
+    body = _empty(reply.path, reply.answer, now.isoformat(timespec="seconds"))
+    body["choices"] = reply.choices
+    body["seatHold"] = reply.seat_hold
+    return body
 
 
 def _cache_info(key_text: str, *, stored: bool, similarity: float | None = None) -> dict[str, Any]:

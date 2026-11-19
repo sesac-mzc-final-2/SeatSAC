@@ -1,0 +1,40 @@
+{
+  "summary": "HOLD_RESULT — 확인 버튼 뒤 선점 성공(Claude 호출 없음, 토큰 0). 화면은 seatHold.bookingId로 결제 화면 링크를 만든다",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "J7·J8 좌석을 잡았습니다. 19:45까지 결제를 마쳐 주세요.",
+    "path": "HOLD_RESULT",
+    "columns": null,
+    "rows": null,
+    "screeningIds": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "context": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 0,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadTokens": 0,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 210,
+    "rejection": null,
+    "choices": null,
+    "cache": null,
+    "seatHold": {
+      "screeningId": 5123,
+      "bookingId": 9876,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": 30000,
+      "expiresAt": "2026-11-17T19:45:05+09:00",
+      "confirmExpiresAt": null,
+      "reason": null
+    }
+  }
+}

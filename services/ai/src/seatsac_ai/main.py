@@ -25,6 +25,7 @@ from seatsac_ai.llm.orchestrator import ChatService
 from seatsac_ai.quota.limiter import QuotaLimiter, connect_valkey
 from seatsac_ai.resources import context_templates
 from seatsac_ai.resources import presets as all_presets
+from seatsac_ai.seat_hold import SeatHoldClient
 from seatsac_ai.snapshot import Snapshot, build_snapshot
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.valkey.aclose()
         if app.state.bookings is not None:
             await app.state.bookings.aclose()
+        if app.state.seat_hold is not None:
+            await app.state.seat_hold.aclose()
 
 
 def create_app(
@@ -79,7 +82,7 @@ def create_app(
     """
     settings = settings or get_settings()
     configure_logging(settings.app_env)
-    init_label_series()
+    init_label_series(seat_hold=settings.seat_hold_enabled)
 
     # 문서 화면(/docs·/redoc·/openapi.json)은 끈다. 계약 원본은 contracts/openapi/ai.openapi.yaml
     app = FastAPI(
@@ -144,6 +147,14 @@ def create_app(
         MyBookingsClient(settings.public_api_base_url) if settings.public_api_base_url else None
     )
 
+    # 채팅으로 좌석 잡기(3.4.19) — 플래그(기본 켜짐)가 켜져 있고 공개 API 주소가 있을 때만.
+    # "내 예매"와 같은 공개 API 주소를 쓴다
+    app.state.seat_hold = (
+        SeatHoldClient(settings.public_api_base_url)
+        if settings.seat_hold_enabled and settings.public_api_base_url
+        else None
+    )
+
     # 질문 처리(3.4.2·3.4.3). 스냅샷이 없으면 /ai/chat 은 503 AI_SNAPSHOT_NOT_READY
     app.state.chat = None
     if app.state.snapshot is not None:
@@ -157,6 +168,7 @@ def create_app(
             cache=app.state.cache,
             bookings=app.state.bookings,
             refresher=app.state.snapshot.refresher,
+            seat_hold=app.state.seat_hold,
         )
 
     app.add_middleware(RequestContextMiddleware)

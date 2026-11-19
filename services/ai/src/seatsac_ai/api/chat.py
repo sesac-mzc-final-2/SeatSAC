@@ -60,6 +60,7 @@ async def chat(
             user_id=user_id,
             session_id=str(body.sessionId) if body.sessionId else None,
             # "내 예매"는 사용자 토큰 그대로 공개 API를 부른다(gateway가 Authorization 을 넘긴다)
+            # 좌석 잡기(플래그) 확인 단계도 이 토큰으로 선점을 부른다(저장하지 않는다)
             authorization=request.headers.get("authorization"),
             continue_from=body.continueFrom,
         )

@@ -28,6 +28,7 @@
     "latencyMs": 142,
     "rejection": null,
     "choices": null,
-    "cache": null
+    "cache": null,
+    "seatHold": null
   }
 }

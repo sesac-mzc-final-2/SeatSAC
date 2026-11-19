@@ -72,6 +72,13 @@ class Settings(BaseSettings):
         2.0, alias="APP_AI_SNAPSHOT_REFRESH_TIMEOUT_SECONDS"
     )
 
+    # 채팅으로 좌석 잡기(3.4.19, seat_hold.py). 기본 켜짐 — 문제가 생기면 false 로 끈다.
+    # 꺼져 있으면 도구 목록·system·응답이 좌석 잡기가 없던 때와 같다.
+    # 켜져 있어도 ai Valkey나 공개 API 주소가 없으면 꺼진 것으로 동작한다(orchestrator)
+    seat_hold_enabled: bool = Field(True, alias="APP_AI_SEAT_HOLD_ENABLED")
+    # 확인 버튼을 기다리는 시간. 지나면 대기 행동이 사라져 확인을 눌러도 잡지 않는다
+    seat_hold_confirm_ttl: Seconds = Field(120, alias="APP_AI_SEAT_HOLD_CONFIRM_TTL")
+
     # 캐시·세션·한도
     cache_ttl: Seconds = Field(3600, alias="APP_AI_CACHE_TTL")
     session_ttl: Seconds = Field(1800, alias="APP_AI_SESSION_TTL")

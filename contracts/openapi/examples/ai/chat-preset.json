@@ -26,6 +26,7 @@
     "latencyMs": 1860,
     "rejection": null,
     "choices": null,
-    "cache": { "entryId": "c03d58e1f6a9", "stored": true, "similarity": null }
+    "cache": { "entryId": "c03d58e1f6a9", "stored": true, "similarity": null },
+    "seatHold": null
   }
 }

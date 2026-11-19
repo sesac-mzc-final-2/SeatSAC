@@ -6,6 +6,8 @@ Claude는 답을 글로 쓰지 않고 이 중 하나를 "호출"한다. Sonnet 5
   run_sql      Claude가 직접 쓴 SQL                     → path NL2SQL (검증기 통과 시)
   out_of_scope 영화·극장·회차와 상관없는 질문            → path OUT_OF_SCOPE
   ask_user     잔여석을 묻는데 날짜를 알 수 없음          → path CLARIFY (서버가 날짜 버튼을 만든다)
+플래그 APP_AI_SEAT_HOLD_ENABLED(기본 켜짐)가 켜졌을 때만 5번째 도구가 붙는다(끄면 앞의 4개뿐이다):
+  hold_seats   좌석을 잡아 달라고 함                     → path HOLD_* (확인 뒤에만 선점)
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ RUN_PRESET = "run_preset"
 RUN_SQL = "run_sql"
 OUT_OF_SCOPE = "out_of_scope"
 ASK_USER = "ask_user"
+HOLD_SEATS = "hold_seats"
 
 _SLOT_SCHEMA = {
     "time": {"type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$", "description": "HH:MM"},
@@ -34,7 +37,56 @@ _SLOT_SCHEMA = {
 }
 
 
-def tool_definitions() -> list[dict[str, Any]]:
+_HOLD_SEATS_TOOL = {
+    "name": HOLD_SEATS,
+    "description": (
+        "사용자가 특정 회차의 좌석을 잡아(예매해) 달라고 하면 이 도구를 쓴다. 질문에 있는 "
+        "영화·극장·날짜·시각·좌석 이름만 그대로 옮긴다. 말하지 않은 값은 넣지 않는다(짐작 금지). "
+        "좌석을 대신 고르거나 추천하지 않는다 — 좌석 이름이 없으면 seats를 빈 배열로 둔다. "
+        "서버가 사용자에게 확인을 받은 뒤에만 좌석을 잡는다. 결제·예매 취소에는 쓰지 않는다."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "movie": _SLOT_SCHEMA["movie"],
+            "theater": _SLOT_SCHEMA["theater"],
+            "date": _SLOT_SCHEMA["date"],
+            "time": {**_SLOT_SCHEMA["time"], "description": "상영 시작 시각 HH:MM"},
+            "seats": {
+                "type": "array",
+                "items": {"type": "string", "description": "좌석 이름(행 글자 + 번호, 예: J7)"},
+                "description": "사용자가 말한 좌석 이름. 'J열 7번·8번' → ['J7', 'J8']",
+            },
+        },
+        "required": ["seats"],
+    },
+}
+
+
+# out_of_scope 의 category 설명 중 action_request(3.4.17).
+# 좌석 잡기가 꺼져 있으면 앞의 것을 글자 그대로 쓴다.
+# 켜져 있으면 "좌석 잡기 → 범위 밖"이 hold_seats 와 부딪치므로 좌석 잡기를 빼고 갈 곳을 적는다
+_ACTION_REQUEST = (
+    "action_request=예매·좌석 잡기·취소·결제처럼 사이트가 하는 행동을 "
+    "대신 해 달라는 요청. "
+)
+_ACTION_REQUEST_SEAT_HOLD = (
+    "action_request=결제·예매 취소·예매 변경·좌석 추천처럼 사이트가 하는 행동을 "
+    "대신 해 달라는 요청(좌석을 잡아·예매해 달라는 요청은 여기가 아니라 hold_seats 도구). "
+)
+
+
+def tool_definitions(seat_hold: bool = False) -> list[dict[str, Any]]:
+    """seat_hold=False 면 좌석 잡기가 없던 때와 같은 4개.
+
+    True 면 끝에 hold_seats 를 붙이고, out_of_scope 의 action_request 설명에서 좌석 잡기를 뺀다.
+    """
+    if not seat_hold:
+        return _base_tools(_ACTION_REQUEST)
+    return [*_base_tools(_ACTION_REQUEST_SEAT_HOLD), _HOLD_SEATS_TOOL]
+
+
+def _base_tools(action_request: str) -> list[dict[str, Any]]:
     return [
         {
             "name": RUN_PRESET,
@@ -97,8 +149,7 @@ def tool_definitions() -> list[dict[str, Any]]:
                         "type": "string",
                         "enum": list(OUT_OF_SCOPE_CATEGORIES),
                         "description": (
-                            "action_request=예매·좌석 잡기·취소·결제처럼 사이트가 하는 행동을 "
-                            "대신 해 달라는 요청. "
+                            f"{action_request}"
                             "site_feature=영화·극장·상영과 관련 있지만 지금 데이터나 기능이 없어 "
                             "답할 수 없는 것(주차·매점·가격·할인·리뷰 등). "
                             "unrelated=영화관과 무관하지만 구체적인 정보나 기능을 원하는 요청"

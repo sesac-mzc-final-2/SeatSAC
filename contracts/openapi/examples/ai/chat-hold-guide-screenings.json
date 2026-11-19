@@ -1,0 +1,49 @@
+{
+  "summary": "HOLD_GUIDE — 회차가 여럿이라 고르게 한다(choices 회차 버튼). 버튼은 seatHold.confirmExpiresAt(2분)까지만 누를 수 있다",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "어느 회차인가요? 골라 주세요.",
+    "path": "HOLD_GUIDE",
+    "columns": null,
+    "rows": null,
+    "screeningIds": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "context": null,
+    "asOf": "2026-11-17T19:40:00+09:00",
+    "llm": {
+      "calls": 1,
+      "inputTokens": 420,
+      "outputTokens": 48,
+      "cacheReadTokens": 4100,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 1390,
+    "rejection": null,
+    "choices": [
+      {
+        "label": "별의 항해 11/17(화) 20:00 건대입구 1관",
+        "message": "별의 항해 11/17(화) 20:00 건대입구 1관"
+      },
+      {
+        "label": "한강의 밤 11/17(화) 21:00 건대입구 2관",
+        "message": "한강의 밤 11/17(화) 21:00 건대입구 2관"
+      }
+    ],
+    "cache": null,
+    "seatHold": {
+      "screeningId": null,
+      "bookingId": null,
+      "seatLabels": [
+        "J7",
+        "J8"
+      ],
+      "amount": null,
+      "expiresAt": null,
+      "confirmExpiresAt": "2026-11-17T19:42:00+09:00",
+      "reason": "SCREENING_AMBIGUOUS"
+    }
+  }
+}

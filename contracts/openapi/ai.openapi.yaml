@@ -9,7 +9,7 @@ info:
     외부 호출은 `/api` 접두사, Gateway가 StripPrefix=1 (`/api/ai/chat` → ai `/ai/chat`).
     gateway 플래그 `APP_AI_ENABLED=false`(기본)면 라우트 자체가 없어 **404 NOT_FOUND**(유효한 토큰으로 인증됐을 때. 토큰이 없거나 만료·서명 불일치면 gateway 인증이 라우팅보다 먼저라 401) — 화면은 챗봇 창을 열 때 부른
     `GET /ai/presets`가 404면 「준비 중」 안내 뒤 챗봇 버튼을 숨긴다(로그인·메인 진입 때 자동 호출 없음 — 런북 6-G-5). 켜져 있을 때 `/api/ai/**` 라우트만 응답 타임아웃 28초(ai 요청 전체 기한 25초).
-    조회 전용이라 `Idempotency-Key`는 받지 않는다. 오류 코드 4개(`AI_*`)는 `services/ai` 안에서 정의하고 형식은
+    조회 중심이며 `/ai/chat`은 `Idempotency-Key`를 받지 않는다(좌석 잡기는 ai가 확인 요청 때 만든 키를 쓴다). 오류 코드 4개(`AI_*`)는 `services/ai` 안에서 정의하고 형식은
     `contracts/schemas/error.v1.json` 그대로.
 servers:
   - url: /api
@@ -56,6 +56,28 @@ paths:
         **`REJECTED`·`OUT_OF_SCOPE`도 200**(결제 거절 200과 같은 원칙). 사용자당 동시 1건 · 분당 10회 · 하루 100회.
         `sessionId`는 서버가 UUID로 발급한다. 생략·만료(30분)·다른 사용자의 것·위조면 **오류 없이 새 세션**으로 시작한다
         (키 `ai:session:{userId}:{sessionId}`로 사용자별 격리). Claude 호출은 질문 1건당 최대 3회, 전체 기한 25초.
+
+        **채팅으로 좌석 잡기 (ai 플래그 `APP_AI_SEAT_HOLD_ENABLED`, 기본 `true` — `false`로 끌 수 있다. 꺼져 있으면 위 설명 그대로이고
+        `HOLD_*` 경로가 나오지 않으며 `seatHold`는 늘 null)**: "오늘 20시 ○○ 건대입구 J7 J8 잡아줘"
+        ⑥에서 Claude가 도구 `hold_seats`(영화·극장·날짜·시각·좌석 이름)를 고르면 ai가
+        - 좌석 이름은 Claude가 준 것 중 **이번 `message` 원문에 적힌 것만** 쓴다(좌석을 골라 주지 않는다, 최대 4석)
+        - (영화 또는 극장) + (날짜 또는 시각)이 없으면 회차를 좁히지 않고 되묻는다. 스냅샷에서 예매할 수 있는(시작 5분 전까지) 회차가
+          하나면 진행, 2~7개면 `HOLD_GUIDE` + `choices` 회차 버튼(확인 버튼과 같은 2분 기한 — `seatHold.confirmExpiresAt`),
+          8개 이상이면 조건을 더 묻는다
+        - 공개 API `GET /screenings/{id}/seats` → `GET /auditoriums/{id}/layout?version=`(좌석 현황이 말한 배치 버전)로
+          좌석 이름 → `seatId`·빈 좌석인지 확인한 뒤 **확인 요청**(`HOLD_CONFIRM`)을 돌려준다. 이때는 선점하지 않는다.
+        확인 요청마다 일회용 확인 ID를 만들어 `choices` 두 버튼의 `message`에 싣는다(`좌석 잡기 #c7f2a1`·`취소 #c7f2a1`, 버튼 글자는
+        「J7·J8 잡기」·「취소」). 잡을 내용은 ai Valkey `ai:pending:{userId}:{sessionId}`(2분, `seatHold.confirmExpiresAt`)에 둔다.
+        화면이 확인 버튼의 `message`를 **직전 응답의 `sessionId`**로 보내면 ai는 Claude 없이 그 대기 행동을 꺼내(한 번 쓰면 사라진다)
+        **확인 ID가 같을 때만** `POST {PUBLIC_API_BASE_URL}/seats/hold`를 요청의 `Authorization` 그대로 + 저장해 둔 `Idempotency-Key`로
+        부르고 결과를 `HOLD_RESULT`로 답한다(시간 초과·연결 오류면 같은 키로 1회만 재시도). 대기 행동이 없거나(만료·취소·다른 세션·
+        다른 사용자·그 사이 다른 질문) 확인 ID가 다르면(지난 확인 요청의 버튼) 선점하지 않는다. ID 없이 타이핑한 「좌석 잡기」는 확인이 아니다
+        (대기 행동이 있으면 버튼을 누르라는 안내, 없으면 평소 질문으로 처리 — ID 없이 타이핑한 「취소」도 대기 행동이 있을 때만 취소로 받는다).
+        선점에 **성공하면** 그 결과(확인 ID·`bookingId`·좌석 이름·금액·만료 시각 — 토큰 없음)를 `ai:held:{userId}:{sessionId}`에 선점이
+        남은 동안(5분 이내)만 둔다. 응답이 화면에 닿지 못해(예: gateway 시간 초과) **같은 확인 ID가 같은 `sessionId`로 다시 오면**
+        booking을 다시 부르지 않고 같은 `HOLD_RESULT`를 돌려준다(다른 사용자·다른 세션·다른 확인 ID·기한 뒤에는 `NOT_CONFIRMED`).
+        좌석 잡기 흐름 동안 응답의 `sessionId`는 바뀌지 않는다. 결제는 채팅에서 하지 않는다 — 화면이 `seatHold.bookingId`로 결제 화면 링크를,
+        `seatHold.screeningId`로 좌석 화면 링크를 만든다. 좌석 현황·예매 결과는 Claude에 보내지 않고 캐시·세션 문맥에도 남기지 않는다.
       security: [ { bearerAuth: [] } ]
       requestBody:
         required: true
@@ -83,6 +105,10 @@ paths:
             `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)·`CLARIFY`(되묻기)도 200이며 `columns`·`rows`는 null.
             `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다(버튼 없이 안내 문장만 올 수도 있다 — 빈 배열).
             `sql`은 `REJECTED`일 때 거부된 SQL(화면은 보여주지 않아도 됨), `OUT_OF_SCOPE`는 null.
+            `HOLD_CONFIRM`·`HOLD_RESULT`·`HOLD_GUIDE`(좌석 잡기 플래그가 켜졌을 때만)도 200이며 `columns`·`rows`는 null,
+            `seatHold`에 회차·좌석·예매 ID·금액이 온다. 선점 실패(좌석이 이미 잡힘·진행 중인 선점 있음·예매 마감·booking 응답 없음)도
+            200 + `seatHold.reason`이다(화면이 좌석 화면·진행 중인 예매로 가는 링크를 보여 주려고). 확인 단계에서 토큰이 없거나 만료면 401
+            (토큰이 없으면 대기 행동을 꺼내기 전에 401 — 다시 로그인한 뒤 같은 버튼을 누를 수 있다).
             `cache`는 이 답이 어느 캐시 항목과 이어지는지 — 데모 화면이 같은 대화에서 `entryId`가 같은
             `stored: true` 답(처음 물은 답)과 `stored: false` 답(캐시로 나온 답)을 짝지어 실제로 아낀 토큰·시간을 보여 준다.
           content:
@@ -96,6 +122,10 @@ paths:
                 myBookings: { $ref: "./examples/ai/chat-my-bookings.json" }
                 rejected: { $ref: "./examples/ai/chat-rejected.json" }
                 clarify: { $ref: "./examples/ai/chat-clarify.json" }
+                holdConfirm: { $ref: "./examples/ai/chat-hold-confirm.json" }
+                holdResult: { $ref: "./examples/ai/chat-hold-result.json" }
+                holdGuide: { $ref: "./examples/ai/chat-hold-guide.json" }
+                holdGuideScreenings: { $ref: "./examples/ai/chat-hold-guide-screenings.json" }
         "400":
           description: |
             VALIDATION_FAILED — `message` 없음·빈 문자열(공백만)·300자 초과(`details[{ field: "message", reason: LENGTH }]`),
@@ -225,11 +255,14 @@ components:
 
     ChatPath:
       type: string
-      enum: [CACHE_EXACT, CACHE_SEMANTIC, PRESET, NL2SQL, MY_BOOKINGS, REJECTED, OUT_OF_SCOPE, CLARIFY]
+      enum: [CACHE_EXACT, CACHE_SEMANTIC, PRESET, NL2SQL, MY_BOOKINGS, REJECTED, OUT_OF_SCOPE, CLARIFY, HOLD_CONFIRM, HOLD_RESULT, HOLD_GUIDE]
       description: |
         CACHE_EXACT 정확 일치 캐시(토큰 0) · CACHE_SEMANTIC 의미 캐시(토큰 0) · PRESET 프리셋 실행(Claude가 선택, 또는 문맥 이어받기 — `llm.calls` 0) ·
         NL2SQL Claude가 SQL 생성 · MY_BOOKINGS 내 예매(공개 API, 토큰 0) · REJECTED SQL 검증 거부(`rejection` 참고) ·
         OUT_OF_SCOPE 답할 수 없는 질문(안내 문장만) · CLARIFY 되묻기(잔여석 질문에 날짜가 없음, 또는 질문 조건을 SQL에 반영하지 못함 — `choices`)
+        좌석 잡기(플래그 `APP_AI_SEAT_HOLD_ENABLED`가 켜졌을 때만 — 기본 켜짐): HOLD_CONFIRM 확인 요청(아직 선점하지 않음 — `choices` 확인·취소) ·
+        HOLD_RESULT 선점을 시도한 결과(성공이면 `seatHold.bookingId`, 실패면 `seatHold.reason`. 확인 단계라 토큰 0) ·
+        HOLD_GUIDE 선점하지 않고 안내(회차 고르기 `choices`·없는 좌석·이미 잡힌 좌석·좌석 미지정·취소·확인 시간 만료 — `seatHold.reason`)
 
     Column:
       type: object
@@ -296,8 +329,8 @@ components:
 
     ChatResponse:
       type: object
-      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`context`·`rejection`·`choices`·`cache`)
-      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, context, asOf, llm, latencyMs, rejection, choices, cache]
+      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`context`·`rejection`·`choices`·`cache`·`seatHold`)
+      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, context, asOf, llm, latencyMs, rejection, choices, cache, seatHold]
       properties:
         sessionId: { type: string, format: uuid, description: "서버가 발급. 후속 질문에 그대로 보낸다(30분)" }
         answer: { type: string, description: "답 문장(결과 행을 템플릿에 채워 만듦, Claude에 결과를 다시 보내지 않음). 끝에 \"○시 ○분 기준\"" }
@@ -353,7 +386,7 @@ components:
           type: [array, "null"]
           maxItems: 7
           items: { $ref: "#/components/schemas/Choice" }
-          description: "CLARIFY일 때만 버튼 목록(날짜 고르기 최대 7개, 조건을 다시 말해 달라는 안내는 빈 배열). 그 밖은 null"
+          description: "CLARIFY일 때 버튼 목록(날짜 고르기 최대 7개, 조건을 다시 말해 달라는 안내는 빈 배열). 좌석 잡기 플래그가 켜졌으면 HOLD_CONFIRM(확인·취소 2개 — message에 확인 ID)·HOLD_GUIDE(회차 고르기 2~7개, 버튼이 없으면 null)·HOLD_RESULT `reason: HOLD_NOT_SENT`(같은 확인·취소 버튼을 다시, 확인 시간이 남았을 때)에도 온다. 그 밖은 null"
         cache:
           description: |
             이 답과 이어진 캐시 항목(데모 화면 표시용). 캐시에서 나왔거나 캐시에 저장한 답에만 있고 그 밖은 null.
@@ -361,6 +394,38 @@ components:
           oneOf:
             - { type: "null" }
             - { $ref: "#/components/schemas/CacheRef" }
+        seatHold:
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/SeatHold" }
+          description: "항상 있다. HOLD_* 경로(ai 플래그 `APP_AI_SEAT_HOLD_ENABLED`가 켜졌을 때만 나온다 — 기본 켜짐)에서만 객체, 그 밖은 null"
+
+    SeatHold:
+      type: object
+      description: |
+        채팅으로 좌석 잡기의 요약. ai는 URL을 만들지 않는다 — 화면이 `bookingId`로 결제 화면(`/bookings/{bookingId}/pay`),
+        `screeningId`로 좌석 선택 화면(`/screenings/{screeningId}`) 링크를 만든다. 모든 필드가 항상 있고 해당 없으면 null(`seatLabels`는 빈 배열).
+      required: [screeningId, bookingId, seatLabels, amount, expiresAt, confirmExpiresAt, reason]
+      properties:
+        screeningId: { type: [integer, "null"], format: int64, description: "회차 ID(좌석 화면 링크용). 회차를 하나로 정하지 못했으면 null" }
+        bookingId: { type: [integer, "null"], format: int64, description: "HOLD_RESULT 성공이면 새 PENDING 예매 ID(결제 화면 링크용). `reason: ACTIVE_HOLD_EXISTS`면 진행 중인 예매 ID(booking이 알려 주지 않으면 null — 화면은 null이면 결제 화면 링크를 만들지 않는다). 그 밖은 null" }
+        seatLabels: { type: array, maxItems: 4, items: { type: string }, description: "좌석 이름(예: J7). 사용자가 이번 message에 적은 것(대문자), 성공이면 booking이 확정한 것" }
+        amount: { type: [integer, "null"], description: "HOLD_RESULT 성공일 때만 booking이 확정한 금액(원). 확인 요청에는 금액을 적지 않는다(요금 규칙은 booking의 것) — null" }
+        expiresAt: { type: [string, "null"], format: date-time, description: "선점 만료 시각(+09:00, 결제 기한). HOLD_RESULT 성공·ACTIVE_HOLD_EXISTS(booking이 알려 줄 때)일 때만. 화면은 지나면 결제 화면 링크를 숨긴다" }
+        confirmExpiresAt: { type: [string, "null"], format: date-time, description: "`choices` 버튼을 누를 수 있는 기한(+09:00, 버튼을 낸 뒤 2분 — 대기 행동 `ai:pending`의 만료 시각). HOLD_CONFIRM·회차 고르기 HOLD_GUIDE(`reason: SCREENING_AMBIGUOUS` + `choices`)·HOLD_RESULT `HOLD_NOT_SENT`(버튼이 다시 올 때)에만. 화면은 이 값이 있으면 지난 뒤 버튼을 막는다" }
+        reason:
+          type: [string, "null"]
+          pattern: "^[A-Z_]+$"
+          description: |
+            선점하지 않았거나 못한 까닭. HOLD_CONFIRM·HOLD_RESULT 성공은 null.
+            HOLD_GUIDE: SCREENING_NOT_FOUND(회차·영화·극장을 못 찾음) · SCREENING_AMBIGUOUS(회차가 여럿이거나 조건이 모자람 — `choices`로 고르거나 조건을 더 말한다) ·
+            SCREENING_STARTED(시작했거나 예매 마감 — 시작 5분 전) · SEATS_REQUIRED(좌석 이름 없음 — 좌석 화면으로) · TOO_MANY_SEATS(5석 이상) ·
+            SEAT_NOT_FOUND(그 상영관에 없는 좌석·이름이 겹치는 좌석) · SEAT_UNAVAILABLE(이미 잡힌 좌석) · CANCELED(취소) ·
+            NOT_CONFIRMED(확인할 대기 행동이 없음 — 2분 만료·지난 확인 요청의 버튼·버튼 없이 타이핑) ·
+            UPSTREAM_UNAVAILABLE(좌석 현황·배치도를 확인하지 못함).
+            HOLD_RESULT 실패: SEAT_UNAVAILABLE · ACTIVE_HOLD_EXISTS · SCREENING_STARTED(booking 오류 코드 그대로) ·
+            HOLD_NOT_SENT(선점 요청을 보내지 못함 — 좌석은 잡히지 않았다. 확인 시간이 남았으면 같은 버튼이 다시 온다) ·
+            UPSTREAM_UNAVAILABLE(보냈으나 결과 모름 — 같은 키로 1회 재시도 뒤에도 응답 없음. 선점됐을 수도 있으니 화면에서 확인) · HOLD_FAILED(그 밖의 거절)
 
     Choice:
       type: object

@@ -27,6 +27,9 @@ CHAT_PATHS = (
     "rejected",
     "out_of_scope",
 )
+# 채팅으로 좌석 잡기(플래그 APP_AI_SEAT_HOLD_ENABLED, 기본 켜짐). 켜졌을 때만 0으로 등록한다.
+# 조회 답이 아니므로 토큰 절감 계산의 분모·분자에서 뺀다(계약 5장)
+HOLD_CHAT_PATHS = ("hold_confirm", "hold_result", "hold_guide")
 CHAT_RESULTS = ("ok", "error")
 TOKEN_KINDS = ("input", "output", "cache_read", "cache_write")
 CACHE_LAYERS = ("exact", "semantic")
@@ -67,7 +70,7 @@ AI_UNMET_DEMAND = Counter("ai_unmet_demand", "Out-of-scope requests by category"
 def chat_path_label(response_path: str) -> str:
     """응답 `path`(CACHE_EXACT) → 지표 라벨(cache_exact). 모르는 값은 실수이므로 예외."""
     label = response_path.lower()
-    if label not in CHAT_PATHS:
+    if label not in CHAT_PATHS and label not in HOLD_CHAT_PATHS:
         raise ValueError(f"unknown chat path: {response_path}")
     return label
 
@@ -81,9 +84,12 @@ def unmet_category_label(value: object) -> str:
     return value if isinstance(value, str) and value in UNMET_CATEGORIES else UNMET_UNKNOWN
 
 
-def init_label_series() -> None:
-    """라벨 조합을 0으로 미리 만든다(멱등). 첫 건이 증가분 계산에서 빠지는 것을 막는다."""
-    for path in CHAT_PATHS:
+def init_label_series(seat_hold: bool = False) -> None:
+    """라벨 조합을 0으로 미리 만든다(멱등). 첫 건이 증가분 계산에서 빠지는 것을 막는다.
+
+    seat_hold = 좌석 잡기 플래그. 꺼져 있으면 hold_* 라벨을 만들지 않는다.
+    """
+    for path in CHAT_PATHS + (HOLD_CHAT_PATHS if seat_hold else ()):
         for result in CHAT_RESULTS:
             AI_CHAT.labels(path, result)
     for layer in CACHE_LAYERS:

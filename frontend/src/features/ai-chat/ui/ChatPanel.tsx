@@ -20,7 +20,7 @@ import {
   type PickKind,
   type PresetChoice,
 } from "../lib/preset-actions";
-import { activeHold, isHoldReply } from "../lib/seat-hold";
+import { activeHold, holdMessages, holdStateOf } from "../lib/seat-hold";
 import { MAX_MESSAGE_LENGTH, useAiChat } from "../model/use-ai-chat";
 import { useDemoMode } from "../model/use-demo-mode";
 import { ChatEntryView } from "./ChatEntryView";
@@ -90,8 +90,9 @@ export function ChatPanel({
       entries.some((entry) => entry.kind === "answer" && answerMovieTitles(entry.response).length > 0),
   });
 
-  // 좌석 잡기: 지금 눌러도 되는 확인 요청(가장 최근 답)과 그 확인 시간(2분). 지나면 버튼을 막는다
+  // 좌석 잡기: 지금 눌러도 되는 버튼(가장 최근 답의 확인·취소·회차)과 그 기한(2분). 지나면 버튼을 막는다
   const pendingHold = activeHold(entries);
+  const knownHoldMessages = holdMessages(entries);
   const [clock, setClock] = useState(() => serverNow());
   const holdExpiresAt = pendingHold?.expiresAt ?? null;
   useEffect(() => {
@@ -101,15 +102,7 @@ export function ChatPanel({
     const timer = window.setTimeout(() => setClock(serverNow()), left + 100);
     return () => window.clearTimeout(timer);
   }, [holdExpiresAt]);
-  const holdOf = (entry: (typeof entries)[number]): "active" | "expired" | "stale" => {
-    const mine =
-      pendingHold !== null &&
-      (entry.kind === "answer"
-        ? entry.id === pendingHold.entryId
-        : entry.kind === "error" && isHoldReply(entry.question) && pendingHold.messages.includes(entry.question));
-    if (!mine) return "stale";
-    return pendingHold.expiresAt <= clock ? "expired" : "active";
-  };
+  const holdOf = (entry: (typeof entries)[number]) => holdStateOf(entry, pendingHold, knownHoldMessages, clock);
 
   const disabled = notReady || unavailable;
   const blocked = disabled || checking || isPending || cooldownSeconds > 0;

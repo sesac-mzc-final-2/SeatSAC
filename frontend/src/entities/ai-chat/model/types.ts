@@ -51,13 +51,13 @@ export interface ChatChoice {
  */
 export interface ChatSeatHold {
   screeningId: number | null;
-  /** 선점 성공이면 새 PENDING 예매, `reason: ACTIVE_HOLD_EXISTS` 면 이미 진행 중인 예매 */
+  /** 선점 성공이면 새 PENDING 예매, `reason: ACTIVE_HOLD_EXISTS` 면 진행 중인 예매(booking 이 알려 주지 않으면 null) */
   bookingId: number | null;
   seatLabels: string[];
   amount: number | null;
   /** 선점 만료 시각 `+09:00` (결제 기한) */
   expiresAt: string | null;
-  /** 확인 버튼을 누를 수 있는 기한 `+09:00` (확인 요청 뒤 2분). 버튼이 달린 답에만 */
+  /** 버튼을 누를 수 있는 기한 `+09:00` (버튼을 낸 뒤 2분). 확인·취소·회차 고르기 버튼이 달린 답에만 */
   confirmExpiresAt?: string | null;
   /** 선점하지 않았거나 못한 까닭 (성공·확인 요청은 null) */
   reason: string | null;

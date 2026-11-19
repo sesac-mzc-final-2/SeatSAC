@@ -40,7 +40,8 @@ LLM_RESULTS = ("ok", "timeout", "overloaded", "rate_limited", "error")
 SNAPSHOT_SCOPES = ("today", "other")
 QUOTA_WINDOWS = ("minute", "day")
 # 범위 밖 질문 중 "수요"로 세는 분류 + out_of_scope 도구의 category 가 정해진 값이 아닌 경우
-UNMET_CATEGORIES = ("action_request", "site_feature", "unrelated")
+# recommendation = 조건 없는 영화 추천 요청(3.4.25) — 추천 기능을 만들 근거로 따로 센다
+UNMET_CATEGORIES = ("action_request", "site_feature", "recommendation", "unrelated")
 UNMET_UNKNOWN = "unknown"
 # 욕설·인사·잡담은 수요가 아니라 세지 않는다. Claude가 고를 수는 있어야 다른 분류로 새지 않는다
 UNMET_CHITCHAT = "chitchat"

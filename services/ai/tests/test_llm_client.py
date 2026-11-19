@@ -114,7 +114,7 @@ def test_out_of_scope_tool_requires_a_fixed_category():
     schema = out_of_scope["input_schema"]
     assert schema["required"] == ["category", "reason"]
     assert schema["properties"]["category"]["enum"] == [
-        "action_request", "site_feature", "unrelated", "chitchat",
+        "action_request", "site_feature", "recommendation", "unrelated", "chitchat",
     ]  # fmt: skip
     assert "chitchat" not in UNMET_CATEGORIES
 

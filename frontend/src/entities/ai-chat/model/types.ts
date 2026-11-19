@@ -1,6 +1,14 @@
 /** contracts/openapi/ai.openapi.yaml (AI-01·AI-04). 필드는 항상 있고 해당 없으면 null */
 
-export type ChatPath = "CACHE_EXACT" | "CACHE_SEMANTIC" | "PRESET" | "NL2SQL" | "MY_BOOKINGS" | "REJECTED" | "OUT_OF_SCOPE";
+export type ChatPath =
+  | "CACHE_EXACT"
+  | "CACHE_SEMANTIC"
+  | "PRESET"
+  | "NL2SQL"
+  | "MY_BOOKINGS"
+  | "REJECTED"
+  | "OUT_OF_SCOPE"
+  | "CLARIFY";
 
 export type ChatColumnType = "text" | "integer" | "real";
 
@@ -27,6 +35,12 @@ export interface ChatRejection {
   object?: string | null;
 }
 
+/** `CLARIFY`(되묻기) 버튼. 누르면 `message` 를 그대로 다음 질문으로 보낸다 */
+export interface ChatChoice {
+  label: string;
+  message: string;
+}
+
 export interface ChatRequest {
   message: string;
   sessionId?: string;
@@ -47,6 +61,8 @@ export interface ChatResponse {
   llm: LlmUsage;
   latencyMs: number;
   rejection: ChatRejection | null;
+  /** `CLARIFY` 일 때만 버튼 목록 (배포 순서상 옛 ai 는 이 필드를 보내지 않을 수 있다) */
+  choices?: ChatChoice[] | null;
 }
 
 export interface ChatPreset {

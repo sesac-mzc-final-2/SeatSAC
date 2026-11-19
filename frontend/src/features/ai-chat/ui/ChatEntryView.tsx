@@ -14,6 +14,8 @@ interface Props {
   onRetry?: (question: string, link?: ChatLink) => void;
   /** 답에 나온 영화를 골랐을 때 (보낼 수 없는 상태면 undefined — 버튼 비활성) */
   onPickMovie?: (title: string) => void;
+  /** 되묻기(`CLARIFY`) 버튼 — 누르면 그 `message` 를 보낸다 (보낼 수 없는 상태면 undefined) */
+  onChoose?: (message: string) => void;
 }
 
 const n = (value: number) => value.toLocaleString("ko-KR");
@@ -74,18 +76,36 @@ function Answer({
   demo,
   link,
   onPickMovie,
+  onChoose,
 }: {
   response: ChatResponse;
   demo: boolean;
   link?: ChatLink;
   onPickMovie?: (title: string) => void;
+  onChoose?: (message: string) => void;
 }) {
   const movieTitles = answerMovieTitles(response);
+  const choices = response.choices ?? [];
   const table = hasResultTable(response);
   return (
     <div className={styles.answer}>
       <p className={styles.text}>{response.answer}</p>
       {response.rejection && <p className={styles.note}>{response.rejection.message}</p>}
+      {choices.length > 0 && (
+        <div className={styles.choices} role="group" aria-label="답 고르기">
+          {choices.map((choice) => (
+            <Chip
+              key={choice.message}
+              size="sm"
+              disabled={!onChoose}
+              title={choice.message}
+              onClick={() => onChoose?.(choice.message)}
+            >
+              {choice.label}
+            </Chip>
+          ))}
+        </div>
+      )}
       {/* 0건이면 머리글만 남은 빈 표를 그리지 않는다 — 답 문장이 이유를 말한다 */}
       {table && response.columns && response.rows && response.rows.length > 0 && (
         <ResultTable columns={response.columns} rows={response.rows} caption={`결과 ${response.rowCount}건`} />
@@ -109,7 +129,7 @@ function Answer({
   );
 }
 
-export function ChatEntryView({ entry, demo, onRetry, onPickMovie }: Props) {
+export function ChatEntryView({ entry, demo, onRetry, onPickMovie, onChoose }: Props) {
   if (entry.kind === "question") {
     return (
       <div className={styles.question} data-question="">
@@ -119,7 +139,15 @@ export function ChatEntryView({ entry, demo, onRetry, onPickMovie }: Props) {
     );
   }
   if (entry.kind === "answer") {
-    return <Answer response={entry.response} demo={demo} link={entry.link} onPickMovie={onPickMovie} />;
+    return (
+      <Answer
+        response={entry.response}
+        demo={demo}
+        link={entry.link}
+        onPickMovie={onPickMovie}
+        onChoose={onChoose}
+      />
+    );
   }
   return (
     <div className={styles.error} role="alert">

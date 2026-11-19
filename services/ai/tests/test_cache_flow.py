@@ -20,6 +20,13 @@ from .sql_fixtures import loaded_store
 
 NOW = datetime(2026, 11, 17, 19, 40, tzinfo=KST)
 USER = "user-1"
+# 「그중 건대입구만」: 직전 SQL에 극장 조건을 더한 것(의미 검사가 극장 조건을 본다)
+KONDAE_AFTER_20_SQL = (
+    "SELECT m.title AS movie_title, s.starts_at FROM screening s "
+    "JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id "
+    "WHERE s.business_date = '2026-11-17' AND s.starts_at >= '2026-11-17 20:00' "
+    "AND t.name = '건대입구' AND s.starts_at > '2026-11-17 19:40' ORDER BY s.starts_at"
+)
 AFTER_20_SQL = (
     "SELECT m.title AS movie_title, s.starts_at FROM screening s "
     "JOIN movie m ON m.movie_id = s.movie_id "
@@ -224,7 +231,9 @@ def test_semantic_cache_off_by_setting():
 
 
 def test_session_id_is_kept_and_followup_gets_previous_context():
-    llm = ScriptedLlm(preset_after("20:00"), tool("run_sql", sql=AFTER_20_SQL, explanation="x"))
+    llm = ScriptedLlm(
+        preset_after("20:00"), tool("run_sql", sql=KONDAE_AFTER_20_SQL, explanation="x")
+    )
     service, _ = make(llm)
     first = ask(service, "오늘 20시 이후 영화 알려줘")
     follow = ask(service, "그중 건대입구만", session_id=first["sessionId"])
@@ -245,7 +254,11 @@ def test_followup_is_not_answered_from_cache():
 
 
 def test_someone_elses_session_id_starts_a_new_session():
-    service, _ = make(ScriptedLlm(preset_after("20:00"), preset_after("20:00")))
+    service, _ = make(
+        ScriptedLlm(
+            preset_after("20:00"), tool("run_sql", sql=KONDAE_AFTER_20_SQL, explanation="x")
+        )
+    )
     mine = ask(service, "오늘 20시 이후 영화 알려줘")
     other = ask(service, "그중 건대입구만", session_id=mine["sessionId"], user="user-2")
     assert other["sessionId"] != mine["sessionId"]
@@ -388,3 +401,36 @@ def test_semantic_entry_is_written_with_ttl_in_one_transaction():
     asyncio.run(index.add("doc1", [0.1] * 384, "time", "{}", 3600))
     ttl = asyncio.run(valkey.ttl(SEMCACHE_PREFIX + "doc1"))
     assert 0 < ttl <= 3600
+
+
+def test_short_reply_to_a_date_question_is_joined_with_the_original():
+    """되묻기에 버튼 대신 「내일」이라고 쳐도 원래 질문에 붙여 처리한다."""
+    seats = (
+        "SELECT s.starts_at, s.remaining_seats FROM screening s "
+        "WHERE s.business_date = '2026-11-18' ORDER BY s.remaining_seats DESC"
+    )
+    llm = ScriptedLlm(tool("ask_user", missing="date"), tool("run_sql", sql=seats, explanation="x"))
+    service, _ = make(llm)
+    first = ask(service, "잔여석 많은 회차")
+    assert first["path"] == "CLARIFY"
+    second = ask(service, "내일", session_id=first["sessionId"])
+    assert "질문: 내일 잔여석 많은 회차" in llm.requests[1]["messages"][0]["content"]
+    assert second["path"] == "NL2SQL"
+
+
+def test_date_button_for_a_short_question_is_not_joined_twice():
+    """버튼은 완성된 질문(12자)을 보낸다 — 원래 질문을 또 붙이지 않는다(#140 리뷰)."""
+    seats = (
+        "SELECT s.starts_at, s.remaining_seats FROM screening s "
+        "WHERE s.business_date = '2026-11-18' ORDER BY s.remaining_seats DESC"
+    )
+    llm = ScriptedLlm(tool("ask_user", missing="date"), tool("run_sql", sql=seats, explanation="x"))
+    service, _ = make(llm)
+    first = ask(service, "잔여석 많은 회차")
+    button = first["choices"][1]["message"]
+    assert button == "내일 잔여석 많은 회차"
+    second = ask(service, button, session_id=first["sessionId"])
+    sent = llm.requests[1]["messages"][0]["content"]
+    assert "질문: 내일 잔여석 많은 회차" in sent
+    assert "잔여석 많은 회차 잔여석 많은 회차" not in sent
+    assert second["path"] == "NL2SQL"

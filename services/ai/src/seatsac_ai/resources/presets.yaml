@@ -16,6 +16,8 @@
 #   빠지고 '오늘·내일·모레' 중 하나가 있어야 한다(test_cache_warm.py). grade 프리셋은 넣지 않는다(캐시 안 함).
 # - :today('YYYY-MM-DD')·:now('YYYY-MM-DD HH:MM')는 서버가 항상 넣는다(KST). params 에 적지 않는다.
 # - screening 을 조회하는 SQL은 모두 starts_at > :now 를 붙인다(data-model 6-1).
+# - remaining_seats(잔여석)는 잔여석을 묻는 프리셋(most_remaining_today·almost_sold_out_today)에만 넣는다.
+#   잔여석을 읽는 SQL은 실행 직전에 그 날짜 × 극장 회차를 새로 받기 때문이다(snapshot/fresh.py).
 # - 모든 SQL은 test_presets.py 에서 검증기(16장)를 통과하고 실제 스냅샷에서 실행돼야 한다.
 
 presets:
@@ -31,8 +33,7 @@ presets:
       - "{time} 이후에 하는 영화 뭐 있어"
     params: [time]
     sql: |
-      SELECT m.title AS movie_title, t.name AS theater_name, s.auditorium_name,
-             s.starts_at, s.remaining_seats
+      SELECT m.title AS movie_title, t.name AS theater_name, s.auditorium_name, s.starts_at
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -53,8 +54,7 @@ presets:
       - "모레 {theater} 편성표"
     params: [date, theater]
     sql: |
-      SELECT m.title AS movie_title, s.auditorium_name, s.screen_type, s.starts_at, s.ends_at,
-             s.remaining_seats
+      SELECT m.title AS movie_title, s.auditorium_name, s.screen_type, s.starts_at, s.ends_at
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -72,8 +72,7 @@ presets:
       - "{movie} 어디서 볼 수 있어"
     params: [movie]
     sql: |
-      SELECT t.name AS theater_name, s.business_date, s.starts_at, s.auditorium_name,
-             s.remaining_seats
+      SELECT t.name AS theater_name, s.business_date, s.starts_at, s.auditorium_name
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -147,7 +146,7 @@ presets:
       - "오늘 상영관 종류별로 회차 몇 개야"
     params: []
     sql: |
-      SELECT s.screen_type, count(*) AS screening_count, sum(s.remaining_seats) AS remaining_seats
+      SELECT s.screen_type, count(*) AS screening_count
       FROM screening s
       WHERE s.business_date = :today AND s.starts_at > :now
       GROUP BY s.screen_type
@@ -163,7 +162,7 @@ presets:
       - "{movie} 제일 빠른 회차"
     params: [movie]
     sql: |
-      SELECT s.starts_at, t.name AS theater_name, s.auditorium_name, s.remaining_seats
+      SELECT s.starts_at, t.name AS theater_name, s.auditorium_name
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -181,7 +180,7 @@ presets:
       - "오늘 심야 상영 뭐 해"
     params: []
     sql: |
-      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats
+      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id
@@ -199,8 +198,7 @@ presets:
       - "조조 상영 뭐 해"
     params: []
     sql: |
-      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at,
-             CASE WHEN s.remaining_seats_source = 'BOOKING' THEN s.remaining_seats END AS remaining_seats
+      SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at
       FROM screening s
       JOIN movie m ON m.movie_id = s.movie_id
       JOIN theater t ON t.theater_id = s.theater_id

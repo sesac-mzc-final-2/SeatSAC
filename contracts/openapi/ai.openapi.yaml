@@ -33,8 +33,12 @@ paths:
         ③ 정규화·슬롯 추출(`{time}`·`{date}`·`{theater}`·`{movie}`·`{n}`) → 템플릿 질문
         ④ 정확 일치 캐시 적중 → 저장된 SQL 템플릿에 이번 슬롯 값으로 SQLite 실행(`CACHE_EXACT`, 토큰 0)
         ⑤ 의미 캐시(코사인 ≥ 0.92 **그리고** 슬롯 종류 같음) 적중 → 같이 실행(`CACHE_SEMANTIC`, 토큰 0)
-        ⑥ Claude 1회 호출(도구 `run_preset`·`run_sql`·`out_of_scope`) → `PRESET`·`NL2SQL`·`OUT_OF_SCOPE`.
-           `run_sql`은 16장 검증 → 실패하면 사유를 붙여 1회 재요청 → 또 실패면 `REJECTED`
+        ⑥ Claude 1회 호출(도구 `run_preset`·`run_sql`·`ask_user`·`out_of_scope`) → `PRESET`·`NL2SQL`·`CLARIFY`·`OUT_OF_SCOPE`.
+           `run_sql`은 16장 검증 → 실패하면 사유를 붙여 1회 재요청 → 또 실패면 `REJECTED`.
+           **의미 검사**: 질문에서 뽑은 날짜·극장·영화가 SQL(프리셋 포함) 조건에 없거나 다르면 실행하지 않고 재요청 →
+           호출을 다 쓰도록 어긋나면 `CLARIFY`(조건 확인 버튼). OR·범위처럼 읽지 못한 조건은 통과.
+           **잔여석**: 잔여석을 읽는 SQL은 실행 직전에 그 SQL의 날짜 × 극장 회차만 공개 API에서 새로 받는다(질문 시점 값).
+           잔여석을 묻는데 날짜가 없으면 `CLARIFY`(날짜 버튼). booking이 늦어 확인 못 한 잔여석은 null + 답 문장 안내
         ⑦ SQLite 읽기 전용 실행(5초·최대 500행) ⑧ 성공한 PRESET·NL2SQL만 캐시 저장(1시간, 결과 행은 저장하지 않음).
         **`REJECTED`·`OUT_OF_SCOPE`도 200**(결제 거절 200과 같은 원칙). 사용자당 동시 1건 · 분당 10회 · 하루 100회.
         `sessionId`는 서버가 UUID로 발급한다. 생략·만료(30분)·다른 사용자의 것·위조면 **오류 없이 새 세션**으로 시작한다
@@ -57,7 +61,8 @@ paths:
           description: |
             답. `path`로 처리 경로를 구분하고 화면은 `answer` 문장 + `columns`/`rows` 표 + "`asOf` 기준"을 보여준다.
             `llm.calls`가 0이면 Claude API를 부르지 않은 것(캐시·내 예매) — 데모 화면에 그대로 표시.
-            `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)도 200이며 `columns`·`rows`는 null.
+            `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)·`CLARIFY`(되묻기)도 200이며 `columns`·`rows`는 null.
+            `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다(버튼 없이 안내 문장만 올 수도 있다 — 빈 배열).
             `sql`은 `REJECTED`일 때 거부된 SQL(화면은 보여주지 않아도 됨), `OUT_OF_SCOPE`는 null.
           content:
             application/json:
@@ -68,6 +73,7 @@ paths:
                 nl2sql: { $ref: "./examples/ai/chat-nl2sql.json" }
                 myBookings: { $ref: "./examples/ai/chat-my-bookings.json" }
                 rejected: { $ref: "./examples/ai/chat-rejected.json" }
+                clarify: { $ref: "./examples/ai/chat-clarify.json" }
         "400":
           description: |
             VALIDATION_FAILED — `message` 없음·빈 문자열(공백만)·300자 초과(`details[{ field: "message", reason: LENGTH }]`),
@@ -190,11 +196,11 @@ components:
 
     ChatPath:
       type: string
-      enum: [CACHE_EXACT, CACHE_SEMANTIC, PRESET, NL2SQL, MY_BOOKINGS, REJECTED, OUT_OF_SCOPE]
+      enum: [CACHE_EXACT, CACHE_SEMANTIC, PRESET, NL2SQL, MY_BOOKINGS, REJECTED, OUT_OF_SCOPE, CLARIFY]
       description: |
         CACHE_EXACT 정확 일치 캐시(토큰 0) · CACHE_SEMANTIC 의미 캐시(토큰 0) · PRESET Claude가 프리셋 선택 ·
         NL2SQL Claude가 SQL 생성 · MY_BOOKINGS 내 예매(공개 API, 토큰 0) · REJECTED SQL 검증 거부(`rejection` 참고) ·
-        OUT_OF_SCOPE 답할 수 없는 질문(안내 문장만)
+        OUT_OF_SCOPE 답할 수 없는 질문(안내 문장만) · CLARIFY 되묻기(잔여석 질문에 날짜가 없음, 또는 질문 조건을 SQL에 반영하지 못함 — `choices`)
 
     Column:
       type: object
@@ -234,8 +240,8 @@ components:
 
     ChatResponse:
       type: object
-      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`sql`·`presetId`·`rejection`)
-      required: [sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection]
+      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`sql`·`presetId`·`rejection`·`choices`)
+      required: [sessionId, answer, path, columns, rows, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices]
       properties:
         sessionId: { type: string, format: uuid, description: "서버가 발급. 후속 질문에 그대로 보낸다(30분)" }
         answer: { type: string, description: "답 문장(결과 행을 템플릿에 채워 만듦, Claude에 결과를 다시 보내지 않음). 끝에 \"○시 ○분 기준\"" }
@@ -250,7 +256,7 @@ components:
           items:
             type: array
             items: { type: [string, integer, number, "null"], description: "`Column.type` text → string, integer → integer, real → number. SQLite에 boolean은 없다(0·1 integer)" }
-          description: "`columns` 순서의 값 배열. 최대 500행(`truncated`). MY_BOOKINGS는 본인 예매만. REJECTED·OUT_OF_SCOPE는 null"
+          description: "`columns` 순서의 값 배열. 최대 500행(`truncated`). MY_BOOKINGS는 본인 예매만. REJECTED·OUT_OF_SCOPE·CLARIFY는 null. 잔여석(remaining_seats)이 null이면 확인 불가(booking이 늦게 답함)"
         rowCount: { type: integer, minimum: 0, description: "`rows` 길이(null이면 0)" }
         truncated: { type: boolean, description: "500행에서 잘렸으면 true(LIMIT 없는 SQL은 LIMIT 500을 붙여 실행)" }
         sql:
@@ -260,13 +266,25 @@ components:
         asOf:
           type: string
           format: date-time
-          description: 스냅샷 기준 시각(오늘 회차 1분·나머지 10분 갱신). MY_BOOKINGS는 공개 API 호출 시각. +09:00
+          description: 스냅샷 기준 시각(오늘 회차 1분·나머지 10분 갱신). 잔여석 답은 질문 시점에 새로 받은 시각. MY_BOOKINGS는 공개 API 호출 시각. +09:00
         llm: { $ref: "#/components/schemas/LlmUsage" }
         latencyMs: { type: integer, minimum: 0, description: "ai 안 처리 시간(ms)" }
         rejection:
           oneOf:
             - { type: "null" }
             - { $ref: "#/components/schemas/Rejection" }
+        choices:
+          type: [array, "null"]
+          maxItems: 7
+          items: { $ref: "#/components/schemas/Choice" }
+          description: "CLARIFY일 때만 버튼 목록(날짜 고르기 최대 7개, 조건을 다시 말해 달라는 안내는 빈 배열). 그 밖은 null"
+
+    Choice:
+      type: object
+      required: [label, message]
+      properties:
+        label: { type: string, description: "버튼 글자 (예: 내일 11/19(목))" }
+        message: { type: string, maxLength: 300, description: "누르면 `POST /ai/chat`의 `message`로 그대로 보내는 완성된 질문" }
 
     Preset:
       type: object

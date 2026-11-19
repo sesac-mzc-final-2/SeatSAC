@@ -22,6 +22,7 @@
     "asOf": "2026-11-17T19:42:00+09:00",
     "llm": { "calls": 1, "inputTokens": 455, "outputTokens": 212, "cacheReadTokens": 3810, "cacheWriteTokens": 0 },
     "latencyMs": 3240,
-    "rejection": null
+    "rejection": null,
+    "choices": null
   }
 }

@@ -156,7 +156,7 @@ function Answer({
   response: ChatResponse;
   demo: EntryDemo | null;
   link?: ChatLink;
-  question: string;
+  question?: string;
   continueFrom?: string;
   onPickMovie?: (title: string, continueFrom?: string) => void;
   onClearContext?: (question: string, link?: ChatLink) => void;
@@ -179,8 +179,9 @@ function Answer({
           <button
             type="button"
             className={styles.clear}
-            disabled={!onClearContext}
-            onClick={() => onClearContext?.(question, link)}
+            aria-label={`${carried} 조건 지우기`}
+            disabled={!onClearContext || !question}
+            onClick={() => question && onClearContext?.(question, link)}
           >
             <Icon name="x" size={12} />
             조건 지우기

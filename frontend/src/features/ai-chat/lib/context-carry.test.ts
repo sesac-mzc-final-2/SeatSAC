@@ -24,6 +24,13 @@ describe("문맥 이어받기 (3.4.22)", () => {
     expect(continueFromOf({ context: context({ id: "" }) })).toBeUndefined();
   });
 
+  it("이어받을 조건(날짜·극장)이 없는 답이면 continueFrom 을 보내지 않는다 — 영화만 있는 답", () => {
+    const onlyMovie = context({ date: null, theater: null, movie: "부활남", label: "부활남" });
+    expect(continueFromOf({ context: onlyMovie })).toBeUndefined();
+    expect(continueFromOf({ context: context({ theater: null }) })).toBe("k7f2a1");
+    expect(continueFromOf({ context: context({ date: null }) })).toBe("k7f2a1");
+  });
+
   it("이어받은 답만 조건 글자를 보여 준다", () => {
     expect(inheritedLabel({ context: context({ inherited: ["date", "theater"] }) })).toBe("내일 11/20(금) · 부산본점");
     expect(inheritedLabel({ context: context() })).toBeNull();

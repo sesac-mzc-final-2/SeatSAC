@@ -10,7 +10,7 @@ import { AiChatDock } from "./AiChatDock";
 const SESSION_ID = "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a";
 const TRACE = "0123456789abcdef0123456789abcdef";
 const BUTTON = "부활남 어디서 몇 시에 해?";
-const EXPIRED = "이전 조건이 만료되어 전체 기준으로 찾았어요";
+const EXPIRED = "이전 조건을 이어받지 못해 전체 기준으로 찾았어요";
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -148,7 +148,7 @@ describe("문맥 이어받기 (3.4.22)", () => {
     expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
 
     // 조건 지우기 = 같은 질문을 continueFrom 없이 다시 보낸다
-    await userEvent.click(screen.getByRole("button", { name: "조건 지우기" }));
+    await userEvent.click(screen.getByRole("button", { name: "내일 11/20(금) · 부산본점 조건 지우기" }));
     expect(await screen.findByText("부활남 회차: 3건입니다.")).toBeInTheDocument();
     expect(chatBodies(fetchMock)[2]).toEqual({ message: BUTTON, sessionId: SESSION_ID });
     // 다시 받은 답은 이어받지 않은 답 — 조건 표시도 만료 안내도 없다
@@ -171,7 +171,7 @@ describe("문맥 이어받기 (3.4.22)", () => {
 
     expect(await screen.findByText(EXPIRED)).toBeInTheDocument();
     expect(chatBodies(fetchMock)[1].continueFrom).toBe("k7f2a1");
-    expect(screen.queryByRole("button", { name: "조건 지우기" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /조건 지우기/ })).not.toBeInTheDocument();
   });
 
   it("context 가 없는 옛 ai 응답이면 예전과 같다 — continueFrom 도 조건 표시도 안내도 없다", async () => {
@@ -184,13 +184,26 @@ describe("문맥 이어받기 (3.4.22)", () => {
     expect(await screen.findByText("부활남 회차: 1건입니다.")).toBeInTheDocument();
     expect(chatBodies(fetchMock)[1]).toEqual({ message: BUTTON, sessionId: SESSION_ID });
     expect(screen.queryByText(/ 기준$/, { selector: "span" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "조건 지우기" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /조건 지우기/ })).not.toBeInTheDocument();
     expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
   });
 
   it("조건이 없는 답(context null)의 영화 버튼도 continueFrom 을 보내지 않는다", async () => {
     const fetchMock = mockApi(listed("상영 영화: 2건입니다.", null), showtimes("부활남 회차: 1건입니다.", ["2026-11-19 21:00"], null));
     await openAndAsk("상영 중인 영화 알려줘");
+    await pickMovie();
+    expect(await screen.findByText("부활남 회차: 1건입니다.")).toBeInTheDocument();
+    expect(chatBodies(fetchMock)[1]).toEqual({ message: BUTTON, sessionId: SESSION_ID });
+    expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument();
+  });
+
+  it("영화만 있는 답(이어받을 날짜·극장이 없음)의 버튼은 continueFrom 을 보내지 않고 안내도 없다", async () => {
+    const onlyMovie = context({ date: null, theater: null, movie: "부활남", label: "부활남" });
+    const fetchMock = mockApi(
+      listed("부활남과 같이 볼 영화: 2건입니다.", onlyMovie),
+      showtimes("부활남 회차: 1건입니다.", ["2026-11-19 21:00"], context({ ...onlyMovie, id: "c41e7b" })),
+    );
+    await openAndAsk("부활남이랑 같이 볼 영화");
     await pickMovie();
     expect(await screen.findByText("부활남 회차: 1건입니다.")).toBeInTheDocument();
     expect(chatBodies(fetchMock)[1]).toEqual({ message: BUTTON, sessionId: SESSION_ID });

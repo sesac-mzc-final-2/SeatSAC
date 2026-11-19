@@ -10,7 +10,9 @@
   ⑤ 확인 버튼이 직전 응답의 sessionId 로 오면 Claude 없이 대기 행동을 꺼내(한 번만) POST /seats/hold
   ⑥ 결과(HOLD_RESULT): 예매 요약 또는 오류 코드별 안내. 결제는 화면에서 한다(ai는 bookingId 만 준다)
   ⑦ 선점에 성공하면 그 결과를 '방금 끝난 선점'(ai:held, 선점이 남은 동안·5분 이내)으로 남긴다.
-     응답이 화면에 닿지 못해 같은 확인 ID가 다시 오면 booking 을 다시 부르지 않고 같은 결과를 준다
+     응답이 화면에 닿지 못해 같은 확인 ID가 다시 오면 다시 잡지 않는다. 그 예매를 한 번 조회해
+     (GET /bookings/{bookingId}) 아직 PENDING이면 같은 결과를, 그 사이 취소·만료·결제됐으면
+     그 안내를 준다
 
 지키는 것
   - 확인 없이 선점하는 길이 없다: POST /seats/hold 는 SeatHoldFlow._confirmed 에서만 부르고,
@@ -87,6 +89,9 @@ ACTIVE_HOLD_EXISTS = "ACTIVE_HOLD_EXISTS"
 UPSTREAM_UNAVAILABLE = "UPSTREAM_UNAVAILABLE"  # 좌석 현황 확인 실패 · 선점을 보냈으나 결과 모름
 HOLD_NOT_SENT = "HOLD_NOT_SENT"  # 선점 요청을 보내지 못했다(좌석은 잡히지 않았다)
 HOLD_FAILED = "HOLD_FAILED"
+HOLD_ENDED = "HOLD_ENDED"  # 재전송 때 다시 보니 그 예매가 취소·만료·결제 실패로 끝나 있다
+ALREADY_PAID = "ALREADY_PAID"  # 재전송 때 다시 보니 그 예매는 결제까지 끝났다
+_ENDED_STATUSES = ("CANCELED", "EXPIRED", "PAYMENT_FAILED")
 # 우리 키는 확인 요청마다 새로 만든다 — 이 코드가 오면 앞선 시도가 booking 에 닿았다는 뜻(결과 모름)
 _IDEMPOTENCY_CODES = ("IDEMPOTENCY_IN_PROGRESS", "IDEMPOTENCY_KEY_CONFLICT")
 
@@ -234,6 +239,40 @@ class SeatHoldClient:
             return self._outcome(response)
         return HoldOutcome(UPSTREAM_UNAVAILABLE if sent else HOLD_NOT_SENT)
 
+    async def booking_status(
+        self, authorization: str, booking_id: int, deadline: float
+    ) -> str | None:
+        """GET /bookings/{bookingId} 의 status(본인 예매만). 알 수 없으면 None.
+
+        ai 쪽에서는 읽기다(쓰기 API는 여전히 POST /seats/hold 하나). 다만 booking 계약상 이 GET은
+        PENDING이고 결제 요청이 있으면 응답 전에 Payment 조회·verify(포트원)로 결제 결과를 반영한다
+        — 화면의 새로고침과 같은 호출이고, 그만큼 늦을 수 있다(3초를 넘으면 None).
+
+        내 예매 목록(/users/me/bookings)은 쓰지 않는다 — 기본이 PENDING 제외라
+        살아 있는 선점이 안 보인다.
+        """
+        timeout = _timeout(deadline)
+        if timeout is None:
+            return None
+        try:
+            response = await self._http.get(
+                f"{self._base}/bookings/{booking_id}",
+                headers={"Authorization": authorization},
+                timeout=timeout,
+            )
+        except httpx.HTTPError:
+            return None
+        if response.status_code == 401:
+            raise unauthorized("INVALID_TOKEN")
+        if response.status_code != 200:
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        status = body.get("status") if isinstance(body, dict) else None
+        return status if isinstance(status, str) else None
+
     @staticmethod
     def _outcome(response: httpx.Response) -> HoldOutcome:
         if response.status_code == 401:
@@ -305,8 +344,10 @@ class SeatHoldFlow:
         if verb == CONFIRM_MESSAGE and not authorization:
             raise unauthorized("TOKEN_REQUIRED")  # 대기 행동을 꺼내기 전에 — 꺼낸 뒤 401이면 헛소모
         if verb == CONFIRM_MESSAGE and sent_session_id:
-            # 방금 성공한 그 확인의 재전송(응답이 화면에 닿지 못했다) — booking 을 다시 부르지 않고
-            # 같은 결과를 준다. 대기 행동보다 먼저 본다(그 사이 만든 새 확인 요청을 지우지 않게)
+            # 방금 성공한 그 확인의 재전송(응답이 화면에 닿지 못했다) — 선점을 다시 하지 않고
+            # 같은 결과를 준다. 대기 행동보다 먼저 본다(그 사이 만든 새 확인 요청을 지우지 않게).
+            # 주기 전에 그 예매가 아직 살아 있는지 한 번 조회한다(_replayed) — 그 사이 화면에서
+            # 취소했으면 "잡았어요"가 취소된 예매의 결제 화면으로 이어진다(11/19 staging 재현)
             held = await self._cache.get_held(user_id, sent_session_id)
             if (
                 held is not None
@@ -315,13 +356,7 @@ class SeatHoldFlow:
                 and held.get("replayUntil", 0) > now.timestamp()
                 and isinstance(held.get("bookingId"), int)
             ):
-                return _held(
-                    held.get("screeningId"),
-                    held["bookingId"],
-                    [str(x) for x in held.get("seatLabels") or []],
-                    held.get("amount"),
-                    held.get("expiresAt"),
-                ), True
+                return await self._replayed(held, authorization, deadline), True
         pending = None
         if sent_session_id:
             pending = await self._cache.take_pending(user_id, sent_session_id)
@@ -346,6 +381,42 @@ class SeatHoldFlow:
             pending, message.strip(), verb, confirm_id, authorization, user_id, sent_session_id,
             now, deadline,
         ), True  # fmt: skip
+
+    async def _replayed(
+        self, held: dict[str, Any], authorization: str, deadline: float
+    ) -> HoldReply:
+        """같은 확인의 재전송에 주는 답. 예매를 한 번 조회한다(ai가 선점·취소를 부르지 않는다).
+
+        조회는 화면 새로고침과 같은 GET이다 — booking 이 그때 결제 결과를 반영할 수 있다
+        (booking_status).
+        """
+        screening_id = held.get("screeningId")
+        labels = [str(x) for x in held.get("seatLabels") or []]
+        status = await self._client.booking_status(authorization, held["bookingId"], deadline)
+        if status == "PENDING":
+            return _held(
+                screening_id, held["bookingId"], labels, held.get("amount"), held.get("expiresAt")
+            )
+        if status in _ENDED_STATUSES:
+            return _result(
+                "그 예매는 이미 취소(만료)됐어요. 다시 잡으려면 회차와 좌석을 말해 주세요.",
+                HOLD_ENDED,
+                screening_id,
+                labels,
+            )
+        if status == "CONFIRMED":
+            # 좌석 화면 링크를 붙이지 않는다(screeningId 없음) — 더 할 일이 없다
+            return _result(
+                "그 예매는 이미 결제를 마쳤어요. 마이페이지 예매 내역에서 확인해 주세요.",
+                ALREADY_PAID,
+                labels=labels,
+            )
+        log.warning("재전송 때 예매 상태를 확인하지 못함", extra={"fields": {"holdStatus": status}})
+        return _result(
+            "결과를 확인하지 못했어요. 마이페이지 예매 내역에서 확인해 주세요.",
+            UPSTREAM_UNAVAILABLE,
+            labels=labels,
+        )
 
     async def _answer_pending(
         self, pending, text, verb, confirm_id, authorization, user_id, session_id, now, deadline

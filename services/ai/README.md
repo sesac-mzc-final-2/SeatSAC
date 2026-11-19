@@ -25,7 +25,9 @@ gateway를 거치지 않고 직접 부를 때는 gateway가 넣어 주는 헤더
   끄면 Claude에 가는 system·도구가 좌석 잡기가 없던 때와 글자 하나 다르지 않다(`tests/test_seat_hold.py`)
 - 켜져 있어도 ai Valkey(`AI_VALKEY_HOST`)나 `PUBLIC_API_BASE_URL`이 없으면 꺼진 것으로 동작한다
 - 확인은 닿았는데 응답만 실패해(예: gateway 시간 초과) 같은 확인 버튼 문장이 다시 오면, 성공한 선점의 결과를
-  `ai:held:{userId}:{sessionId}`(선점이 남은 동안, 최대 5분)에서 꺼내 같은 답을 준다 — booking을 다시 부르지 않는다
+  `ai:held:{userId}:{sessionId}`(선점이 남은 동안, 최대 5분)에서 꺼낸다 — 다시 잡지 않는다. 답하기 전에
+  `GET /bookings/{bookingId}`로 그 예매를 한 번 다시 본다: PENDING이면 같은 답, 그 사이 화면에서 취소했거나 만료됐으면
+  "이미 취소(만료)됐어요"(`HOLD_ENDED`), 결제했으면 `ALREADY_PAID`, 확인하지 못하면 마이페이지 안내(3.4.24)
 - 로컬에서 켠 채 `PUBLIC_API_BASE_URL`을 staging 주소로 두면 확인 버튼이 **staging 좌석을 실제로 잡는다** — 로컬 gateway 주소로 두고 쓴다
 - `eval.run`은 좌석 잡기 클라이언트를 붙이지 않아 도구 4개(꺼진 상태)의 정확도를 잰다
 

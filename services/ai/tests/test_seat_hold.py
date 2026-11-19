@@ -55,12 +55,20 @@ class Api:
     """가짜 공개 API. seen = 받은 요청 전부, hold = POST /seats/hold 응답(상태, 본문) 또는 예외."""
 
     def __init__(
-        self, hold=(201, HELD), taken=(), seats_status=200, version=3, layout_version=3, extra=()
+        self,
+        hold=(201, HELD),
+        taken=(),
+        seats_status=200,
+        version=3,
+        layout_version=3,
+        extra=(),
+        booking=(200, HELD),
     ):
         self.seen: list[httpx.Request] = []
         # hold 가 목록이면 시도마다 차례로(재시도 확인용), 아니면 늘 같은 답
         self.holds = list(hold) if isinstance(hold, list) else None
         self.hold = hold
+        self.booking = booking  # GET /bookings/{id} 응답(상태, 본문) 또는 예외 — 재전송 때만 불린다
         self.taken = set(taken)
         self.seats_status = seats_status
         self.version = version  # 좌석 현황이 말하는 배치 버전(None 이면 칸이 없다)
@@ -75,6 +83,10 @@ class Api:
             if isinstance(reply, Exception):
                 raise reply
             return httpx.Response(reply[0], json=reply[1])
+        if request.method == "GET" and path.startswith("/api/bookings/"):
+            if isinstance(self.booking, Exception):
+                raise self.booking
+            return httpx.Response(self.booking[0], json=self.booking[1])
         if path.endswith("/seats"):
             if self.seats_status != 200:
                 return httpx.Response(self.seats_status, json={"code": "SERVICE_UNAVAILABLE"})
@@ -368,7 +380,11 @@ def test_resending_the_same_confirm_after_success_returns_the_same_result_withou
         }
     assert again["path"] == "HOLD_RESULT" and again["seatHold"]["bookingId"] == 9876
     assert again["llm"]["calls"] == 0 and len(llm.requests) == 1
-    assert len(api.posts) == 1 and len(api.seen) == seen  # booking 을 다시 부르지 않았다
+    # 다시 잡지 않는다 — 재전송마다 그 예매를 조회 1번만 한다(본인 토큰으로)
+    looked = api.seen[seen:]
+    assert len(api.posts) == 1 and len(looked) == 2
+    assert {(r.method, r.url.path) for r in looked} == {("GET", "/api/bookings/9876")}
+    assert all(r.headers["Authorization"] == TOKEN for r in looked)
     key = held_key(USER, first["sessionId"])
     stored = json.loads(asyncio.run(valkey.get(key)))
     assert set(stored) == {
@@ -394,6 +410,46 @@ def test_a_finished_hold_is_replayed_only_to_the_same_user_session_and_confirm_i
         body = ask(service, "좌석 잡기 #000000", session_id=first["sessionId"])
     assert body["path"] == "HOLD_GUIDE" and body["seatHold"]["reason"] == "NOT_CONFIRMED"
     assert body["seatHold"]["bookingId"] is None and len(api.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "booking, reason, word, screening",
+    [
+        ((200, HELD | {"status": "CANCELED"}), "HOLD_ENDED", "이미 취소", 2),
+        ((200, HELD | {"status": "EXPIRED"}), "HOLD_ENDED", "이미 취소", 2),
+        ((200, HELD | {"status": "PAYMENT_FAILED"}), "HOLD_ENDED", "이미 취소", 2),
+        ((200, HELD | {"status": "CONFIRMED"}), "ALREADY_PAID", "결제를 마쳤", None),
+        ((503, {"code": "SERVICE_UNAVAILABLE"}), "UPSTREAM_UNAVAILABLE", "확인하지 못했", None),
+        ((404, {"code": "NOT_FOUND"}), "UPSTREAM_UNAVAILABLE", "확인하지 못했", None),
+        ((200, {"bookingId": 9876}), "UPSTREAM_UNAVAILABLE", "확인하지 못했", None),
+        ((200, HELD | {"status": "SOMETHING_NEW"}), "UPSTREAM_UNAVAILABLE", "확인하지 못했", None),
+        (httpx.ReadTimeout("slow"), "UPSTREAM_UNAVAILABLE", "확인하지 못했", None),
+    ],
+)
+def test_resending_after_the_booking_changed_does_not_say_held(booking, reason, word, screening):
+    """잡은 뒤 화면에서 취소(만료·결제)한 예매 — 재전송에 "잡았어요"·결제 링크를 주지 않는다."""
+    llm = ScriptedLlm(hold_tool())
+    service, api, _ = make(llm, Api(booking=booking))
+    first = confirmed(service)
+    assert press(service, first)["seatHold"]["bookingId"] == 9876  # 처음 답은 조회 없이 그대로
+    assert [r for r in api.seen if r.method == "GET" and "/bookings/" in r.url.path] == []
+    again = press(service, first)
+    assert set(again) == CONTRACT_KEYS | {"sessionId"}
+    assert again["path"] == "HOLD_RESULT" and word in again["answer"]
+    hold = again["seatHold"]
+    assert hold["reason"] == reason and hold["bookingId"] is None  # 결제 링크가 생기지 않는다
+    assert hold["screeningId"] == screening and hold["amount"] is None
+    assert again["llm"]["calls"] == 0 and len(llm.requests) == 1
+    assert len(api.posts) == 1  # 다시 잡지도, 취소하지도 않는다(조회만)
+
+
+def test_resending_with_an_expired_token_is_401_and_does_not_hold():
+    service, api, _ = make(ScriptedLlm(hold_tool()), Api(booking=(401, {"code": "UNAUTHORIZED"})))
+    first = confirmed(service)
+    press(service, first)
+    with pytest.raises(ApiError) as raised:
+        press(service, first)
+    assert raised.value.status == 401 and len(api.posts) == 1
 
 
 def test_a_finished_hold_under_my_key_that_names_another_user_is_not_replayed():

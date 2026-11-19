@@ -72,7 +72,7 @@
 
 ⚠️AI ai는 내부 API를 부르지 않는다. 공개 API(`GET /movies`·`/movies/{id}`·`/theaters`·`/screenings`, 사용자 토큰으로 `GET /users/me/bookings`)를 CloudFront 주소로 호출한다(ADR-84). 기존 계약 변경 없음.
 
-⚠️AI 채팅으로 좌석 잡기(ai 플래그 `APP_AI_SEAT_HOLD_ENABLED` 기본 `true` — `false`로 끈다, 3.4.19 — ADR 번호는 노션 등록 후 확정): 켜져 있을 때 ai가 공개 API를 3개 더 부른다 — `GET /screenings/{screeningId}/seats` · `GET /auditoriums/{auditoriumId}/layout`(인증 없음, 좌석 이름 → `seatId`), 그리고 **사용자가 확인 버튼을 누른 뒤에만** `POST /seats/hold`(요청의 `Authorization` 그대로 + ai가 만든 `Idempotency-Key`, 시간 초과·연결 오류 시 같은 키로 1회 재시도). ai가 쓰기 API를 부르는 유일한 경우다. booking·catalog 계약은 바뀌지 않는다.
+⚠️AI 채팅으로 좌석 잡기(ai 플래그 `APP_AI_SEAT_HOLD_ENABLED` 기본 `true` — `false`로 끈다, 3.4.19 — ADR 번호는 노션 등록 후 확정): 켜져 있을 때 ai가 공개 API를 4개 더 부른다 — `GET /screenings/{screeningId}/seats` · `GET /auditoriums/{auditoriumId}/layout`(인증 없음, 좌석 이름 → `seatId`), 그리고 **사용자가 확인 버튼을 누른 뒤에만** `POST /seats/hold`(요청의 `Authorization` 그대로 + ai가 만든 `Idempotency-Key`, 시간 초과·연결 오류 시 같은 키로 1회 재시도). ai가 쓰기 API를 부르는 유일한 경우다. 네 번째는 선점에 성공한 그 확인이 다시 왔을 때만 부르는 `GET /bookings/{bookingId}`(요청의 `Authorization` 그대로, 읽기 — 단 booking이 응답 전에 결제 결과를 반영할 수 있다, `booking.openapi.yaml`). booking·catalog 계약은 바뀌지 않는다.
 
 ## 3. 확정 결정 (10/22)
 

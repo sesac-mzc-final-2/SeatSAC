@@ -4,7 +4,8 @@
 
 "오늘 20시 별의 항해 건대입구 J7 J8 잡아줘"
   ① Claude가 도구 hold_seats 로 영화·극장·날짜·시각·좌석 이름만 뽑는다(좌석을 골라 주지 않는다)
-  ② 스냅샷에서 회차를 정확히 하나로 좁힌다. 여럿이면 버튼(choices)으로 고르게 한다
+  ② 스냅샷에서 회차를 정확히 하나로 좁힌다. 여럿이면 버튼(choices)으로 고르게 한다 — 7개 이하면
+     회차 버튼, 더 많으면 빠진 조건을 영화 → 날짜 → 극장 순으로 하나씩 버튼으로 묻는다(_narrow)
   ③ 공개 API(좌석 현황 + 배치도)로 좌석 이름 → seatId 를 찾는다
   ④ 확인 요청(HOLD_CONFIRM): 잡을 내용을 ai Valkey에 '대기 중인 행동'으로 저장(2분) + 확인/취소 버튼
   ⑤ 확인 버튼이 직전 응답의 sessionId 로 오면 Claude 없이 대기 행동을 꺼내(한 번만) POST /seats/hold
@@ -59,6 +60,7 @@ MAX_SEATS = 4  # booking 계약 POST /seats/hold seatIds 1~4
 HOLD_MINUTES = 5  # booking 선점 TTL 300초
 CLOSE_MINUTES = 5  # 예매 마감: 상영 시작 5분 전부터(booking SCREENING_STARTED)
 _CHOICES_MAX = 7  # 계약 ChatResponse.choices maxItems
+_CANDIDATES_MAX = 5000  # 되묻기 버튼을 만들 때 살펴보는 회차 수 상한
 # 외부 호출 1회: 전체 3초·연결 1초(bookings.py 와 같은 기준). 남은 기한이 더 짧으면 그쪽
 _CALL_SECONDS = 3.0
 _CONNECT_SECONDS = 1.0
@@ -370,6 +372,12 @@ class SeatHoldFlow:
             if row is None:
                 return _guide("그 회차를 찾지 못했어요. 다시 말해 주세요.", SCREENING_NOT_FOUND)
             return await self._propose(row, pending["seats"], user_id, session_id, now, deadline)
+        if pending.get("kind") == "NARROW" and verb is None:
+            patch = pending["options"].get(text)
+            if patch is None:
+                return None
+            cond = {**pending["cond"], **patch}
+            return await self._narrow(cond, pending["seats"], user_id, session_id, now, deadline)
         if verb is not None:
             return _guide(
                 "확인할 좌석 요청이 없어요. 잡을 회차와 좌석을 다시 말해 주세요.", NOT_CONFIRMED
@@ -496,25 +504,34 @@ class SeatHoldFlow:
                 f"한 번에 최대 {MAX_SEATS}석까지 잡을 수 있어요. 좌석을 줄여서 다시 말해 주세요.",
                 TOO_MANY_SEATS,
             )
-        # 최소 조건: (영화 또는 극장) + (날짜 또는 시각). 없으면 회차를 짐작으로 좁히지 않는다
-        missing = [
-            word
-            for word, have in (("영화나 극장", movie or theater), ("날짜나 시각", day or clock))
-            if not have
-        ]
-        if missing:
-            return _guide(
-                f"어느 회차인지 알 수 있게 {'·'.join(missing)}을(를) 함께 말해 주세요. "
-                "(예: 오늘 20시 건대입구 J7 J8 잡아줘)",
-                SCREENING_AMBIGUOUS,
-                labels=seats,
-            )
-        closes = _closes(now)
-        rows, miss = self._find(movie, theater, day, clock, closes)
+        ids, miss = self._ids(movie, theater)
         if miss:
             return _guide(miss, SCREENING_NOT_FOUND)
+        cond = {**ids, "day": day, "clock": clock}
+        return await self._narrow(cond, seats, user_id, session_id, now, deadline)
+
+    # --- ② 회차를 하나로 좁히기: 빠진 조건은 버튼으로 되묻는다 ---------------------
+
+    async def _narrow(
+        self,
+        cond: dict[str, Any],
+        seats: list[str],
+        user_id: str,
+        session_id: str,
+        now: datetime,
+        deadline: float,
+    ) -> HoldReply:
+        """지금까지 모인 조건(cond)에 맞는 예매 가능 회차를 보고 다음 행동을 정한다(선점 없음).
+
+          0개      → 못 찾았다고 안내            1개 → 좌석 확인 요청(_propose)
+          2~7개    → 회차 버튼                  8개 이상 → 빠진 조건 하나를 버튼으로 묻는다
+        묻는 순서는 영화 → 날짜 → 극장. 버튼에는 그 조건에 **실제로 회차가 있는 값**만 넣는다
+        (짐작으로 회차를 고르지 않는다). 버튼을 누르면 resume 이 조건을 하나 더해 여기로 다시 온다
+        — Claude를 부르지 않는다. 셋이 다 정해졌는데도 많으면 가까운 회차 7개를 버튼으로 보여 준다.
+        """
+        rows = self._rows(cond, _closes(now), _CANDIDATES_MAX)
         if not rows:
-            if self._find(movie, theater, day, clock, None)[0]:
+            if self._rows(cond, None, 1):
                 return _guide(
                     "이미 시작했거나 예매가 마감된 회차입니다(상영 시작 5분 전까지).",
                     SCREENING_STARTED,
@@ -523,49 +540,87 @@ class SeatHoldFlow:
                 "조건에 맞는 회차를 찾지 못했어요. 영화·극장·날짜·시각을 다시 말해 주세요.",
                 SCREENING_NOT_FOUND,
             )
-        if len(rows) > _CHOICES_MAX:
+        if len(rows) == 1:
+            return await self._propose(rows[0], seats, user_id, session_id, now, deadline)
+        if len(rows) <= _CHOICES_MAX:
+            return await self._ask(
+                "어느 회차인가요? 골라 주세요.",
+                {"kind": "SCREENING", "options": {_label(r): r["screening_id"] for r in rows}},
+                seats, user_id, session_id, now,
+            )  # fmt: skip
+        for word, fixed, label_of, patch_of in (
+            ("영화", len(cond.get("movieIds") or []) == 1, _movie_label, _movie_patch),
+            ("날짜", bool(cond.get("day") or cond.get("businessDate")), _day_label, _day_patch),
+            ("극장", len(cond.get("theaterIds") or []) == 1, _theater_label, _theater_patch),
+        ):
+            if fixed:
+                continue
+            # 회차가 많은 값부터(같으면 빠른 회차가 있는 값부터) — 날짜는 가까운 날부터
+            counts: dict[str, int] = {}
+            patches: dict[str, dict[str, Any]] = {}
+            for r in rows:
+                counts[label_of(r)] = counts.get(label_of(r), 0) + 1
+                patches.setdefault(label_of(r), patch_of(r))
+            if len(counts) < 2:
+                continue
+            labels = list(counts)
+            if word != "날짜":
+                labels.sort(key=lambda x: -counts[x])
+            more = f" 여기 없으면 {word}까지 넣어 다시 말해 주세요."
+            if len(labels) <= _CHOICES_MAX:
+                more = ""
+            return await self._ask(
+                f"어느 {word}인가요? 골라 주세요.{more}",
+                {
+                    "kind": "NARROW",
+                    "cond": cond,
+                    "options": {x: patches[x] for x in labels[:_CHOICES_MAX]},
+                },
+                seats, user_id, session_id, now,
+            )  # fmt: skip
+        return await self._ask(
+            f"가까운 회차 {_CHOICES_MAX}개예요. 골라 주세요. "
+            "다른 시각이면 시각까지 넣어 다시 말해 주세요.",
+            {
+                "kind": "SCREENING",
+                "options": {_label(r): r["screening_id"] for r in rows[:_CHOICES_MAX]},
+            },
+            seats, user_id, session_id, now,
+        )  # fmt: skip
+
+    async def _ask(
+        self,
+        answer: str,
+        pending: dict[str, Any],
+        seats: list[str],
+        user_id: str,
+        session_id: str,
+        now: datetime,
+    ) -> HoldReply:
+        """버튼으로 되묻는다. 버튼 글자 → 그 뜻(pending["options"])을 대기 행동(2분)에 남긴다."""
+        expires_at = now.timestamp() + self._ttl
+        stored = await self._cache.put_pending(
+            user_id,
+            session_id,
+            {**pending, "userId": user_id, "seats": seats, "expiresAt": expires_at},
+            self._ttl,
+        )
+        if not stored:
+            # 고른 답을 기억할 수 없으면 버튼을 내지 않는다
             return _guide(
-                "조건에 맞는 회차가 많아요. 영화·극장·날짜·시각을 더 알려 주세요.",
+                "조건에 맞는 회차가 여럿이에요. 영화·극장·날짜·시각을 더 알려 주세요.",
                 SCREENING_AMBIGUOUS,
                 labels=seats,
             )
-        if len(rows) > 1:
-            choices = [{"label": _label(r), "message": _label(r)} for r in rows]
-            expires_at = now.timestamp() + self._ttl
-            stored = await self._cache.put_pending(
-                user_id,
-                session_id,
-                {
-                    "kind": "SCREENING",
-                    "userId": user_id,
-                    "seats": seats,
-                    "options": {
-                        c["message"]: r["screening_id"] for c, r in zip(choices, rows, strict=True)
-                    },
-                    "expiresAt": expires_at,
-                },
-                self._ttl,
-            )
-            if not stored:
-                # 고른 답을 기억할 수 없으면 버튼을 내지 않는다
-                return _guide(
-                    "조건에 맞는 회차가 여럿이에요. 영화·극장·날짜·시각을 더 알려 주세요.",
-                    SCREENING_AMBIGUOUS,
-                    labels=seats,
-                )
-            # 회차 버튼도 대기 행동(2분)에 묶여 있다 — 만료 시각을 같이 알려 화면이 버튼을 막게 한다
-            return HoldReply(
-                HOLD_GUIDE,
-                "어느 회차인가요? 골라 주세요.",
-                _seat_hold(
-                    None,
-                    labels=seats,
-                    reason=SCREENING_AMBIGUOUS,
-                    confirm_expires_at=_at(expires_at),
-                ),
-                choices,
-            )
-        return await self._propose(rows[0], seats, user_id, session_id, now, deadline)
+        # 버튼은 대기 행동(2분)에 묶여 있다 — 만료 시각을 같이 알려 화면이 버튼을 막게 한다
+        return HoldReply(
+            HOLD_GUIDE,
+            answer,
+            _seat_hold(
+                None, labels=seats, reason=SCREENING_AMBIGUOUS, confirm_expires_at=_at(expires_at)
+            ),
+            [{"label": x, "message": x} for x in pending["options"]],
+        )
 
     async def _propose(
         self, row: dict[str, Any], seats: list[str], user_id: str, session_id: str, now, deadline
@@ -580,7 +635,7 @@ class SeatHoldFlow:
         if not seats:
             # 좌석은 추천하지 않는다 — 화면에서 고르게 한다
             return _guide(
-                f"{_label(row)} 회차입니다. 잡을 좌석 이름을 알 수 없어요. {GO_SCREEN}",
+                f"{_label(row)} 회차입니다. 좌석은 채팅이 대신 고르지 않아요. {GO_SCREEN}",
                 SEATS_REQUIRED,
                 screening_id,
             )
@@ -657,6 +712,7 @@ class SeatHoldFlow:
 
     _SELECT = (
         "SELECT s.screening_id, s.auditorium_id, s.auditorium_name, s.starts_at, "
+        "s.movie_id, s.theater_id, s.business_date, "
         "m.title AS movie, t.name AS theater FROM screening s "
         "JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id "
     )
@@ -668,48 +724,83 @@ class SeatHoldFlow:
             row = cursor.fetchone()
         return dict(zip(names, row, strict=True)) if row else None
 
-    def _find(
-        self, movie: str, theater: str, day: str, clock: str, closes: str | None
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """(조건에 맞는 회차, 이름을 못 찾았을 때의 안내).
-
-        closes 가 있으면 그 시각 뒤에 시작하는(예매할 수 있는) 회차만, 버튼 상한 + 1개까지 —
-        마감 조건을 SQL에 둔다(지나간 회차가 많아도 예매할 수 있는 회차를 놓치지 않게).
-        None 이면 마감·시작한 것까지 1개만(「마감」과 「없음」을 구분하는 데 쓴다).
-        """
-        where: list[str] = []
-        params: list[Any] = []
+    def _ids(self, movie: str, theater: str) -> tuple[dict[str, list[int]], str | None]:
+        """말한 영화·극장 이름 → ID 목록. (조건, 이름을 못 찾았을 때의 안내)."""
+        found: dict[str, list[int]] = {}
         with self._store.reader() as conn:
-            for said, table, column, id_column, word in (
-                (movie, "movie", "title", "movie_id", "영화"),
-                (theater, "theater", "name", "theater_id", "극장"),
+            for said, table, column, id_column, key, word in (
+                (movie, "movie", "title", "movie_id", "movieIds", "영화"),
+                (theater, "theater", "name", "theater_id", "theaterIds", "극장"),
             ):
                 if not said:
                     continue
                 names = conn.execute(f"SELECT {id_column}, {column} FROM {table}").fetchall()  # noqa: S608
                 ids = _match(names, said)
                 if not ids:
-                    return [], f"'{said}' {word}을(를) 지금 상영 정보에서 찾지 못했어요."
-                where.append(f"s.{id_column} IN ({', '.join('?' * len(ids))})")
+                    return {}, f"'{said}' {word}을(를) 지금 상영 정보에서 찾지 못했어요."
+                found[key] = ids
+        return found, None
+
+    def _rows(self, cond: dict[str, Any], closes: str | None, limit: int) -> list[dict[str, Any]]:
+        """조건에 맞는 회차(시작 순). 값은 전부 바인딩한다.
+
+        closes 가 있으면 그 시각 뒤에 시작하는(예매할 수 있는) 회차만 — 마감 조건을 SQL에 둔다
+        (지나간 회차가 많아도 예매할 수 있는 회차를 놓치지 않게). None 이면 마감·시작한 것까지
+        (「마감」과 「없음」을 구분하는 데 쓴다).
+        """
+        where: list[str] = []
+        params: list[Any] = []
+        for key, column in (("movieIds", "s.movie_id"), ("theaterIds", "s.theater_id")):
+            ids = [int(i) for i in cond.get(key) or []]
+            if ids:
+                where.append(f"{column} IN ({', '.join('?' * len(ids))})")
                 params += ids
-            if day:
-                # 자정 넘은 심야 회차(영업일은 전날)도 사용자가 말한 날짜로 찾는다
-                where.append("(s.business_date = ? OR substr(s.starts_at, 1, 10) = ?)")
-                params += [day, day]
-            if clock:
-                where.append("substr(s.starts_at, 12, 5) = ?")
-                params.append(clock)
-            if closes is not None:
-                where.append("s.starts_at > ?")
-                params.append(closes)
-            limit = _CHOICES_MAX + 1 if closes is not None else 1
-            sql = self._SELECT + (f"WHERE {' AND '.join(where)} " if where else "")
+        if cond.get("businessDate"):
+            where.append("s.business_date = ?")  # 날짜 버튼으로 고른 영업일
+            params.append(cond["businessDate"])
+        elif cond.get("day"):
+            # 자정 넘은 심야 회차(영업일은 전날)도 사용자가 말한 날짜로 찾는다
+            where.append("(s.business_date = ? OR substr(s.starts_at, 1, 10) = ?)")
+            params += [cond["day"], cond["day"]]
+        if cond.get("clock"):
+            where.append("substr(s.starts_at, 12, 5) = ?")
+            params.append(cond["clock"])
+        if closes is not None:
+            where.append("s.starts_at > ?")
+            params.append(closes)
+        sql = self._SELECT + (f"WHERE {' AND '.join(where)} " if where else "")
+        with self._store.reader() as conn:
             cursor = conn.execute(
-                sql + f"ORDER BY s.starts_at, s.screening_id LIMIT {limit}", params
+                sql + f"ORDER BY s.starts_at, s.screening_id LIMIT {int(limit)}", params
             )
             names = [c[0] for c in cursor.description]
-            rows = [dict(zip(names, r, strict=True)) for r in cursor.fetchall()]
-        return rows, None
+            return [dict(zip(names, r, strict=True)) for r in cursor.fetchall()]
+
+
+# 되묻기 버튼: 회차 한 줄 → 버튼 글자 / 그 버튼이 더하는 조건
+def _movie_label(row: dict[str, Any]) -> str:
+    return str(row["movie"])
+
+
+def _movie_patch(row: dict[str, Any]) -> dict[str, Any]:
+    return {"movieIds": [row["movie_id"]]}
+
+
+def _day_label(row: dict[str, Any]) -> str:
+    day = datetime.strptime(row["business_date"], "%Y-%m-%d")
+    return f"{day.month}/{day.day}({_WEEKDAYS[day.weekday()]})"
+
+
+def _day_patch(row: dict[str, Any]) -> dict[str, Any]:
+    return {"businessDate": row["business_date"]}
+
+
+def _theater_label(row: dict[str, Any]) -> str:
+    return str(row["theater"])
+
+
+def _theater_patch(row: dict[str, Any]) -> dict[str, Any]:
+    return {"theaterIds": [row["theater_id"]]}
 
 
 def _match(names: list[tuple[int, str]], said: str) -> list[int]:

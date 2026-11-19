@@ -265,7 +265,7 @@ components:
         OUT_OF_SCOPE 답할 수 없는 질문(안내 문장만) · CLARIFY 되묻기(잔여석 질문에 날짜가 없음, 또는 질문 조건을 SQL에 반영하지 못함 — `choices`)
         좌석 잡기(플래그 `APP_AI_SEAT_HOLD_ENABLED`가 켜졌을 때만 — 기본 켜짐): HOLD_CONFIRM 확인 요청(아직 선점하지 않음 — `choices` 확인·취소) ·
         HOLD_RESULT 선점을 시도한 결과(성공이면 `seatHold.bookingId`, 실패면 `seatHold.reason`. 확인 단계라 토큰 0) ·
-        HOLD_GUIDE 선점하지 않고 안내(회차 고르기 `choices`·없는 좌석·이미 잡힌 좌석·좌석 미지정·취소·확인 시간 만료 — `seatHold.reason`)
+        HOLD_GUIDE 선점하지 않고 안내(회차·빠진 조건(영화·날짜·극장) 고르기 `choices`·없는 좌석·이미 잡힌 좌석·좌석 미지정·취소·확인 시간 만료 — `seatHold.reason`)
 
     Column:
       type: object
@@ -397,7 +397,7 @@ components:
           type: [array, "null"]
           maxItems: 7
           items: { $ref: "#/components/schemas/Choice" }
-          description: "CLARIFY일 때 버튼 목록(날짜 고르기 최대 7개, 조건을 다시 말해 달라는 안내는 빈 배열). 좌석 잡기 플래그가 켜졌으면 HOLD_CONFIRM(확인·취소 2개 — message에 확인 ID)·HOLD_GUIDE(회차 고르기 2~7개, 버튼이 없으면 null)·HOLD_RESULT `reason: HOLD_NOT_SENT`(같은 확인·취소 버튼을 다시, 확인 시간이 남았을 때)에도 온다. 그 밖은 null"
+          description: "CLARIFY일 때 버튼 목록(날짜 고르기 최대 7개, 조건을 다시 말해 달라는 안내는 빈 배열). 좌석 잡기 플래그가 켜졌으면 HOLD_CONFIRM(확인·취소 2개 — message에 확인 ID)·HOLD_GUIDE(회차 또는 빠진 조건(영화·날짜·극장) 고르기 2~7개 — label과 message가 같다, 버튼이 없으면 null)·HOLD_RESULT `reason: HOLD_NOT_SENT`(같은 확인·취소 버튼을 다시, 확인 시간이 남았을 때)에도 온다. 그 밖은 null"
         cache:
           description: |
             이 답과 이어진 캐시 항목(데모 화면 표시용). 캐시에서 나왔거나 캐시에 저장한 답에만 있고 그 밖은 null.
@@ -423,13 +423,13 @@ components:
         seatLabels: { type: array, maxItems: 4, items: { type: string }, description: "좌석 이름(예: J7). 사용자가 이번 message에 적은 것(대문자), 성공이면 booking이 확정한 것" }
         amount: { type: [integer, "null"], description: "HOLD_RESULT 성공일 때만 booking이 확정한 금액(원). 확인 요청에는 금액을 적지 않는다(요금 규칙은 booking의 것) — null" }
         expiresAt: { type: [string, "null"], format: date-time, description: "선점 만료 시각(+09:00, 결제 기한). HOLD_RESULT 성공·ACTIVE_HOLD_EXISTS(booking이 알려 줄 때)일 때만. 화면은 지나면 결제 화면 링크를 숨긴다" }
-        confirmExpiresAt: { type: [string, "null"], format: date-time, description: "`choices` 버튼을 누를 수 있는 기한(+09:00, 버튼을 낸 뒤 2분 — 대기 행동 `ai:pending`의 만료 시각). HOLD_CONFIRM·회차 고르기 HOLD_GUIDE(`reason: SCREENING_AMBIGUOUS` + `choices`)·HOLD_RESULT `HOLD_NOT_SENT`(버튼이 다시 올 때)에만. 화면은 이 값이 있으면 지난 뒤 버튼을 막는다" }
+        confirmExpiresAt: { type: [string, "null"], format: date-time, description: "`choices` 버튼을 누를 수 있는 기한(+09:00, 버튼을 낸 뒤 2분 — 대기 행동 `ai:pending`의 만료 시각). HOLD_CONFIRM·회차·조건 고르기 HOLD_GUIDE(`reason: SCREENING_AMBIGUOUS` + `choices`)·HOLD_RESULT `HOLD_NOT_SENT`(버튼이 다시 올 때)에만. 화면은 이 값이 있으면 지난 뒤 버튼을 막는다" }
         reason:
           type: [string, "null"]
           pattern: "^[A-Z_]+$"
           description: |
             선점하지 않았거나 못한 까닭. HOLD_CONFIRM·HOLD_RESULT 성공은 null.
-            HOLD_GUIDE: SCREENING_NOT_FOUND(회차·영화·극장을 못 찾음) · SCREENING_AMBIGUOUS(회차가 여럿이거나 조건이 모자람 — `choices`로 고르거나 조건을 더 말한다) ·
+            HOLD_GUIDE: SCREENING_NOT_FOUND(회차·영화·극장을 못 찾음) · SCREENING_AMBIGUOUS(회차가 여럿이거나 조건이 모자람 — `choices`로 고른다: 회차가 7개 이하면 회차 버튼, 더 많으면 빠진 조건을 영화 → 날짜 → 극장 순으로 하나씩 묻는 버튼. 버튼을 낼 수 없으면 조건을 더 말한다) ·
             SCREENING_STARTED(시작했거나 예매 마감 — 시작 5분 전) · SEATS_REQUIRED(좌석 이름 없음 — 좌석 화면으로) · TOO_MANY_SEATS(5석 이상) ·
             SEAT_NOT_FOUND(그 상영관에 없는 좌석·이름이 겹치는 좌석) · SEAT_UNAVAILABLE(이미 잡힌 좌석) · CANCELED(취소) ·
             NOT_CONFIRMED(확인할 대기 행동이 없음 — 2분 만료·지난 확인 요청의 버튼·버튼 없이 타이핑) ·

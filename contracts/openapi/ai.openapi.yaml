@@ -40,6 +40,14 @@ paths:
            **잔여석**: 잔여석을 읽는 SQL은 실행 직전에 그 SQL의 날짜 × 극장 회차만 공개 API에서 새로 받는다(질문 시점 값).
            잔여석을 묻는데 날짜가 없으면 `CLARIFY`(날짜 버튼). booking이 늦어 확인 못 한 잔여석은 null + 답 문장 안내
         ⑦ SQLite 읽기 전용 실행(5초·최대 500행) ⑧ 성공한 PRESET·NL2SQL만 캐시 저장(1시간, 결과 행은 저장하지 않음).
+        **문맥 이어받기(`continueFrom`)**: 표가 있는 답마다 그 답이 실제로 조회한 날짜·극장·영화를 세션에 남기고 `context`로 돌려준다
+        (실행한 SQL의 조건에서 뽑고 하나로 확정된 값만 — 날짜 2개·OR·범위는 뺀다. 최근 답 5개까지).
+        화면은 답 아래 「영화 고르기」 버튼을 누를 때 **그 답의** `context.id`를 `continueFrom`으로 같이 보낸다(`message`는 그대로).
+        ai는 그 조건에 `message`의 영화 제목을 더해 Claude 없이 바로 실행한다(②~⑥보다 먼저, 토큰 0. `message` 문장은 다시 해석하지 않고
+        스냅샷에 있는 영화 제목만 읽는다. `message`에 날짜·극장이 있으면 그 값이 먼저). 예열된 캐시에 있으면 `CACHE_EXACT`, 없으면 `PRESET`.
+        이어받을 것이 없으면(모르는·만료된 `continueFrom`, 지난 날짜, 스냅샷에서 내려간 극장·영화) **오류 없이** 위 순서대로 독립 질문으로 답하고
+        `context.inherited`가 빈 배열이다. `continueFrom`이 없는 요청(직접 친 질문)은 세션에 조건이 있어도 이어받지 않는다.
+        시각·개수 조건은 이어받지 않는다("오늘 20시 이후" 답에서 영화를 고르면 오늘 그 영화 전체).
         **`REJECTED`·`OUT_OF_SCOPE`도 200**(결제 거절 200과 같은 원칙). 사용자당 동시 1건 · 분당 10회 · 하루 100회.
         `sessionId`는 서버가 UUID로 발급한다. 생략·만료(30분)·다른 사용자의 것·위조면 **오류 없이 새 세션**으로 시작한다
         (키 `ai:session:{userId}:{sessionId}`로 사용자별 격리). Claude 호출은 질문 1건당 최대 3회, 전체 기한 25초.
@@ -56,11 +64,16 @@ paths:
               followUp:
                 summary: 후속 질문 (직전 응답의 sessionId)
                 value: { message: "그중 건대입구만", sessionId: "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a" }
+              continueFrom:
+                summary: 답 아래 영화 버튼 (그 답의 context.id — 앞 답의 날짜·극장을 이어받는다)
+                value: { message: "영화 제목 어디서 몇 시에 해?", sessionId: "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a", continueFrom: "k7f2a1" }
       responses:
         "200":
           description: |
             답. `path`로 처리 경로를 구분하고 화면은 `answer` 문장 + `columns`/`rows` 표 + "`asOf` 기준"을 보여준다.
             `screeningIds`가 있으면 표의 그 행에 좌석 선택 화면(화면 라우트 `/screenings/{screeningId}` — API 경로가 아님)으로 가는 링크를 붙인다.
+            `context.inherited`가 비어 있지 않으면 앞 답의 조건을 이어받은 답 — 화면은 답 아래에 「`context.label` 기준」과 「조건 지우기」
+            (같은 `message`를 `continueFrom` 없이 다시 보냄)를 보여 준다. `continueFrom`을 보냈는데 비어 오면 「이전 조건이 만료되어 전체 기준으로 찾았어요」.
             `llm.calls`가 0이면 Claude API를 부르지 않은 것(캐시·내 예매) — 데모 화면에 그대로 표시.
             `REJECTED`(SQL 검증 거부)·`OUT_OF_SCOPE`(답할 수 없는 질문)·`CLARIFY`(되묻기)도 200이며 `columns`·`rows`는 null.
             `CLARIFY`는 `choices` 버튼을 보여 주고, 누르면 그 `message`를 같은 `sessionId`로 보낸다(버튼 없이 안내 문장만 올 수도 있다 — 빈 배열).
@@ -71,6 +84,7 @@ paths:
               examples:
                 cacheSemantic: { $ref: "./examples/ai/chat-cache-semantic.json" }
                 preset: { $ref: "./examples/ai/chat-preset.json" }
+                contextCarry: { $ref: "./examples/ai/chat-context-carry.json" }
                 nl2sql: { $ref: "./examples/ai/chat-nl2sql.json" }
                 myBookings: { $ref: "./examples/ai/chat-my-bookings.json" }
                 rejected: { $ref: "./examples/ai/chat-rejected.json" }
@@ -78,7 +92,8 @@ paths:
         "400":
           description: |
             VALIDATION_FAILED — `message` 없음·빈 문자열(공백만)·300자 초과(`details[{ field: "message", reason: LENGTH }]`),
-            `sessionId` 형식 오류(`details[{ field: "sessionId", reason: FORMAT }]`), JSON 아님
+            `sessionId` 형식 오류(`details[{ field: "sessionId", reason: FORMAT }]`),
+            `continueFrom` 64자 초과(`details[{ field: "continueFrom", reason: LENGTH }]` — 모르는 값은 400이 아니라 무시), JSON 아님
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFoundFlagOff" }
@@ -194,12 +209,18 @@ components:
           type: string
           format: uuid
           description: 직전 응답의 `sessionId`(후속 질문 문맥). 없거나 이 사용자의 것이 아니면 새 세션
+        continueFrom:
+          type: string
+          maxLength: 64
+          description: |
+            답 아래 「영화 고르기」 버튼을 눌렀을 때만 보낸다 — 그 버튼이 달린 답의 `context.id`(직전 답이 아닐 수 있다).
+            같은 `sessionId`와 함께 보낸다. 이 세션에 없는 값(만료·다른 사용자·위조)이면 **오류 없이 무시**하고 독립 질문으로 답한다
 
     ChatPath:
       type: string
       enum: [CACHE_EXACT, CACHE_SEMANTIC, PRESET, NL2SQL, MY_BOOKINGS, REJECTED, OUT_OF_SCOPE, CLARIFY]
       description: |
-        CACHE_EXACT 정확 일치 캐시(토큰 0) · CACHE_SEMANTIC 의미 캐시(토큰 0) · PRESET Claude가 프리셋 선택 ·
+        CACHE_EXACT 정확 일치 캐시(토큰 0) · CACHE_SEMANTIC 의미 캐시(토큰 0) · PRESET 프리셋 실행(Claude가 선택, 또는 문맥 이어받기 — `llm.calls` 0) ·
         NL2SQL Claude가 SQL 생성 · MY_BOOKINGS 내 예매(공개 API, 토큰 0) · REJECTED SQL 검증 거부(`rejection` 참고) ·
         OUT_OF_SCOPE 답할 수 없는 질문(안내 문장만) · CLARIFY 되묻기(잔여석 질문에 날짜가 없음, 또는 질문 조건을 SQL에 반영하지 못함 — `choices`)
 
@@ -239,10 +260,36 @@ components:
         message: { type: string, description: "사용자에게 보여줄 안내(개발용 상세는 로그)" }
         object: { type: [string, "null"], description: "FORBIDDEN_OBJECT일 때 거부된 테이블·함수 이름" }
 
+    ChatContext:
+      type: object
+      description: |
+        이 답이 실제로 조회한 조건(3.4.22 문맥 이어받기). 실행한 SQL의 조건에서 뽑고 **하나로 확정된 값만** 채운다
+        (날짜 2개·OR·범위 비교는 null). 세 값이 모두 없으면 `context` 자체가 null.
+        공개 정보(날짜·극장명·영화 제목)뿐이고 세션(30분)에 최근 5개까지 둔다
+      required: [id, date, theater, movie, label, inherited]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: 이 답의 조건을 가리키는 짧은 임의 값. 이 답 아래 영화 버튼을 누를 때 `continueFrom`으로 보낸다. 같은 `sessionId` 안에서만 뜻이 있다
+        date: { type: [string, "null"], format: date, description: "조회한 영업일(절대 날짜 — 자정을 넘겨도 밀리지 않는다)" }
+        theater: { type: [string, "null"], description: "조회한 극장 이름(스냅샷 `theater.name`)" }
+        movie: { type: [string, "null"], description: "조회한 영화 제목(스냅샷 `movie.title`)" }
+        label:
+          type: string
+          description: "화면 표시용 요약 (예: 내일 11/20(금) · 부산본점). `inherited`가 있으면 이어받은 조건만, 없으면 이 답의 조건 전부"
+        inherited:
+          type: array
+          maxItems: 2
+          uniqueItems: true
+          items: { type: string, enum: [date, theater] }
+          description: "`continueFrom`의 답에서 이어받은 칸. 빈 배열이면 이어받지 않은 답(화면은 조건 표시를 그리지 않는다)"
+
     ChatResponse:
       type: object
-      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`rejection`·`choices`)
-      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, asOf, llm, latencyMs, rejection, choices]
+      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`context`·`rejection`·`choices`)
+      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, context, asOf, llm, latencyMs, rejection, choices]
       properties:
         sessionId: { type: string, format: uuid, description: "서버가 발급. 후속 질문에 그대로 보낸다(30분)" }
         answer: { type: string, description: "답 문장(결과 행을 템플릿에 채워 만듦, Claude에 결과를 다시 보내지 않음). 끝에 \"○시 ○분 기준\"" }
@@ -274,7 +321,15 @@ components:
         sql:
           type: [string, "null"]
           description: 실행한 SQLite SQL(공개 데이터라 노출해도 됨). REJECTED면 거부된 SQL. PRESET·MY_BOOKINGS·OUT_OF_SCOPE는 null
-        presetId: { type: [string, "null"], description: "PRESET·캐시 적중(프리셋 유래)일 때 프리셋 ID, 그 밖은 null" }
+        presetId: { type: [string, "null"], description: "PRESET·캐시 적중(프리셋 유래)일 때 프리셋 ID, 그 밖은 null. `ctx_`로 시작하면 문맥 이어받기 내부 틀(`GET /ai/presets` 목록에는 없다)" }
+        context:
+          description: |
+            이 답이 조회한 날짜·극장·영화. 표가 있는 답(PRESET·NL2SQL·CACHE_*)에서 확정된 조건이 하나라도 있을 때만 있고,
+            그 밖(MY_BOOKINGS·REJECTED·OUT_OF_SCOPE·CLARIFY, 조건 없는 답, 세션을 둘 수 없는 local)은 null.
+            null이면 화면은 그 답의 영화 버튼에 `continueFrom`을 붙이지 않는다(예전처럼 독립 질문)
+          oneOf:
+            - { type: "null" }
+            - { $ref: "#/components/schemas/ChatContext" }
         asOf:
           type: string
           format: date-time

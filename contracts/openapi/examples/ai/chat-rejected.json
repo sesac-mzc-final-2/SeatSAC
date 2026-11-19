@@ -11,6 +11,7 @@
     "truncated": false,
     "sql": "SELECT table_name, refreshed_at FROM snapshot_meta",
     "presetId": null,
+    "context": null,
     "asOf": "2026-11-17T19:42:00+09:00",
     "llm": { "calls": 2, "inputTokens": 921, "outputTokens": 164, "cacheReadTokens": 7620, "cacheWriteTokens": 0 },
     "latencyMs": 4120,

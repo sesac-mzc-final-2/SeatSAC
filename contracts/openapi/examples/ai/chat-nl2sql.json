@@ -20,6 +20,7 @@
     "truncated": false,
     "sql": "SELECT m.title AS movie_title, t.name AS theater_name, s.starts_at, s.remaining_seats, s.total_seats, ROUND(1.0 * s.remaining_seats / s.total_seats, 3) AS remaining_ratio FROM screening s JOIN movie m ON m.movie_id = s.movie_id JOIN theater t ON t.theater_id = s.theater_id WHERE s.business_date = '2026-11-17' AND s.starts_at > '2026-11-17 19:42' AND s.total_seats > 0 AND 1.0 * s.remaining_seats / s.total_seats <= 0.1 ORDER BY remaining_ratio LIMIT 500",
     "presetId": null,
+    "context": { "id": "3fd92e", "date": "2026-11-17", "theater": null, "movie": null, "label": "오늘 11/17(화)", "inherited": [] },
     "asOf": "2026-11-17T19:42:00+09:00",
     "llm": { "calls": 1, "inputTokens": 455, "outputTokens": 212, "cacheReadTokens": 3810, "cacheWriteTokens": 0 },
     "latencyMs": 3240,

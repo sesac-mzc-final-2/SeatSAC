@@ -22,6 +22,7 @@
     "truncated": false,
     "sql": null,
     "presetId": null,
+    "context": null,
     "asOf": "2026-11-17T19:43:12+09:00",
     "llm": { "calls": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0 },
     "latencyMs": 142,

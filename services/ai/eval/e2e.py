@@ -192,6 +192,7 @@ def _summary(body: dict[str, Any], r: httpx.Response) -> str:
 def _chat_ok(r: httpx.Response, body: dict[str, Any]) -> bool:
     """계약 ChatResponse: 200이고 모든 필드가 있다(해당 없으면 null)."""
     required = {
+        "context",
         "sessionId", "answer", "path", "columns", "rows", "screeningIds", "rowCount", "truncated",
         "sql", "presetId", "asOf", "llm", "latencyMs", "rejection", "choices",
     }  # fmt: skip

@@ -2,6 +2,7 @@
 
 - schema.yaml: 스냅샷 표·칸 설명, 값 뜻, 시간 규칙, 예시 SQL (3.4.1)
 - presets.yaml: 추천 질문 13개와 바인딩 SQL (3.4.4)
+- context_templates.yaml: 문맥 이어받기 내부 SQL 틀 3개 (3.4.22). Claude·화면 버튼에는 안 나간다
 """
 
 from __future__ import annotations
@@ -63,4 +64,26 @@ def presets() -> tuple[Preset, ...]:
             phrasings=tuple(p.get("phrasings") or ()),
         )
         for p in raw
+    )
+
+
+@lru_cache
+def context_templates() -> tuple[Preset, ...]:
+    """문맥 이어받기 내부 틀(context_templates.yaml). presets() 에 섞지 않는다.
+
+    presets() 는 화면 버튼(GET /ai/presets)·Claude 프롬프트·도구 enum 으로 나간다. 내부 틀은
+    서버가 값으로 직접 실행하고(seatsac_ai/context.py) 캐시 예열에만 같이 넣는다(cache/warm.py).
+    """
+    raw = _load("context_templates.yaml")["templates"]
+    return tuple(
+        Preset(
+            preset_id=t["presetId"],
+            title=t["title"],
+            example="",
+            description="",
+            params=tuple(t["params"]),
+            sql=t["sql"].strip(),
+            phrasings=tuple(t["phrasings"]),
+        )
+        for t in raw
     )

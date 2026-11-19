@@ -5,6 +5,9 @@
 sessionId: 후속 질문 문맥(ai:session:{userId}:{sessionId}, 30분)은
 오케스트레이터가 ai Valkey에 둔다.
 모르는·남의·만료된 sessionId면 새로 발급한다(오류 아님). Valkey가 없으면(local) 매번 새로 발급.
+
+continueFrom: 답 아래 영화 버튼이 보내는 그 답의 context.id (문맥 이어받기, seatsac_ai/context.py).
+세션에 없는 값(만료·남의 것·위조)이면 무시하고 평소처럼 답한다(오류 아님).
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from seatsac_ai.api.deps import current_user_id
 from seatsac_ai.common.errors import llm_unavailable, snapshot_not_ready
+from seatsac_ai.context import CONTINUE_FROM_MAX
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -25,6 +29,8 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=300)
     sessionId: UUID | None = None
+    # 답 아래 영화 버튼을 눌렀을 때만: 그 답의 context.id. 모르는 값이면 오류 없이 무시한다
+    continueFrom: str | None = Field(default=None, max_length=CONTINUE_FROM_MAX)
 
     @field_validator("message")
     @classmethod
@@ -55,6 +61,7 @@ async def chat(
             session_id=str(body.sessionId) if body.sessionId else None,
             # "내 예매"는 사용자 토큰 그대로 공개 API를 부른다(gateway가 Authorization 을 넘긴다)
             authorization=request.headers.get("authorization"),
+            continue_from=body.continueFrom,
         )
     session_id = result.pop("sessionId", None) or str(uuid4())
     return {"sessionId": session_id, **result}

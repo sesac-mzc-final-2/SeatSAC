@@ -184,9 +184,9 @@ async def make_cache(embedder) -> ChatCache:
     await cache.start()
     if PREWARM:
         from seatsac_ai.cache.warm import preset_items, warm
-        from seatsac_ai.resources import presets
+        from seatsac_ai.resources import context_templates, presets
 
-        await warm(cache, preset_items(presets()))
+        await warm(cache, preset_items(presets() + context_templates()))  # 기동 때와 같은 대상
     return cache
 
 

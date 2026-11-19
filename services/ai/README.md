@@ -45,6 +45,16 @@ uv run pytest
 - 검증기 차단(10-a·10-b)은 Claude가 거부 사유를 받고 고쳐 쓸 수 있어 REJECTED·OUT_OF_SCOPE 또는 `ai_rejected_total` 증가 중 하나로 본다. CloudFront 경유는 지표를 볼 수 없어 path가 차단이 아니면 SKIP(판정 불가)이다. 결정적 확인은 `tests/test_sql_validator.py`·`test_sql_executor.py`(pytest)
 - 토큰·질문 원문은 출력하지 않는다
 
+## 문맥 이어받기 (3.4.22)
+
+답 아래 「영화 고르기」 버튼이 앞 답의 날짜·극장을 잃지 않게 한다 — `seatsac_ai/context.py`, 내부 SQL 틀 `resources/context_templates.yaml`.
+
+- 답마다 **실행한 SQL의 조건**에서 하나로 확정된 날짜·극장·영화를 세션 `ctx`(최근 5개)에 남기고 응답 `context`로 돌려준다
+- 버튼은 그 답의 `context.id`를 `continueFrom`으로 보낸다 → 그 조건 + 고른 영화로 내부 틀을 Claude 없이 실행한다. `continueFrom`이 없는(직접 친) 질문은 예전과 같다
+- 내부 틀 3개(날짜+극장+영화 · 날짜+영화 · 극장+영화)는 `presets.yaml`과 따로 둔다 — 화면 버튼·Claude 프롬프트·도구 목록에 나가지 않는다. 말투는 기동 때 캐시에 같이 예열하므로, 그 말투("내일 건대입구 ○○ 회차")로 직접 친 질문도 캐시로 답한다(`presetId`가 `ctx_`로 시작)
+- 지표: 이어받은 답은 `ai_chat_total`의 `cache_exact`(예열 적중) 또는 `preset`(캐시가 비었을 때, 토큰 0)로 잡힌다. `ai_cache_requests_total`에는 세지 않는다. 건수는 로그 `context carried`(`presetId`·`inherited`)로 본다
+- 한계: 시각·개수 조건은 이어받지 않는다. 날짜가 2개인 답(주말)은 날짜를 이어받지 않는다
+
 ## 패키지
 
 | 패키지 | 내용 | WBS |

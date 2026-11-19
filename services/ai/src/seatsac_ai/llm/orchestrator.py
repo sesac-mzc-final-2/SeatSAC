@@ -11,6 +11,11 @@
 캐시를 보지도 저장하지도 않는다
 — 같은 글자라도 직전 질문에 따라 뜻이 달라서.
 
+문맥 이어받기(seatsac_ai/context.py): 답마다 그 답이 조회한 날짜·극장·영화를 세션(ctx)에 남기고
+응답 context 로 돌려준다. 답 아래 영화 버튼은 그 답의 context.id 를 continueFrom 으로 보낸다 —
+그때만 앞 답의 조건 + 새 영화로 내부 틀을 바로 실행한다(Claude 0번, ②~⑧보다 먼저).
+continueFrom 이 없는(직접 친) 질문은 위 순서 그대로다.
+
 재요청 규칙: Claude 호출은 질문당 최대 3회(설정 APP_AI_LLM_MAX_CALLS_PER_QUERY).
 검증 거부·SQL 오류·프리셋 빈칸 오류·조건 불일치가 나면 사유를 붙여 다시 묻는다. 남은 호출이 없으면
 REJECTED(조건 불일치였으면 CLARIFY — 사용자에게 조건을 확인한다).
@@ -45,6 +50,7 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
 from seatsac_ai import bookings as my_bookings
+from seatsac_ai import context as ctx
 from seatsac_ai.cache import template as tpl
 from seatsac_ai.cache.slots import (
     RELATIVE_DAYS,
@@ -221,6 +227,7 @@ class ChatService:
         user_id: str | None = None,
         session_id: str | None = None,
         authorization: str | None = None,
+        continue_from: str | None = None,
     ) -> dict[str, Any]:
         """계약 ChatResponse. 캐시가 있으면 sessionId 도 채운다(없으면 api/chat.py 가 새로 발급)."""
         started = time.monotonic()
@@ -234,11 +241,15 @@ class ChatService:
         sid, previous = session_id, None
         if cache is not None and user_id is not None:
             sid, previous = await cache.load_session(user_id, session_id)
+        # 문맥 이어받기: continueFrom 이 가리킨 답의 조건 + 이 메시지의 영화. 없으면 평소 경로
+        known = ctx.entries(previous)
+        carry = self._carry_plan(ctx.find(known, continue_from), question, now)
         if previous is not None and previous.get("path") == "CLARIFY":
             # 되묻기에 짧게 답했으면("내일") 원래 질문에 붙인다. 버튼은 완성된 질문을 보내므로
             # 원래 질문이 이미 들어 있으면 붙이지 않는다(짧은 질문의 버튼이 두 번 붙었다, #140 리뷰)
             if (
-                len(question.strip()) <= _CLARIFY_REPLY_MAX
+                carry is None
+                and len(question.strip()) <= _CLARIFY_REPLY_MAX
                 and not is_followup(question)
                 and previous["question"] not in question
             ):
@@ -253,9 +264,16 @@ class ChatService:
         body: dict[str, Any] | None = None
         ext: Extracted | None = None
         vector: list[float] | None = None
+        made: _Made | None = None
         try:
+            if carry is not None:
+                body = await self._carried(cache, carry, now, system_params, deadline)
+                if body is None:
+                    carry = None  # 틀 실행 실패 — 이어받지 않고 평소 경로로 답한다
             # ② 개인 질문 — Claude·캐시 없이
-            if self._bookings is not None and my_bookings.is_personal(question):
+            if body is not None:
+                pass  # 이어받은 조건으로 이미 답했다
+            elif self._bookings is not None and my_bookings.is_personal(question):
                 body = await self._my_bookings(authorization, now)
             # ③④⑤ 캐시
             elif cache is not None and not skip_cache:
@@ -284,12 +302,26 @@ class ChatService:
         }
         body["latencyMs"] = int((time.monotonic() - started) * 1000)
         self._record(question, body, usage)
+        body["context"] = None
         if cache is not None and user_id is not None and sid is not None:
             # MY_BOOKINGS도 저장하지 않는다 — SQL 없는 문맥이라 후속 질문에 못 쓴다(#96 리뷰)
+            # (저장하지 않으니 곁가지 질문이 앞 답들의 조건 ctx 를 지우지도 않는다)
             if body["path"] not in ("REJECTED", "OUT_OF_SCOPE", "MY_BOOKINGS"):
-                await cache.save_session(
-                    user_id, sid, {"question": question, "sql": body["sql"], "path": body["path"]}
-                )
+                # 이번 답의 조건을 ctx 뒤에 붙인다. 되묻기(CLARIFY)는 조건이 없어 기존 ctx 만 넘긴다
+                values = carry.values if carry else self._queried(body, made, system_params)
+                if values is not None:
+                    entry = ctx.new_entry(known, values)
+                    known = ctx.appended(known, entry)
+                    inherited = carry.inherited if carry else ()
+                    body["context"] = ctx.response(entry, inherited, now.date())
+                session = {
+                    # 이어받은 답은 완성 문장을 남긴다(후속 질문이 조건을 알게). 원문은 그대로 둔다
+                    "question": carry.sentence if carry else question,
+                    "sql": body["sql"],
+                    "path": body["path"],
+                    "ctx": known,
+                }
+                await cache.save_session(user_id, sid, session)
             body["sessionId"] = sid
         return body
 
@@ -364,6 +396,76 @@ class ChatService:
             message=last.get("message"),
         )
         return rejected, None, calls
+
+    # --- 문맥 이어받기 ----------------------------------------------------------
+
+    def _names(self) -> tuple[list[tuple[int, str]], list[str]]:
+        with self._store.reader() as conn:
+            theaters = [(r[0], r[1]) for r in conn.execute("SELECT theater_id, name FROM theater")]
+            movies = [r[0] for r in conn.execute("SELECT title FROM movie")]
+        return theaters, movies
+
+    def _carry_plan(self, entry, question: str, now: datetime) -> ctx.Plan | None:
+        """continueFrom 이 가리킨 답의 조건(entry)으로 실행할 틀. 이어받을 것이 없으면 None."""
+        if entry is None:
+            return None
+        try:
+            theaters, movies = self._names()
+        except SnapshotNotReady:
+            return None  # 평소 경로가 503(AI_SNAPSHOT_NOT_READY)으로 답한다
+        return ctx.plan(entry, question, now, [name for _, name in theaters], movies)
+
+    async def _carried(
+        self, cache: ChatCache | None, plan: ctx.Plan, now: datetime, system_params, deadline
+    ) -> dict[str, Any] | None:
+        """앞 답의 조건 + 고른 영화로 내부 틀을 실행한다. Claude 0번. 실패하면 None.
+
+        캐시는 조건이 다 찬 틀의 키로만 본다 — 예열된 항목이 있으면 CACHE_EXACT, 없으면(수명이
+        지났거나 캐시가 비었으면) 틀을 직접 실행한다(PRESET). 원래의 짧은 메시지
+        ("부활남 어디서 몇 시에 해?")의 키로는 조회도 저장도 하지 않는다 — 그 키는 조건 없는 답이다.
+        """
+        template = plan.template
+        params = system_params | plan.values
+        sql, path = template.sql, "PRESET"
+        cached = await cache.get_exact(plan.warm.key_text) if cache is not None else None
+        if cached is not None and cached.preset_id == template.preset_id:
+            # 같은 키에 Claude가 답한 항목이 있으면 쓰지 않는다 — 표 열이 틀과 다를 수 있다
+            sql, path = cached.sql, "CACHE_EXACT"
+        try:
+            ran = await self._execute(sql, params, deadline)
+        except _Retry as retry:  # 스냅샷 모양이 바뀌었거나 너무 오래 걸림
+            log.warning("문맥 틀 실행 실패(평소 경로로 처리): %s", retry.message)
+            return None
+        shown_sql = tpl.render(ran.sql, params)
+        subject = ctx.subject(plan, now.date())
+        answer = _answer(subject, ran.result) + self._date_note(shown_sql)
+        log.info(
+            "context carried",
+            extra={"fields": {"presetId": template.preset_id, "inherited": list(plan.inherited)}},
+        )
+        # 계약: PRESET 은 sql null, 캐시 적중은 실행한 SQL
+        shown = shown_sql if path == "CACHE_EXACT" else None
+        return self._result_body(path, answer, ran, shown, template.preset_id)
+
+    def _queried(self, body: dict[str, Any], made: _Made | None, system_params) -> dict | None:
+        """이번 답이 실제로 조회한 날짜·극장·영화(실행한 SQL의 조건). 확정된 칸이 없으면 None."""
+        if body["path"] not in ("PRESET", "NL2SQL", "CACHE_EXACT", "CACHE_SEMANTIC"):
+            return None
+        try:
+            if made is not None and made.preset is not None:
+                # 프리셋 답은 응답 sql 이 null 이다 — 프리셋 SQL과 빈칸 값으로 읽는다
+                validated = validate(made.preset.sql, self._s.max_rows)
+                conditions = analyze(validated, system_params | made.params)
+            elif body["sql"]:
+                conditions = analyze(validate(body["sql"], self._s.max_rows))
+            else:
+                return None
+            values = ctx.from_conditions(conditions, *self._names())
+        except (SqlRejected, SqlglotError, SnapshotNotReady) as exc:
+            # 부가 정보라 답을 막지 않는다. 이 답에서는 이어받을 조건이 없을 뿐이다
+            log.warning("답의 조건을 읽지 못했다(%s)", type(exc).__name__)
+            return None
+        return values if any(values.values()) else None
 
     # --- 내 예매 --------------------------------------------------------------
 

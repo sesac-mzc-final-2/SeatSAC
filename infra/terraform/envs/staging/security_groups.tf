@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------
 # 3.1.1 보안그룹
-#   alb     : CloudFront 관리형 접두사 목록에서만 80 (ALB 직접 접근 차단)
+#   alb     : CloudFront 관리형 접두사 목록에서만 80 (+ api_origin_https 켜면 443) (ALB 직접 접근 차단)
 #   rds     : app 서브넷 대역 + Lambda SG 에서 3306
 #   valkey  : app 서브넷 대역에서 6379
 #   lambda  : 일별 집계 Lambda(VPC 연결) → RDS 3306 만 나감
@@ -28,6 +28,17 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront_80" {
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80
+  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id
+}
+
+# 3.1.23 후속: CloudFront → ALB HTTPS 원본(origin_https.tf). 80 규칙은 전환을 확인한 뒤 따로 지운다(런북 7-8)
+resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront_443" {
+  count             = local.api_origin_https_prepare ? 1 : 0
+  security_group_id = aws_security_group.alb.id
+  description       = "CloudFront to ALB /api/* origin (HTTPS)"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
   prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id
 }
 

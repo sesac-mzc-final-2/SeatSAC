@@ -215,18 +215,17 @@ resource "aws_cloudfront_distribution" "frontend" {
     for_each = local.api_origin_enabled ? [local.api_origin_domain_name] : []
     content {
       origin_id   = "alb-gateway"
-      domain_name = origin.value
+      domain_name = local.api_origin_https_on ? local.api_origin_https_name : origin.value
 
-      # CloudFront → ALB 구간은 HTTP(80)다. HTTPS 원본은 ALB에 공개 CA 인증서가 있어야 하는데(CloudFront가 원본 인증서를
-      # 신뢰 CA·도메인 이름으로 검증한다) ACM은 *.elb.amazonaws.com 에 발급하지 않는다 → 사용자 지정 도메인이 필요하고,
-      # ADR-9는 기본 도메인만 쓴다. 완화: ALB SG는 CloudFront origin-facing 접두사 목록만 허용(security_groups.tf),
-      # 구간은 AWS 네트워크 안, Access Token은 Cognito 단기 토큰. 3.1.23 사용자 도메인을 붙여도 이 구간은 HTTP 그대로다 —
-      # HTTPS 원본은 ALB 443 리스너(gitops Ingress)와 원본용 이름(api.<도메인>)의 ap-northeast-2 ACM 인증서가 더 필요해 범위 밖
+      # CloudFront → ALB 구간은 기본이 HTTP(80)다. HTTPS 원본은 ALB에 공개 CA 인증서가 있어야 하는데(CloudFront가 원본 인증서를
+      # 신뢰 CA·도메인 이름으로 검증한다) ACM은 *.elb.amazonaws.com 에 발급하지 않는다 → 원본용 이름(origin.<도메인>)이 필요하다.
+      # HTTP일 때 완화: ALB SG는 CloudFront origin-facing 접두사 목록만 허용(security_groups.tf), 구간은 AWS 네트워크 안,
+      # Access Token은 Cognito 단기 토큰. api_origin_https = "on"이면 origin.<도메인> · https-only (origin_https.tf, 런북 7-8)
       custom_origin_config {
         http_port                = 80
         https_port               = 443
-        origin_protocol_policy   = "http-only"
-        origin_ssl_protocols     = ["TLSv1.2"] # https-only로 바꿀 때만 쓰인다(필수 인수라 둔다)
+        origin_protocol_policy   = local.api_origin_https_on ? "https-only" : "http-only"
+        origin_ssl_protocols     = ["TLSv1.2"] # https-only일 때만 쓰인다(필수 인수라 둔다)
         origin_read_timeout      = 30          # 원본 응답 대기. SSE heartbeat 15초보다 길어야 한다(세트 ③). Gateway 응답 타임아웃 15초보다도 길다
         origin_keepalive_timeout = 5
       }
@@ -293,4 +292,11 @@ resource "aws_cloudfront_distribution" "frontend" {
   }
 
   tags = { Name = "${var.name}-frontend" }
+
+  # https-only 전환은 원본 이름·인증서·443 리스너가 모두 준비된 뒤에(origin_https.tf). off면 셋 다 비어 있다
+  depends_on = [
+    aws_route53_record.origin_alias,
+    aws_acm_certificate_validation.origin,
+    data.aws_lb_listener.gateway_https,
+  ]
 }

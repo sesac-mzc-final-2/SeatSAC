@@ -1999,9 +1999,16 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
    curl -N https://<도메인>/api/screenings/<회차>/seats/stream                 # SSE ping 15초마다 바로바로
    ```
    화면: 로그인 · 좌석 선점 · 결제 · 챗봇. ai(`PUBLIC_API_BASE_URL`)·포트원 웹훅도 CloudFront를 거치므로 따로 바꿀 것 없다
-4. **80 정리(선택)** — 3번을 하루쯤 본 뒤 따로 PR: gitops `listen-ports`에서 `{"HTTP": 80}` 삭제 → Terraform `alb_from_cloudfront_80` 규칙을 443만으로(`from_port`·이름 정리). 3번과 같이 하지 않는다(배포가 퍼지는 동안 80이 닫히면 502)
+4. **80 정리(선택)** — 3번을 하루쯤 본 뒤 따로 PR: gitops `listen-ports`에서 `{"HTTP": 80}` 삭제 → Terraform `alb_from_cloudfront_80` 규칙을 443만으로(`from_port` 443). 리소스 이름까지 바꾸려면 같은 PR에 `moved { from = …alb_from_cloudfront_80, to = …<새 이름> }` 블록을 넣는다 — 없으면 규칙을 지우고 새로 만들어 그 사이 `/api`가 끊긴다. plan이 SG 규칙 `update in-place` 1건이 아니라 삭제 + 추가면 진행하지 않는다. 3번과 같이 하지 않는다(배포가 퍼지는 동안 80이 닫히면 502)
 
-**되돌리기**: `on` → `prepare`(CloudFront가 다시 HTTP 80으로, 4번 정리 전이면 바로 된다) → gitops 443 리스너 revert → `off`. 반대 순서로 한 단계씩 — **gitops에 443 리스너가 남은 채 `off`로 가면** 인증서가 리스너에 물려 있어 삭제가 실패한다.
+**되돌리기**: `on` → `prepare`(CloudFront가 다시 HTTP 80으로) → gitops 443 리스너 revert → `off`. 반대 순서로 한 단계씩 — **gitops에 443 리스너가 남은 채 `off`로 가면** 인증서가 리스너에 물려 있어 삭제가 실패한다.
+
+**4번(80 정리)을 한 뒤에는 `on` → `prepare`를 바로 하지 않는다** — 80 리스너·SG 80이 없어 `prepare`의 HTTP 원본 요청이 전부 실패한다. 먼저 80을 되살린다:
+
+1. gitops `listen-ports`에 `{"HTTP": 80}`을 다시 넣는 PR → ArgoCD sync
+2. Terraform `alb_from_cloudfront_80` 규칙의 `from_port`를 80으로(80~443) → apply
+3. `aws elbv2 describe-listeners --load-balancer-arn <ALB ARN> --query 'Listeners[].[Port,Protocol]'`에 80 HTTP가 보이는지 확인
+4. 그 뒤에 `on` → `prepare`
 
 | 증상 | 원인·해결 |
 | --- | --- |
@@ -2009,7 +2016,7 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
 | plan에서 `태그로 찾은 gateway ALB가 있어야 한다` | Ingress가 없거나 `api_origin_domain_name`을 직접 넣었다 — 비워 두고 ALB 태그 탐색을 쓴다 |
 | `on` plan에서 리스너를 못 찾음 · `인증서가 origin 인증서와 다르다` | 2번(gitops)이 아직이거나 `spec.tls.hosts` 이름이 다르다 |
 | Ingress 이벤트 `no certificate found for host` | 인증서가 아직 `PENDING_VALIDATION` 또는 이름 불일치 — 1번 확인 뒤 ArgoCD sync |
-| `on` 뒤 `/api` 502 | CloudFront가 원본 인증서를 못 믿는다(이름·만료) 또는 SG 443 없음 — `aws elbv2 describe-listeners`·SG 확인. 급하면 `prepare`로 되돌린다. `/api`는 뷰어 `Host`를 원본에 그대로 넘기는데(`allViewer`) AWS 문서로는 인증서가 원본 도메인 이름(`origin.<도메인>`)과 맞으면 된다 — 그래도 한쪽 주소만 502면(3번의 두 `curl`) `prepare`로 되돌리고 원본 인증서에 `<도메인>`을 SAN으로 더할지(기본 도메인은 인증서를 받을 수 없다)·`Host` 전달을 뺄지 정한다 |
+| `on` 뒤 `/api` 502 | CloudFront가 원본 인증서를 못 믿는다(이름·만료) 또는 SG 443 없음 — `aws elbv2 describe-listeners`·SG 확인. 급하면 `prepare`로 되돌린다(4번 정리 뒤라면 위 「80을 되살린다」를 먼저). `/api`는 뷰어 `Host`를 원본에 그대로 넘긴다(`allViewer`). 이때 원본 인증서가 원본 도메인 이름(`origin.<도메인>`)과만 맞아도 되는지는 **AWS 문서끼리 설명이 달라 확정하지 못했다**(502 안내는 원본 도메인 또는 `Host` 중 하나, 원본 설정 안내는 `Host`와 일치) → 3번의 두 `curl` 결과로 판단한다. 한쪽 주소라도 502면 `prepare`로 되돌리고, 그 결과를 보고 원본 인증서에 `<도메인>`을 SAN으로 더할지(기본 도메인은 인증서를 받을 수 없다)·`Host` 전달을 뺄지(`CloudFront-Viewer-Address` 전달 방법을 같이 정해야 한다) 정한다 |
 | ALB를 다시 만든 뒤(Ingress 재생성) `/api` 502 | ALB DNS 이름이 바뀌었다 — apply를 한 번 더(`origin.` 별칭 갱신) |
 
 - 발표 뒤 사용자 도메인을 정리(`custom_domain = ""`)하려면 **먼저 이 절을 되돌려 `off`**로 만든다(검증이 막는다)

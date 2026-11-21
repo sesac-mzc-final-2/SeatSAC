@@ -10,9 +10,9 @@
 #   - ALB 443 리스너는 gitops base/gateway/ingress.yaml 이 만든다(listen-ports + spec.tls.hosts).
 #     LB Controller가 spec.tls.hosts 이름으로 ACM 인증서를 찾아 붙인다 → gitops(Public)에 인증서 ARN(계정 ID)을 쓰지 않는다
 #   - 세 단계로 나눠 끊김 없이 바꾼다(확장 → 전환 → 정리, 런북 7-8):
-#       prepare : 인증서 · DNS(origin.) · ALB SG 443 — CloudFront는 아직 HTTP(80). 이 뒤에 gitops PR로 443 리스너 추가
+#       prepare : 인증서 · DNS(origin.) · ALB SG 80 → 80~443(규칙 하나, security_groups.tf) — CloudFront는 아직 HTTP(80). 이 뒤에 gitops PR로 443 리스너 추가
 #       on      : CloudFront 원본을 origin.{custom_domain} · https-only 로. 443 리스너가 없거나 다른 인증서면 plan이 실패한다
-#     80 정리(SG 규칙·리스너 삭제)는 전환을 확인한 뒤 따로 한다 — CloudFront 배포가 엣지에 퍼지는 동안 80이 닫히면 /api가 끊긴다
+#     80 정리(리스너 삭제 · SG 규칙을 443만으로)는 전환을 확인한 뒤 따로 한다 — CloudFront 배포가 엣지에 퍼지는 동안 80이 닫히면 /api가 끊긴다
 # ------------------------------------------------------------------
 locals {
   api_origin_https_prepare = var.api_origin_https != "off"

@@ -1974,13 +1974,13 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
 | --- | --- | --- |
 | 원본 이름 `origin.<도메인>` → ALB (Route 53 별칭 A) | Terraform `envs/staging/origin_https.tf` | `api_origin_https = "prepare"` |
 | 그 이름의 ACM 인증서(**ap-northeast-2** — ALB는 리전 인증서) · DNS 검증 | 같은 파일 | CloudFront 뷰어 인증서(us-east-1, 7-7)와 별개. 무료 |
-| ALB 보안그룹 443(CloudFront 접두사 목록만) | `security_groups.tf` | 80 규칙은 정리 단계까지 둔다 |
+| ALB 보안그룹 80 → **80~443**(CloudFront 접두사 목록만) | `security_groups.tf` | 기존 규칙 하나를 넓힌다(제자리 변경). 443 규칙을 따로 만들지 않는다 — CloudFront 접두사 목록은 규칙 하나가 55개로 계산돼 할당량 60에서 규칙 2개(110)는 실패한다. ALB 리스너가 80·443뿐이라 사이 포트는 받는 것이 없다 |
 | ALB HTTPS(443) 리스너 | **gitops** `base/gateway/ingress.yaml` | `listen-ports`에 `{"HTTPS": 443}` 추가 + `spec.tls.hosts: [origin.<도메인>]`. LB Controller가 그 이름으로 ACM 인증서를 찾아 붙인다 → Public 레포에 인증서 ARN(계정 ID)을 쓰지 않는다 |
 | CloudFront 원본 `origin.<도메인>` · `https-only` | Terraform `cloudfront.tf` | `api_origin_https = "on"` |
 
 **순서 — 한 단계씩, 앞 단계를 확인한 뒤 다음으로**(확장 → 전환 → 정리. 순서가 바뀌면 `/api`가 끊긴다). 시연·측정이 없는 시간에 하고 스크럼에 공유한다.
 
-1. **prepare** — `staging.tfvars`에 `api_origin_https = "prepare"` PR → `infra-plan` 기대: **추가** 인증서 1·검증 레코드 1·검증 1·별칭 A 1·SG 규칙 1, **변경·삭제 없음**(CloudFront 그대로) → 머지 뒤 `cinema-admin`으로 apply
+1. **prepare** — `staging.tfvars`에 `api_origin_https = "prepare"` PR → `infra-plan` 기대: **추가** 인증서 1·검증 레코드 1·검증 1·별칭 A 1, **변경** SG 규칙 1(`alb_from_cloudfront_80`의 `to_port` 80 → 443·설명 — **`update in-place`여야 한다**. `must be replaced`면 80이 잠깐 끊기므로 멈추고 확인), 삭제 없음(CloudFront 그대로) → 머지 뒤 `cinema-admin`으로 apply
    ```bash
    aws acm list-certificates --region ap-northeast-2 --query 'CertificateSummaryList[?DomainName==`origin.<도메인>`].Status'   # ISSUED
    dig +short origin.<도메인>      # ALB IP 2개
@@ -1999,7 +1999,7 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
    curl -N https://<도메인>/api/screenings/<회차>/seats/stream                 # SSE ping 15초마다 바로바로
    ```
    화면: 로그인 · 좌석 선점 · 결제 · 챗봇. ai(`PUBLIC_API_BASE_URL`)·포트원 웹훅도 CloudFront를 거치므로 따로 바꿀 것 없다
-4. **80 정리(선택)** — 3번을 하루쯤 본 뒤 따로 PR: gitops `listen-ports`에서 `{"HTTP": 80}` 삭제 → Terraform `alb_from_cloudfront_80` 규칙 삭제. 3번과 같이 하지 않는다(배포가 퍼지는 동안 80이 닫히면 502)
+4. **80 정리(선택)** — 3번을 하루쯤 본 뒤 따로 PR: gitops `listen-ports`에서 `{"HTTP": 80}` 삭제 → Terraform `alb_from_cloudfront_80` 규칙을 443만으로(`from_port`·이름 정리). 3번과 같이 하지 않는다(배포가 퍼지는 동안 80이 닫히면 502)
 
 **되돌리기**: `on` → `prepare`(CloudFront가 다시 HTTP 80으로, 4번 정리 전이면 바로 된다) → gitops 443 리스너 revert → `off`. 반대 순서로 한 단계씩 — **gitops에 443 리스너가 남은 채 `off`로 가면** 인증서가 리스너에 물려 있어 삭제가 실패한다.
 
@@ -2009,7 +2009,7 @@ CloudFront 기본 도메인(`*.cloudfront.net`)은 **그대로 두고** 도메�
 | plan에서 `태그로 찾은 gateway ALB가 있어야 한다` | Ingress가 없거나 `api_origin_domain_name`을 직접 넣었다 — 비워 두고 ALB 태그 탐색을 쓴다 |
 | `on` plan에서 리스너를 못 찾음 · `인증서가 origin 인증서와 다르다` | 2번(gitops)이 아직이거나 `spec.tls.hosts` 이름이 다르다 |
 | Ingress 이벤트 `no certificate found for host` | 인증서가 아직 `PENDING_VALIDATION` 또는 이름 불일치 — 1번 확인 뒤 ArgoCD sync |
-| `on` 뒤 `/api` 502 | CloudFront가 원본 인증서를 못 믿는다(이름·만료) 또는 SG 443 없음 — `aws elbv2 describe-listeners`·SG 확인. 급하면 `prepare`로 되돌린다 |
+| `on` 뒤 `/api` 502 | CloudFront가 원본 인증서를 못 믿는다(이름·만료) 또는 SG 443 없음 — `aws elbv2 describe-listeners`·SG 확인. 급하면 `prepare`로 되돌린다. `/api`는 뷰어 `Host`를 원본에 그대로 넘기는데(`allViewer`) AWS 문서로는 인증서가 원본 도메인 이름(`origin.<도메인>`)과 맞으면 된다 — 그래도 한쪽 주소만 502면(3번의 두 `curl`) `prepare`로 되돌리고 원본 인증서에 `<도메인>`을 SAN으로 더할지(기본 도메인은 인증서를 받을 수 없다)·`Host` 전달을 뺄지 정한다 |
 | ALB를 다시 만든 뒤(Ingress 재생성) `/api` 502 | ALB DNS 이름이 바뀌었다 — apply를 한 번 더(`origin.` 별칭 갱신) |
 
 - 발표 뒤 사용자 도메인을 정리(`custom_domain = ""`)하려면 **먼저 이 절을 되돌려 `off`**로 만든다(검증이 막는다)

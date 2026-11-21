@@ -156,7 +156,7 @@ variable "api_origin_https" {
   description = <<-EOT
     3.1.23 후속 CloudFront → ALB 구간 HTTPS (origin_https.tf, 런북 7-8). custom_domain이 있어야 한다.
       off     (기본) 아무것도 만들지 않는다. CloudFront → ALB는 HTTP(80)
-      prepare 인증서(ap-northeast-2)·DNS origin.<custom_domain>·ALB SG 443. CloudFront는 아직 HTTP
+      prepare 인증서(ap-northeast-2)·DNS origin.<custom_domain>·ALB SG 규칙을 80~443으로. CloudFront는 아직 HTTP
               → 이 뒤에 gitops PR로 Ingress에 443 리스너를 더한다
       on      CloudFront 원본을 origin.<custom_domain> · https-only 로 바꾼다(ALB 443 리스너가 있어야 plan 통과)
   EOT

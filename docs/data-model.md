@@ -157,7 +157,7 @@
 | `cinema-staging-ai-db` | `db.t4g.micro` | Single-AZ | `ai_db` | 1 × 5 |
 
 - 파라미터 그룹은 하나를 같이 쓴다(UTC·utf8mb4·TLS 강제). micro는 `max_connections` 약 60~80이라 경보는 인스턴스마다 `max_connections`의 75%
-- 옮기는 순서: 새 인스턴스 → db-bootstrap(인스턴스별) → 덤프·복원(서비스 하나씩, 잠깐 쓰기 멈춤) → `DB_HOST_{SVC}`로 바꾸는 gitops PR → 이전 인스턴스는 다 옮긴 뒤 삭제. catalog 시드는 다시 적재해도 된다(ID 고정)
+- 옮기는 순서: 새 인스턴스 → db-bootstrap(인스턴스별) → 덤프·복원(서비스 하나씩) → `DB_HOST_{SVC}`로 바꾸는 gitops PR(앱 `SPRING_DATASOURCE_URL`과 Flyway Job `FLYWAY_URL`의 호스트를 **같은 PR에서** 함께 — 따로 바꾸면 마이그레이션과 앱이 다른 인스턴스를 본다) → 이전 인스턴스는 다 옮긴 뒤 삭제. **쓰기는 덤프를 시작할 때부터 그 서비스가 새 인스턴스로 떠서 확인(Flyway Job 성공·readiness 200·행 수 대조)이 끝날 때까지 멈춘다** — 덤프 뒤에 기존 인스턴스에 쓰인 것은 새 인스턴스에 없다. 그 전에 쓰기를 다시 열어야 하면 전환을 미루고 덤프부터 다시 한다. catalog 시드는 다시 적재해도 된다(ID 고정)
 - 마스터 비밀번호는 인스턴스마다 RDS 관리 Secrets Manager
 
 ### 7-2. 테이블 추가 (이름은 API 명세서 v1.5 27-1과 같다)
@@ -171,13 +171,13 @@
 | `payment_db` | `processed_message` · `outbox_message` | 같은 구조 | 명령 inbox · 결과 발송 |
 | `user_db` | `booking_history` | PK `booking_id`, INDEX (`user_id`, `confirmed_at`) | `status` CONFIRMED·CANCELED, `screening_id`, `seat_count`, `amount`·`discount_amount`(NULL 허용), `confirmed_at`·`canceled_at`. CANCELED가 이긴다(순서 역전) |
 | `user_db` | `booking_history_sync` · `processed_message` | PK `user_id` · PK `message_id` | 사용자별 첫 조회 1회 sync 채움 기록 · inbox |
-| `catalog_db` | `outbox_message` · `screening.version` 열 | booking과 같은 구조 · `BIGINT` | `screening.changed`·`movie.changed` 발행, 복제본은 `version`이 클 때만 덮어씀 |
+| `catalog_db` | `outbox_message` · `screening.version` 열 | 컬럼·유일 제약은 booking과 같다(UK (`event_type`, `aggregate_id`)) — 단 `aggregate_id = {screeningId 또는 movieId}:{version}` · `BIGINT` | `screening.changed`·`movie.changed` 발행, 복제본은 `version`이 클 때만 덮어씀. 같은 회차·영화가 바뀔 때마다 `version`이 올라 **변경 1번 = 새 행 1개**(booking 결제 재확인의 `{checkoutId}:{attempt}`와 같은 방식 — ID만 넣으면 두 번째 변경이 유일 제약에 걸린다) |
 | `coupon_db` | `coupon_event` | PK `event_id` | `title`, `discount_rate`, `eligible_grade`(VIP), `total_quantity`, `starts_at`·`ends_at` |
 | `coupon_db` | `coupon_issue` | PK `coupon_issue_id` CHAR(36), **UK (`event_id`, `user_id`)**, INDEX (`user_id`, `state`) | `state` ISSUED·RESERVED·USED·EXPIRED, `expires_at`(= 이벤트 종료), `issued_at`·`used_at` |
 | `coupon_db` | `coupon_reservation` | PK `checkout_id`, INDEX (`coupon_issue_id`) | `state` RESERVED·RELEASED·USED. 체크아웃 1건 = 1행 — 반환이 예약보다 먼저 오면 RELEASED 행을 먼저 만들어 늦은 예약을 거절 |
 | `coupon_db` | `processed_message` · `outbox_message` | 같은 구조 | 명령 inbox·결과 발송 |
 
-- 재고는 Valkey `coupon:stock:{eventId}`(DECR) + DB 행이 둘 다 성공해야 확정(어느 쪽이 실패해도 `INCR`로 되돌림). DB UK `(event_id, user_id)`가 1인 1매 최종 방어선. 키가 없으면 `total_quantity − 발급 수`로 `SET NX` 재생성
+- 재고는 Valkey `coupon:stock:{eventId}`의 `DECR` 결과가 0 이상이고 DB 행 생성도 성공해야 확정. `INCR`로 되돌리는 것은 **`DECR`이 성공한 뒤**의 두 경우뿐이다 — 결과가 음수(매진 처리)이거나 DB INSERT가 실패했을 때. `DECR`이 실행되지 않았거나 실패했으면 `INCR`를 부르지 않는다(안 깎은 재고를 올리면 `total_quantity`를 넘겨 발급된다) — conventions 4장 `coupon:stock` 행과 같은 기준. DB UK `(event_id, user_id)`가 1인 1매 최종 방어선. 키가 없으면 `total_quantity − 발급 수`로 `SET NX` 재생성
 - 이벤트 종료 스윕은 ISSUED만 EXPIRED. RESERVED는 booking의 use·release까지 그대로(1시간 넘으면 경보만)
 
 ### 7-3. 체크아웃 상태 전이 (ADR-116, API 명세서 v1.5 21-2)

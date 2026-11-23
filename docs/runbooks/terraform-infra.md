@@ -2149,6 +2149,80 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 - 이 폴더 destroy(11장) 때 계정·스키마는 RDS에 남는다(Job은 만들기만 함). staging까지 destroy하면 RDS와 함께 사라진다
 - `cinema-ops`를 `developer_namespaces`에 넣으면 precondition이 막는다(입력 Secret 보호)
 
+### 8-E. 서비스별 RDS 인스턴스 (6.1.1, ADR-115)
+
+코드: `envs/staging/rds_services.tf`(인스턴스 6·로그 그룹·경보) · `envs/staging/db_bootstrap.tf`(Job이 읽는 마스터 Secret 목록) · `envs/staging-k8s/db_bootstrap.tf`(인스턴스별 Job) · `envs/staging-k8s/infra_endpoints.tf`(`DB_HOST_{SVC}`) · `scripts/db-bootstrap/query-account.sh`(`ai_query`)
+
+순서는 **확장 → 전환 → 정리**다. 이 절의 1·2번(확장)은 기존 `cinema-staging-mysql`과 `DB_HOST`를 건드리지 않는다 — 서비스는 계속 기존 인스턴스를 쓴다.
+
+| 항목 | 값 |
+| --- | --- |
+| 인스턴스 | `cinema-staging-{svc}-db` 6개 — booking `db.t4g.small`, 나머지 `db.t4g.micro`, ai만 Single-AZ(`staging.tfvars` `service_databases`, data-model 7-1) |
+| 같이 쓰는 것 | 파라미터 그룹 `cinema-staging-mysql84` · 보안그룹 `cinema-staging-rds`(app 서브넷 → 3306) · data 서브넷 그룹 |
+| 마스터 비밀번호 | 인스턴스마다 RDS 관리 Secrets Manager. tfstate·코드에 없다 |
+| Job (`cinema-ops`) | 인스턴스마다 하나: `db-bootstrap-{svc}-<해시8>`(입력 Secret `db-bootstrap-accounts-{svc}` — 그 서비스 비밀번호만). 기존 인스턴스 Job `db-bootstrap-<해시8>`은 이름·입력이 그대로라 다시 돌지 않는다 |
+| 계정 비밀번호 | 서비스별 계정 비밀번호 하나를 기존·새 인스턴스가 **같이 쓴다** → 옮길 때 `{svc}-secrets`는 그대로, 호스트만 바뀐다 |
+| 새로 생기는 Secret (`cinema-staging`) | `coupon-secrets` · `coupon-migrator-secrets` · `ai-migrator-secrets` |
+| ai 계정 | `ai_app` · `ai_migrator` · `ai_query`(`ai_db`의 `movie`·`theater`·`screening` SELECT만). **ai 앱이 읽는 DB 비밀번호 Secret은 이 단계에 없다** — 6.1.4(External Secrets)에서 전달한다. 그 전까지 `APP_AI_DATA_SOURCE`는 `snapshot` 그대로 |
+| 엔드포인트 | ConfigMap `cinema-infra-endpoints`에 `DB_HOST_{BOOKING,PAYMENT,USER,CATALOG,COUPON,AI}` 추가. `DB_HOST`는 다 옮길 때까지 남긴다 |
+| 경보 | 인스턴스마다 `cinema-staging-{svc}-db-cpu-80` · `-connections`(small 130, micro 45) · `-free-storage-2gb` |
+
+**1) staging — 인스턴스 만들기** (시연·측정이 없는 시간, 스크럼 공유)
+
+```bash
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: add 36 = aws_db_instance.service 6 · 로그 그룹 12 · 경보 18
+#       change 1 = module.db_bootstrap_pod_identity 정책(마스터 Secret ARN 6개 추가)
+#       destroy 0. aws_db_instance.mysql(기존)에 변경이 보이면 멈춘다
+terraform apply plan.out          # Multi-AZ 인스턴스 생성 15~25분(6개가 같이 만들어진다)
+aws rds describe-db-instances --query "DBInstances[?starts_with(DBInstanceIdentifier,'cinema-staging-')].[DBInstanceIdentifier,DBInstanceStatus,MultiAZ,DBInstanceClass]" --output table
+```
+
+**2) staging-k8s — 인스턴스별 Job·`DB_HOST_{SVC}`** (전제: 1번의 6개가 모두 `available` · 노드 켜짐)
+
+```bash
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out
+# 기대: add = random_password 5(coupon 2·ai 3) · Secret 3(coupon 2·ai-migrator 1) · db-bootstrap-accounts-{svc} 6 · Job 6
+#       change = ConfigMap cinema-infra-endpoints(DB_HOST_* 6개 추가) · ConfigMap db-bootstrap-scripts(query-account.sh 추가)
+#       destroy 0. 기존 Job·Secret은 `has moved to …["legacy"]`만 보여야 한다 — legacy Job이 replace로 나오면 멈춘다
+terraform apply plan.out          # Job 6개 완료까지 기다린다
+terraform output db_bootstrap_job
+```
+
+- 인스턴스가 없거나 아직 만들어지는 중이면 plan이 `DBInstanceNotFound`로 멈춘다 → 1번을 먼저 끝낸다. 일부만 먼저 하려면 `service_db_services`에 그 서비스만 넣는다
+- `staging-k8s`는 CI plan 대상이 아니다 → 로컬 plan을 PR에 붙일 때 Secret·Job 줄이 `(sensitive value)`인지 확인한다(8-A와 같다)
+
+확인(관리자 컨텍스트):
+
+```bash
+for j in $(kubectl -n cinema-ops get jobs -l app.kubernetes.io/name=db-bootstrap -o name); do echo "== $j"; kubectl -n cinema-ops logs $j -c bootstrap | tail -3; done
+kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data}' | tr ',' '\n' | grep DB_HOST
+```
+
+- [ ] 새 Job 6개 마지막 줄 `PASS: 스키마 1 · 계정 2 · 권한 확인 완료 (--ssl-mode=VERIFY_IDENTITY)`, ai는 그 뒤에 `PASS: ai_query 읽기 전용 권한 확인 완료`
+- [ ] `DB_HOST_*` 6개 + `DB_HOST`(기존)
+- [ ] 두 번째 plan(staging·staging-k8s) No changes
+- [ ] 기존 서비스 readiness 그대로(아무것도 옮기지 않았다)
+
+**3) 전환 — 서비스 하나씩** (이 PR 범위 밖. 덤프·복원 Job은 아직 레포에 없다 — 옮기기 전에 따로 만든다)
+
+1. 옮길 서비스의 쓰기를 멈춘다(gitops에서 replicas 0 또는 시연이 없는 시간) → 기존 인스턴스의 `{svc}_db`를 덤프해 새 인스턴스에 복원(클러스터 안 Job, `{svc}_migrator` 계정 — 두 인스턴스에 같은 비밀번호)
+2. gitops PR: `overlays/staging/{svc}`의 `SPRING_DATASOURCE_URL`을 `${DB_HOST}` → `${DB_HOST_{SVC}}`로, `base/{svc}/flyway-job.yaml`의 `configMapKeyRef` 키도 같이 바꾼다
+3. Flyway Job 성공 + readiness 200 + 행 수 대조 → 다음 서비스. 순서는 catalog·user·payment → booking(블루/그린, 한 번에 하나)
+- catalog는 덤프 대신 시드를 다시 적재해도 된다(ID 고정, 8-C). coupon·ai는 새 스키마라 옮길 데이터가 없다
+- 되돌리기: gitops PR을 revert하면 기존 인스턴스로 돌아간다. 그 사이 새 인스턴스에 쓰인 데이터는 기존 인스턴스에 없다 → 전환 직후 확인을 끝내고 다음으로 넘어간다
+
+**4) 정리** — 네 서비스를 모두 옮기고 며칠 지켜본 뒤 별도 PR: `rds.tf`(기존 인스턴스)·`DB_HOST`·legacy Job 삭제. 그 전에는 지우지 않는다
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| staging-k8s plan `DBInstanceNotFound` | 1번 전이거나 인스턴스 생성 중 | 1번 apply·`available` 확인 뒤 다시 |
+| 새 Job fetch-master `AccessDeniedException` | staging apply 전(Pod Identity 정책에 새 마스터 Secret이 없음) | 1번 먼저 |
+| 새 Job이 `Pending`으로 timeout | 노드 0대 | `cluster-scale.sh up` 뒤 다시 apply |
+| micro 인스턴스 연결 수 경보 | `max_connections`가 작다(약 60) | 파드 수 × Hikari 풀 확인(data-model 7-1). 넘으면 클래스를 올린다 |
+
 
 ---
 

@@ -20,8 +20,8 @@ output "db_secret_names" {
 }
 
 output "db_bootstrap_job" {
-  description = "마지막으로 실행된 DB 계정 생성 Job (kubectl -n cinema-ops logs job/<이름>)"
-  value       = kubernetes_job_v1.db_bootstrap.metadata[0].name
+  description = "마지막으로 실행된 DB 계정 생성 Job — 인스턴스마다 하나, legacy = 기존 cinema-staging-mysql (kubectl -n cinema-ops logs job/<이름>)"
+  value       = { for k, j in kubernetes_job_v1.db_bootstrap : k => j.metadata[0].name }
 }
 
 output "infra_endpoints_keys" {

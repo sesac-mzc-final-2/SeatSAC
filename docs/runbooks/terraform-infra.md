@@ -2152,6 +2152,73 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 
 ---
 
+### 8-F. External Secrets — Secrets Manager → `{svc}-secrets` (6.1.4, ADR-123)
+
+코드: `envs/staging/external_secrets.tf`(ESO Pod Identity) · `envs/staging-k8s/external_secrets.tf`(Secrets Manager 값) · gitops `apps/staging/platform-external-secrets.yaml`·`platform/external-secrets/values.yaml`·`base/common/clustersecretstore.yaml`·`base/{svc}/externalsecret.yaml`
+
+| 항목 | 값 |
+| --- | --- |
+| Secrets Manager | `cinema/staging/{svc}` → K8s Secret `{svc}-secrets` · `cinema/staging/{svc}-migrator` → `{svc}-migrator-secrets`. 값은 키 = 값 JSON(키 이름이 K8s Secret과 같다) |
+| ESO | namespace `external-secrets`, ServiceAccount `external-secrets`, Pod Identity `cinema-staging-external-secrets-pod`(읽기: `cinema/staging/*`의 GetSecretValue·DescribeSecret뿐) |
+| 저장소 연결 | ClusterSecretStore `aws-secrets-manager`(리전만 적는다 — ARN·계정 ID는 gitops에 두지 않는다. 자격 증명은 Pod Identity) |
+| ExternalSecret | 서비스마다 2개(app·migrator), sync wave **-3**(ConfigMap -2 · Flyway Job -1 · 앱 0보다 먼저), 1시간마다 다시 읽음 |
+| 대상 밖 | `ai-secrets`(ANTHROPIC_API_KEY) — Terraform K8s Secret 그대로. ai DB 비밀번호 키 이름이 정해질 때 함께 옮긴다 · `cinema-ops`의 `db-bootstrap-accounts*`(Job 입력) |
+
+**순서: 확장 → 전환 → 정리.** 단계마다 서비스가 읽는 값은 같다(같은 `random_password`). 한 단계씩 확인하고 넘어간다.
+
+**1) 확장 — Terraform** (서비스 영향 없음. K8s Secret은 그대로)
+
+```bash
+cd infra/terraform/envs/staging
+terraform init -backend-config=backend.hcl      # 모듈 추가(external_secrets_pod_identity) → 한 번
+terraform plan -var-file=staging.tfvars -out=plan.out     # 기대: Pod Identity 역할·정책·연결만 add. destroy 0
+terraform apply plan.out
+
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out
+# 기대: aws_secretsmanager_secret.app · secret_version.app 을 Secret 수만큼 add(서비스 4개면 8쌍 — app 4 · migrator 4).
+#       kubernetes_secret_v1.* 에 변경 없음. secret_string은 (sensitive value)로만 보여야 한다 — 값이 보이면 멈춘다
+terraform apply plan.out
+terraform output secrets_manager_names
+```
+
+확인(값은 출력하지 않는다 — 키 이름만 비교):
+
+```bash
+for s in booking catalog user payment; do
+  a=$(aws secretsmanager get-secret-value --secret-id "cinema/staging/$s" --query SecretString --output text | python3 -c 'import json,sys; print(sorted(json.load(sys.stdin)))')
+  k=$(kubectl -n cinema-staging get secret "$s-secrets" -o json | python3 -c 'import json,sys; print(sorted(json.load(sys.stdin)["data"]))')
+  [ "$a" = "$k" ] && echo "OK $s $a" || echo "DIFF $s: sm=$a k8s=$k"
+done
+```
+
+**2) 전환 — gitops PR** (SeatSAC-gitops. 1)이 끝난 뒤 머지)
+
+1. ESO 설치(Application `external-secrets`) + ClusterSecretStore → `kubectl get clustersecretstore aws-secrets-manager` 가 `Valid`·`Ready`
+2. ExternalSecret(`creationPolicy: Merge` — Terraform이 만든 Secret에 같은 키를 같은 값으로 쓴다. 소유자는 아직 Terraform)
+   → `kubectl -n cinema-staging get externalsecret` 전부 `SecretSynced`·`Ready=True`
+3. 파드는 재시작되지 않는다(값이 같다). 확인: 서비스 하나를 ArgoCD Restart해 기동·readiness 200
+
+**3) 정리 — 별도 PR 두 개** (2)를 며칠 지켜본 뒤)
+
+1. SeatSAC: `db_bootstrap.tf`의 `kubernetes_secret_v1.app`·`.migrator`를 **state에서만** 뺀다 — `removed { from = … lifecycle { destroy = false } }`(Secret을 지우지 않는다). Secrets Manager 값의 출처를 `random_password`·`local.app_secret_extra`로 옮긴다. plan에 Secret `destroy`가 보이면 apply하지 않는다
+2. gitops: ExternalSecret `creationPolicy: Merge` → `Owner`(빈 클러스터에서 ESO가 Secret을 처음부터 만든다)
+- 이 뒤로 비밀번호 교체(8-D)는 `terraform apply -replace=random_password.db[…]` → Secrets Manager 갱신 + db-bootstrap `ALTER USER` → ESO가 다음 주기(최대 1시간, 바로 하려면 ExternalSecret에 `force-sync` 주석)로 K8s Secret 갱신 → 서비스 재시작
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| ClusterSecretStore `InvalidProviderConfig`·`AccessDenied` | Pod Identity 연결 전(1)의 staging apply 전) / ESO ServiceAccount 이름이 `external-secrets`가 아님 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace external-secrets`, gitops values의 `serviceAccount.name` |
+| ExternalSecret `SecretSyncedError` `ResourceNotFoundException` | Secrets Manager에 그 이름이 없음(1)의 staging-k8s apply 전·서비스 이름 오타) | `terraform output secrets_manager_names`와 `remoteRef.key` 비교 |
+| ExternalSecret `Merge` 인데 `secret … not found` | 대상 K8s Secret이 없음(Terraform이 아직 안 만든 서비스) | Terraform apply 먼저. 정리 단계 뒤라면 `Owner`로 |
+| 정리 1번 plan에 `kubernetes_secret_v1 … will be destroyed` | `removed` 블록 없이 리소스만 지움 | apply하지 않는다 — `removed`·`destroy = false` 확인 |
+| 값을 바꿨는데 파드가 옛 값 | 앱은 env를 기동 때만 읽는다 | ESO 반영(`kubectl get externalsecret`의 갱신 시각) 뒤 서비스 재시작 |
+
+- 값은 `staging-k8s` tfstate와 Secrets Manager 두 곳에 있다(둘 다 관리자만). 콘솔에서 값을 고치지 않는다 — 다음 apply가 되돌린다
+- Secrets Manager 비용: Secret 1개당 월 약 $0.4
+
+
+---
+
 ## 8-1. 가동 정책 — 노드 0대 스케줄·Budgets (3.1.14, OPS-13)
 
 코드: `infra/terraform/envs/staging/cluster_schedule.tf`(EventBridge Scheduler, **정시 실행**) · `.github/workflows/cluster-schedule.yml`(백업·수동) · `infra/scripts/cluster-scale.sh` · `infra/terraform/global/{cluster_schedule,budgets}.tf`

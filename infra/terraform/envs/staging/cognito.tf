@@ -2,7 +2,8 @@
 # 3.1.16 Cognito 사용자 풀 · 앱 클라이언트 · Hosted UI 도메인 · ADMIN 그룹 · Pre sign-up Lambda (ADR-37·63)
 #   - 이름(conventions 9장): 사용자 풀 cinema-staging-users · Lambda cinema-staging-cognito-presignup · 도메인 cinema-staging
 #   - 로그인: Hosted UI(클래식) + 코드 + PKCE, 공개 클라이언트(시크릿 없음). 토큰은 화면 메모리(ADR-63)
-#   - gateway: Access Token을 JWKS로 검증(iss·token_use=access·client_id) → X-User-Id(sub)·X-User-Role(cognito:groups의 ADMIN)
+#   - gateway: Access Token을 JWKS로 검증(iss·token_use=access·client_id) → X-User-Id(sub)·X-User-Role(항상 USER, 11/14)
+#              · X-User-Grade(Access Token cognito:groups에 VIP가 있으면 VIP, 6.1.11)
 #   - user: 같은 Access Token으로 GetUser(email·name) → 클라이언트가 aws.cognito.signin.user.admin 범위를 허용해야 하고
 #           화면도 그 범위를 요청해야 한다(런타임 계약 3장 frontend)
 #   - 이메일 실발송 없음: Pre sign-up Lambda가 가입을 자동 확인(autoConfirmUser·autoVerifyEmail) → Cognito 기본 메일 한도와 무관

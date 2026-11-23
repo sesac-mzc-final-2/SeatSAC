@@ -2163,7 +2163,7 @@ terraform apply -var-file=staging-k8s.tfvars -replace='random_password.db["booki
 | Job (`cinema-ops`) | 인스턴스마다 하나: `db-bootstrap-{svc}-<해시8>`(입력 Secret `db-bootstrap-accounts-{svc}` — 그 서비스 비밀번호만). 기존 인스턴스 Job `db-bootstrap-<해시8>`은 이름·입력이 그대로라 다시 돌지 않는다 |
 | 계정 비밀번호 | 서비스별 계정 비밀번호 하나를 기존·새 인스턴스가 **같이 쓴다** → 옮길 때 `{svc}-secrets`는 그대로, 호스트만 바뀐다 |
 | 새로 생기는 Secret (`cinema-staging`) | `coupon-secrets` · `coupon-migrator-secrets` · `ai-migrator-secrets` |
-| ai 계정 | `ai_app` · `ai_migrator` · `ai_query`(`ai_db`의 `movie`·`theater`·`screening` SELECT만). **ai 앱이 읽는 DB 비밀번호 Secret은 이 단계에 없다** — 6.1.4(External Secrets)에서 전달한다. 그 전까지 `APP_AI_DATA_SOURCE`는 `snapshot` 그대로 |
+| ai 계정 | `ai_app` · `ai_migrator` · `ai_query`. `ai_query`는 **계정만** 만든다(권한 없음) — 테이블이 아직 없어 SELECT를 줄 수 없다. `movie`·`theater`·`screening`의 SELECT는 ai 마이그레이션이 테이블을 만든 뒤 `GRANT`로 주고, 그러려고 `ai_migrator`만 `ai_db` 범위의 GRANT OPTION을 갖는다(data-model 6-4). **ai 앱이 읽는 DB 비밀번호 Secret은 이 단계에 없다** — 6.1.4(External Secrets)에서 전달한다. 그 전까지 `APP_AI_DATA_SOURCE`는 `snapshot` 그대로 |
 | 엔드포인트 | ConfigMap `cinema-infra-endpoints`에 `DB_HOST_{BOOKING,PAYMENT,USER,CATALOG,COUPON,AI}` 추가. `DB_HOST`는 다 옮길 때까지 남긴다 |
 | 경보 | 인스턴스마다 `cinema-staging-{svc}-db-cpu-80` · `-connections`(small 130, micro 45) · `-free-storage-2gb` |
 
@@ -2201,7 +2201,7 @@ for j in $(kubectl -n cinema-ops get jobs -l app.kubernetes.io/name=db-bootstrap
 kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data}' | tr ',' '\n' | grep DB_HOST
 ```
 
-- [ ] 새 Job 6개 마지막 줄 `PASS: 스키마 1 · 계정 2 · 권한 확인 완료 (--ssl-mode=VERIFY_IDENTITY)`, ai는 그 뒤에 `PASS: ai_query 읽기 전용 권한 확인 완료`
+- [ ] 새 Job 6개 마지막 줄 `PASS: 스키마 1 · 계정 2 · 권한 확인 완료 (--ssl-mode=VERIFY_IDENTITY)`, ai는 그 뒤에 `PASS: ai_query 계정 준비(권한 없음 — 테이블 SELECT는 ai 마이그레이션이 준다) · ai_migrator GRANT OPTION ai_db`(마이그레이션 뒤에 다시 돌면 `SELECT 3/3 테이블`)
 - [ ] `DB_HOST_*` 6개 + `DB_HOST`(기존)
 - [ ] 두 번째 plan(staging·staging-k8s) No changes
 - [ ] 기존 서비스 readiness 그대로(아무것도 옮기지 않았다)
@@ -2211,7 +2211,10 @@ kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data}' | 
 1. 옮길 서비스의 쓰기를 멈춘다(gitops에서 replicas 0 또는 시연이 없는 시간) → 기존 인스턴스의 `{svc}_db`를 덤프해 새 인스턴스에 복원(클러스터 안 Job, `{svc}_migrator` 계정 — 두 인스턴스에 같은 비밀번호)
 2. gitops PR: `overlays/staging/{svc}`의 `SPRING_DATASOURCE_URL`을 `${DB_HOST}` → `${DB_HOST_{SVC}}`로, `base/{svc}/flyway-job.yaml`의 `configMapKeyRef` 키도 같이 바꾼다
 3. Flyway Job 성공 + readiness 200 + 행 수 대조 → 다음 서비스. 순서는 catalog·user·payment → booking(블루/그린, 한 번에 하나)
-- catalog는 덤프 대신 시드를 다시 적재해도 된다(ID 고정, 8-C). coupon·ai는 새 스키마라 옮길 데이터가 없다
+- **catalog도 덤프·복원이 기본이다.** 시드를 다시 적재하는 방법(8-C, ID 고정)은 `movie`의 TMDB 보충 컬럼(장르·줄거리·감독·`poster_path` 등 — 마이그레이션 주석상 「별도 스크립트로 채운다」)까지 시드 적재가 채우는지 확인한 뒤에만 쓴다. 빠지면 영화 상세와 ai 스냅샷의 `genres`·`synopsis`가 빈다. 확인: 옮긴 뒤 `SELECT COUNT(*) FROM movie WHERE tmdb_id IS NOT NULL`이 기존 인스턴스와 같은지
+- 시드를 다시 적재한다면 **새 인스턴스로**: `lotte-seed/load`의 Job이 `DB_HOST`(기존 인스턴스)를 읽으면 `DB_HOST_CATALOG`로 바꾼 뒤 실행한다(안 바꾸면 기존 인스턴스에 다시 넣는다). catalog Flyway가 새 인스턴스에 먼저 적용돼야 한다
+- coupon·ai는 새 스키마라 옮길 데이터가 없다
+- **덤프는 파일로 남기지 않는다**: `user_db.user`에 이메일·이름이 있다. Job 안에서 덤프를 복원으로 바로 넘기고(파이프), PVC·ConfigMap·노트북에 덤프 파일을 두지 않는다. 다른 스키마도 같은 방식으로
 - 되돌리기: gitops PR을 revert하면 기존 인스턴스로 돌아간다. 그 사이 새 인스턴스에 쓰인 데이터는 기존 인스턴스에 없다 → 전환 직후 확인을 끝내고 다음으로 넘어간다
 
 **4) 정리** — 네 서비스를 모두 옮기고 며칠 지켜본 뒤 별도 PR: `rds.tf`(기존 인스턴스)·`DB_HOST`·legacy Job 삭제. 그 전에는 지우지 않는다
@@ -2221,6 +2224,8 @@ kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data}' | 
 | staging-k8s plan `DBInstanceNotFound` | 1번 전이거나 인스턴스 생성 중 | 1번 apply·`available` 확인 뒤 다시 |
 | 새 Job fetch-master `AccessDeniedException` | staging apply 전(Pod Identity 정책에 새 마스터 Secret이 없음) | 1번 먼저 |
 | 새 Job이 `Pending`으로 timeout | 노드 0대 | `cluster-scale.sh up` 뒤 다시 apply |
+| ai Job `ERROR 1146 … Table 'ai_db.movie' doesn't exist` | 옛 `query-account.sh`(테이블이 없는데 SELECT를 줌)로 실행됨 | main 최신으로 다시 plan·apply(스크립트가 바뀌어 ai Job만 다시 돈다) |
+| ai 마이그레이션의 `GRANT … TO 'ai_query'` 가 `Access denied` | ai 인스턴스 db-bootstrap이 아직 안 돌아 `ai_migrator`에 GRANT OPTION이 없음 | 2)의 ai Job PASS 확인 뒤 마이그레이션 |
 | micro 인스턴스 연결 수 경보 | `max_connections`가 작다(약 60) | 파드 수 × Hikari 풀 확인(data-model 7-1). 넘으면 클래스를 올린다 |
 
 

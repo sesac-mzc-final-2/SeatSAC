@@ -18,7 +18,8 @@
 #   - {svc}   : cinema-staging-{svc}-db (스키마 {svc}_db 하나) — var.service_db_services에 넣은 서비스만
 #   - 계정 비밀번호는 서비스별로 하나를 두 인스턴스가 같이 쓴다 → 옮길 때 {svc}-secrets는 그대로, 호스트만 DB_HOST → DB_HOST_{SVC}
 #   - Job은 자기 서비스의 비밀번호 Secret(db-bootstrap-accounts-{svc})과 자기 인스턴스의 마스터 Secret만 받는다
-#   - coupon: 다른 서비스와 같은 Secret 2개. ai: ai_app·ai_migrator·ai_query(NL2SQL 읽기 전용, data-model 6-4) 계정과
+#   - coupon: 다른 서비스와 같은 Secret 2개. ai: ai_app·ai_migrator·ai_query(NL2SQL 실행 전용, data-model 6-4 — 계정만 만들고
+#     테이블 SELECT는 ai 마이그레이션이 준다. 그래서 ai_migrator만 ai_db 범위의 GRANT OPTION을 갖는다, query-account.sh) 계정과
 #     ai-migrator-secrets까지 — ai 앱이 읽는 DB 비밀번호 전달은 6.1.4(External Secrets)에서 한다(ai-secrets는 ai.tf가 값을 다시 쓰지 않는다)
 # ------------------------------------------------------------------
 
@@ -161,7 +162,7 @@ resource "kubernetes_config_map_v1" "db_bootstrap" {
   data = {
     "fetch-master.sh"  = file("${path.module}/scripts/db-bootstrap/fetch-master.sh")
     "bootstrap.sh"     = file("${path.module}/scripts/db-bootstrap/bootstrap.sh")
-    "query-account.sh" = file("${path.module}/scripts/db-bootstrap/query-account.sh") # ai_query (ai 인스턴스만)
+    "query-account.sh" = file("${path.module}/scripts/db-bootstrap/query-account.sh") # ai_query 계정·ai_migrator GRANT OPTION (ai 인스턴스만)
   }
 }
 
@@ -264,7 +265,7 @@ resource "kubernetes_job_v1" "db_bootstrap" {
         container {
           name  = "bootstrap"
           image = var.mysql_client_image
-          # ai 인스턴스만 ai_query(읽기 전용)까지. 나머지는 이전과 같은 명령(legacy Job이 바뀌지 않게)
+          # ai 인스턴스만 ai_query 계정까지(테이블 권한은 ai 마이그레이션). 나머지는 이전과 같은 명령(legacy Job이 바뀌지 않게)
           command = each.value.query ? ["/bin/bash", "-c", "/bin/bash /scripts/bootstrap.sh && /bin/bash /scripts/query-account.sh"] : ["/bin/bash", "/scripts/bootstrap.sh"]
 
           env {

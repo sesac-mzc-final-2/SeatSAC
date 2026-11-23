@@ -10,7 +10,7 @@
 /services/ai/           @seohyeon-tomato
 # MSA 고도화(ADR-118·119): coupon(Java)·ops-api(Python)
 /services/coupon/       @imi21123 @pinodo
-/services/ops-api/      @pinodo
+/services/ops-api/      @pinodo @namgungil
 /frontend/              @imi21123 @namgungil
 /contracts/             @imi21123 @namgungil
 /contracts/openapi/ai*  @seohyeon-tomato @imi21123

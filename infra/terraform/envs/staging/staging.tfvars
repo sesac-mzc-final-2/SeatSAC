@@ -26,4 +26,4 @@ valkey_node_type      = "cache.t4g.micro"
 custom_domain = "seatsac.com"
 
 # 3.1.23 후속 CloudFront → ALB HTTPS(런북 7-8). off → prepare → (gitops 443 리스너) → on 순서로 한 단계씩 PR
-# api_origin_https = "prepare"
+api_origin_https = "prepare"

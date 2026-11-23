@@ -3,6 +3,7 @@
 > 기준 2026-10-22 (회의록2 결정 반영, ADR-49~64). 03a 명명 규칙 개정을 확정한 최종본. 03a 이후 결정(Cognito ADR-37, API 명세서 v1.1, 2.2.4 v0.3, ERD 6차)을 반영해 03a와 다른 곳은 ⚠️로 표시했다.
 > 범위: 서비스 6개(gateway·catalog·booking·user·payment + ⚠️ ai) + Lambda 2개(notification·cognito-presignup) (ADR-51·82).
 > ⚠️ 11/5 AI 재도입(ADR-82~87): `ai`는 Python(FastAPI) 사용자 챗봇. 기존 5개 서비스·RDS·기존 Valkey는 건드리지 않는다. 아래 ⚠️AI 표시 행이 새로 생긴 규칙이다.
+> 🆕 11/23 MSA 고도화(노션 ADR-114~125, API 명세서 v1.5): 서비스 8개(`coupon`·`ops-api` 추가), 서비스별 RDS 인스턴스, SNS·SQS 이벤트·명령, VIP 등급·관리자 `/ops`. 아래 🆕 표시 행이 새 규칙이다. 기존 API·키·이름은 지우지 않는다(추가만).
 > 이 문서가 노션 회의록과 다르면 이 문서를 따르고, 바꿀 때는 PR로 고친다.
 
 ---
@@ -17,8 +18,10 @@
 | user | Java | 8080 | 8083 | `http://user:8080` |
 | payment | Java | 8080 | 8084 | `http://payment:8080` |
 | ⚠️AI ai | **Python 3.12 (FastAPI·uvicorn)** | 8080 | 8085 | `http://ai:8080` |
+| 🆕 coupon | Java (Spring MVC) | 8080 | 8086 | `http://coupon:8080` |
+| 🆕 ops-api | Python 3.12 (FastAPI, 제안 — 6.0.1에서 확정) | 8080 | 8087 | `http://ops-api:8080` (외부는 CloudFront `/ops/*` → ALB, gateway를 거치지 않음) |
 | frontend | React (Vite) | 없음 (S3 + CloudFront) | 5173 (`/api` → 8080 프록시) | — |
-| MySQL 8.4 / Valkey 8.2 / ElasticMQ (로컬) | — | 3306 / 6379 / 9324 | 같음 | RDS / ElastiCache(TLS) / SQS |
+| MySQL 8.4 / Valkey 8.2 / ElasticMQ (로컬) | — | 3306 / 6379 / 9324 | 같음 | 🆕 서비스별 RDS 인스턴스 6개(ADR-115) / ElastiCache(TLS, 복제본) / SQS·SNS. 로컬은 MySQL 하나에 스키마 6개(인스턴스 분리는 staging만), ElasticMQ에 큐를 같은 이름으로 |
 | ⚠️AI ai Valkey (로컬, `valkey/valkey-bundle` — 벡터 검색 모듈 포함) | — | 6379 | 6380 | ElastiCache `cinema-staging-ai-valkey`(TLS) |
 
 | 경로 | 규칙 |
@@ -27,6 +30,7 @@
 | 내부 API | `/internal/**` — Gateway 라우팅 금지, NetworkPolicy로 호출자 제한 |
 | 헬스 | `/actuator/health/liveness`, `/actuator/health/readiness` (ALB는 gateway readiness만). ⚠️AI ai(Python)도 **같은 경로**로 맞춘다 — 프로브·PodMonitor 템플릿 공용 |
 | 메트릭 | `/actuator/prometheus` (ai도 같은 경로, `prometheus_client`) |
+| 🆕 관리자 API | `https://{도메인}/ops/**` → CloudFront 동작 `/ops/*`(CachingDisabled) → ALB 규칙(같은 IngressGroup) → `ops-api:8080`. **gateway 라우트가 아니다** — gateway를 정지해도 관리자 화면이 동작해야 해서(ADR-119). 인증은 ops-api가 Cognito Access Token을 직접 검증하고 `cognito:groups`에 `ADMIN`이 있어야 한다. `/api/admin/**`은 계속 없음 |
 | Gateway 404 | `/api/internal/**`, `/api/actuator/**`, `/api/payments/**`(payment는 포트원 웹훅 `POST /api/webhooks/portone` 하나만 연다 — 인증 없음, 서명은 payment가 검증, ADR-112), `/api/auth/**`, ⚠️AI `/api/ai/**`(플래그 `APP_AI_ENABLED=false`일 때 — 라우트 자체가 없다), `/api/admin/**`(관리자 역할·API 없음 — 11/14 삭제). 404가 보이는 조건: `/api/internal/**`·`/api/actuator/**`는 경로 차단 필터(`PathGuardWebFilter`)가 인증보다 먼저라 **항상** 404. 나머지는 `/api/**` 인증(`SecurityConfig`)이 라우팅보다 먼저라 **유효한 토큰으로 인증됐을 때만** 404이고, 토큰이 없으면 401 `UNAUTHORIZED`(`TOKEN_REQUIRED`), 만료·서명 불일치 등 잘못된 토큰이면 401 `UNAUTHORIZED`(`INVALID_TOKEN`). ⚠️AI 켜져 있을 때 `/api/ai/**` 라우트는 metadata `response-timeout: 28000`(ms) — 전역 15초의 예외(SSE 라우트와 같은 방식, `docs/service-runtime-contract.md` 9-1 시간 예산) |
 
 ## 2. 코드·API 이름
@@ -36,13 +40,13 @@
 | URL 경로 | 소문자 복수 명사, 단어는 `-`, ID는 `{camelCase}` | `/screenings/{screeningId}/seats`, `/seat-counts` |
 | JSON 필드·쿼리 파라미터 | camelCase | `screeningId`, `hasLayout` |
 | 코드 값(enum)·오류 코드·`reason` | UPPER_SNAKE | `PAYMENT_FAILED`, `SEAT_UNAVAILABLE` |
-| 이벤트 `type` | 좌석 이벤트는 UPPER (`HELD`), SQS 메시지는 `{도메인}.{과거분사}` | `booking.confirmed` |
+| 이벤트 `type` | 좌석 이벤트는 UPPER (`HELD`), SQS 메시지는 `{도메인}.{과거분사}`. 🆕 명령도 과거분사로 「…-requested」, 결과는 「…ed」(ADR-117) | `booking.confirmed`, `coupon.reservation-requested`, `payment.approved` |
 | `operationId` | camelCase 동사 시작 | `holdSeats`, `getBooking` |
 | 페이징 응답 | `{ content, page, size, totalElements, totalPages }`, `page` 0부터, `size` 기본 20·최대 50 | — |
 | 페이징 없는 목록 | ⚠️ `{ items }` (2.2.4 D8, API 명세서 1-3의 "JSON 배열"을 대체) | `GET /theaters` |
 | Java 패키지 | `com.seatsac.{service}`, 공통은 `com.seatsac.common.{core,web,test}` | `com.seatsac.booking.hold` |
-| ⚠️AI Python 패키지 | `services/ai/src/seatsac_ai/{api,snapshot,llm,sql,cache,quota}` — `libs/`(Java)는 쓰지 않는다. 오류 형식·traceId 규칙은 `seatsac_ai.common`에서 같은 계약(`error.v1.json`)으로 구현 | `seatsac_ai.sql.validator` |
-| 계약 파일 | `contracts/openapi/{service}.openapi.yaml`, `openapi/internal/{service}.internal.openapi.yaml`, `events/{이름}.v{N}.json`, `schemas/{이름}.v{N}.json` | — |
+| ⚠️AI Python 패키지 | `services/ai/src/seatsac_ai/{api,snapshot,llm,sql,cache,quota}`(🆕 6.4.7 `guide` — 이용 안내 검색) — `libs/`(Java)는 쓰지 않는다. 오류 형식·traceId 규칙은 `seatsac_ai.common`에서 같은 계약(`error.v1.json`)으로 구현 | `seatsac_ai.sql.validator` |
+| 계약 파일 | `contracts/openapi/{service}.openapi.yaml`, `openapi/internal/{service}.internal.openapi.yaml`, `events/{이름}.v{N}.json`, `schemas/{이름}.v{N}.json` | 🆕 `openapi/coupon.openapi.yaml`, `openapi/ops.openapi.yaml`, `events/coupon.reservation-requested.v1.json` |
 | OpenAPI 확장 | `x-feature-id`, `x-caller` | — |
 
 ## 3. 데이터베이스
@@ -53,13 +57,18 @@
 | `booking_db` | booking | `booking_app` | `booking_migrator` |
 | `user_db` | user | `user_app` | `user_migrator` |
 | `payment_db` | payment | `payment_app` | `payment_migrator` |
+| 🆕 `coupon_db` | coupon | `coupon_app` | `coupon_migrator` |
+| 🆕 `ai_db` | ai | `ai_app`(+ NL2SQL 실행용 읽기 전용 `ai_query`) | `ai_migrator` |
+
+🆕 11/23부터 **스키마마다 RDS 인스턴스가 따로**다(ADR-115): `cinema-staging-{svc}-db`(booking `db.t4g.small`, 나머지 `db.t4g.micro`, ai만 Single-AZ). 인스턴스 안의 스키마·계정 이름은 위 표 그대로이고, 엔드포인트 키만 `DB_HOST` → `DB_HOST_{SVC}`(런타임 계약 3장)로 바뀐다. 서비스는 자기 인스턴스에만 접속한다 — 다른 서비스 데이터가 필요하면 이벤트 복제본(ADR-116)으로.
 
 - 테이블·컬럼 `snake_case`, 테이블 단수형. 다른 스키마 FK 없음(ID 컬럼만)
 - 상태 컬럼은 `VARCHAR` + 앱 enum (MySQL ENUM 금지 — 블루/그린 중 값 추가가 어려움)
 - 문자셋 `utf8mb4` / `utf8mb4_0900_ai_ci`
 - Flyway: `services/{svc}/src/main/resources/db/migration/V{yyyyMMddHHmm}__{설명}.sql`. 확장 → 전환 → 정리 순서로, 컬럼 삭제·이름 변경은 다음 배포에
 - 시드(롯데시네마 배치·편성)는 앱 레포 Flyway에 넣지 않는다 → 비공개 `lotte-seed`
-- ⚠️AI `ai`는 **RDS에 접근하지 않는다**(계정·스키마·리포트 뷰 없음, ADR-60 유지). 검색 대상은 파드 메모리 안의 SQLite 스냅샷이고, 공개 API로만 채운다(`docs/data-model.md` 6장)
+- ⚠️AI `ai`는 다른 서비스의 DB에 접근하지 않는다. ~~RDS에 접근하지 않는다~~ → 🆕 11/23 **자기 인스턴스 `ai_db`만** 쓴다(ADR-120 — 레포 ADR-84의 「SQLite 스냅샷만」 대체, `APP_AI_DATA_SOURCE=snapshot`이면 예전처럼 스냅샷). 데이터는 catalog 이벤트 복제본 + 최초 공개 API 백필(`docs/data-model.md` 6장)
+- 🆕 서비스가 남의 데이터를 쓸 때는 **이벤트 복제본**(자기 DB 안의 사본, 필요한 컬럼만, `version`이 클 때만 덮어씀)으로 둔다. 테이블 이름은 원본과 같게 두거나 `{원본}_copy`·`{도메인}_history`. 원본은 계속 원본 서비스다
 
 ## 4. Valkey 키·채널
 
@@ -71,6 +80,8 @@
 | `seat-seq:{screeningId}` | booking | 없음 | 회차별 이벤트 일련번호. 이벤트마다 +1, **키가 없으면 현재 시각 ms × 1000부터** 시작(`seq-next.lua`) — Valkey 재시작으로 키가 사라져도 번호가 뒤로 가지 않아 열린 화면이 빈틈으로 보고 다시 받는다 |
 | `hold-expiry` (sorted set) | booking | 없음 | 멤버 `{screeningId}:{holdId}`, 점수 = 만료 시각 |
 | ⚠️ `idem:{userId}:{Idempotency-Key}` | booking | 24시간 | 요청 해시 + 처리 상태 + 첫 응답 (03a `idem:{키}` 대체) |
+| 🆕 `coupon:stock:{eventId}` | coupon | 이벤트 종료 + 1일 | 선착순 남은 수량(`DECR`, 음수면 `INCR`로 되돌리고 매진, DB INSERT 실패도 `INCR`). 원본 수량은 `coupon_db.coupon_event.total_quantity` — 키가 없으면 `total_quantity − 발급 수`로 `SET NX`. `DECR` 뒤 프로세스가 죽거나 결과를 모르면 되돌리지 않는다(덜 발급되는 쪽), 대조는 발급이 멈춘 뒤에만 — data-model 7-2 |
+| 🆕 `coupon:idem:{userId}:{Idempotency-Key}` | coupon | 24시간 | 발급 요청 멱등(booking `idem:`과 같은 모양 — 같은 키 다른 이벤트 409 `IDEMPOTENCY_KEY_CONFLICT`, 처리 중 409 `IDEMPOTENCY_IN_PROGRESS`, 끝났으면 첫 응답 재생) |
 
 | Pub/Sub 채널 | 발행 | 구독 | 메시지 |
 | --- | --- | --- | --- |
@@ -98,27 +109,41 @@
 - 그래서 **모든 `ai:*` 키에 TTL**을 단다(위 표). 의미 캐시는 앱이 최대 5,000건으로 제한(넘으면 저장하지 않음 — 1건 약 2.5KB, 합 약 13MB로 가용 메모리 약 250MB의 5%)
 - 메모리가 차서 쓰기가 실패하면: 캐시 저장 실패는 **무시**(적중 안 됨과 같음), 한도·동시 1건 키 쓰기 실패는 **거부**(503 `AI_LLM_UNAVAILABLE`, `reason` `QUOTA_STORE_UNAVAILABLE`) — 한도 확인 없이 Claude를 부르지 않는다. 경보: 메모리 80%
 
-## 5. SQS
+## 5. SQS·SNS
 
 | 대상 | 이름 |
 | --- | --- |
-| 알림 큐 | `cinema-staging-notification-events` |
+| 알림 큐 | `cinema-staging-notification-events` (그대로) |
 | DLQ | `cinema-staging-notification-events-dlq` (maxReceiveCount 3) |
 | 메시지 속성 | `type`, `traceId` (String) |
 | 본문 | envelope `{eventId, type, version, occurredAt, producer, traceId, payload}` — `contracts/events/booking.confirmed.v1.json` |
 | 발송 | ⚠️ booking 아웃박스(`booking_db.outbox_message`) + 릴레이(파드마다 1초). 요청 스레드에서 보내지 않음 |
+
+🆕 11/23 서비스 간 메시징(ADR-117, API 명세서 v1.5 26장)
+
+| 대상 | 이름 | 비고 |
+| --- | --- | --- |
+| 이벤트 토픽(SNS) | `cinema-staging-booking-events`, `cinema-staging-catalog-events` | 보내는 서비스 하나가 소유 |
+| 구독 큐 | `cinema-staging-{소비 svc}-{도메인}-events` — `user-booking-events`, `ai-catalog-events`, (여유 시) `booking-catalog-events` | raw message delivery |
+| 명령 큐 | `cinema-staging-{svc}-commands` — `coupon-commands`, `payment-commands` | saga 명령 |
+| 결과 큐 | `cinema-staging-booking-replies` | saga 결과(coupon·payment → booking) |
+| DLQ | `{큐}-dlq`, maxReceiveCount 3, 메시지 1건 이상이면 경보 | 큐마다 |
+| 메시지 속성 | `type`, `traceId`, 🆕 `correlationId`(saga = `checkoutId`) | String |
+| 본문 | 기존 envelope + `correlationId` | `contracts/events/{type}.v1.json` |
+| 보내기 | 같은 트랜잭션에 `outbox_message` 행 → 릴레이(1초) | booking·catalog·coupon·payment |
+| 받기 | 서비스 파드가 SQS long polling(20초), `processed_message(message_id UK)`로 한 번만. Lambda는 외부 작업(알림)만 | 받는 서비스 전부 |
 
 ## 6. 오류·헤더·시간·ID·로그
 
 | 대상 | 규칙 |
 | --- | --- |
 | 오류 응답 | ⚠️ `{ code, message, traceId, details[] }` — `details`는 **항상 배열**(없으면 `[]`), 원소 `{ field, value?, reason? }`. 화면 분기는 `code`로 한다 — 단 **401 `UNAUTHORIZED`는 `details[].reason`으로 나눈다**(재로그인으로 풀리지 않는 user의 `TOKEN_REJECTED`·`IDENTITY_MISMATCH`, 아래 공통 오류 코드 표). `message`는 개발용 (`contracts/schemas/error.v1.json`) |
-| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(항상 `USER` — 관리자 역할 없음, 11/14), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`, `X-Payment-Mock-Key`(모의 결제 허용 키 — k6·분석 Job만, 값은 booking Secret, ADR-112), 포트원 웹훅 `webhook-id`·`webhook-timestamp`·`webhook-signature`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
+| 헤더 | `Authorization: Bearer {Cognito Access Token}`, `X-User-Id`(= `sub`), `X-User-Role`(항상 `USER` — 관리자 역할 없음, 11/14. 🆕 관리자는 `/ops`에서 ops-api가 토큰의 `ADMIN` 그룹을 직접 본다), 🆕 `X-User-Grade`(`NORMAL`·`VIP` — 토큰 `cognito:groups`에 `VIP`가 있으면 VIP, ADR-118. 외부 값은 모든 라우트에서 지우고 인증된 요청에만 붙인다. 그룹 변경은 토큰 재발급 뒤 반영), `X-Trace-Id`, `Idempotency-Key`, `CloudFront-Viewer-Address`, `X-Payment-Mock-Key`(모의 결제 허용 키 — k6·분석 Job만, 값은 booking Secret, ADR-112), 포트원 웹훅 `webhook-id`·`webhook-timestamp`·`webhook-signature`. 외부에서 들어온 `X-User-*`·`X-Trace-Id`는 Gateway가 지우거나 덮어쓴다 |
 | traceId | ⚠️ 소문자 16진수 **32자리**(UUID 하이픈 제거). Gateway가 요청마다 생성, 응답 헤더에도. 요청 없는 작업(만료 스캔·릴레이)은 새로 생성 |
 | 시간 | DB `DATETIME(3)` **UTC**(RDS `time_zone=UTC`, 앱 `Clock.systemUTC()`, 상태 전이 조건에 `NOW()` 대신 앱이 구한 `:now`). API·메시지는 ISO-8601 `+09:00`. `business_date`·`date` 파라미터·화면은 Asia/Seoul |
 | ID | PK `BIGINT AUTO_INCREMENT`(Java `Long`, OpenAPI `int64`). ⚠️ 사용자 ID = Cognito `sub`(`CHAR(36)`, `String`). holdId·paymentId·eventId = UUID v4 `CHAR(36)` |
-| 금액 | 정수(원). 1석 15,000원, `amount = seatCount × 15000` |
-| 로그 | stdout JSON 한 줄: `timestamp`(+09:00), `level`, `service`, `traceId`, `userId`(있으면), `message`, `error`(있으면). 카드 번호·토큰·비밀번호 금지 |
+| 금액 | 정수(원). 1석 15,000원, `amount = seatCount × 15000`. 🆕 쿠폰을 쓰면 `final = amount − floor(amount × discountRate / 100)`(결제 준비 전에 booking이 확정, ADR-118) |
+| 로그 | stdout JSON 한 줄: `timestamp`(+09:00), `level`, `service`, `traceId`, `userId`(있으면), `message`, `error`(있으면). 카드 번호·토큰·비밀번호 금지. 🆕 오류·보안 로그에는 `errorCategory`(`HTTP_UPSTREAM`·`TIMEOUT`·`AUTH`·`FORBIDDEN`·`SECURITY`·`VALIDATION`·`CONFLICT`·`INTERNAL`, ADR-121) — 일자별 리포트가 이 값으로 나눈다. `SECURITY`는 401·403·차단 경로(`/api/internal`·`actuator`)·위조 헤더·WAF 차단. 메시지 소비 로그는 `messageType`·`correlationId` |
 
 ### 공통 오류 코드
 
@@ -130,7 +155,7 @@
 | 401 | `UNAUTHORIZED`(reason `WEBHOOK_SIGNATURE_INVALID`) | payment 웹훅 |
 | 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
-| 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |
+| 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking (🆕 멱등 두 코드는 coupon 발급 `POST /coupons/events/{eventId}/claim`도 같은 뜻으로 쓴다 — 4장 `coupon:idem`) |
 | 409 | `PAYMENT_CONFLICT`, `PAYMENT_NOT_APPROVED` | payment (내부) |
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
@@ -139,7 +164,15 @@
 | 409 | ⚠️AI `AI_QUERY_IN_PROGRESS` | ai — 같은 사용자의 질문이 처리 중(동시 1건) |
 | 429 | ⚠️AI `AI_QUOTA_EXCEEDED` | ai — 사용 한도 초과. `details[].reason` `PER_MINUTE`·`PER_DAY`. gateway 요청 수 제한(ADR-62 미도입)과 다른, ai 앱 안의 비용 보호 |
 | 503 | ⚠️AI `AI_LLM_UNAVAILABLE` | ai — Claude API 타임아웃·과부하·지출 한도·서킷 열림. `details[].reason` `TIMEOUT`·`OVERLOADED`·`RATE_LIMITED`·`SPEND_LIMIT`·`CIRCUIT_OPEN`·`QUOTA_STORE_UNAVAILABLE`(ai Valkey에 한도를 기록하지 못함) |
-| 503 | ⚠️AI `AI_SNAPSHOT_NOT_READY` | ai — 기동 직후 SQLite 스냅샷 첫 적재 전 |
+| 503 | ⚠️AI `AI_SNAPSHOT_NOT_READY` | ai — 기동 직후 SQLite 스냅샷 첫 적재 전(🆕 `APP_AI_DATA_SOURCE=db`면 첫 백필 전) |
+| 409 | 🆕 `CHECKOUT_IN_PROGRESS`, `CHECKOUT_NOT_READY`, `PAYMENT_PATH_CONFLICT` | booking — 체크아웃 saga(ADR-116). 동기 결제와 체크아웃을 한 예매에 섞으면 `PAYMENT_PATH_CONFLICT` |
+| 403 | 🆕 `COUPON_NOT_ELIGIBLE` | coupon — VIP 아님 |
+| 409 | 🆕 `COUPON_EVENT_NOT_OPEN`(`reason` `UPCOMING`·`CLOSED`), `COUPON_SOLD_OUT`, `COUPON_ALREADY_CLAIMED` | coupon |
+| — | 🆕 `COUPON_NOT_USABLE`, `PAYMENT_DECLINED`, `STEP_TIMEOUT`, `HOLD_EXPIRED` | booking 체크아웃 응답의 `failure.code`(HTTP 오류가 아니라 200 응답 안의 값). `STEP_TIMEOUT`은 돈이 움직이기 전 단계만, 결제 결과 불명은 `HOLD_EXPIRED`(`reason` `PAYMENT_RESULT_UNKNOWN`). coupon 거절 `reason`은 `NOT_OWNER`·`NOT_ISSUED`·`EXPIRED`·`ALREADY_RELEASED`. 🆕 `COUPON_NOT_USABLE`은 `state` `COUPON_REJECTED`와 함께 온다 — 예매는 그대로라 화면은 남은 선점 시간 안에 쿠폰을 다시 고르거나 쿠폰 없이 결제하게 한다 |
+| 413 | 🆕 `PAYLOAD_TOO_LARGE` | gateway — 요청 본문 64KB 초과(ADR-124) |
+| 400 | 🆕 `SERVICE_NOT_STOPPABLE` | ops-api — 정지/가동 대상이 아님 |
+| 409 | 🆕 `ROLLOUT_IN_PROGRESS` | ops-api — booking·gateway 블루/그린 진행 중 |
+| 503 | 🆕 `REPORT_UNAVAILABLE` | ops-api — Athena·S3 오류 |
 
 새 코드는 이 표와 해당 OpenAPI 응답 `description`에 함께 추가한다. ⚠️AI ai 코드는 `services/ai` 안에서 정의하고 `libs/`의 `CommonResponseCode`는 바꾸지 않는다(Python이라 `libs/`를 쓰지 않음). 형식은 `error.v1.json` 그대로
 
@@ -159,8 +192,9 @@
 | 인증 | ⚠️ `APP_COGNITO_ISSUER_URI`, `APP_COGNITO_CLIENT_ID` (gateway 앱 설정 `app.cognito.*`, Spring 표준 `SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI`는 쓰지 않음. 03a `APP_JWT_SECRET`·`jwt-secret` 삭제) | — |
 | AWS | SDK 표준 `AWS_REGION=ap-northeast-2`. 자격 증명은 Pod Identity, 액세스 키 금지 | — |
 | frontend | `VITE_` (빌드에 포함 = 공개 값만). 개발 전용(빌드에 안 들어감): `DEV_API_PROXY` — Vite 프록시 `/api` 대상(기본 `http://localhost:8080`, 목 서버는 `npm run dev:mock`) | `VITE_API_BASE_URL=/api`, `VITE_COGNITO_AUTHORITY` |
-| K8s Secret (Terraform 생성) | `{service}-secrets`(앱), `{service}-migrator-secrets`(Flyway Job만) | `booking-secrets` |
-| ConfigMap | `{service}-config`(gitops, 엔드포인트는 `${키}`만), ⚠️ `cinema-infra-endpoints`(Terraform, 엔드포인트 — 키는 `docs/service-runtime-contract.md` 3장) | `${DB_HOST}` |
+| K8s Secret | `{service}-secrets`(앱), `{service}-migrator-secrets`(Flyway Job만). ~~Terraform 생성~~ → 🆕 External Secrets가 Secrets Manager `cinema/staging/{service}`에서 동기화(ADR-123) — 이름·키는 그대로 | `booking-secrets` |
+| ConfigMap | `{service}-config`(gitops, 엔드포인트는 `${키}`만), ⚠️ `cinema-infra-endpoints`(Terraform, 엔드포인트 — 키는 `docs/service-runtime-contract.md` 3장) | `${DB_HOST}` → 🆕 `${DB_HOST_BOOKING}` |
+| 🆕 ops-api(Python) | `OPS_*`(pydantic-settings), 엔드포인트 키는 ai처럼 이름 그대로 읽음 | `OPS_PROMETHEUS_URL` |
 | 프로필 | `local`, `staging` | `SPRING_PROFILES_ACTIVE=staging` |
 | ⚠️AI ai(Python) | `APP_AI_*`(pydantic-settings). **Python은 `${키}` 치환이 없으므로** `cinema-infra-endpoints`의 키(`AI_VALKEY_HOST`·`PUBLIC_API_BASE_URL`)를 이름 그대로 읽는다. 프로필은 `APP_ENV=local\|staging` | `APP_AI_MODEL=claude-sonnet-5-5` |
 | ⚠️AI gateway 플래그 | `APP_AI_ENABLED`(gateway `{svc}-config`, 기본 `false`) — `app.ai.enabled`. 꺼져 있으면 `/api/ai/**` 라우트가 없다 → 404 | — |
@@ -174,14 +208,16 @@
 | --- | --- | --- |
 | 공통 접두사 / 환경 | `cinema` / `staging` (환경은 staging 하나, ADR-34) | — |
 | 앱 namespace | `cinema-staging` | — |
-| 플랫폼 namespace | 도구 기본값 | `argocd`, `argo-rollouts`, `monitoring`, `kube-system` |
+| 플랫폼 namespace | 도구 기본값 | `argocd`, `argo-rollouts`, `monitoring`, `kube-system`, 🆕 `external-secrets`, `karpenter` |
 | 관리자 namespace | `cinema-ops` (팀원 조회 범위 밖, Terraform이 만드는 운영 Job·그 입력 Secret) | `db-bootstrap-*` Job (3.1.12) |
-| AWS 리소스 | `cinema-staging-{대상}` | `cinema-staging-eks`, `cinema-staging-valkey`, `cinema-staging-users`(Cognito), ⚠️AI `cinema-staging-ai-valkey`, `cinema-staging-ng-ai`(노드그룹) |
+| AWS 리소스 | `cinema-staging-{대상}` | `cinema-staging-eks`, `cinema-staging-valkey`, `cinema-staging-users`(Cognito), ⚠️AI `cinema-staging-ai-valkey`, `cinema-staging-ng-ai`(노드그룹), 🆕 `cinema-staging-{svc}-db`(RDS 6), `cinema-staging-{도메인}-events`(SNS), `cinema-staging-{svc}-commands`(SQS), `cinema-staging-reports`(Athena 작업 그룹), `cinema-staging-waf` |
+| 🆕 Secrets Manager | `cinema/staging/{service}` | `cinema/staging/booking` |
+| 🆕 Cognito 그룹 | `VIP`(쿠폰 대상), `ADMIN`(관리자 `/ops`만) | — |
 | 계정 단위 리소스 | `cinema-{대상}` | `cinema-admin`, `cinema-developer`, `cinema-gha-ecr-push`, `cinema-tfstate-{계정ID}` |
-| S3 버킷 | `cinema-staging-frontend-{계정ID}`, `cinema-tfstate-{계정ID}`, `cinema-staging-loki-{계정ID}`(3.1.24 로그) | — |
-| ECR | `cinema/{service}` (frontend 없음) | `cinema/booking`, ⚠️AI `cinema/ai` |
+| S3 버킷 | `cinema-staging-frontend-{계정ID}`, `cinema-tfstate-{계정ID}`, `cinema-staging-loki-{계정ID}`(3.1.24 로그), 🆕 `cinema-staging-reports-{계정ID}`(오류·보안 리포트·Athena 결과) | — |
+| ECR | `cinema/{service}` (frontend 없음) | `cinema/booking`, ⚠️AI `cinema/ai`, 🆕 `cinema/coupon`, `cinema/ops-api` |
 | 이미지 태그 | git SHA 7자리, 불변 | `cinema/booking:3f9a1c2` |
-| Pod Identity 역할 | `cinema-staging-{대상}-pod` | `cinema-staging-booking-pod`, `cinema-staging-loki-pod`(3.1.24) |
+| Pod Identity 역할 | `cinema-staging-{대상}-pod` | `cinema-staging-booking-pod`, `cinema-staging-loki-pod`(3.1.24), 🆕 `cinema-staging-{coupon,payment,user,catalog,ai,ops-api,external-secrets,karpenter}-pod` |
 | Lambda | `cinema-staging-{기능}` | `cinema-staging-notification`, `cinema-staging-cognito-presignup` |
 | K8s 리소스 | `{service}`, Rollout 미리보기 Service `{service}-preview`, Flyway Job `{service}-flyway` | `booking-preview` |
 | 공통 라벨 | `app.kubernetes.io/name={service}`, `app.kubernetes.io/part-of=cinema` | — |

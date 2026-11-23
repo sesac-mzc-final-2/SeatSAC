@@ -187,6 +187,35 @@ variable "app_namespace" {
   default     = "cinema-staging"
 }
 
+# ---- 6.1.2 가용성 (ADR-122) --------------------------------------------
+variable "nat_gateway_per_az" {
+  description = "true면 NAT Gateway를 AZ마다 1개(a·c) 둔다. false(기본)는 AZ a에 1개. 바꿀 때는 런북 5-6 순서로 apply"
+  type        = bool
+  default     = false
+}
+
+variable "valkey_replicas" {
+  description = "좌석 선점 Valkey 복제본 수(0 또는 1). 1이면 AZ c에 복제본을 두고 자동 장애 조치·Multi-AZ를 켠다 (ADR-122)"
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1], var.valkey_replicas)
+    error_message = "valkey_replicas는 0 또는 1 (AZ가 2개다)."
+  }
+}
+
+variable "ai_valkey_replicas" {
+  description = "⚠️AI ai Valkey 복제본 수(0 또는 1). 1이면 AZ c에 복제본 + 자동 장애 조치 (ADR-122 「Valkey 2개」)"
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1], var.ai_valkey_replicas)
+    error_message = "ai_valkey_replicas는 0 또는 1 (AZ가 2개다)."
+  }
+}
+
 # ---- 3.1.12 DB 계정 생성 Job ------------------------------------------
 variable "ops_namespace" {
   description = "관리자 전용 namespace(팀원 조회 범위 밖). DB 계정 생성 Job·그 입력 Secret이 여기 있다. envs/staging-k8s의 ops_namespace와 같은 값"

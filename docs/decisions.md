@@ -85,14 +85,14 @@
 | --- | --- | --- |
 | 114 | 범위: 기간 11/23~27(4명 — 11/23~25 구현, 11/26 통합 테스트·비교 측정, 11/27 통합 시연·리허설), 목표 = 서비스별 DB·비동기 saga·장애 격리·관리자 운영. 하루 비용 상한 $50, 못 끝내면 새 계정으로 이어서(125). 순서는 노션 「MSA 고도화 (WBS)」 「순서」 열 | 52 보완 |
 | 115 | **서비스별 RDS 인스턴스** `cinema-staging-{svc}-db` 6개(booking small·나머지 micro, ai 외 Multi-AZ), `DB_HOST_{SVC}`, 인스턴스별 db-bootstrap | 3·33·61 대체 |
-| 116 | 체크아웃 **오케스트레이션 saga**(booking이 오케스트레이터): 새 리소스 `/bookings/{id}/checkout`(202 + 폴링), 쿠폰 예약 → 결제 준비 → 확인 → 확정, 실패는 역순 보상, 단계 기한 30초. 기존 `/payments`·`/pay`는 유지, 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 off)·화면 `VITE_CHECKOUT_MODE` | 동기 경로와 비교 시연 |
+| 116 | 체크아웃 **오케스트레이션 saga**(booking이 오케스트레이터): 새 리소스 `/bookings/{id}/checkout`(202 + 폴링), 쿠폰 예약 → 결제 준비 → 확인 → 확정, 실패는 역순 보상, ~~단계 기한 30초~~ 🆕 단계 기한 10초(돈이 움직이기 전 단계만 — 결제 확인은 보상 없이 재확인, 선점 만료 뒤에는 예매 상태를 따름), 쿠폰 거절은 보상 없이 `COUPON_REJECTED`(예매·좌석 유지, 다시 시작 가능). 기존 `/payments`·`/pay`는 유지, 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 off)·화면 `VITE_CHECKOUT_MODE` | 동기 경로와 비교 시연 |
 | 117 | 메시징 **SNS(이벤트) + SQS(명령·결과)**, 큐마다 DLQ 3회, 아웃박스 + inbox(`processed_message`), `correlationId` = checkoutId. 파드가 SQS 직접 소비, Lambda는 외부 작업만 | 22·23 보완, 30 유지 |
 | 118 | **coupon 서비스**(Java, `coupon_db`): VIP 선착순 쿠폰, 재고 Valkey DECR + DB 유일 제약, VIP는 Cognito 그룹 → gateway `X-User-Grade` | 37 보완 |
 | 119 | **ops-api**(Python, `/ops/*` CloudFront → ALB, gateway 우회): Cognito `ADMIN` 그룹만, 상태·정지/가동(replicas 0 ↔ 원래 값, ArgoCD `ignoreDifferences`)·리포트. 감사 로그 | 37 보완. GitOps 예외(replicas만) |
 | 120 | ai는 자기 **`ai_db`** 복제본(catalog 이벤트 + 백필 + 10분 대조)과 `unmet_demand`, `APP_AI_DATA_SOURCE=snapshot\|db`, ops-api용 내부 통계 API | 84 보완 |
 | 121 | 리포트: 로그 `errorCategory` → Loki → S3 `cinema-staging-reports-*`(1시간 CronJob) → Glue → Athena → CSV(presigned 5분) | 113 확장 |
 | 122 | 가용성: NAT AZ별 2개, Multi-AZ RDS·Valkey 복제본, 핵심 서비스 replicas 2 + topologySpread, **Karpenter**(t3 계열 On-Demand) | 7·34 보완 |
-| 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-eso-pod` | 10 대체 |
+| 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-external-secrets-pod`(conventions 9장 이름 규칙 `cinema-staging-{대상}-pod`) | 10 대체 |
 | 124 | ⏳ 보안: WAF(관리형 규칙 + IP 요청 제한), gateway 본문 64KB(413 `PAYLOAD_TOO_LARGE`), `SECURITY` 로그, 원본 HTTPS `on` | 검토 중. 62 재검토 |
 | 125 | 새 AWS 계정 이전: 기존 계정 리소스를 그대로 두고 Terraform을 새 계정에 다시 apply(bootstrap → global → staging → staging-k8s), 도메인은 Route 53 등록 이전 + 새 호스팅 영역, ECR 이미지는 CI 재빌드 | 이전할 때만 |
 | 126 | ai 추가 고도화 두 가지. **이용 안내 RAG**: 사이트 이용 안내 문서만, 파드 메모리 색인, 플래그 `APP_AI_RAG_ENABLED`(기본 off), 응답 `path: RAG`·`sources`. **수요 → 백로그 워크플로우**(LangGraph): 통계 API 응답 → 묶기 → 기준 미달은 건너뜀 → 제안서 초안 → 사람 승인 → 파일. 로컬 실행, 클러스터 배포 없음, 코드·PR 생성 없음 | 120 보완(노션 ADR-120에 표시). WBS 6.4.7·6.4.8(6.4.1~6.4.4·6.4.6은 그대로) |

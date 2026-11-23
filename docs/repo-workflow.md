@@ -35,8 +35,8 @@ SeatSAC-gitops/
 ├── apps/staging/          App of Apps 대상(project·플랫폼 2·cinema-common). root 앱·서비스 Application 5개는 SeatSAC Terraform(staging-k8s argocd_apps.tf)
 ├── platform/              Argo Rollouts, kube-prometheus-stack values (LB Controller는 Terraform envs/staging-k8s) · 🆕 karpenter(NodePool·EC2NodeClass)·external-secrets(ClusterSecretStore)
 ├── base/{service}/        Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, PodMonitor, Flyway 훅 Job(Sync wave -1)
-│                          ⚠️AI base/ai: Deployment(nodeSelector·toleration ng-ai)·Service·NetworkPolicy(gateway·monitoring → ai)·PodMonitor (HPA·Flyway 없음)
-│                          🆕 base/coupon: Deployment·Service·HPA·NetworkPolicy(gateway·monitoring → coupon)·PodMonitor·Flyway Job·ExternalSecret
+│                          ⚠️AI base/ai: Deployment(nodeSelector·toleration ng-ai)·Service·NetworkPolicy(gateway·monitoring → ai, 🆕 ops-api → ai 내부 통계)·PodMonitor (HPA 없음. Flyway는 🆕 `ai_db`를 쓰기 전까지 없음 — 런타임 계약 9-1)
+│                          🆕 base/coupon: Deployment·Service·HPA·NetworkPolicy(gateway·ops-api·monitoring → coupon — ops-api는 내부 이벤트 생성·목록)·PodMonitor·Flyway Job·ExternalSecret
 │                          🆕 base/ops-api: Deployment·Service·Ingress(IngressGroup `cinema`, `/ops`)·Role·RoleBinding·ServiceAccount·NetworkPolicy·PodMonitor
 │                          🆕 base/{svc}/externalsecret.yaml(sync wave -3) — Secret 매니페스트 대신
 ├── base/common/           앱 namespace 인바운드 기본 거부 + analysis

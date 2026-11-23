@@ -80,7 +80,7 @@
 | `seat-seq:{screeningId}` | booking | 없음 | 회차별 이벤트 일련번호. 이벤트마다 +1, **키가 없으면 현재 시각 ms × 1000부터** 시작(`seq-next.lua`) — Valkey 재시작으로 키가 사라져도 번호가 뒤로 가지 않아 열린 화면이 빈틈으로 보고 다시 받는다 |
 | `hold-expiry` (sorted set) | booking | 없음 | 멤버 `{screeningId}:{holdId}`, 점수 = 만료 시각 |
 | ⚠️ `idem:{userId}:{Idempotency-Key}` | booking | 24시간 | 요청 해시 + 처리 상태 + 첫 응답 (03a `idem:{키}` 대체) |
-| 🆕 `coupon:stock:{eventId}` | coupon | 이벤트 종료 + 1일 | 선착순 남은 수량(`DECR`, 음수면 `INCR`로 되돌리고 매진, DB INSERT 실패도 `INCR`). 원본 수량은 `coupon_db.coupon_event.total_quantity` — 키가 없으면 `total_quantity − 발급 수`로 `SET NX` |
+| 🆕 `coupon:stock:{eventId}` | coupon | 이벤트 종료 + 1일 | 선착순 남은 수량(`DECR`, 음수면 `INCR`로 되돌리고 매진, DB INSERT 실패도 `INCR`). 원본 수량은 `coupon_db.coupon_event.total_quantity` — 키가 없으면 `total_quantity − 발급 수`로 `SET NX`. `DECR` 뒤 프로세스가 죽거나 결과를 모르면 되돌리지 않는다(덜 발급되는 쪽), 대조는 발급이 멈춘 뒤에만 — data-model 7-2 |
 | 🆕 `coupon:idem:{userId}:{Idempotency-Key}` | coupon | 24시간 | 발급 요청 멱등(booking `idem:`과 같은 모양 — 같은 키 다른 이벤트 409 `IDEMPOTENCY_KEY_CONFLICT`, 처리 중 409 `IDEMPOTENCY_IN_PROGRESS`, 끝났으면 첫 응답 재생) |
 
 | Pub/Sub 채널 | 발행 | 구독 | 메시지 |
@@ -155,7 +155,7 @@
 | 401 | `UNAUTHORIZED`(reason `WEBHOOK_SIGNATURE_INVALID`) | payment 웹훅 |
 | 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
-| 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |
+| 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking (🆕 멱등 두 코드는 coupon 발급 `POST /coupons/events/{eventId}/claim`도 같은 뜻으로 쓴다 — 4장 `coupon:idem`) |
 | 409 | `PAYMENT_CONFLICT`, `PAYMENT_NOT_APPROVED` | payment (내부) |
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
@@ -168,7 +168,7 @@
 | 409 | 🆕 `CHECKOUT_IN_PROGRESS`, `CHECKOUT_NOT_READY`, `PAYMENT_PATH_CONFLICT` | booking — 체크아웃 saga(ADR-116). 동기 결제와 체크아웃을 한 예매에 섞으면 `PAYMENT_PATH_CONFLICT` |
 | 403 | 🆕 `COUPON_NOT_ELIGIBLE` | coupon — VIP 아님 |
 | 409 | 🆕 `COUPON_EVENT_NOT_OPEN`(`reason` `UPCOMING`·`CLOSED`), `COUPON_SOLD_OUT`, `COUPON_ALREADY_CLAIMED` | coupon |
-| — | 🆕 `COUPON_NOT_USABLE`, `PAYMENT_DECLINED`, `STEP_TIMEOUT`, `HOLD_EXPIRED` | booking 체크아웃 응답의 `failure.code`(HTTP 오류가 아니라 200 응답 안의 값). `STEP_TIMEOUT`은 돈이 움직이기 전 단계만, 결제 결과 불명은 `HOLD_EXPIRED`(`reason` `PAYMENT_RESULT_UNKNOWN`). coupon 거절 `reason`은 `NOT_OWNER`·`NOT_ISSUED`·`EXPIRED`·`ALREADY_RELEASED` |
+| — | 🆕 `COUPON_NOT_USABLE`, `PAYMENT_DECLINED`, `STEP_TIMEOUT`, `HOLD_EXPIRED` | booking 체크아웃 응답의 `failure.code`(HTTP 오류가 아니라 200 응답 안의 값). `STEP_TIMEOUT`은 돈이 움직이기 전 단계만, 결제 결과 불명은 `HOLD_EXPIRED`(`reason` `PAYMENT_RESULT_UNKNOWN`). coupon 거절 `reason`은 `NOT_OWNER`·`NOT_ISSUED`·`EXPIRED`·`ALREADY_RELEASED`. 🆕 `COUPON_NOT_USABLE`은 `state` `COUPON_REJECTED`와 함께 온다 — 예매는 그대로라 화면은 남은 선점 시간 안에 쿠폰을 다시 고르거나 쿠폰 없이 결제하게 한다 |
 | 413 | 🆕 `PAYLOAD_TOO_LARGE` | gateway — 요청 본문 64KB 초과(ADR-124) |
 | 400 | 🆕 `SERVICE_NOT_STOPPABLE` | ops-api — 정지/가동 대상이 아님 |
 | 409 | 🆕 `ROLLOUT_IN_PROGRESS` | ops-api — booking·gateway 블루/그린 진행 중 |

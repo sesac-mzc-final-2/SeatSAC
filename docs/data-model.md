@@ -164,14 +164,15 @@
 
 | 스키마 | 테이블 | 키·제약 | 비고 |
 | --- | --- | --- | --- |
-| `booking_db` | `checkout_saga` | PK `checkout_id` CHAR(36), INDEX (`booking_id`, `created_at`), INDEX (`state`, `step_deadline_at`)(스윕) | `state`(STARTED·COUPON_RESERVING·PAYMENT_PREPARING·READY_TO_PAY·CHARGING·VERIFYING·CONFIRMED·COMPENSATING·FAILED·EXPIRED), `method`(TOSSPAY·CARD), `coupon_issue_id`, `discount_rate`, `original_amount`·`discount_amount`·`final_amount`, `payment_id`, `failure_code`·`failure_reason`, `step_deadline_at`, `verify_attempt`. 진행 중 체크아웃은 예매당 1건(앱이 확인, 409 `CHECKOUT_IN_PROGRESS`) |
+| `booking_db` | `checkout_saga` | PK `checkout_id` CHAR(36), 🆕 UK `active_booking_id`, INDEX (`booking_id`, `created_at`), INDEX (`state`, `step_deadline_at`)(스윕) | `state`(STARTED·COUPON_RESERVING·PAYMENT_PREPARING·READY_TO_PAY·CHARGING·VERIFYING·CONFIRMED·COMPENSATING·FAILED·EXPIRED·🆕 COUPON_REJECTED), `method`(TOSSPAY·CARD), `coupon_issue_id`, `discount_rate`, `original_amount`·`discount_amount`·`final_amount`, `payment_id`, `failure_code`·`failure_reason`, `step_deadline_at`, `verify_attempt`. ~~진행 중 체크아웃은 예매당 1건(앱이 확인)~~ → 🆕 진행 중 체크아웃은 예매당 1건 — 생성 열 `active_booking_id`(진행 중 상태일 때만 `booking_id`, 끝난 상태면 NULL)의 UK가 동시 요청까지 막는다(409 `CHECKOUT_IN_PROGRESS`). 끝난 행은 NULL이라 쿠폰 거절 뒤 같은 예매에 새 행을 만들 수 있다 |
 | `booking_db` | `booking` (기존) | 그대로 | `amount`는 선점 후 불변(원가). 할인·최종 금액은 `checkout_saga`에만, `booking.confirmed`의 `amount`(최종)·`discountAmount`로 내보냄 |
 | `booking_db` | `processed_message` | PK `message_id` | 결과(reply) inbox |
-| `booking_db` | `outbox_message` (기존) | 그대로 | 명령·이벤트도 같은 표에 `event_type`으로. 결제 재확인은 새 행 `aggregate_id = {checkoutId}:{attempt}`(새 `eventId`) |
+| `booking_db` | `outbox_message` (기존) | 🆕 열 `aggregate_key VARCHAR(80) NOT NULL DEFAULT ''` 추가, UK (`event_type`, `aggregate_id`) → (`event_type`, `aggregate_id`, `aggregate_key`) | 명령·이벤트도 같은 표에 `event_type`으로. ~~결제 재확인은 새 행 `aggregate_id = {checkoutId}:{attempt}`~~ → 🆕 `aggregate_id`는 BIGINT라 문자열을 넣을 수 없다 — `aggregate_id = bookingId` 그대로, 명령은 `aggregate_key = {checkoutId}:{단계}`, 결제 재확인은 `{checkoutId}:{attempt}`(새 `eventId`). 기존 행·이전 버전 파드가 넣는 행은 `''`라 기존 유일 보장이 그대로다(블루/그린 중 두 버전 공존) |
 | `payment_db` | `processed_message` · `outbox_message` | 같은 구조 | 명령 inbox · 결과 발송 |
+| `payment_db` | 🆕 `saga_payment` | PK `payment_id`, INDEX (`checkout_id`) | saga 명령으로 만든 결제 표시(`checkout_id`, `booking_id`). payment 스윕·포트원 웹훅이 이 결제를 APPROVED·FAILED로 닫으면 **같은 트랜잭션에 결과 이벤트**(`payment.approved`·`payment.declined`)를 outbox에 넣는다 — 체크아웃 중 booking은 payment를 조회하지 않기 때문. 동기 경로 결제는 행이 없어 지금과 같다 |
 | `user_db` | `booking_history` | PK `booking_id`, INDEX (`user_id`, `confirmed_at`) | `status` CONFIRMED·CANCELED, `screening_id`, `seat_count`, `amount`·`discount_amount`(NULL 허용), `confirmed_at`·`canceled_at`. CANCELED가 이긴다(순서 역전) |
 | `user_db` | `booking_history_sync` · `processed_message` | PK `user_id` · PK `message_id` | 사용자별 첫 조회 1회 sync 채움 기록 · inbox |
-| `catalog_db` | `outbox_message` · `screening.version` 열 | 컬럼·유일 제약은 booking과 같다(UK (`event_type`, `aggregate_id`)) — 단 `aggregate_id = {screeningId 또는 movieId}:{version}` · `BIGINT` | `screening.changed`·`movie.changed` 발행, 복제본은 `version`이 클 때만 덮어씀. 같은 회차·영화가 바뀔 때마다 `version`이 올라 **변경 1번 = 새 행 1개**(booking 결제 재확인의 `{checkoutId}:{attempt}`와 같은 방식 — ID만 넣으면 두 번째 변경이 유일 제약에 걸린다) |
+| `catalog_db` | `outbox_message` · `screening.version` 열 | 컬럼·유일 제약은 booking과 같다(🆕 UK (`event_type`, `aggregate_id`, `aggregate_key`)) — `aggregate_id` = screeningId 또는 movieId, 🆕 `aggregate_key` = `{version}` · `BIGINT` | `screening.changed`·`movie.changed` 발행, 복제본은 `version`이 클 때만 덮어씀. 같은 회차·영화가 바뀔 때마다 `version`이 올라 **변경 1번 = 새 행 1개**(booking 결제 재확인과 같은 `aggregate_key` 방식 — ID만 넣으면 두 번째 변경이 유일 제약에 걸리고, `aggregate_id`는 BIGINT라 `{id}:{version}` 문자열을 넣을 수 없다) |
 | `coupon_db` | `coupon_event` | PK `event_id` | `title`, `discount_rate`, `eligible_grade`(VIP), `total_quantity`, `starts_at`·`ends_at` |
 | `coupon_db` | `coupon_issue` | PK `coupon_issue_id` CHAR(36), **UK (`event_id`, `user_id`)**, INDEX (`user_id`, `state`) | `state` ISSUED·RESERVED·USED·EXPIRED, `expires_at`(= 이벤트 종료), `issued_at`·`used_at` |
 | `coupon_db` | `coupon_reservation` | PK `checkout_id`, INDEX (`coupon_issue_id`) | `state` RESERVED·RELEASED·USED. 체크아웃 1건 = 1행 — 반환이 예약보다 먼저 오면 RELEASED 행을 먼저 만들어 늦은 예약을 거절 |
@@ -185,17 +186,18 @@
 
 | 현재 | 다음 | 계기 | 보상 |
 | --- | --- | --- | --- |
-| — | STARTED | `POST /bookings/{id}/checkout`(예매 PENDING·선점 유효·마감 전) | — |
-| STARTED | COUPON_RESERVING / PAYMENT_PREPARING | 쿠폰 있음 / 없음 → 명령 발송(같은 트랜잭션 outbox) | — |
-| COUPON_RESERVING | PAYMENT_PREPARING | `coupon.reserved` → 금액 확정 | — |
-| COUPON_RESERVING | FAILED | `coupon.reservation-rejected`(`failure.code` `COUPON_NOT_USABLE`) | 없음(예매 PENDING 유지) |
-| PAYMENT_PREPARING | READY_TO_PAY (TOSSPAY) / CHARGING (CARD) | `payment.prepared` / `payment.charge-requested` 발송 | — |
+| — | STARTED | `POST /bookings/{id}/checkout`(예매 PENDING·선점 유효·마감 전·🆕 `current_payment_id` 없음) | — |
+| STARTED | COUPON_RESERVING / PAYMENT_PREPARING (TOSSPAY) / 🆕 CHARGING (CARD) | 쿠폰 있음 / 없음 → 명령 발송(같은 트랜잭션 outbox). 🆕 **결제 명령을 처음 보낼 때** `attachPayment`로 paymentId를 붙인다 | — |
+| COUPON_RESERVING | PAYMENT_PREPARING / 🆕 CHARGING | `coupon.reserved` → 금액 확정 + 🆕 `attachPayment` + 결제 명령 | — |
+| COUPON_RESERVING | ~~FAILED~~ 🆕 **COUPON_REJECTED**(끝) | `coupon.reservation-rejected`(`failure.code` `COUPON_NOT_USABLE`) | **없음** — 예매 PENDING·좌석 HELD·`expires_at` 그대로(선점 시간을 늘리지 않는다). 사용자는 최초 선점 5분 안에 다른 쿠폰이나 쿠폰 없이 `POST …/checkout`을 다시 보낸다(새 행). paymentId를 쿠폰 단계에서 붙이지 않는 이유: 붙어 있으면 기존 만료 처리가 결제 중으로 보고 만료를 유예만큼 미룬다 |
+| PAYMENT_PREPARING | READY_TO_PAY | `payment.prepared` | — |
+| ~~PAYMENT_PREPARING~~ | ~~CHARGING (CARD)~~ | ~~`payment.charge-requested` 발송~~ → 🆕 CARD는 결제 준비 단계가 없다(위 두 행) | — |
 | READY_TO_PAY | VERIFYING | `POST …/checkout/confirm` → `payment.verification-requested` | — |
-| VERIFYING·CHARGING | CONFIRMED | `payment.approved` → 예매 PENDING → CONFIRMED(4장, 동기 경로와 같은 `BookingPaymentResultApplier`) + `coupon.use-requested` | — |
+| 🆕 READY_TO_PAY·VERIFYING·CHARGING | CONFIRMED | `payment.approved` + 예매가 **PENDING일 때만** → 예매 CONFIRMED(4장, 동기 경로와 같은 `BookingPaymentResultApplier`) + `coupon.use-requested`. READY_TO_PAY가 들어간 이유: 사용자가 결제 뒤 확인 요청 없이 떠나도 포트원 웹훅·payment 스윕이 결제를 닫고 결과 이벤트를 낸다(`saga_payment`) | — |
 | VERIFYING·CHARGING | COMPENSATING → FAILED | `payment.declined`(`PAYMENT_DECLINED`) | `coupon.release-requested` + 좌석 해제(PAYMENT_FAILED) + `booking.canceled` |
-| COUPON_RESERVING·PAYMENT_PREPARING | COMPENSATING → FAILED | 단계 기한 30초(`STEP_TIMEOUT`) — **돈이 움직이기 전 단계만** | 위와 같음 |
-| VERIFYING·CHARGING | (그대로) | 30초 안에 결과 없음 · `payment.result-unknown` | **보상하지 않음** — 새 `eventId`로 `payment.verification-requested` 재발송 |
-| 진행 중 어디서나 | COMPENSATING → EXPIRED | 선점 만료 300초(`HOLD_EXPIRED`, 결과 불명이었으면 `reason` `PAYMENT_RESULT_UNKNOWN`) | 쿠폰 반환. 그 뒤 승인이 오면 기존 늦은 승인 규칙(#63 포트원 환불 → EXPIRED) |
+| COUPON_RESERVING·PAYMENT_PREPARING | COMPENSATING → FAILED | 단계 기한 ~~30초~~ 🆕 **10초**(`STEP_TIMEOUT`) — **돈이 움직이기 전 단계만**(정상 왕복 1~3초, 최악 약 6초) | 위와 같음. 쿠폰은 예약 여부를 몰라도 반환 명령을 보낸다 |
+| VERIFYING·CHARGING | (그대로) | 재확인 기한 안에 결과 없음 · `payment.result-unknown` | **보상하지 않음** — 새 `eventId`로 `payment.verification-requested` 재발송. 🆕 간격 ⏳(5초 고정 제안), `expires_at + APP_PAYMENT_PENDING_GRACE`(2분)까지만 보낸다 |
+| ~~진행 중 어디서나~~ 🆕 READY_TO_PAY·VERIFYING·CHARGING | ~~COMPENSATING → EXPIRED~~ 🆕 **예매 상태를 따라** CONFIRMED / FAILED / EXPIRED | 🆕 예매가 PENDING을 벗어남. paymentId가 붙은 예매는 기존 만료 처리(`HoldExpiryService`)가 **선점 만료 + 유예 2분 뒤** payment를 조회해 닫는다 — 승인이면 확정하지 않고 환불 후 EXPIRED, 실패면 PAYMENT_FAILED, 아직 결제 중이면 payment 스윕이 결제 생성 7분 뒤 닫을 때까지 미룬다. 결과를 끝까지 모르면 대략 7~9분에 닫힌다 | saga는 환불·좌석을 다시 처리하지 않고 쿠폰만 반환(EXPIRED·FAILED). 결과 불명이었으면 `reason` `PAYMENT_RESULT_UNKNOWN`. 예매가 닫힌 뒤 온 `payment.approved`는 `applyApproved`를 부르지 않는다(환불 두 번 방지) |
 
 - 4장 규칙 그대로: 모든 전이는 `WHERE state=:expected` 조건부 UPDATE, 이미 처리된 결과 메시지는 inbox·0행으로 무시. 결과 소비자·스윕은 블루/그린 preview 파드에서도 돈다(이전 버전과 호환)
 - `GET /bookings/{id}`는 체크아웃 진행 중이면 payment를 부르지 않는다(동기 대조 없음)

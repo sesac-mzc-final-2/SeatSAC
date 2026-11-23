@@ -117,7 +117,7 @@
 | `seat-seq:{screeningId}` | booking | 없음 | 회차별 이벤트 일련번호. 이벤트마다 +1, **키가 없으면 현재 시각 ms × 1000부터** 시작(`seq-next.lua`) — Valkey 재시작으로 키가 사라져도 번호가 뒤로 가지 않아 열린 화면이 빈틈으로 보고 다시 받는다 |
 | `hold-expiry` (sorted set) | booking | 없음 | 멤버 `{screeningId}:{holdId}`, 점수 = 만료 시각 |
 | ⚠️ `idem:{userId}:{Idempotency-Key}` | booking | 24시간 | 요청 해시 + 처리 상태 + 첫 응답 (03a `idem:{키}` 대체) |
-| 🆕 `coupon:stock:{eventId}` | coupon | 이벤트 종료 + 1일 | 선착순 남은 수량(`DECR`, 음수면 `INCR`로 되돌리고 매진, DB INSERT 실패도 `INCR`). 원본 수량은 `coupon_db.coupon_event.total_quantity` — 키가 없으면 `total_quantity − 발급 수`로 `SET NX` |
+| 🆕 `coupon:stock:{eventId}` | coupon | 이벤트 종료 + 1일 | 선착순 남은 수량(`DECR`, 음수면 `INCR`로 되돌리고 매진, DB INSERT 실패도 `INCR`). 원본 수량은 `coupon_db.coupon_event.total_quantity` — 키가 없으면 `total_quantity − 발급 수`로 `SET NX`. `DECR` 뒤 프로세스가 죽거나 결과를 모르면 되돌리지 않는다(덜 발급되는 쪽), 대조는 발급이 멈춘 뒤에만 — data-model 7-2 |
 | 🆕 `coupon:idem:{userId}:{Idempotency-Key}` | coupon | 24시간 | 발급 요청 멱등(booking `idem:`과 같은 모양 — 같은 키 다른 이벤트 409 `IDEMPOTENCY_KEY_CONFLICT`, 처리 중 409 `IDEMPOTENCY_IN_PROGRESS`, 끝났으면 첫 응답 재생) |
 
 | Pub/Sub 채널 | 발행 | 구독 | 메시지 |
@@ -192,7 +192,7 @@
 | 401 | `UNAUTHORIZED`(reason `WEBHOOK_SIGNATURE_INVALID`) | payment 웹훅 |
 | 403 | `FORBIDDEN` | gateway·서비스 |
 | 404 | `NOT_FOUND` | 전체 |
-| 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking |
+| 409 | `SEAT_UNAVAILABLE`, `ACTIVE_HOLD_EXISTS`, `BOOKING_STATE_CONFLICT`, `PAYMENT_ALREADY_REQUESTED`, `IDEMPOTENCY_KEY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS` | booking (🆕 멱등 두 코드는 coupon 발급 `POST /coupons/events/{eventId}/claim`도 같은 뜻으로 쓴다 — 4장 `coupon:idem`) |
 | 409 | `PAYMENT_CONFLICT`, `PAYMENT_NOT_APPROVED` | payment (내부) |
 | 500 | `INTERNAL_ERROR` | 전체 |
 | 503 | `SERVICE_UNAVAILABLE` | gateway·서비스 |
@@ -205,7 +205,7 @@
 | 409 | 🆕 `CHECKOUT_IN_PROGRESS`, `CHECKOUT_NOT_READY`, `PAYMENT_PATH_CONFLICT` | booking — 체크아웃 saga(ADR-116). 동기 결제와 체크아웃을 한 예매에 섞으면 `PAYMENT_PATH_CONFLICT` |
 | 403 | 🆕 `COUPON_NOT_ELIGIBLE` | coupon — VIP 아님 |
 | 409 | 🆕 `COUPON_EVENT_NOT_OPEN`(`reason` `UPCOMING`·`CLOSED`), `COUPON_SOLD_OUT`, `COUPON_ALREADY_CLAIMED` | coupon |
-| — | 🆕 `COUPON_NOT_USABLE`, `PAYMENT_DECLINED`, `STEP_TIMEOUT`, `HOLD_EXPIRED` | booking 체크아웃 응답의 `failure.code`(HTTP 오류가 아니라 200 응답 안의 값). `STEP_TIMEOUT`은 돈이 움직이기 전 단계만, 결제 결과 불명은 `HOLD_EXPIRED`(`reason` `PAYMENT_RESULT_UNKNOWN`). coupon 거절 `reason`은 `NOT_OWNER`·`NOT_ISSUED`·`EXPIRED`·`ALREADY_RELEASED` |
+| — | 🆕 `COUPON_NOT_USABLE`, `PAYMENT_DECLINED`, `STEP_TIMEOUT`, `HOLD_EXPIRED` | booking 체크아웃 응답의 `failure.code`(HTTP 오류가 아니라 200 응답 안의 값). `STEP_TIMEOUT`은 돈이 움직이기 전 단계만, 결제 결과 불명은 `HOLD_EXPIRED`(`reason` `PAYMENT_RESULT_UNKNOWN`). coupon 거절 `reason`은 `NOT_OWNER`·`NOT_ISSUED`·`EXPIRED`·`ALREADY_RELEASED`. 🆕 `COUPON_NOT_USABLE`은 `state` `COUPON_REJECTED`와 함께 온다 — 예매는 그대로라 화면은 남은 선점 시간 안에 쿠폰을 다시 고르거나 쿠폰 없이 결제하게 한다 |
 | 413 | 🆕 `PAYLOAD_TOO_LARGE` | gateway — 요청 본문 64KB 초과(ADR-124) |
 | 400 | 🆕 `SERVICE_NOT_STOPPABLE` | ops-api — 정지/가동 대상이 아님 |
 | 409 | 🆕 `ROLLOUT_IN_PROGRESS` | ops-api — booking·gateway 블루/그린 진행 중 |
@@ -331,7 +331,7 @@
 | 없음(서명) | `POST /webhooks/portone` | PAY-05 | 포트원 웹훅. Standard Webhooks 서명, 본문 불신 → 단건 조회 재검증 |
 | USER | `POST /bookings/{bookingId}/cancel` | BKG-07 | |
 | 🆕 USER | `POST /bookings/{bookingId}/checkout` | BKG-10 | **체크아웃 saga**(ADR-116). `Idempotency-Key` 필수, `{method: TOSSPAY\|CARD, couponIssueId?}` → 202 `{checkoutId, state, pollAfterMs}`. 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 `false` → 404). 한 예매에 동기 결제와 섞으면 409 `PAYMENT_PATH_CONFLICT` |
-| 🆕 USER | `GET /bookings/{bookingId}/checkout` | BKG-10 | polling(1초, 최대 30초). `state` STARTED → COUPON_RESERVING → PAYMENT_PREPARING → READY_TO_PAY(포트원 결제창 값) → VERIFYING → CONFIRMED / COMPENSATING → FAILED / EXPIRED, `amount {original, discount, final}`, `failure {code, reason}`. 결제 결과 불명(`CHARGING`·`VERIFYING`)은 보상하지 않고 재확인, 선점 만료까지 모르면 EXPIRED. 진행 중이면 `DELETE /bookings/{id}/hold`도 409 `CHECKOUT_IN_PROGRESS`, `GET /bookings/{id}`에 `checkout {checkoutId, state}` 추가 |
+| 🆕 USER | `GET /bookings/{bookingId}/checkout` | BKG-10 | polling(1초, 최대 30초). `state` STARTED → COUPON_RESERVING → PAYMENT_PREPARING → READY_TO_PAY(포트원 결제창 값) → VERIFYING → CONFIRMED / COMPENSATING → FAILED / EXPIRED, 🆕 / COUPON_REJECTED(쿠폰만 거절 — 예매·좌석은 그대로, 최초 선점 5분 안에 다른 쿠폰이나 쿠폰 없이 `POST …/checkout`을 새 `Idempotency-Key`로 다시). CARD는 결제 준비 없이 CHARGING. `amount {original, discount, final}`, `failure {code, reason}`. 결제 결과 불명(`CHARGING`·`VERIFYING`)은 보상하지 않고 재확인, ~~선점 만료까지 모르면 EXPIRED~~ 🆕 선점 만료 뒤에는 예매 상태를 따라 닫힌다(기존 만료 처리가 유예 2분 뒤 payment 결과로 정함 — 결과 불명이면 대략 7~9분). 진행 중이면 `DELETE /bookings/{id}/hold`도 409 `CHECKOUT_IN_PROGRESS`, `GET /bookings/{id}`에 `checkout {checkoutId, state}` 추가 |
 | 🆕 USER | `POST /bookings/{bookingId}/checkout/confirm` | BKG-10 | 결제창이 닫힌 뒤 `{paymentId}` → 202. `READY_TO_PAY`가 아니면 409 `CHECKOUT_NOT_READY` |
 | 🆕 USER | `GET /coupons/events/current` | CPN-01 | **coupon**, `{eventId, title, discountRate, startsAt, endsAt, totalQuantity, remainingQuantity, eligibleGrade, state, myIssue}` — NORMAL 사용자도 200(화면이 「VIP 전용」 안내) |
 | 🆕 USER | `POST /coupons/events/{eventId}/claim` | CPN-02 | VIP만(`X-User-Grade`), 선착순, `Idempotency-Key` 필수 → 201. 403 `COUPON_NOT_ELIGIBLE`, 409 `COUPON_SOLD_OUT`·`COUPON_ALREADY_CLAIMED`·`COUPON_EVENT_NOT_OPEN` |
@@ -450,7 +450,7 @@
 | 🆕 coupon | 롤링 | 2 (2~4, CPU 70%) | 200m / 448Mi | 640Mi | ✅ (`coupon:*`) | `coupon_db` | `cinema-staging-coupon-pod`: `coupon-commands` 수신, `booking-replies` 발송 |
 | 🆕 ops-api | 롤링 | 1 (고정) | 100m / 256Mi | 384Mi | — | — | `cinema-staging-ops-api-pod`: Athena·Glue 조회, S3 `cinema-staging-reports-*` 읽기·쓰기 |
 
-- 🆕 11/23(ADR-115·117·122): **RDS 스키마 열은 이제 각자의 인스턴스**(`cinema-staging-{svc}-db`). gateway·catalog·booking·user·payment·coupon은 **replicas 최소 2** + `topologySpreadConstraints`(`topology.kubernetes.io/zone`, `whenUnsatisfiable: ScheduleAnyway`) — 두 AZ에 자리가 있으면 파드를 AZ마다 나눠 AZ 하나가 죽어도 남게 한다. **보장은 아니다**: `ScheduleAnyway`는 한 AZ에 자리가 없으면 같은 AZ에 둘 다 올린다(그때 그 AZ가 죽으면 다시 뜰 때까지 0개). 배포 뒤 `kubectl get pods -o wide`로 AZ가 나뉘었는지 확인하고, 강제(`DoNotSchedule`)는 AZ별 노드 용량이 확보되는 Karpenter(6.1.6) 뒤에 정한다 — `DoNotSchedule`은 자리가 없으면 파드가 Pending이라 블루/그린 preview가 멈춘다. booking HPA 2~4(자기 인스턴스라 블루/그린 순간 8 × 15 = 120 < 경보 130), gateway 2(블루/그린 중 4). Pod Identity 추가: booking(명령 발송·`booking-replies` 수신·SNS 발행), payment(`payment-commands` 수신·`booking-replies` 발송), user(`user-booking-events` 수신), catalog(SNS `catalog-events` 발행)
+- 🆕 11/23(ADR-115·117·122): **RDS 스키마 열은 이제 각자의 인스턴스**(`cinema-staging-{svc}-db`). gateway·catalog·booking·user·payment·coupon은 **replicas 최소 2** + `topologySpreadConstraints`(`topology.kubernetes.io/zone`, `whenUnsatisfiable: ScheduleAnyway`) — 두 AZ에 자리가 있으면 파드를 AZ마다 나눠 AZ 하나가 죽어도 남게 한다. **보장은 아니다**: `ScheduleAnyway`는 한 AZ에 자리가 없으면 같은 AZ에 둘 다 올린다(그때 그 AZ가 죽으면 다시 뜰 때까지 0개). 배포 뒤 `kubectl get pods -o wide`로 AZ가 나뉘었는지 확인하고, 강제(`DoNotSchedule`)는 AZ별 노드 용량이 확보되는 Karpenter(6.1.6) 뒤에 정한다 — `DoNotSchedule`은 자리가 없으면 파드가 Pending이라 블루/그린 preview가 멈춘다. booking HPA 2~4(자기 인스턴스라 블루/그린 순간 8 × 15 = 120 < 경보 130), gateway 2(블루/그린 중 4). 위 표의 replicas 열도 최소가 2로 바뀐다 — catalog 2~4, coupon 2~4, user 2(최대 2 그대로라 고정과 같다), payment 2(고정) — data-model 7-1의 연결 수 계산과 같은 값. Pod Identity 추가: booking(명령 발송·`booking-replies` 수신·SNS 발행), payment(`payment-commands` 수신·`booking-replies` 발송), user(`user-booking-events` 수신), catalog(SNS `catalog-events` 발행)
 - JVM: `-XX:MaxRAMPercentage=75` (Dockerfile). limits cpu는 두지 않는다(스로틀로 p95 악화)
 - ⚠️AI ai는 `ng-ai` 노드에만 뜬다(`nodeSelector cinema/workload=ai` + toleration). 기존 5개 서비스는 taint 때문에 `ng-ai`에 올라가지 않는다. `ng-ai` desired 0이면 ai 파드는 Pending(정상) — 나머지 서비스·데모에 영향 없음
 - 두 서비스 동시 블루/그린 금지(노드 2대). 공통 모듈 급한 반영도 한 번에 한 서비스씩: catalog·user·payment → booking → gateway
@@ -503,12 +503,12 @@
 | --- | --- | --- |
 | gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 유효한 토큰이면 404, 토큰이 없거나 잘못되면 인증이 먼저라 401, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). 하위 연결 풀은 `httpclient.pool.max-idle-time: 30s`(앱 `application.yml`) — 하위 Tomcat keep-alive 60초보다 짧게 둬 이미 닫힌 연결을 꺼내 쓰는 503(PrematureClose)을 막는다. ai(uvicorn keep-alive 기본 5초)는 이 값으로 덮지 못해 ai 쪽 keep-alive를 늘려 맞춘다. gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL`, `APP_SERVICES_PAYMENT_URL=http://payment:8080`(포트원 웹훅 라우트 `POST /api/webhooks/portone`만, ADR-112) (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
-| 🆕 booking (추가) | `APP_CHECKOUT_SAGA_ENABLED`(기본 `false` — 체크아웃 API 404. 메시징·coupon 준비 뒤 `true`), `APP_CHECKOUT_STEP_TIMEOUT=30s`, `APP_MESSAGING_COUPON_COMMANDS_URL=${SQS_COUPON_COMMANDS_URL}`, `APP_MESSAGING_PAYMENT_COMMANDS_URL=${SQS_PAYMENT_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}`, `APP_MESSAGING_EVENTS_TOPIC_ARN=${SNS_BOOKING_EVENTS_ARN}`, (여유 시) `APP_SCREENING_LOOKUP_MODE=sync\|local` | 같음 |
+| 🆕 booking (추가) | `APP_CHECKOUT_SAGA_ENABLED`(기본 `false` — 체크아웃 API 404. 메시징·coupon 준비 뒤 `true`), ~~`APP_CHECKOUT_STEP_TIMEOUT=30s`~~ 🆕 `APP_CHECKOUT_STEP_TIMEOUT=10s`(쿠폰 예약·결제 준비만), ⏳ `APP_CHECKOUT_VERIFY_INTERVAL`(결제 재확인 간격, 5s 제안 — 재확인은 선점 만료 + `APP_PAYMENT_PENDING_GRACE`까지), `APP_MESSAGING_COUPON_COMMANDS_URL=${SQS_COUPON_COMMANDS_URL}`, `APP_MESSAGING_PAYMENT_COMMANDS_URL=${SQS_PAYMENT_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}`, `APP_MESSAGING_EVENTS_TOPIC_ARN=${SNS_BOOKING_EVENTS_ARN}`, (여유 시) `APP_SCREENING_LOOKUP_MODE=sync\|local` | 같음 |
 | 🆕 coupon | `SPRING_DATA_REDIS_*`(기존 Valkey), `APP_MESSAGING_COMMANDS_URL=${SQS_COUPON_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}`, `APP_COUPON_IDEMPOTENCY_TTL=24h`, `APP_COUPON_RESERVED_ALARM_AFTER=1h`, ⏳ 이벤트 값(수량·할인율·시각)은 6.0.1 | `SPRING_DATASOURCE_PASSWORD` |
 | 🆕 user (추가) | `APP_BOOKING_HISTORY_MODE=sync\|local`(`local`은 사용자별 첫 조회 때 1회 sync로 채운 뒤 복제본만 — API 명세서 v1.5 23-1), `APP_MESSAGING_BOOKING_EVENTS_URL=${SQS_USER_BOOKING_EVENTS_URL}` | 같음 |
-| 🆕 catalog (추가) | `APP_MESSAGING_EVENTS_TOPIC_ARN=${SNS_CATALOG_EVENTS_ARN}`, `APP_OUTBOX_RELAY_ENABLED` | 같음 |
-| 🆕 payment (추가) | `APP_MESSAGING_COMMANDS_URL=${SQS_PAYMENT_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}` | 같음 |
-| 🆕 gateway (추가) | `APP_SERVICES_COUPON_URL=http://coupon:8080`, `APP_GATEWAY_MAX_BODY_SIZE=64KB`(초과 413 `PAYLOAD_TOO_LARGE`) — `X-User-Grade`는 코드(토큰 `cognito:groups` ∋ `VIP` → `VIP`, 아니면 `NORMAL`, 외부 값은 모든 라우트에서 지움, VIP 지정은 토큰 재발급 뒤 반영). 401·403·413·차단 경로 404는 `errorCategory=SECURITY` 로그(`reason`·`status`·`route`·`traceId`, 토큰·IP 원문 없음) | 없음 |
+| 🆕 catalog (추가) | `APP_MESSAGING_EVENTS_TOPIC_ARN=${SNS_CATALOG_EVENTS_ARN}`, `APP_OUTBOX_RELAY_ENABLED`(기본 `false` — booking과 같은 플래그·같은 이유: SNS 토픽 `catalog-events`와 구독 큐(6.1.3)가 생기기 전에 켜면 재시도 끝에 아웃박스 행이 `FAILED`가 된다. 꺼 두면 `PENDING`으로 쌓였다가 켤 때 흘러간다. 토픽·`ai-catalog-events` 구독 뒤 gitops로 `true`) | 같음 |
+| 🆕 payment (추가) | `APP_MESSAGING_COMMANDS_URL=${SQS_PAYMENT_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}`. 포트원 스윕·웹훅이 saga 결제(`saga_payment`)를 닫으면 결과 이벤트도 낸다(data-model 7-2) — 새 설정 없음 | 같음 |
+| 🆕 gateway (추가) | `APP_SERVICES_COUPON_URL=http://coupon:8080`(다른 서비스 주소처럼 `application.yml`에 기본값을 둔다 — gitops `gateway-config`에 없어도 기동한다. 기본값 없이 넣으면 gitops보다 이미지가 먼저 나갈 때 기동 실패 → 블루/그린 abort. coupon이 아직 배포되지 않은 동안 `/api/coupons/**`는 503 `SERVICE_UNAVAILABLE`), `APP_GATEWAY_MAX_BODY_SIZE=64KB`(초과 413 `PAYLOAD_TOO_LARGE`) — `X-User-Grade`는 코드(토큰 `cognito:groups` ∋ `VIP` → `VIP`, 아니면 `NORMAL`, 외부 값은 모든 라우트에서 지움, VIP 지정은 토큰 재발급 뒤 반영). 401·403·413·차단 경로 404는 `errorCategory=SECURITY` 로그(`reason`·`status`·`route`·`traceId`, 토큰·IP 원문 없음) | 없음 |
 | booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SERVICES_PAYMENT_PG_READ_TIMEOUT=10s`(payment가 포트원을 부르는 verify·cancel만 응답 대기 — 포트원 최대 약 8초 < 10초 < gateway 15초, ADR-112. 나머지 payment 호출은 기본 3초), `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`(30~600, 벗어나면 기동 실패. 멱등 처리 중 키도 같은 값. 바꾸면 이전 TTL 동안 고아 판정이 어긋나므로 데모 준비 때 한 번만), `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, `APP_PAYMENT_PENDING_GRACE=2m`(ADR-112 — 결제 요청이 붙은 PENDING은 만료+이 유예가 지나면 만료 스캔이 Payment를 조회해 반영. 그 전에는 보류), ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 큐와 3.1.8 알림 Lambda 연결 뒤 `true`(런북 6-B-3) — 큐만 있고 받는 쪽이 없으면 메시지가 DLQ로도 못 가고 7일 뒤 사라진다` | `SPRING_DATASOURCE_PASSWORD`, `APP_PAYMENT_MOCK_KEY`(모의 결제 허용 키, Terraform `random_password` — k6 Job·블루/그린 분석 Job이 Secret 참조로 받아 `X-Payment-Mock-Key`로 보낸다. 없으면 기계 경로 자체가 꺼짐) |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL`, `APP_COGNITO_ENDPOINT`(선택, 기본 `https://cognito-idp.{AWS_REGION}.amazonaws.com`, `AWS_REGION`이 없으면 `ap-northeast-2` — 프로필 첫 생성 때 `GetUser`) | `SPRING_DATASOURCE_PASSWORD` |
 | payment | `APP_PAYMENT_MOCK_DELAY_CARD=9999`, `APP_PAYMENT_MOCK_DELAY=5s`, `APP_PORTONE_ENABLED`(코드 기본 `false` — TOSSPAY 준비가 503 `PORTONE_DISABLED`이고 스윕이 돌지 않는다. Secret·설정을 넣은 뒤 gitops PR로 `true`. 켰는데 Secret이 비어 있으면 기동은 되고 포트원이 401 → verify·취소 503 `PORTONE_UNAVAILABLE`), `APP_PORTONE_API_BASE_URL=https://api.portone.io`(로컬은 Stub), `APP_PORTONE_STORE_ID`·`APP_PORTONE_CHANNEL_KEY_TOSSPAY`(포트원 콘솔 공개 값 — 브라우저에 노출되는 값이라 ConfigMap 가능), `APP_PORTONE_PENDING_TIMEOUT=7m`(결제창 미완료 PROCESSING 정리) | `SPRING_DATASOURCE_PASSWORD`, `APP_PORTONE_API_SECRET`(V2 API Secret), `APP_PORTONE_WEBHOOK_SECRET`(웹훅 시크릿, 테스트용) |
@@ -583,7 +583,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | ⚠️AI `ai_snapshot_age_seconds` · `ai_quota_rejected_total` | gauge · counter | `scope`=`today`·`other` · `window`=`minute`·`day` | ai | 스냅샷 신선도(오늘 1분·나머지 10분) · 한도 초과 |
 | ⚠️AI `ai_unmet_demand_total` | counter | `category`=`action_request`·`site_feature`·`recommendation`(조건 없는 영화 추천 요청, 3.4.25)·`unrelated`·`unknown` | ai | 범위 밖(OUT_OF_SCOPE)으로 끝난 요청의 분류별 수 — 다음 개발 후보의 근거. 욕설·인사·잡담(`chitchat`)은 수요가 아니라 세지 않는다. `unknown`은 `out_of_scope` 도구의 `category`가 정해진 값이 아닌 경우(도구 없이 끝난 폴백은 세지 않는다). 로그는 9장 |
 | 🆕 `ai_rag_search_total` | counter | `result`=`hit`·`miss` | ai | 이용 안내 검색 결과(6.4.7). `miss`는 하한을 넘는 조각이 없어 `OUT_OF_SCOPE`로 끝난 경우 — 안내 문서를 더 쓸 근거 |
-| 🆕 `booking_checkout_total` · `booking_checkout_seconds` · `booking_checkout_compensation_total` | counter · histogram · counter | `result`=`confirmed`·`failed`·`expired` · — · `reason`=`coupon_rejected`·`payment_declined`·`step_timeout`·`hold_expired` | booking | 체크아웃 saga(ADR-116). 자동 롤백은 기존 `booking_payment_call_total` 그대로 |
+| 🆕 `booking_checkout_total` · `booking_checkout_seconds` · `booking_checkout_compensation_total` | counter · histogram · counter | `result`=`confirmed`·`failed`·`expired`·🆕 `coupon_rejected` · — · `reason`=`payment_declined`·`step_timeout`·`hold_expired`(🆕 쿠폰 거절은 보상이 아니라 `result`로 센다) | booking | 체크아웃 saga(ADR-116). 자동 롤백은 기존 `booking_payment_call_total` 그대로 |
 | 🆕 `booking_checkout_step_seconds` · `booking_checkout_verify_retry_total` | histogram · counter | `step`=`accepted`·`coupon_reserved`·`payment_prepared`·`verified`·`applied` · — | booking | 동기/비동기 비교 측정(API 명세서 v1.5 21-3) — 단계별 시간·결제 재확인 횟수 |
 | 🆕 `payment_command_total` · `payment_command_seconds` | counter · histogram | `type`, `result`=`ok`·`duplicate`·`error` · `type` | payment | saga 명령 처리 |
 | 🆕 `coupon_command_total` | counter | `type`, `result`=`ok`·`duplicate`·`rejected`·`error` | coupon | saga 명령 처리(거절 포함) |
@@ -731,6 +731,10 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 🆕 `APP_AI_RAG_ENABLED` | `false` | 이용 안내 검색(RAG, 6.4.7). 꺼져 있으면 Claude 도구 목록·system·처리 경로가 지금과 같다. 켜기는 평가(6.4.6) 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작) |
 | 🆕 `APP_AI_RAG_TOP_K` / `APP_AI_RAG_MIN_SCORE` | `3` / ⏳ | Claude에 주는 조각 수 / 코사인 유사도 하한. 하한은 6.4.6 평가 문항으로 재서 정한다 — 의미 캐시의 0.92를 그대로 쓰지 않는다(질문끼리가 아니라 질문과 문서를 비교해 값이 낮게 나온다) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |
+| 🆕 `APP_AI_DATA_SOURCE` | `snapshot` | `snapshot`(지금처럼 메모리 SQLite) · `db`(자기 인스턴스 `ai_db`, ADR-120). `db`로 바꾸기는 아래 세 줄이 준비된 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작). 되돌리기는 `snapshot` |
+| 🆕 `DB_HOST_AI` · `SQS_AI_CATALOG_EVENTS_URL` | `cinema-infra-endpoints`(Terraform, 6.1.1·6.1.3) | 이름 그대로 읽음. `APP_AI_DATA_SOURCE=db`일 때만 쓴다 |
+| 🆕 ⏳ ai DB 비밀번호 | Secret `ai-secrets`에 키 2개 — 제안 `APP_AI_DB_PASSWORD`(`ai_app`)·`APP_AI_QUERY_DB_PASSWORD`(`ai_query`) | **키 이름 미확정**(6.4.1에서 김서현 확정). 계정은 6.1.1 db-bootstrap이 만들고, Secret 전달은 6.1.4(External Secrets — `ai-secrets`는 지금 Terraform이 값을 다시 쓰지 않아 여기에 키를 더하지 않는다). 그 전에는 `db`로 켤 수 없다 |
+| 🆕 ⏳ `ai_db` 마이그레이션 | 제안: 다른 서비스와 같은 Flyway 훅 Job `ai-flyway`(`ai-migrator-secrets`, SQL은 이미지 `/app/db/migration`) | **방식 미확정**(6.4.1). `ai-migrator-secrets`는 6.1.1에서 만든다. 지금 gitops `base/ai`에는 Flyway Job이 없다 |
 | `ANTHROPIC_API_KEY` (Secret `ai-secrets`) | Terraform sensitive 변수 → K8s Secret | staging 키. 로컬은 개발 전용 키를 `.env`에 |
 
 **시간 예산** (`/api/ai/chat` 한 번, 바깥이 항상 안쪽보다 길다)
@@ -748,7 +752,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 #### 9-2. 실행 규칙
 
-- **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey. 🆕 11/23(노션 ADR-120): `APP_AI_DATA_SOURCE=db`면 **자기 인스턴스 `ai_db`만** 쓴다(`DB_HOST_AI`, 앱 `ai_app`·NL2SQL 실행 `ai_query` 읽기 전용 계정 — 실행 상한 5초·500행 그대로, MySQL `MAX_EXECUTION_TIME`). 복제본은 SQS `ai-catalog-events` 소비 + 최초 백필(공개 API) + 10분 전체 대조. 범위 밖 질문은 `ai_db.unmet_demand`. 다른 서비스 DB·기존 Valkey는 계속 금지. 기본값은 `snapshot`(복제본 준비 뒤 gitops로 `db`)
+- **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey. 🆕 11/23(노션 ADR-120): `APP_AI_DATA_SOURCE=db`면 **자기 인스턴스 `ai_db`만** 쓴다(`DB_HOST_AI`, 앱 `ai_app`·NL2SQL 실행 `ai_query` 읽기 전용 계정 — 실행 상한 5초·500행 그대로, MySQL `MAX_EXECUTION_TIME`). 복제본은 SQS `ai-catalog-events` 소비 + 최초 백필(공개 API) + 10분 전체 대조. 범위 밖 질문은 `ai_db.unmet_demand`. 다른 서비스 DB·기존 Valkey는 계속 금지. 기본값은 `snapshot`(복제본 준비 뒤 gitops로 `db`). `ng-ai`가 0대인 동안(평소) `ai-catalog-events`는 받는 파드가 없어 큐에 쌓이고 보존 기간이 지나면 사라진다 — DLQ로 가지 않아 경보도 울리지 않는다. 그래서 복제본은 이벤트만 믿지 않고 **기동 때 백필 + 10분 전체 대조**로 맞춘다(ai를 켠 직후 답은 첫 백필이 끝난 뒤부터, 그 전은 503 `AI_SNAPSHOT_NOT_READY`)
 - 🆕 **이용 안내 검색(RAG)**(`APP_AI_RAG_ENABLED` 기본 `false`, 6.4.7 — ADR-126): 켜져 있을 때만 Claude 도구에 `search_guide`가 추가된다. Claude가 이 도구를 고르면 ai가 질문을 임베딩해 메모리의 안내 조각(data-model 6-5)에서 상위 `APP_AI_RAG_TOP_K`개를 찾고, 하한을 넘는 조각만 Claude에 돌려줘 **그 조각만 근거로** 답하게 한다 → `path: RAG`, `sources`에 쓴 조각의 `id`·`title`. Claude 호출은 2회(도구 선택 1 + 답 1, `APP_AI_LLM_MAX_CALLS_PER_QUERY` 3 안). 하한을 넘는 조각이 없으면 지금처럼 `OUT_OF_SCOPE`(`site_feature`)로 끝나고 수요 기록에 남는다. RAG 답은 캐시에 저장하지 않는다(처음에는 단순하게 — 저장은 평가 뒤 검토). 외부 호출·DB·Valkey 키는 늘지 않는다. 로그에는 `path=RAG`와 `sourceIds`(문서 id)만 더 남긴다
 - 🆕 **수요 → 백로그 워크플로우**(6.4.8, LangGraph — ADR-126): `services/ai/backlog/`에 둔다. `eval/`처럼 **이미지에 들어가지 않고**(Dockerfile은 `src`만 복사) 클러스터에 배포하지 않는다 — 사람이 로컬에서 실행한다. 의존성 `langgraph`는 `pyproject.toml`의 별도 그룹 `workflow`에만 넣어 서비스 이미지(`--no-dev`)에 들어가지 않는다. 입력은 관리자 통계 API(6.4.4) 응답을 저장한 JSON 파일 — 분류·요약·횟수뿐이고 질문 원문·userId가 없다(6-4 `unmet_demand` 규칙). 단계: ① 읽기 ② 비슷한 요약 묶기 ③ 횟수가 기준 미만이면 건너뜀 ④ 상위 묶음의 기능 제안서 초안(Claude, 개발 전용 키) ⑤ **사람 승인 대기**(체크포인트 파일 — 껐다 켜도 이어진다) ⑥ 승인된 것만 마크다운 파일로 저장. 노션 WBS 등록은 사람이 한다(이슈는 노션 WBS만 — ADR-48·64). 코드·PR을 만드는 단계는 없다. `ai_db`·Valkey·다른 서비스에 쓰지 않는다
 - 회차 ID 넘기기(계약 `screeningIds`): 검증을 통과한 SQL을 실행할 때 행 하나가 회차 하나이면 회차 ID 열을 덧붙였다 떼어 `screeningIds`로 보낸다(프리셋·NL2SQL·캐시 적중 모두 같은 실행 경로, data-model 6-1). Claude에게 주는 프롬프트·스키마 설명과 로그 `sqlTemplate`은 덧붙이기 전 SQL 그대로다. 덧붙인 SQL만 실패하면 남은 시간 안에서 원래 SQL로 한 번 다시 실행해 답은 그대로 내고(`screeningIds: null`) WARNING 한 줄(오류 종류만)을 남긴다. ai는 화면 주소를 만들지 않는다
@@ -942,14 +946,15 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 | 스키마 | 테이블 | 키·제약 | 비고 |
 | --- | --- | --- | --- |
-| `booking_db` | `checkout_saga` | PK `checkout_id` CHAR(36), INDEX (`booking_id`, `created_at`), INDEX (`state`, `step_deadline_at`)(스윕) | `state`(STARTED·COUPON_RESERVING·PAYMENT_PREPARING·READY_TO_PAY·CHARGING·VERIFYING·CONFIRMED·COMPENSATING·FAILED·EXPIRED), `method`(TOSSPAY·CARD), `coupon_issue_id`, `discount_rate`, `original_amount`·`discount_amount`·`final_amount`, `payment_id`, `failure_code`·`failure_reason`, `step_deadline_at`, `verify_attempt`. 진행 중 체크아웃은 예매당 1건(앱이 확인, 409 `CHECKOUT_IN_PROGRESS`) |
+| `booking_db` | `checkout_saga` | PK `checkout_id` CHAR(36), 🆕 UK `active_booking_id`, INDEX (`booking_id`, `created_at`), INDEX (`state`, `step_deadline_at`)(스윕) | `state`(STARTED·COUPON_RESERVING·PAYMENT_PREPARING·READY_TO_PAY·CHARGING·VERIFYING·CONFIRMED·COMPENSATING·FAILED·EXPIRED·🆕 COUPON_REJECTED), `method`(TOSSPAY·CARD), `coupon_issue_id`, `discount_rate`, `original_amount`·`discount_amount`·`final_amount`, `payment_id`, `failure_code`·`failure_reason`, `step_deadline_at`, `verify_attempt`. ~~진행 중 체크아웃은 예매당 1건(앱이 확인)~~ → 🆕 진행 중 체크아웃은 예매당 1건 — 생성 열 `active_booking_id`(진행 중 상태일 때만 `booking_id`, 끝난 상태면 NULL)의 UK가 동시 요청까지 막는다(409 `CHECKOUT_IN_PROGRESS`). 끝난 행은 NULL이라 쿠폰 거절 뒤 같은 예매에 새 행을 만들 수 있다 |
 | `booking_db` | `booking` (기존) | 그대로 | `amount`는 선점 후 불변(원가). 할인·최종 금액은 `checkout_saga`에만, `booking.confirmed`의 `amount`(최종)·`discountAmount`로 내보냄 |
 | `booking_db` | `processed_message` | PK `message_id` | 결과(reply) inbox |
-| `booking_db` | `outbox_message` (기존) | 그대로 | 명령·이벤트도 같은 표에 `event_type`으로. 결제 재확인은 새 행 `aggregate_id = {checkoutId}:{attempt}`(새 `eventId`) |
+| `booking_db` | `outbox_message` (기존) | 🆕 열 `aggregate_key VARCHAR(80) NOT NULL DEFAULT ''` 추가, UK (`event_type`, `aggregate_id`) → (`event_type`, `aggregate_id`, `aggregate_key`) | 명령·이벤트도 같은 표에 `event_type`으로. ~~결제 재확인은 새 행 `aggregate_id = {checkoutId}:{attempt}`~~ → 🆕 `aggregate_id`는 BIGINT라 문자열을 넣을 수 없다 — `aggregate_id = bookingId` 그대로, 명령은 `aggregate_key = {checkoutId}:{단계}`, 결제 재확인은 `{checkoutId}:{attempt}`(새 `eventId`). 기존 행·이전 버전 파드가 넣는 행은 `''`라 기존 유일 보장이 그대로다(블루/그린 중 두 버전 공존) |
 | `payment_db` | `processed_message` · `outbox_message` | 같은 구조 | 명령 inbox · 결과 발송 |
+| `payment_db` | 🆕 `saga_payment` | PK `payment_id`, INDEX (`checkout_id`) | saga 명령으로 만든 결제 표시(`checkout_id`, `booking_id`). payment 스윕·포트원 웹훅이 이 결제를 APPROVED·FAILED로 닫으면 **같은 트랜잭션에 결과 이벤트**(`payment.approved`·`payment.declined`)를 outbox에 넣는다 — 체크아웃 중 booking은 payment를 조회하지 않기 때문. 동기 경로 결제는 행이 없어 지금과 같다 |
 | `user_db` | `booking_history` | PK `booking_id`, INDEX (`user_id`, `confirmed_at`) | `status` CONFIRMED·CANCELED, `screening_id`, `seat_count`, `amount`·`discount_amount`(NULL 허용), `confirmed_at`·`canceled_at`. CANCELED가 이긴다(순서 역전) |
 | `user_db` | `booking_history_sync` · `processed_message` | PK `user_id` · PK `message_id` | 사용자별 첫 조회 1회 sync 채움 기록 · inbox |
-| `catalog_db` | `outbox_message` · `screening.version` 열 | 컬럼·유일 제약은 booking과 같다(UK (`event_type`, `aggregate_id`)) — 단 `aggregate_id = {screeningId 또는 movieId}:{version}` · `BIGINT` | `screening.changed`·`movie.changed` 발행, 복제본은 `version`이 클 때만 덮어씀. 같은 회차·영화가 바뀔 때마다 `version`이 올라 **변경 1번 = 새 행 1개**(booking 결제 재확인의 `{checkoutId}:{attempt}`와 같은 방식 — ID만 넣으면 두 번째 변경이 유일 제약에 걸린다) |
+| `catalog_db` | `outbox_message` · `screening.version` 열 | 컬럼·유일 제약은 booking과 같다(🆕 UK (`event_type`, `aggregate_id`, `aggregate_key`)) — `aggregate_id` = screeningId 또는 movieId, 🆕 `aggregate_key` = `{version}` · `BIGINT` | `screening.changed`·`movie.changed` 발행, 복제본은 `version`이 클 때만 덮어씀. 같은 회차·영화가 바뀔 때마다 `version`이 올라 **변경 1번 = 새 행 1개**(booking 결제 재확인과 같은 `aggregate_key` 방식 — ID만 넣으면 두 번째 변경이 유일 제약에 걸리고, `aggregate_id`는 BIGINT라 `{id}:{version}` 문자열을 넣을 수 없다) |
 | `coupon_db` | `coupon_event` | PK `event_id` | `title`, `discount_rate`, `eligible_grade`(VIP), `total_quantity`, `starts_at`·`ends_at` |
 | `coupon_db` | `coupon_issue` | PK `coupon_issue_id` CHAR(36), **UK (`event_id`, `user_id`)**, INDEX (`user_id`, `state`) | `state` ISSUED·RESERVED·USED·EXPIRED, `expires_at`(= 이벤트 종료), `issued_at`·`used_at` |
 | `coupon_db` | `coupon_reservation` | PK `checkout_id`, INDEX (`coupon_issue_id`) | `state` RESERVED·RELEASED·USED. 체크아웃 1건 = 1행 — 반환이 예약보다 먼저 오면 RELEASED 행을 먼저 만들어 늦은 예약을 거절 |
@@ -963,17 +968,18 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 | 현재 | 다음 | 계기 | 보상 |
 | --- | --- | --- | --- |
-| — | STARTED | `POST /bookings/{id}/checkout`(예매 PENDING·선점 유효·마감 전) | — |
-| STARTED | COUPON_RESERVING / PAYMENT_PREPARING | 쿠폰 있음 / 없음 → 명령 발송(같은 트랜잭션 outbox) | — |
-| COUPON_RESERVING | PAYMENT_PREPARING | `coupon.reserved` → 금액 확정 | — |
-| COUPON_RESERVING | FAILED | `coupon.reservation-rejected`(`failure.code` `COUPON_NOT_USABLE`) | 없음(예매 PENDING 유지) |
-| PAYMENT_PREPARING | READY_TO_PAY (TOSSPAY) / CHARGING (CARD) | `payment.prepared` / `payment.charge-requested` 발송 | — |
+| — | STARTED | `POST /bookings/{id}/checkout`(예매 PENDING·선점 유효·마감 전·🆕 `current_payment_id` 없음) | — |
+| STARTED | COUPON_RESERVING / PAYMENT_PREPARING (TOSSPAY) / 🆕 CHARGING (CARD) | 쿠폰 있음 / 없음 → 명령 발송(같은 트랜잭션 outbox). 🆕 **결제 명령을 처음 보낼 때** `attachPayment`로 paymentId를 붙인다 | — |
+| COUPON_RESERVING | PAYMENT_PREPARING / 🆕 CHARGING | `coupon.reserved` → 금액 확정 + 🆕 `attachPayment` + 결제 명령 | — |
+| COUPON_RESERVING | ~~FAILED~~ 🆕 **COUPON_REJECTED**(끝) | `coupon.reservation-rejected`(`failure.code` `COUPON_NOT_USABLE`) | **없음** — 예매 PENDING·좌석 HELD·`expires_at` 그대로(선점 시간을 늘리지 않는다). 사용자는 최초 선점 5분 안에 다른 쿠폰이나 쿠폰 없이 `POST …/checkout`을 다시 보낸다(새 행). paymentId를 쿠폰 단계에서 붙이지 않는 이유: 붙어 있으면 기존 만료 처리가 결제 중으로 보고 만료를 유예만큼 미룬다 |
+| PAYMENT_PREPARING | READY_TO_PAY | `payment.prepared` | — |
+| ~~PAYMENT_PREPARING~~ | ~~CHARGING (CARD)~~ | ~~`payment.charge-requested` 발송~~ → 🆕 CARD는 결제 준비 단계가 없다(위 두 행) | — |
 | READY_TO_PAY | VERIFYING | `POST …/checkout/confirm` → `payment.verification-requested` | — |
-| VERIFYING·CHARGING | CONFIRMED | `payment.approved` → 예매 PENDING → CONFIRMED(4장, 동기 경로와 같은 `BookingPaymentResultApplier`) + `coupon.use-requested` | — |
+| 🆕 READY_TO_PAY·VERIFYING·CHARGING | CONFIRMED | `payment.approved` + 예매가 **PENDING일 때만** → 예매 CONFIRMED(4장, 동기 경로와 같은 `BookingPaymentResultApplier`) + `coupon.use-requested`. READY_TO_PAY가 들어간 이유: 사용자가 결제 뒤 확인 요청 없이 떠나도 포트원 웹훅·payment 스윕이 결제를 닫고 결과 이벤트를 낸다(`saga_payment`) | — |
 | VERIFYING·CHARGING | COMPENSATING → FAILED | `payment.declined`(`PAYMENT_DECLINED`) | `coupon.release-requested` + 좌석 해제(PAYMENT_FAILED) + `booking.canceled` |
-| COUPON_RESERVING·PAYMENT_PREPARING | COMPENSATING → FAILED | 단계 기한 30초(`STEP_TIMEOUT`) — **돈이 움직이기 전 단계만** | 위와 같음 |
-| VERIFYING·CHARGING | (그대로) | 30초 안에 결과 없음 · `payment.result-unknown` | **보상하지 않음** — 새 `eventId`로 `payment.verification-requested` 재발송 |
-| 진행 중 어디서나 | COMPENSATING → EXPIRED | 선점 만료 300초(`HOLD_EXPIRED`, 결과 불명이었으면 `reason` `PAYMENT_RESULT_UNKNOWN`) | 쿠폰 반환. 그 뒤 승인이 오면 기존 늦은 승인 규칙(#63 포트원 환불 → EXPIRED) |
+| COUPON_RESERVING·PAYMENT_PREPARING | COMPENSATING → FAILED | 단계 기한 ~~30초~~ 🆕 **10초**(`STEP_TIMEOUT`) — **돈이 움직이기 전 단계만**(정상 왕복 1~3초, 최악 약 6초) | 위와 같음. 쿠폰은 예약 여부를 몰라도 반환 명령을 보낸다 |
+| VERIFYING·CHARGING | (그대로) | 재확인 기한 안에 결과 없음 · `payment.result-unknown` | **보상하지 않음** — 새 `eventId`로 `payment.verification-requested` 재발송. 🆕 간격 ⏳(5초 고정 제안), `expires_at + APP_PAYMENT_PENDING_GRACE`(2분)까지만 보낸다 |
+| ~~진행 중 어디서나~~ 🆕 READY_TO_PAY·VERIFYING·CHARGING | ~~COMPENSATING → EXPIRED~~ 🆕 **예매 상태를 따라** CONFIRMED / FAILED / EXPIRED | 🆕 예매가 PENDING을 벗어남. paymentId가 붙은 예매는 기존 만료 처리(`HoldExpiryService`)가 **선점 만료 + 유예 2분 뒤** payment를 조회해 닫는다 — 승인이면 확정하지 않고 환불 후 EXPIRED, 실패면 PAYMENT_FAILED, 아직 결제 중이면 payment 스윕이 결제 생성 7분 뒤 닫을 때까지 미룬다. 결과를 끝까지 모르면 대략 7~9분에 닫힌다 | saga는 환불·좌석을 다시 처리하지 않고 쿠폰만 반환(EXPIRED·FAILED). 결과 불명이었으면 `reason` `PAYMENT_RESULT_UNKNOWN`. 예매가 닫힌 뒤 온 `payment.approved`는 `applyApproved`를 부르지 않는다(환불 두 번 방지) |
 
 - 4장 규칙 그대로: 모든 전이는 `WHERE state=:expected` 조건부 UPDATE, 이미 처리된 결과 메시지는 inbox·0행으로 무시. 결과 소비자·스윕은 블루/그린 preview 파드에서도 돈다(이전 버전과 호환)
 - `GET /bookings/{id}`는 체크아웃 진행 중이면 payment를 부르지 않는다(동기 대조 없음)
@@ -1071,14 +1077,14 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | --- | --- | --- |
 | 114 | 범위: 기간 11/23~27(4명 — 11/23~25 구현, 11/26 통합 테스트·비교 측정, 11/27 통합 시연·리허설), 목표 = 서비스별 DB·비동기 saga·장애 격리·관리자 운영. 하루 비용 상한 $50, 못 끝내면 새 계정으로 이어서(125). 순서는 노션 「MSA 고도화 (WBS)」 「순서」 열 | 52 보완 |
 | 115 | **서비스별 RDS 인스턴스** `cinema-staging-{svc}-db` 6개(booking small·나머지 micro, ai 외 Multi-AZ), `DB_HOST_{SVC}`, 인스턴스별 db-bootstrap | 3·33·61 대체 |
-| 116 | 체크아웃 **오케스트레이션 saga**(booking이 오케스트레이터): 새 리소스 `/bookings/{id}/checkout`(202 + 폴링), 쿠폰 예약 → 결제 준비 → 확인 → 확정, 실패는 역순 보상, 단계 기한 30초. 기존 `/payments`·`/pay`는 유지, 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 off)·화면 `VITE_CHECKOUT_MODE` | 동기 경로와 비교 시연 |
+| 116 | 체크아웃 **오케스트레이션 saga**(booking이 오케스트레이터): 새 리소스 `/bookings/{id}/checkout`(202 + 폴링), 쿠폰 예약 → 결제 준비 → 확인 → 확정, 실패는 역순 보상, ~~단계 기한 30초~~ 🆕 단계 기한 10초(돈이 움직이기 전 단계만 — 결제 확인은 보상 없이 재확인, 선점 만료 뒤에는 예매 상태를 따름), 쿠폰 거절은 보상 없이 `COUPON_REJECTED`(예매·좌석 유지, 다시 시작 가능). 기존 `/payments`·`/pay`는 유지, 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 off)·화면 `VITE_CHECKOUT_MODE` | 동기 경로와 비교 시연 |
 | 117 | 메시징 **SNS(이벤트) + SQS(명령·결과)**, 큐마다 DLQ 3회, 아웃박스 + inbox(`processed_message`), `correlationId` = checkoutId. 파드가 SQS 직접 소비, Lambda는 외부 작업만 | 22·23 보완, 30 유지 |
 | 118 | **coupon 서비스**(Java, `coupon_db`): VIP 선착순 쿠폰, 재고 Valkey DECR + DB 유일 제약, VIP는 Cognito 그룹 → gateway `X-User-Grade` | 37 보완 |
 | 119 | **ops-api**(Python, `/ops/*` CloudFront → ALB, gateway 우회): Cognito `ADMIN` 그룹만, 상태·정지/가동(replicas 0 ↔ 원래 값, ArgoCD `ignoreDifferences`)·리포트. 감사 로그 | 37 보완. GitOps 예외(replicas만) |
 | 120 | ai는 자기 **`ai_db`** 복제본(catalog 이벤트 + 백필 + 10분 대조)과 `unmet_demand`, `APP_AI_DATA_SOURCE=snapshot\|db`, ops-api용 내부 통계 API | 84 보완 |
 | 121 | 리포트: 로그 `errorCategory` → Loki → S3 `cinema-staging-reports-*`(1시간 CronJob) → Glue → Athena → CSV(presigned 5분) | 113 확장 |
 | 122 | 가용성: NAT AZ별 2개, Multi-AZ RDS·Valkey 복제본, 핵심 서비스 replicas 2 + topologySpread, **Karpenter**(t3 계열 On-Demand) | 7·34 보완 |
-| 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-eso-pod` | 10 대체 |
+| 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-external-secrets-pod`(conventions 9장 이름 규칙 `cinema-staging-{대상}-pod`) | 10 대체 |
 | 124 | ⏳ 보안: WAF(관리형 규칙 + IP 요청 제한), gateway 본문 64KB(413 `PAYLOAD_TOO_LARGE`), `SECURITY` 로그, 원본 HTTPS `on` | 검토 중. 62 재검토 |
 | 125 | 새 AWS 계정 이전: 기존 계정 리소스를 그대로 두고 Terraform을 새 계정에 다시 apply(bootstrap → global → staging → staging-k8s), 도메인은 Route 53 등록 이전 + 새 호스팅 영역, ECR 이미지는 CI 재빌드 | 이전할 때만 |
 | 126 | ai 추가 고도화 두 가지. **이용 안내 RAG**: 사이트 이용 안내 문서만, 파드 메모리 색인, 플래그 `APP_AI_RAG_ENABLED`(기본 off), 응답 `path: RAG`·`sources`. **수요 → 백로그 워크플로우**(LangGraph): 통계 API 응답 → 묶기 → 기준 미달은 건너뜀 → 제안서 초안 → 사람 승인 → 파일. 로컬 실행, 클러스터 배포 없음, 코드·PR 생성 없음 | 120 보완(노션 ADR-120에 표시). WBS 6.4.7·6.4.8(6.4.1~6.4.4·6.4.6은 그대로) |
@@ -1122,8 +1128,8 @@ SeatSAC-gitops/
 ├── apps/staging/          App of Apps 대상(project·플랫폼 2·cinema-common). root 앱·서비스 Application 5개는 SeatSAC Terraform(staging-k8s argocd_apps.tf)
 ├── platform/              Argo Rollouts, kube-prometheus-stack values (LB Controller는 Terraform envs/staging-k8s) · 🆕 karpenter(NodePool·EC2NodeClass)·external-secrets(ClusterSecretStore)
 ├── base/{service}/        Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, PodMonitor, Flyway 훅 Job(Sync wave -1)
-│                          ⚠️AI base/ai: Deployment(nodeSelector·toleration ng-ai)·Service·NetworkPolicy(gateway·monitoring → ai)·PodMonitor (HPA·Flyway 없음)
-│                          🆕 base/coupon: Deployment·Service·HPA·NetworkPolicy(gateway·monitoring → coupon)·PodMonitor·Flyway Job·ExternalSecret
+│                          ⚠️AI base/ai: Deployment(nodeSelector·toleration ng-ai)·Service·NetworkPolicy(gateway·monitoring → ai, 🆕 ops-api → ai 내부 통계)·PodMonitor (HPA 없음. Flyway는 🆕 `ai_db`를 쓰기 전까지 없음 — 런타임 계약 9-1)
+│                          🆕 base/coupon: Deployment·Service·HPA·NetworkPolicy(gateway·ops-api·monitoring → coupon — ops-api는 내부 이벤트 생성·목록)·PodMonitor·Flyway Job·ExternalSecret
 │                          🆕 base/ops-api: Deployment·Service·Ingress(IngressGroup `cinema`, `/ops`)·Role·RoleBinding·ServiceAccount·NetworkPolicy·PodMonitor
 │                          🆕 base/{svc}/externalsecret.yaml(sync wave -3) — Secret 매니페스트 대신
 ├── base/common/           앱 namespace 인바운드 기본 거부 + analysis

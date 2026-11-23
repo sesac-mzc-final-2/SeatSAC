@@ -956,6 +956,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `coupon_db` | `processed_message` · `outbox_message` | 같은 구조 | 명령 inbox·결과 발송 |
 
 - 재고는 Valkey `coupon:stock:{eventId}`의 `DECR` 결과가 0 이상이고 DB 행 생성도 성공해야 확정. `INCR`로 되돌리는 것은 **`DECR`이 성공한 뒤**의 두 경우뿐이다 — 결과가 음수(매진 처리)이거나 DB INSERT가 실패했을 때. `DECR`이 실행되지 않았거나 실패했으면 `INCR`를 부르지 않는다(안 깎은 재고를 올리면 `total_quantity`를 넘겨 발급된다) — conventions 4장 `coupon:stock` 행과 같은 기준. DB UK `(event_id, user_id)`가 1인 1매 최종 방어선. 키가 없으면 `total_quantity − 발급 수`로 `SET NX` 재생성
+- 재고 불변식은 `Valkey 재고 + 발급 수 ≤ total_quantity`(같다가 아니라 **이하**)다. `DECR`이 성공한 뒤 DB INSERT 전에 프로세스가 죽거나 `DECR` 응답을 받지 못하면(타임아웃) 그 1매는 되돌리지 않는다 — 결과를 모를 때 `INCR`를 부르면 안 깎인 재고를 올릴 수 있어서, **덜 발급되는 쪽**으로 틀리게 둔다(초과 발급 없음. 사용자가 다시 눌러도 UK `(event_id, user_id)`가 중복 발급을 막는다). 잃은 수량의 대조는 **발급이 멈춘 상태에서만** 한다: 이벤트가 끝난 뒤, 또는 운영자가 coupon을 멈춘 뒤 `total_quantity − 발급 수`로 키를 다시 쓴다. 발급이 도는 중에 키를 지우거나 다시 쓰면 그때 진행 중이던 발급 수만큼 더 나갈 수 있어서 하지 않는다(Valkey 재시작으로 키가 사라져 `SET NX`로 재생성되는 순간도 같다 — 드문 경우로 두고, 막으려면 6.3.2에서 INSERT 뒤 발급 수 확인을 넣는다). 이벤트 중 자동 복구(차감 기록을 따로 두고 스윕)는 넣지 않았다 — 1시간 이벤트에서 파드가 죽은 횟수만큼만 덜 나간다
 - 이벤트 종료 스윕은 ISSUED만 EXPIRED. RESERVED는 booking의 use·release까지 그대로(1시간 넘으면 경보만)
 
 #### 7-3. 체크아웃 상태 전이 (ADR-116, API 명세서 v1.5 21-2)

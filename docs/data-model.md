@@ -132,6 +132,17 @@
 
 - 계정: `ai_app`(DML), `ai_migrator`(DDL), `ai_query`(NL2SQL 실행 전용, `movie`·`theater`·`screening` SELECT만, `MAX_EXECUTION_TIME` 5초)
 
+### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126 가번호)
+
+`APP_AI_RAG_ENABLED=true`일 때만 쓴다(기본 `false`). DB·Valkey에 넣지 않는다 — 조각이 20개 안팎이라 파드 메모리로 충분하다(늘어나면 ai Valkey 벡터 인덱스로 옮긴다).
+
+| 항목 | 내용 |
+| --- | --- |
+| 원본 | `services/ai/src/seatsac_ai/resources/guides.yaml` — 항목 하나가 조각 하나: `id`·`title`·`body`(300자 안팎) |
+| 내용 | **SeatSAC 사이트 이용 안내만**: 예매 순서·좌석 선점 시간·결제·취소·관람등급 뜻·AI가 하는 일. 이 레포의 계약·문서로 확인되는 사실만 쓴다. 극장 시설·주차·매점처럼 우리 데이터에 없는 것은 쓰지 않는다(지어낸 답 방지 — 그런 질문은 계속 `OUT_OF_SCOPE`로 끝나 `unmet_demand`에 쌓인다). 롯데시네마 원문 금지 |
+| 색인 | 기동 때 조각마다 임베딩(의미 캐시와 같은 모델, 384차원)을 계산해 메모리에 둔다. 고칠 때는 PR → 재배포 |
+| 검색 | 질문 임베딩과 코사인 유사도 상위 `APP_AI_RAG_TOP_K`개 중 `APP_AI_RAG_MIN_SCORE` 이상만 (런타임 계약 9-1·9-2) |
+
 ## 7. 🆕 MSA 고도화 추가분 (11/23)
 
 ### 7-1. 인스턴스 (ADR-115)

@@ -19,7 +19,7 @@
 | 한채연 | gateway · catalog · user · 화면(메인·상영시간·로그인·마이페이지·결제) · 좌석 배치 시드 |
 | 남궁일 | booking · payment · 좌석 화면 · 백업 관리자(`cinema-admin`) |
 | 김종식 | Infra · DevOps (Terraform · CI/CD · gitops · 관측 · Lambda) · ⚠️AI ai 인프라(ng-ai·ai Valkey·Secret·CI) |
-| ⚠️AI 김서현 | ai 서비스(Python FastAPI) · 스냅샷·NL2SQL·캐시·평가 세트 · AI 데모 · 🆕 `ai_db` 복제본·`unmet_demand`·통계 API |
+| ⚠️AI 김서현 | ai 서비스(Python FastAPI) · 스냅샷·NL2SQL·캐시·평가 세트 · AI 데모 · 🆕 `ai_db` 복제본·`unmet_demand`·통계 API · 이용 안내 RAG(6.4.7)·수요 → 백로그 워크플로우(6.4.8) |
 | 🆕 MSA (11/23~) | 남궁일: booking saga·payment 명령·화면(체크아웃) · 한채연: coupon·gateway(`X-User-Grade`·본문 제한)·catalog 이벤트·user 복제본·화면(쿠폰·관리자) · 김종식: RDS 6·NAT·SNS/SQS·ESO·Karpenter·WAF·리포트·**ops-api** |
 
 **절대 규칙**
@@ -82,7 +82,7 @@
 | 페이징 응답 | `{ content, page, size, totalElements, totalPages }`, `page` 0부터, `size` 기본 20·최대 50 | — |
 | 페이징 없는 목록 | ⚠️ `{ items }` (2.2.4 D8, API 명세서 1-3의 "JSON 배열"을 대체) | `GET /theaters` |
 | Java 패키지 | `com.seatsac.{service}`, 공통은 `com.seatsac.common.{core,web,test}` | `com.seatsac.booking.hold` |
-| ⚠️AI Python 패키지 | `services/ai/src/seatsac_ai/{api,snapshot,llm,sql,cache,quota}` — `libs/`(Java)는 쓰지 않는다. 오류 형식·traceId 규칙은 `seatsac_ai.common`에서 같은 계약(`error.v1.json`)으로 구현 | `seatsac_ai.sql.validator` |
+| ⚠️AI Python 패키지 | `services/ai/src/seatsac_ai/{api,snapshot,llm,sql,cache,quota}`(🆕 6.4.7 `guide` — 이용 안내 검색) — `libs/`(Java)는 쓰지 않는다. 오류 형식·traceId 규칙은 `seatsac_ai.common`에서 같은 계약(`error.v1.json`)으로 구현 | `seatsac_ai.sql.validator` |
 | 계약 파일 | `contracts/openapi/{service}.openapi.yaml`, `openapi/internal/{service}.internal.openapi.yaml`, `events/{이름}.v{N}.json`, `schemas/{이름}.v{N}.json` | 🆕 `openapi/coupon.openapi.yaml`, `openapi/ops.openapi.yaml`, `events/coupon.reservation-requested.v1.json` |
 | OpenAPI 확장 | `x-feature-id`, `x-caller` | — |
 
@@ -290,8 +290,8 @@
 | `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장). 🆕 `GET /users/me`에 `grade` | 한채연 |
 | 🆕 `openapi/coupon.openapi.yaml` | 외부 3개 (현재 이벤트·발급·내 쿠폰) | 한채연 |
 | 🆕 `openapi/ops.openapi.yaml` | 외부 8개 (`/ops` — 서비스 상태·정지·가동, 리포트 날짜·생성·상태, AI 범위 밖 통계, 쿠폰 이벤트 생성) | 김종식 |
-| ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`) | 김서현 · 한채연 |
-| ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED) + CLARIFY(#140) + 좌석 잡기 3종(HOLD_CONFIRM·HOLD_RESULT·HOLD_GUIDE) + 문맥 이어받기 `chat-context-carry.json`(3.4.22). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
+| ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`). 🆕 6.4.7: 응답 `path`에 `RAG`, 필드 `sources`(근거 문서 `[{id, title}]`, 그 밖의 경로는 null) **추가만** — `CLARIFY`·`HOLD_*`를 넣을 때와 같은 방식, 6.0.1 계약 PR에 함께(⏳ `contract-check`로 확인) | 김서현 · 한채연 |
+| ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED) + CLARIFY(#140) + 좌석 잡기 3종(HOLD_CONFIRM·HOLD_RESULT·HOLD_GUIDE) + 문맥 이어받기 `chat-context-carry.json`(3.4.22) + 🆕 이용 안내 `chat-rag.json`(6.4.7). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 4개 (생성·조회·확인·취소) | 남궁일 |
@@ -574,7 +574,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
 | `payment_pg_call_total` | counter | `result`=`ok`·`error`·`timeout`, `op`=`get`·`cancel` | payment | 포트원 호출 결과(ADR-112). 웹훅 수신은 `http_server_requests`(`uri=/webhooks/portone`)로 본다 |
 | `payment_refund_unresolved_total` | counter | — | payment | 환불 미완료(FAILED + pgTransactionId + canceledAt null) 행이 결제 생성 뒤 15분이 지나도 끝나지 않았으면 **스윕(1분)마다 1씩** 센다 — 건수가 아니라 「남아 있는 행 × 분」이다. 경보는 `increase(...[5m]) > 0`, 0이 아니면 포트원 콘솔과 대조(사람) |
-| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`·`hold_confirm`·`hold_result`·`hold_guide`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다. `hold_*`(채팅으로 좌석 잡기)는 **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 0으로 등록되고, 조회 답이 아니므로 **토큰 절감 계산의 분모·분자에서 `hold_*`를 제외**한다(`path!~"hold_.*"`). `preset`에는 Claude가 프리셋을 고른 답과 **문맥 이어받기 답 중 캐시가 비어 내부 틀을 직접 실행한 것(Claude 0회·토큰 0, 3.4.22)**이 함께 들어간다 — 이어받기 건수는 로그 `context carried`로 구분한다 |
+| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`·`hold_confirm`·`hold_result`·`hold_guide`·🆕 `rag`(6.4.7, 플래그가 켜져 있을 때만), `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다. `hold_*`(채팅으로 좌석 잡기)는 **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 0으로 등록되고, 조회 답이 아니므로 **토큰 절감 계산의 분모·분자에서 `hold_*`를 제외**한다(`path!~"hold_.*"`). `preset`에는 Claude가 프리셋을 고른 답과 **문맥 이어받기 답 중 캐시가 비어 내부 틀을 직접 실행한 것(Claude 0회·토큰 0, 3.4.22)**이 함께 들어간다 — 이어받기 건수는 로그 `context carried`로 구분한다 |
 | ⚠️AI `ai_tokens_total` | counter | `kind`=`input`·`output`·`cache_read`·`cache_write`, `path` | ai | 토큰 사용량. 절감 그래프는 `input+output`(우리 캐시 효과), 프롬프트 캐싱은 `cache_read`로 **따로** 표시 |
 | ⚠️AI `ai_cache_learned_total` | counter | `result`=`stored`·`known`·`dropped`·`skipped`·`full`·`error` | ai | 스스로 배우기: Claude가 프리셋을 골라 답한 말투를 장부(`ai:learned:v2`)에 적은 결과. `stored`=새로 배움, `known`=이미 같은 답으로 있음, `dropped`=같은 말투에 다른 답이 나와 지움, `skipped`=조건 밖(프리셋 `phrasings`에 있는 말투·SQL이 프리셋 SQL과 다름·날짜 말 없이 오늘로 굳은 SQL·값으로 뽑지 못한 날짜 말이 남은 질문·60자 초과), `full`=200줄 참, `error`=Valkey 실패 |
 | ⚠️AI `ai_cache_requests_total` | counter | `layer`=`exact`·`semantic`, `result`=`hit`·`miss` | ai | 캐시 적중률. 질문으로 캐시를 조회한 경우만 센다 — 문맥 이어받기(3.4.22)가 내부 틀 항목을 꺼낸 답은 `ai_chat_total{path="cache_exact"}`에는 잡히지만 여기에는 세지 않는다(그래서 `cache_exact` 합계가 `exact` `hit`보다 클 수 있다) |
@@ -582,6 +582,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | ⚠️AI `ai_sql_exec_seconds` · `ai_rejected_total` | histogram · counter | — · `reason`(SQL 검증 거부 사유) | ai | SQLite 실행 시간 · 검증기 동작 |
 | ⚠️AI `ai_snapshot_age_seconds` · `ai_quota_rejected_total` | gauge · counter | `scope`=`today`·`other` · `window`=`minute`·`day` | ai | 스냅샷 신선도(오늘 1분·나머지 10분) · 한도 초과 |
 | ⚠️AI `ai_unmet_demand_total` | counter | `category`=`action_request`·`site_feature`·`recommendation`(조건 없는 영화 추천 요청, 3.4.25)·`unrelated`·`unknown` | ai | 범위 밖(OUT_OF_SCOPE)으로 끝난 요청의 분류별 수 — 다음 개발 후보의 근거. 욕설·인사·잡담(`chitchat`)은 수요가 아니라 세지 않는다. `unknown`은 `out_of_scope` 도구의 `category`가 정해진 값이 아닌 경우(도구 없이 끝난 폴백은 세지 않는다). 로그는 9장 |
+| 🆕 `ai_rag_search_total` | counter | `result`=`hit`·`miss` | ai | 이용 안내 검색 결과(6.4.7). `miss`는 하한을 넘는 조각이 없어 `OUT_OF_SCOPE`로 끝난 경우 — 안내 문서를 더 쓸 근거 |
 | 🆕 `booking_checkout_total` · `booking_checkout_seconds` · `booking_checkout_compensation_total` | counter · histogram · counter | `result`=`confirmed`·`failed`·`expired` · — · `reason`=`coupon_rejected`·`payment_declined`·`step_timeout`·`hold_expired` | booking | 체크아웃 saga(ADR-116). 자동 롤백은 기존 `booking_payment_call_total` 그대로 |
 | 🆕 `booking_checkout_step_seconds` · `booking_checkout_verify_retry_total` | histogram · counter | `step`=`accepted`·`coupon_reserved`·`payment_prepared`·`verified`·`applied` · — | booking | 동기/비동기 비교 측정(API 명세서 v1.5 21-3) — 단계별 시간·결제 재확인 횟수 |
 | 🆕 `payment_command_total` · `payment_command_seconds` | counter · histogram | `type`, `result`=`ok`·`duplicate`·`error` · `type` | payment | saga 명령 처리 |
@@ -658,6 +659,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 🆕 24 | ops-api(`/ops`)·Role·`ignoreDifferences` | 김종식 (6.1.7) | 남궁일 6.2.6 · 한채연 6.3.5·6.3.7 | 11/24 | `GET /ops/services` 200(ADMIN 토큰), 403(일반 토큰) |
 | 🆕 25 | ai 통계 내부 API | 김서현 (6.4.4) | 김종식 ops-api 7번 | 11/24 | ops-api → ai 200 |
 | 🆕 26 | catalog `screening.changed`·`movie.changed` 발행 | 한채연 (6.3.4) | 김서현 6.4.2 | 11/24 | `ai-catalog-events` 큐에 메시지 |
+| 🆕 27 | ai 응답 `path: RAG`·`sources` 계약(6.0.1에 포함) | 김서현 (6.4.7) | 한채연 챗 화면(라벨·출처 표시 — 없어도 깨지지 않는다: 모르는 `path`는 글자 그대로 보인다, `chat-labels.ts`) | 11/24 | `contract-check` 통과 |
+| 🆕 28 | 관리자 AI 범위 밖 통계 응답(JSON) | 김서현 6.4.4 · 김종식 6.1.7 | 김서현 6.4.8(워크플로우 입력) | 11/25 | 응답을 파일로 저장해 워크플로우 1회 실행(없으면 같은 모양의 샘플 파일) |
 
 ### 8. 인프라 쪽 남은 정리
 
@@ -725,6 +728,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `APP_AI_CACHE_WARM_PRESETS` | `true` | 프리셋 `phrasings`(버튼 질문 말투)를 기동 때·캐시 TTL 절반마다 정확 일치·의미 캐시에 넣는다(`cache/warm.py`). 버튼 질문은 첫 사용자부터 토큰 0. 끄면 첫 질문은 Claude. 문맥 이어받기 내부 틀 7개(`context_templates.yaml`, 3.4.22)도 같이 넣되 키가 따로(`ctx {presetId}`)이고 의미 캐시에는 넣지 않는다 — 직접 친 질문은 적중하지 않고 이어받기 요청만 쓴다(끄면 이어받은 답의 `path`가 `PRESET`). 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_CACHE_LEARN_ENABLED` | `true` | 스스로 배우기(`cache/learned.py`): Claude가 프리셋을 골라 답한 새 말투를 `ai:learned:v2`에 적고 예열 루프가 캐시에 계속 다시 넣는다 — 캐시 TTL(1시간) 뒤에도 그 말투는 토큰 0. 끄면 새로 적지도 다시 넣지도 않는다(이미 적힌 줄은 키 TTL 7일 뒤 사라짐, 바로 지우려면 `DEL ai:learned:v2`). 한계: Claude가 조건을 빼먹고 프리셋을 고른 답은 구분하지 못해 최대 7일 캐시로 나간다. 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_SEMANTIC_CACHE_ENABLED` / `APP_AI_SEMANTIC_THRESHOLD` | `true` / `0.92` | rc2까지 의미 캐시가 안 되면 `false`로 정확 일치 캐시만(B1) |
+| 🆕 `APP_AI_RAG_ENABLED` | `false` | 이용 안내 검색(RAG, 6.4.7). 꺼져 있으면 Claude 도구 목록·system·처리 경로가 지금과 같다. 켜기는 평가(6.4.6) 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작) |
+| 🆕 `APP_AI_RAG_TOP_K` / `APP_AI_RAG_MIN_SCORE` | `3` / ⏳ | Claude에 주는 조각 수 / 코사인 유사도 하한. 하한은 6.4.6 평가 문항으로 재서 정한다 — 의미 캐시의 0.92를 그대로 쓰지 않는다(질문끼리가 아니라 질문과 문서를 비교해 값이 낮게 나온다) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |
 | `ANTHROPIC_API_KEY` (Secret `ai-secrets`) | Terraform sensitive 변수 → K8s Secret | staging 키. 로컬은 개발 전용 키를 `.env`에 |
 
@@ -744,6 +749,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 #### 9-2. 실행 규칙
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey. 🆕 11/23(노션 ADR-120): `APP_AI_DATA_SOURCE=db`면 **자기 인스턴스 `ai_db`만** 쓴다(`DB_HOST_AI`, 앱 `ai_app`·NL2SQL 실행 `ai_query` 읽기 전용 계정 — 실행 상한 5초·500행 그대로, MySQL `MAX_EXECUTION_TIME`). 복제본은 SQS `ai-catalog-events` 소비 + 최초 백필(공개 API) + 10분 전체 대조. 범위 밖 질문은 `ai_db.unmet_demand`. 다른 서비스 DB·기존 Valkey는 계속 금지. 기본값은 `snapshot`(복제본 준비 뒤 gitops로 `db`)
+- 🆕 **이용 안내 검색(RAG)**(`APP_AI_RAG_ENABLED` 기본 `false`, 6.4.7 — ADR-126 가번호): 켜져 있을 때만 Claude 도구에 `search_guide`가 추가된다. Claude가 이 도구를 고르면 ai가 질문을 임베딩해 메모리의 안내 조각(data-model 6-5)에서 상위 `APP_AI_RAG_TOP_K`개를 찾고, 하한을 넘는 조각만 Claude에 돌려줘 **그 조각만 근거로** 답하게 한다 → `path: RAG`, `sources`에 쓴 조각의 `id`·`title`. Claude 호출은 2회(도구 선택 1 + 답 1, `APP_AI_LLM_MAX_CALLS_PER_QUERY` 3 안). 하한을 넘는 조각이 없으면 지금처럼 `OUT_OF_SCOPE`(`site_feature`)로 끝나고 수요 기록에 남는다. RAG 답은 캐시에 저장하지 않는다(처음에는 단순하게 — 저장은 평가 뒤 검토). 외부 호출·DB·Valkey 키는 늘지 않는다. 로그에는 `path=RAG`와 `sourceIds`(문서 id)만 더 남긴다
+- 🆕 **수요 → 백로그 워크플로우**(6.4.8, LangGraph — ADR-126 가번호): `services/ai/backlog/`에 둔다. `eval/`처럼 **이미지에 들어가지 않고**(Dockerfile은 `src`만 복사) 클러스터에 배포하지 않는다 — 사람이 로컬에서 실행한다. 의존성 `langgraph`는 `pyproject.toml`의 별도 그룹 `workflow`에만 넣어 서비스 이미지(`--no-dev`)에 들어가지 않는다. 입력은 관리자 통계 API(6.4.4) 응답을 저장한 JSON 파일 — 분류·요약·횟수뿐이고 질문 원문·userId가 없다(6-4 `unmet_demand` 규칙). 단계: ① 읽기 ② 비슷한 요약 묶기 ③ 횟수가 기준 미만이면 건너뜀 ④ 상위 묶음의 기능 제안서 초안(Claude, 개발 전용 키) ⑤ **사람 승인 대기**(체크포인트 파일 — 껐다 켜도 이어진다) ⑥ 승인된 것만 마크다운 파일로 저장. 노션 WBS 등록은 사람이 한다(이슈는 노션 WBS만 — ADR-48·64). 코드·PR을 만드는 단계는 없다. `ai_db`·Valkey·다른 서비스에 쓰지 않는다
 - 회차 ID 넘기기(계약 `screeningIds`): 검증을 통과한 SQL을 실행할 때 행 하나가 회차 하나이면 회차 ID 열을 덧붙였다 떼어 `screeningIds`로 보낸다(프리셋·NL2SQL·캐시 적중 모두 같은 실행 경로, data-model 6-1). Claude에게 주는 프롬프트·스키마 설명과 로그 `sqlTemplate`은 덧붙이기 전 SQL 그대로다. 덧붙인 SQL만 실패하면 남은 시간 안에서 원래 SQL로 한 번 다시 실행해 답은 그대로 내고(`screeningIds: null`) WARNING 한 줄(오류 종류만)을 남긴다. ai는 화면 주소를 만들지 않는다
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
 - 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회, **잔여석을 읽는 질문마다 날짜 수 × 극장 수**(「오늘 건대입구」 1회, 극장을 안 정하면 4회, 확인 불가가 섞이면 한 번 더))은 CloudFront → gateway → catalog로 들어간다. 질문 시점 호출은 질문 하나에 최대 8회(날짜 2 × 극장 4 — 9-1)이고, 사용자당 동시 1건(`ai:inflight`)으로 묶이며(staging 한도는 11/18부터 분당 600·하루 300 — 9-1), 같은 범위 동시 질문은 한 번을 같이 쓴다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
@@ -902,6 +909,17 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `unmet_demand` | PK `id`, INDEX (`created_at`), (`category`) | 범위 밖·거부 질문 1건 = 1행: `category`·`reason`·`question_hash`·`slots` JSON·`created_at`. **질문 원문·userId 없음** |
 
 - 계정: `ai_app`(DML), `ai_migrator`(DDL), `ai_query`(NL2SQL 실행 전용, `movie`·`theater`·`screening` SELECT만, `MAX_EXECUTION_TIME` 5초)
+
+#### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126 가번호)
+
+`APP_AI_RAG_ENABLED=true`일 때만 쓴다(기본 `false`). DB·Valkey에 넣지 않는다 — 조각이 20개 안팎이라 파드 메모리로 충분하다(늘어나면 ai Valkey 벡터 인덱스로 옮긴다).
+
+| 항목 | 내용 |
+| --- | --- |
+| 원본 | `services/ai/src/seatsac_ai/resources/guides.yaml` — 항목 하나가 조각 하나: `id`·`title`·`body`(300자 안팎) |
+| 내용 | **SeatSAC 사이트 이용 안내만**: 예매 순서·좌석 선점 시간·결제·취소·관람등급 뜻·AI가 하는 일. 이 레포의 계약·문서로 확인되는 사실만 쓴다. 극장 시설·주차·매점처럼 우리 데이터에 없는 것은 쓰지 않는다(지어낸 답 방지 — 그런 질문은 계속 `OUT_OF_SCOPE`로 끝나 `unmet_demand`에 쌓인다). 롯데시네마 원문 금지 |
+| 색인 | 기동 때 조각마다 임베딩(의미 캐시와 같은 모델, 384차원)을 계산해 메모리에 둔다. 고칠 때는 PR → 재배포 |
+| 검색 | 질문 임베딩과 코사인 유사도 상위 `APP_AI_RAG_TOP_K`개 중 `APP_AI_RAG_MIN_SCORE` 이상만 (런타임 계약 9-1·9-2) |
 
 ### 7. 🆕 MSA 고도화 추가분 (11/23)
 
@@ -1062,6 +1080,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-eso-pod` | 10 대체 |
 | 124 | ⏳ 보안: WAF(관리형 규칙 + IP 요청 제한), gateway 본문 64KB(413 `PAYLOAD_TOO_LARGE`), `SECURITY` 로그, 원본 HTTPS `on` | 검토 중. 62 재검토 |
 | 125 | 새 AWS 계정 이전: 기존 계정 리소스를 그대로 두고 Terraform을 새 계정에 다시 apply(bootstrap → global → staging → staging-k8s), 도메인은 Route 53 등록 이전 + 새 호스팅 영역, ECR 이미지는 CI 재빌드 | 이전할 때만 |
+| 126 (가번호) | ai 추가 고도화 두 가지. **이용 안내 RAG**: 사이트 이용 안내 문서만, 파드 메모리 색인, 플래그 `APP_AI_RAG_ENABLED`(기본 off), 응답 `path: RAG`·`sources`. **수요 → 백로그 워크플로우**(LangGraph): 통계 API 응답 → 묶기 → 기준 미달은 건너뜀 → 제안서 초안 → 사람 승인 → 파일. 로컬 실행, 클러스터 배포 없음, 코드·PR 생성 없음 | 120 보완. 노션 등록 후 번호 확정. WBS 6.4.7·6.4.8(6.4.1~6.4.4·6.4.6은 그대로) |
 
 ---
 
@@ -1087,7 +1106,7 @@ SeatSAC/
 ├── settings.gradle.kts · gradle/libs.versions.toml · build-logic/   빌드 설정 공통 (08)
 ├── libs/common-core · common-web · common-test                     런타임 규약만 (오류·traceId·헤더·로그·내부 클라이언트)
 ├── services/{gateway,catalog,booking,user,payment}/                각 Dockerfile, db/migration
-├── services/ai/                                                    ⚠️AI Python(FastAPI) — pyproject.toml·uv.lock·Dockerfile·src/seatsac_ai·tests, .env(커밋 금지)
+├── services/ai/                                                    ⚠️AI Python(FastAPI) — pyproject.toml·uv.lock·Dockerfile·src/seatsac_ai·tests, .env(커밋 금지), 🆕 `backlog/`(6.4.8 워크플로우 — `eval/`처럼 이미지 밖)
 ├── services/coupon/                                                🆕 Java(Spring) — 다른 Java 서비스와 같은 골격, db/migration
 ├── services/ops-api/                                               🆕 Python(FastAPI) — ai와 같은 골격(⏳ 6.0.1 확정), Flyway 없음
 ├── frontend/                                                       React(Vite) → S3
@@ -1129,7 +1148,7 @@ SeatSAC-gitops/
 | 커밋 메시지 | Conventional Commits + 기능 ID 또는 WBS ID: `feat(booking): BKG-02 좌석 선점 Lua 스크립트`, `infra(terraform): 3.1.3 RDS·Valkey` |
 | 릴리스 태그 | `rc1` 11/6(M5), `rc2` 11/13(M6), `v1.0.0` 11/20 07:00 머지 마감 뒤 main 마지막 커밋 |
 | 동결 | rc2 동결·데모 주간 머지 금지는 **없음**(11/14 — QA·피드백 반영이 남아 뺐다). 평소 PR 규칙(승인 1명) 그대로. 단 main 머지 = 배포이므로 데모 시연·측정이 진행 중인 시간에는 머지하지 않는다(스크럼에서 시간 공유). **발표(11/20 10시 시작, 우리 순서 약 11시) 머지 마감**: booking·gateway(블루/그린 — 분석 약 6분, 실패 시 abort·revert까지 30분 이상)는 **11/20 05:00**, 그 밖의 변경은 **11/20 07:00**까지 머지. 마감 뒤에는 기능·수정 머지를 하지 않는다. 복구 목적의 revert만 예외로 머지한다(승인 1명, 스크럼 공유): 서비스는 `SeatSAC-gitops` 태그 revert PR(4장 롤백), frontend는 SeatSAC main revert PR → `frontend-deploy`가 자동으로 돌고 안 돌면 수동 실행, Terraform은 revert PR 뒤 김종식(또는 백업 관리자)이 로컬에서 `cinema-admin`으로 apply. tfstate 버전 복원은 최후 수단 |
-| 🆕 MSA 고도화 일정·머지 (11/23~27, ADR-114) | 순서는 노션 「MSA 고도화 (WBS)」 「순서」 열. ① **계약 PR 6.0.1 먼저**(API 명세서 v1.5 → `contracts/`, 구현 PR보다 앞). ② 기능은 플래그 off로 머지(`APP_CHECKOUT_SAGA_ENABLED`·`APP_BOOKING_HISTORY_MODE=sync`·`APP_AI_DATA_SOURCE=snapshot`) → 켜기는 gitops PR 1회씩. ③ **블루/그린 동시 금지 그대로**(booking·gateway), Terraform apply는 김종식이 한 번에 하나 — RDS 이전(서비스 하나씩, 덤프 중 쓰기 멈춤)·NAT·Karpenter는 시연·측정이 없는 시간에 스크럼 공유. ④ 부하·장애 테스트를 두 개 동시에 돌리지 않는다. ⑤ ops-api 정지/가동은 시연 중에만, 끝나면 「가동」으로 되돌린다(Git과 replicas가 다른 상태로 두지 않음). ⑥ 하루 비용 $50(Budgets 일 경보)을 넘기면 밤에 노드·NAT를 끈다 |
+| 🆕 MSA 고도화 일정·머지 (11/23~27, ADR-114) | 순서는 노션 「MSA 고도화 (WBS)」 「순서」 열. ① **계약 PR 6.0.1 먼저**(API 명세서 v1.5 → `contracts/`, 구현 PR보다 앞). ② 기능은 플래그 off로 머지(`APP_CHECKOUT_SAGA_ENABLED`·`APP_BOOKING_HISTORY_MODE=sync`·`APP_AI_DATA_SOURCE=snapshot`·`APP_AI_RAG_ENABLED=false`) → 켜기는 gitops PR 1회씩. ③ **블루/그린 동시 금지 그대로**(booking·gateway), Terraform apply는 김종식이 한 번에 하나 — RDS 이전(서비스 하나씩, 덤프 중 쓰기 멈춤)·NAT·Karpenter는 시연·측정이 없는 시간에 스크럼 공유. ④ 부하·장애 테스트를 두 개 동시에 돌리지 않는다. ⑤ ops-api 정지/가동은 시연 중에만, 끝나면 「가동」으로 되돌린다(Git과 replicas가 다른 상태로 두지 않음). ⑥ 하루 비용 $50(Budgets 일 경보)을 넘기면 밤에 노드·NAT를 끈다 |
 | ⚠️AI 일정·머지 (ADR-87) | **rc1(11/6)**: gateway `/api/ai/**` 라우트(플래그 off)·gateway 분석 쿼리 `/ai` 제외 머지 완료. ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)**: AI 기능은 계속 머지할 수 있다 — 허용 경로는 `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai/**`·`overlays/staging/ai/**`만. gateway·booking·`libs/`·Terraform 변경은 이 기간 금지(부하·전환 테스트 환경 보호). **테스트 준비 예외(11/10 일정 변경)**: 4.2.1 부하 테스트 준비가 M6로 밀려 테스트 도구·문서는 M6에도 머지할 수 있다 — `tests/k6/**`, `docs/**`(런북·문서, `CLAUDE.md` 재생성 포함), gitops `base/*/networkpolicy.yaml`의 **테스트 Job 라벨 허용 규칙 추가만**(예: `k6-loadtest` → gateway. Rollout·Deployment 템플릿은 그대로라 블루/그린·재시작이 없다). 조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 4.2.1·4.2.2 테스트가 돌지 않는 시간에 머지. 서비스 코드·Terraform 금지는 그대로. **AI 화면 예외(11/12)**: 3.3.7 챗봇 화면도 M6에 머지할 수 있다 — 이 경로는 전체 허용: `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스), `frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음). 기존 파일은 **추가만**(기존 동작 그대로): `frontend/src/widgets/page-layout/ui/PageLayout.tsx`(Dock import·배치), `frontend/src/shared/ui/icon/Icon.tsx`(아이콘 경로), `frontend/src/shared/api/http.ts`(`Retry-After`를 `ApiError`에 담기 — 기존 오류 처리 그대로, `http.test.ts` 포함), `frontend/src/app/routes/router.tsx`(주석만). `http.ts`는 모든 화면이 쓰는 클라이언트라 `pr-check` `frontend`(vitest) 통과를 조건에 넣는다. frontend는 S3 + CloudFront 배포라 클러스터 파드·블루/그린·노드와 무관하고, 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5) → 로그인·메인 진입 때 ai 트래픽이 없어 4.2.1·4.2.2·좌석 데모 측정에 섞이지 않는다. 조건: PR 본문에 「M6 예외(AI 화면)」와 이유, 스크럼 공유, 테스트가 돌지 않는 시간에 머지(`frontend-deploy`는 S3 업로드·CloudFront 무효화만). 그 밖의 `frontend/**`는 금지 그대로. 테스트(4.2.1·4.2.2)는 `ng-ai` desired 0·플래그 off. ai 검증은 로컬 Compose + **개발 전용 Claude API 키**(`.env`), staging 확인은 테스트가 돌지 않는 시간에 `kubectl port-forward svc/ai`(스크럼에서 시간 공유) · **rc2(11/13)**: M6 테스트가 끝난 뒤 gateway `APP_AI_ENABLED=true` gitops PR 1회. ai 코드 동결은 없다(11/14 삭제) · **데모 주간(11/16~20)**: 시연·측정 중이 아닐 때 머지, 발표 당일 마감 11/20 07:00(ADR-64 — ai는 롤링이라 07:00, gateway 플래그 변경은 블루/그린이라 05:00). 11/17 AI 데모는 `ng-ai` 수동 기동(머지 아님) |
 
 ### 3. PR

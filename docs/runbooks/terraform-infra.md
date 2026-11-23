@@ -551,9 +551,13 @@ aws elasticache test-failover --replication-group-id cinema-staging-valkey --nod
 # 신호등이 정상으로 돌아오는지 본다. 넘어가는 순간의 선점 키는 사라질 수 있다(복제가 비동기) — 좌석 이중 확정은 RDS booking_seat UK가 막는다
 ```
 
+- **쿠폰 재고(`coupon:stock:{eventId}`)는 장애 조치에 약하다**: 복제가 비동기라 넘어가는 순간의 `DECR` 몇 건이 새 primary에 없을 수 있다 → 재고가 실제보다 **많게** 보여 `total_quantity`를 넘겨 발급될 수 있다(DB 유일 제약은 1인 1매만 막는다). 쿠폰 이벤트 중에 장애 조치를 시연하지 않는다. 일어났다면 발급을 멈추고 `total_quantity − 발급 수`로 키를 다시 쓴다(data-model 7-2 대조 규칙). 근본 방어는 coupon(6.3.2)이 INSERT 뒤 발급 수를 확인하는 것이다
+- catalog 캐시(`catalog:*`)는 사라져도 다시 채워진다. `seat-seq`는 키가 없으면 현재 시각 기준으로 다시 시작해 번호가 뒤로 가지 않는다(conventions 4장)
+
 | 증상 | 원인 | 해결 |
 | --- | --- | --- |
 | 1-b 뒤 AZ c 파드만 바깥 호출 실패 | 1-a를 건너뛰어 새 라우트 테이블에 NAT 라우트가 아직 없음 | NAT 생성이 끝나면(2~3분) 돌아온다. `aws ec2 describe-route-tables`로 app-c의 `0.0.0.0/0` 확인 |
+| Valkey apply가 `automatic failover … requires at least 2 nodes`류 오류로 멈춤 | 복제본 추가와 자동 장애 조치 켜기가 한 번에 들어갔는데 순서가 맞지 않음(provider가 보통 복제본을 먼저 늘리지만 실행해 확인한 것은 아니다) | 다시 apply한다(복제본이 이미 늘어 있으면 통과). 그래도 안 되면 두 번에: 먼저 `-var valkey_replicas=1`은 두고 코드에서 `automatic_failover_enabled`·`multi_az_enabled`만 잠깐 `false`로 apply → 되돌려 apply |
 | 복제 그룹 plan이 replace | provider가 AZ 목록 변경을 재생성으로 판단 | apply하지 않는다. `preferred_cache_cluster_azs`를 그대로 두고 복제본만 늘리는 방법을 찾는다(PR로) |
 | 장애 조치 뒤 booking이 계속 5xx | 연결 풀이 옛 primary(지금 복제본, 읽기 전용)에 붙어 있음 | booking 재시작(ArgoCD Restart). 반복되면 클라이언트 재연결 설정을 본다 |
 | 밤에 NAT를 끌 때 | NAT가 2개다 | 둘 다 끈다(`enable_nat_gateway`) — 하나만 남기면 그 AZ만 바깥으로 나간다 |

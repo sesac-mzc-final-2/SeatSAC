@@ -193,7 +193,7 @@ components:
       properties:
         paymentId: { type: string, format: uuid }
         bookingId: { type: integer, format: int64 }
-        amount: { type: integer, minimum: 15000, maximum: 60000, multipleOf: 15000 }
+        amount: { type: integer, minimum: 1, description: "원. 11/24(ADR-24 보완·D20): 쿠폰 할인 뒤 금액을 받으므로 15,000 배수·상한 검사를 뺐다(제약 완화 — 하위 호환). 상한은 선점 때 정한 원가(seatCount × 15000 ≤ 60,000)를 넘지 않는다" }
         method: { $ref: "#/components/schemas/PaymentMethod" }
         orderName: { type: string, maxLength: 100, description: "TOSSPAY — 포트원 결제창에 보이는 주문명" }
         card:

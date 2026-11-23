@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/payment.preparation-requested.v1.json",
+  "title": "PaymentPreparationRequested",
+  "description": "SQS cinema-staging-payment-commands. booking(체크아웃 saga 오케스트레이터) → payment. 메시지 속성 type·traceId·correlationId. 받는 쪽은 processed_message(eventId)로 한 번만 처리하고, 처리 자체도 멱등이라 재배달이 안전하다(API 명세서 v1.5 21·26장, ADR-116·117). TOSSPAY 결제 준비 — payment는 PROCESSING 행을 만들고 결제창 값을 payment.prepared로 돌려준다. 돈은 움직이지 않는다.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행마다 새 UUID. 재전송해도 같은 값(소비자 inbox processed_message가 중복 제거). 재확인 명령은 시도마다 새 행·새 eventId"
+    },
+    "type": {
+      "type": "string",
+      "const": "payment.preparation-requested"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "booking"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "체크아웃 saga ID(checkoutId). SQS 메시지 속성 correlationId와 같은 값"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "checkoutId",
+        "paymentId",
+        "bookingId",
+        "amount",
+        "method",
+        "orderName"
+      ],
+      "properties": {
+        "checkoutId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "= correlationId"
+        },
+        "paymentId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "booking 발급. payment 행의 PK"
+        },
+        "bookingId": {
+          "type": "integer"
+        },
+        "amount": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "쿠폰 할인 뒤 최종 금액(원). 15,000의 배수가 아닐 수 있다(ADR-24 11/24 보완·D20)"
+        },
+        "method": {
+          "type": "string",
+          "const": "TOSSPAY"
+        },
+        "orderName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "포트원 결제창에 보이는 주문명"
+        }
+      }
+    }
+  }
+}

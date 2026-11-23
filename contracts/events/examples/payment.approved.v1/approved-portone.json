@@ -1,0 +1,17 @@
+{
+  "eventId": "7b8c9dae-bfc0-41d2-b3e4-6f7a8b9c0d1e",
+  "type": "payment.approved",
+  "version": 1,
+  "occurredAt": "2026-11-24T14:00:12+09:00",
+  "producer": "payment",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "correlationId": "5d0c7f1a-2b3e-4c5d-8e9f-0a1b2c3d4e5f",
+  "payload": {
+    "checkoutId": "5d0c7f1a-2b3e-4c5d-8e9f-0a1b2c3d4e5f",
+    "paymentId": "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13",
+    "bookingId": 1042,
+    "amount": 15000,
+    "approvedAt": "2026-11-24T14:02:40+09:00",
+    "pgTransactionId": "0197a3e0-1234-5678-9abc-def012345678"
+  }
+}

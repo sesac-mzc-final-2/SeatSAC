@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | `openapi/` | 서비스별 외부 API (OpenAPI 3.1, `servers: /api`) | 화면(한채연·남궁일), Gateway, 테스트 |
 | `openapi/internal/` | 내부 API `/internal/**` (Gateway 비노출, NetworkPolicy로 호출자 제한) | 호출하는 서비스 |
-| `events/` | 메시지 JSON Schema (draft 2020-12). `seat-event.v1.json`(Valkey Pub/Sub → SSE), `booking.confirmed.v1.json`(SQS) | 발행·소비 서비스, Lambda |
+| `events/` | 메시지 JSON Schema (draft 2020-12). `seat-event.v1.json`(Valkey Pub/Sub → SSE), `booking.confirmed.v1.json`(SQS 알림 + SNS), `booking.canceled.v1.json`(SNS), 체크아웃 saga 명령 `payment.*-requested.v1.json`(booking → SQS payment-commands) · 결과 `payment.{prepared,preparation-failed,approved,declined,result-unknown}.v1.json`(payment → SQS booking-replies). coupon 명령·결과 6종은 coupon 계약 PR에서 | 발행·소비 서비스, Lambda |
 | `schemas/` | 공용 스키마. `error.v1.json`(오류 응답 `{code, message, traceId, details?}`) | 모든 서비스 (Java·Python 테스트가 같은 파일을 읽음) |
 | `*/examples/{스키마 이름}/` | 예시 메시지·응답. CI가 스키마로 검증하고, 서비스 테스트의 fixture로도 쓴다 | 테스트 |
 | `openapi/examples/{service}/` | OpenAPI 응답 예시를 파일로 둔 것(`ai`). 내용은 Example Object `{ "summary", "value" }`이고 YAML이 `examples: { 이름: { $ref } }`로 참조한다. Redocly가 `$ref`를 풀어 스키마로 검증(`no-invalid-media-type-examples`) | 화면, 서비스 테스트(`value`) |

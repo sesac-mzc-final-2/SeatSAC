@@ -3,6 +3,7 @@
 > 기준 2026-10-22 (회의록2 결정 반영). 원본은 노션 「결정 기록 (ADR)」(번호 = DB 번호). 근거·대안은 노션에서 본다. 이 문서는 **지금 유효한 결론**만 한 줄씩 둔다.
 > 이후 결정이 앞 결정을 덮은 경우 "→ 대체"로 표시했다. ⏳는 아직 열린 항목이다.
 > ⚠️AI 11/5 AI 재도입: ADR-82~87(노션 등록 번호는 등록 후 확인). 대체·보완 관계는 각 행 비고.
+> 🆕 11/23 MSA 고도화: **6장**(노션 ADR-114~125 — 번호가 노션과 같다). 덮인 행은 비고에 「→ 11X」로 표시했다.
 
 ---
 
@@ -24,7 +25,7 @@
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 3 · 33 · 61 | RDS **MySQL 8.4** 1대(**Single-AZ**, `db.t4g.small`, TLS 강제, 마스터 비밀번호는 RDS 관리 Secrets Manager) + 서비스별 스키마·계정 | Multi-AZ·AZ 장애 실험은 시간 남을 때 |
+| 3 · 33 · 61 | RDS **MySQL 8.4** 1대(**Single-AZ**, `db.t4g.small`, TLS 강제, 마스터 비밀번호는 RDS 관리 Secrets Manager) + 서비스별 스키마·계정 | Multi-AZ·AZ 장애 실험은 시간 남을 때. 🆕 **→ 115·122로 대체**(서비스별 인스턴스·Multi-AZ) |
 | 33 · 59 | ElastiCache **Valkey 8.2 `cache.t4g.micro`**, `noeviction`, `notify-keyspace-events Ex`, 메모리 80%·Evictions 경보 | 부하 테스트에서 70% 넘으면 t4g.small |
 | 57 | DB 마이그레이션은 ArgoCD **Flyway 훅 Job**(`{svc}_migrator`, Sync 단계 wave -1 — ConfigMap 다음·앱 전, 실패 시 sync 중단), 앱은 Flyway 끔. 스키마·계정·Secret은 Terraform(`envs/staging-k8s`)이 클러스터 안 Job으로 생성(3.1.12) | 처음 "PreSync"였으나 첫 배포 때 ConfigMap보다 먼저 돌아 Sync wave -1로 변경(10/23) |
 | 60 | 리포트 뷰 만들지 않음(catalog V2 머지 안 함, ⚠️AI 재도입 후에도 유지 — 84) · payment `PROCESSING` 30초 초과는 기동 시 `FAILED(PROCESSING_TIMEOUT)`(MOCK 행만) · ~~`pg_provider`는 `MOCK`만~~ → 112로 대체(`PORTONE` 추가) | |
@@ -32,19 +33,19 @@
 | 5 | 선점: Valkey `SET NX EX {선점 TTL}`(`APP_SEAT_HOLD_TTL_SECONDS`, 기본 300초, 30~600)(Lua로 여러 좌석 원자적) + 그 시점 RDS PENDING 예매 | |
 | 11 | 한 번에 최대 4석 | |
 | 19 | 멱등: `Idempotency-Key` + Valkey `idem:{userId}:{키}` 24시간 + 유일 제약(`booking_seat`, `current_payment_id`) | |
-| 22 | 내부 브로커 없음: Pub/Sub + keyspace 알림 + sorted set | 만료 반영 2초 초과 시 재검토 |
+| 22 | 내부 브로커 없음: Pub/Sub + keyspace 알림 + sorted set | 만료 반영 2초 초과 시 재검토. 🆕 좌석 실시간은 그대로, 서비스 간 비동기는 **117(SNS/SQS)** 로 보완 |
 | 44 | 만료: keyspace(Ex) + `hold-expiry` 1초 스캔 + RDS 10초 스캔, 조건부 UPDATE로 한 번만 | 노션 본문 "ADR-21" = 이 항목 |
-| ⚠️AI 84 | AI 데이터: **ai 파드 메모리 SQLite 스냅샷**, CloudFront 공개 API로만 적재(오늘 1분·나머지 10분). RDS·기존 Valkey·리포트 뷰·`ai_readonly` 없음. 실행은 읽기 전용·5초·500행, SQL 검증 sqlglot(SQLite). 포스터·시드 원본 미포함 | 기존 MSA DB를 건드리지 않음. 60 유지 |
+| ⚠️AI 84 | AI 데이터: **ai 파드 메모리 SQLite 스냅샷**, CloudFront 공개 API로만 적재(오늘 1분·나머지 10분). RDS·기존 Valkey·리포트 뷰·`ai_readonly` 없음. 실행은 읽기 전용·5초·500행, SQL 검증 sqlglot(SQLite). 포스터·시드 원본 미포함 | 기존 MSA DB를 건드리지 않음. 60 유지. 🆕 **→ 120으로 보완**(`APP_AI_DATA_SOURCE=db`면 자기 `ai_db`) |
 | ⚠️AI 85 | AI 캐시: 새 ElastiCache **`cinema-staging-ai-valkey`** `t4g.micro`(벡터 검색, `noeviction` + 모든 키 TTL — 한도 키 보호, 예약 메모리 50%). 정확 일치 + **의미 캐시**(로컬 임베딩 `paraphrase-multilingual-MiniLM-L12-v2`, 슬롯 치환 뒤 임베딩, 유사도 0.92) + 세션(사용자별 키) + 사용 한도. 개인 질문은 캐시 안 함 | 59는 기존 Valkey에만 해당(그대로) |
 
 ## 3. 서비스 간 통신·계약·결제·알림
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 23 · 32 | REST 동기(RestClient + Resilience4j), 연결 1초·응답 3초(catalog→booking 300ms), 서킷 50%·10초, OpenAPI 계약 + CI | p95 초과 시 gRPC |
+| 23 · 32 | REST 동기(RestClient + Resilience4j), 연결 1초·응답 3초(catalog→booking 300ms), 서킷 50%·10초, OpenAPI 계약 + CI | p95 초과 시 gRPC. 🆕 동기 호출은 **유지**, 체크아웃은 116(saga)·117(메시징)으로 보완 |
 | 38 · 54 | 계약 기준은 API 명세서 v1.1 + 2.2.4 v0.3 정리: 비페이징 목록 `{items}`, 오류 `details` 항상 배열, Cognito 조회 실패 503 `IDENTITY_UNAVAILABLE`, 내부 회차 API `seatIds` 삭제, `GET /internal/theaters` 신설 | `docs/contracts.md` |
 | 55 | 계약 강화(구현 전 일괄): `booking.confirmed` 필드 3개 필수, traceId `^[0-9a-f]{32}$`, 오류 traceId null 불가. 첫 계약 PR만 `contract-break-ok`, 라벨은 구현 시작 엔드포인트·M3 이후 금지 | |
-| 62 | Gateway 요청 수 제한 미도입(`rl:` 키·429 없음) | |
+| 62 | Gateway 요청 수 제한 미도입(`rl:` 키·429 없음) | 🆕 ⏳ 재검토 중 — 124(WAF IP 요청 제한)로 대신할지 |
 | 24 | 결제는 예매당 1회, 실패하면 PAYMENT_FAILED + 좌석 해제 | 20 폐기 |
 | 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외. **112로 부분 대체** — 화면은 토스페이, 모의는 테스트·분석 전용 |
 | 112 | 결제는 **포트원(PortOne) V2 + 토스페이**(간편결제, `payMethod EASY_PAY`). 화면은 토스페이만. 두 단계: `POST /bookings/{id}/payments`(준비, paymentId 발급) → 결제창 → `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(payment가 포트원 단건 조회로 PAID·금액 검증). 웹훅 `Transaction.Paid` 병행(본문 불신). 모의(`CARD`)는 테스트·분석 전용 — 헤더 `X-Payment-Mock-Key`가 맞을 때만(화면에는 없음). paymentId는 booking 발급 UUID 그대로. 결제창 미완료 정리: payment 7분, booking 만료+2분 | 11/13. 결제 경로 매트릭스 `docs/payment-paths.md`. 13 부분 대체·60 대체. 계약 PR #115는 `contract-break-ok`(55의 「M3 이후 금지」 예외 — 응답 enum 값 추가뿐이고 소비자인 화면·booking이 같은 기간에 함께 바뀐다). 일정은 #121(64 개정)로 동결 없음 |
@@ -55,11 +56,11 @@
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 7 · 34 | (⚠️AI 86 보완: `ng-ai` 추가) EKS On-Demand **t3.xlarge 2대**(ng-a 1 · ng-c 1 — 11/14 t3.large에서 변경: 4.2.1 선점 p95가 파드 CPU에 묶여, 부족하면 한 단계씩 올림. `ng-ai`는 t3.large 그대로, 변수 분리). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14 — 실행은 EventBridge Scheduler, GitHub Actions는 백업·수동), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값 |
+| 7 · 34 | (⚠️AI 86 보완: `ng-ai` 추가) EKS On-Demand **t3.xlarge 2대**(ng-a 1 · ng-c 1 — 11/14 t3.large에서 변경: 4.2.1 선점 p95가 파드 CPU에 묶여, 부족하면 한 단계씩 올림. `ng-ai`는 t3.large 그대로, 변수 분리). 환경은 **staging 하나**. 평일 밤·주말 노드 0대(월~금 08:23 켜기·23:07 끄기 KST, 3.1.14 — 실행은 EventBridge Scheduler, GitHub Actions는 백업·수동), 데모 주간 11/16~20 24시간. 비용 경보 Budgets 월·일 | 노션 ADR-7 제목 "3대"는 이전 값. 🆕 **→ 122로 보완**(Karpenter·AZ 분산) |
 | 8 · 35 · 58 | Kustomize + ArgoCD. booking·gateway만 블루/그린(5xx 1%·결제 timeout/error 5% 롤백, scaleDown 60초), 나머지 롤링. 프로브·자원·HPA·메트릭·Secret·NetworkPolicy는 `docs/service-runtime-contract.md` | 동시 블루/그린 금지 |
-| 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음. 사용자 도메인은 **선택으로 추가**(3.1.23 — 기본 도메인은 그대로, Route 53 등록은 Terraform 밖, `var.custom_domain`, apex만. CloudFront → ALB 구간은 기본 HTTP — HTTPS 원본은 **발표 뒤 선택 적용**: `var.api_origin_https` `off`(기본) → `prepare`(원본 이름 `origin.<도메인>`·ap-northeast-2 ACM 인증서·ALB SG 443) → gitops Ingress 443 리스너 → `on`(CloudFront 원본 `https-only`), 런북 7-8) | 31의 httpOnly 쿠키는 37·63으로 대체 |
+| 9 · 31 | CloudFront + S3(OAC), 기본 도메인 HTTPS, `/api/*` → ALB, CORS 없음. 사용자 도메인은 **선택으로 추가**(3.1.23 — 기본 도메인은 그대로, Route 53 등록은 Terraform 밖, `var.custom_domain`, apex만. CloudFront → ALB 구간은 기본 HTTP — HTTPS 원본은 **발표 뒤 선택 적용**: `var.api_origin_https` `off`(기본) → `prepare`(원본 이름 `origin.<도메인>`·ap-northeast-2 ACM 인증서·ALB SG 443) → gitops Ingress 443 리스너 → `on`(CloudFront 원본 `https-only`), 런북 7-8) | 31의 httpOnly 쿠키는 37·63으로 대체. 🆕 124에서 `api_origin_https` **`on`** |
 | 78 | (⚠️AI 86 보완: gateway 5xx 쿼리에 `uri!~"/ai.*"`) 블루/그린 분석 트래픽: 분석 중 AnalysisTemplate Job(k6, 조회만)이 `{svc}-preview`로 직접 요청, `/actuator` 제외 요청 ≥ 20건/분을 같이 판정(트래픽 0 = 실패). 실패하면 abort(전환 없음) → gitops 태그 revert PR. 실패 버전 시연은 gitops 설정 PR로 의존 서비스 주소를 깨뜨리는 방식 | ⏳ 남궁일 확인(결제 경로 트래픽·시연 방식) |
-| 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | External Secrets는 확장. Loki는 113으로 보완 |
+| 10 | 관측은 Prometheus·Grafana, 비밀 값은 Terraform이 만드는 K8s Secret | ~~External Secrets는 확장~~ 🆕 **→ 123으로 대체**(ESO). Loki는 113으로 보완, 121로 확장 |
 | ⚠️AI 86 | AI 격리: 전용 노드그룹 **`ng-ai`**(t3.large 1대, 라벨·taint `cinema/workload=ai`, 평소 desired 0, 스케줄 대상 제외) · 별도 Application **`cinema-ai`**(`argocd_apps.tf`, 다른 Application 수정 없음) · gateway 플래그 `APP_AI_ENABLED`(꺼지면 `/api/ai/**` 404) · 분석 쿼리 `/ai` 제외 · `base/ai/networkpolicy.yaml`만 신규(gateway·monitoring → ai) · ai는 클러스터 안 gateway를 부르지 않고 CloudFront 공개 주소 사용 | 7·34·58·69·78 보완 |
 | 36 · 39 | AWS 아키텍처 = 위 결정들의 합. 노션 ADR-36(10/18 v3)은 이전 스냅샷 | |
 | 46 | GitHub Actions → AWS OIDC. 역할 `cinema-gha-ecr-push`·`cinema-gha-tf-plan`·`cinema-gha-frontend-deploy`·`cinema-gha-cluster-schedule`(3.1.14). CI는 apply 안 함 | `infra/terraform/global` |
@@ -71,9 +72,26 @@
 
 | ADR | 결론 | 비고 |
 | --- | --- | --- |
-| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | 11/14 관리자 역할 제거: `X-User-Role`은 항상 `USER`, `/api/admin/**`·관리자 API·화면 없음(Cognito `ADMIN` 그룹은 쓰지 않음). ADR 번호는 노션 등록 후 |
+| 37 | Cognito 사용자 풀(Hosted UI, 코드 + PKCE), Gateway가 Access Token을 JWKS로 검증 → `X-User-Id`(= sub)·`X-User-Role` | 11/14 관리자 역할 제거: `X-User-Role`은 항상 `USER`, `/api/admin/**`·관리자 API·화면 없음(Cognito `ADMIN` 그룹은 쓰지 않음). ADR 번호는 노션 등록 후. 🆕 **→ 118·119로 보완**: Cognito 그룹 `VIP`(gateway `X-User-Grade`)·`ADMIN`(ops-api `/ops`만, gateway `/api/admin/**`는 계속 없음) |
 | 63 | 화면 토큰 저장은 **메모리**(`InMemoryWebStorage`), localStorage 금지. 새로고침은 Cognito 세션으로 재발급 | |
 | 56 | 공통 코드: 같은 레포 공유 모듈(`libs/common-*` + `build-logic`), 패키지 `com.seatsac.{service}`·`com.seatsac.common.{core,web,test}`. `libs/` 변경 승인 2명 | 최종 결정 21번 "복사" 대체 |
 | 48 · 64 | 레포 `SeatSAC`·`SeatSAC-gitops`, 브랜치 `{type}/{기능ID 또는 WBS ID}-{설명}`, ~~데모 주간 11/16~20 머지 금지~~(11/14 삭제 — QA·피드백 반영, 시연·측정 중에는 머지하지 않음. 발표 당일 마감 booking·gateway 11/20 05:00·그 밖 07:00), 태그 rc1 11/6·rc2 11/13·v1.0.0 11/20(마감 뒤), Lambda Python, 이슈는 노션 WBS만 (⚠️AI `services/ai` 다시 생김 — 82) | `docs/repo-workflow.md` |
 | ⚠️AI 87 | AI 일정·머지: **rc1(11/6)** gateway 라우트(플래그 off)·분석 쿼리 제외 머지, ai 인프라·골격은 플래그 off로 staging 배포 가능 · **M6(11/9~13)** `services/ai/**`·`contracts/openapi/ai*`·gitops `base/ai`·`overlays/staging/ai`만 머지 허용(gateway·booking·`libs/`·Terraform 금지), **테스트 준비 예외(11/10 일정 변경)** `tests/k6/**`·`docs/**`·gitops `base/*/networkpolicy.yaml` 테스트 Job 허용 규칙 추가는 M6에도 머지(조건: PR 본문에 「M6 예외(테스트 준비)」와 이유, 스크럼 공유, 테스트 실행 중이 아닐 때), **AI 화면 예외(11/12)** 3.3.7 챗봇 화면(전체 허용 `frontend/src/entities/ai-chat/**`·`frontend/src/features/ai-chat/**`(새 슬라이스)·`frontend/mock/**`·`frontend/README.md`(개발용 목·문서, 빌드에 들어가지 않음) + 기존 파일 **추가만**: `frontend/src/widgets/page-layout/ui/PageLayout.tsx` Dock 배치·`frontend/src/shared/ui/icon/Icon.tsx` 아이콘 경로·`frontend/src/shared/api/http.ts` `Retry-After` 읽기(기존 오류 처리 그대로, 테스트 포함)·`frontend/src/app/routes/router.tsx` 주석)도 M6에 머지 — frontend는 S3 + CloudFront 배포라 클러스터·블루/그린과 무관하고 화면은 챗봇 창을 열 때만 `/api/ai/**`를 부른다(런북 6-G-5). 조건은 테스트 준비 예외와 같음(PR 본문 「M6 예외(AI 화면)」), 그 밖의 `frontend/**`는 금지 그대로, 테스트는 `ng-ai` 0·플래그 off, ai 검증은 로컬 Compose + 개발 키 · **rc2(11/13)** M6 테스트 뒤 플래그 켜기(ai 코드 동결·데모 주간 머지 금지는 11/14 삭제, 64와 같이) | 64 보완 |
 | 49 | 공통 문서 6종 채택, 합본 `Claude.md`를 레포 루트에 (노션과 다르면 레포 우선, 수정은 PR) | 65는 49로 통합(폐기) |
+
+## 6. 🆕 MSA 고도화 (11/23, 노션 ADR-114~125)
+
+| ADR | 결론 | 비고 |
+| --- | --- | --- |
+| 114 | 범위: 기간 11/23~27(4명 — 11/23~25 구현, 11/26 통합 테스트·비교 측정, 11/27 통합 시연·리허설), 목표 = 서비스별 DB·비동기 saga·장애 격리·관리자 운영. 하루 비용 상한 $50, 못 끝내면 새 계정으로 이어서(125). 순서는 노션 「MSA 고도화 (WBS)」 「순서」 열 | 52 보완 |
+| 115 | **서비스별 RDS 인스턴스** `cinema-staging-{svc}-db` 6개(booking small·나머지 micro, ai 외 Multi-AZ), `DB_HOST_{SVC}`, 인스턴스별 db-bootstrap | 3·33·61 대체 |
+| 116 | 체크아웃 **오케스트레이션 saga**(booking이 오케스트레이터): 새 리소스 `/bookings/{id}/checkout`(202 + 폴링), 쿠폰 예약 → 결제 준비 → 확인 → 확정, 실패는 역순 보상, 단계 기한 30초. 기존 `/payments`·`/pay`는 유지, 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 off)·화면 `VITE_CHECKOUT_MODE` | 동기 경로와 비교 시연 |
+| 117 | 메시징 **SNS(이벤트) + SQS(명령·결과)**, 큐마다 DLQ 3회, 아웃박스 + inbox(`processed_message`), `correlationId` = checkoutId. 파드가 SQS 직접 소비, Lambda는 외부 작업만 | 22·23 보완, 30 유지 |
+| 118 | **coupon 서비스**(Java, `coupon_db`): VIP 선착순 쿠폰, 재고 Valkey DECR + DB 유일 제약, VIP는 Cognito 그룹 → gateway `X-User-Grade` | 37 보완 |
+| 119 | **ops-api**(Python, `/ops/*` CloudFront → ALB, gateway 우회): Cognito `ADMIN` 그룹만, 상태·정지/가동(replicas 0 ↔ 원래 값, ArgoCD `ignoreDifferences`)·리포트. 감사 로그 | 37 보완. GitOps 예외(replicas만) |
+| 120 | ai는 자기 **`ai_db`** 복제본(catalog 이벤트 + 백필 + 10분 대조)과 `unmet_demand`, `APP_AI_DATA_SOURCE=snapshot\|db`, ops-api용 내부 통계 API | 84 보완 |
+| 121 | 리포트: 로그 `errorCategory` → Loki → S3 `cinema-staging-reports-*`(1시간 CronJob) → Glue → Athena → CSV(presigned 5분) | 113 확장 |
+| 122 | 가용성: NAT AZ별 2개, Multi-AZ RDS·Valkey 복제본, 핵심 서비스 replicas 2 + topologySpread, **Karpenter**(t3 계열 On-Demand) | 7·34 보완 |
+| 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-eso-pod` | 10 대체 |
+| 124 | ⏳ 보안: WAF(관리형 규칙 + IP 요청 제한), gateway 본문 64KB(413 `PAYLOAD_TOO_LARGE`), `SECURITY` 로그, 원본 HTTPS `on` | 검토 중. 62 재검토 |
+| 125 | 새 AWS 계정 이전: 기존 계정 리소스를 그대로 두고 Terraform을 새 계정에 다시 apply(bootstrap → global → staging → staging-k8s), 도메인은 Route 53 등록 이전 + 새 호스팅 영역, ECR 이미지는 CI 재빌드 | 이전할 때만 |

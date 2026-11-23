@@ -822,7 +822,7 @@ echo "$RH" | head -c 20; echo     # None이면 아직 안 왔거나 다른 메�
 - [ ] 토픽 2 · 큐 10(원본 5 + DLQ 5) · Pod Identity 연결 6(booking 포함)
 - [ ] 발행한 확인 메시지가 구독 큐에 SNS 봉투 없이 들어온다(Body 그대로 + 메시지 속성)
 - [ ] ConfigMap에 메시징 키 7개, 두 번째 plan No changes
-- [ ] 로컬 ElasticMQ 테스트 통과 뒤 staging에서 명령 1건 왕복(런타임 계약 7장 21번 — 서비스 구현 뒤)
+- [ ] 로컬 ElasticMQ(`infra/compose/elasticmq.conf`에 같은 이름의 큐 5개 + DLQ — `docker compose up -d elasticmq`로 다시 띄운다) 테스트 통과 뒤 staging에서 명령 1건 왕복(런타임 계약 7장 21번 — 서비스 구현 뒤)
 
 | 증상 | 원인 | 해결 |
 | --- | --- | --- |
@@ -831,6 +831,7 @@ echo "$RH" | head -c 20; echo     # None이면 아직 안 왔거나 다른 메�
 | 구독 큐에 메시지가 안 들어옴 | 큐 정책의 `AllowTopicDelivery`가 없거나 구독 미확정 | `aws sns list-subscriptions-by-topic`에 `PendingConfirmation`이 아닌 ARN, 큐 정책 확인 |
 | `…-dlq-not-empty` 경보 | 받는 서비스가 같은 메시지를 3번 처리하지 못함(예외·30초 초과) | 서비스 로그에서 `messageType`·`correlationId`로 원인 확인 → 고친 뒤 DLQ 재전송(redrive, 원본 큐로만 허용) |
 | `…-oldest` 경보 | 받는 파드 없음·멈춤 | 파드 상태 확인. ops-api 정지 시연 중이면 정상 — 「가동」 뒤 OK로 돌아온다 |
+| `user-booking-events-oldest`가 계속 울림 | booking이 `booking-events`를 내기 시작했는데 user 소비자(6.3.4)가 아직 배포되지 않음 — 알림 큐(6-B-3)와 같은 순서 문제 | **받는 쪽을 먼저 배포하고 보내는 쪽을 켠다**: user 소비자 → booking SNS 발행, coupon·payment 소비자 → `APP_CHECKOUT_SAGA_ENABLED`, ai·user 소비자 → catalog `APP_OUTBOX_RELAY_ENABLED`. 이미 쌓였으면 소비자 배포 뒤 흘러간다(보존 4일) |
 
 ### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-74)
 

@@ -24,3 +24,6 @@ valkey_node_type      = "cache.t4g.micro"
 
 # 3.1.23 사용자 도메인(선택). Route 53에서 등록한 뒤에만 채운다(런북 7-7). 비우면 CloudFront 기본 도메인만
 custom_domain = "seatsac.com"
+
+# 3.1.23 후속 CloudFront → ALB HTTPS(런북 7-8). off → prepare → (gitops 443 리스너) → on 순서로 한 단계씩 PR
+# api_origin_https = "prepare"

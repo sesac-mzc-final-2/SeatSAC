@@ -108,6 +108,11 @@ output "api_origin_domain_name" {
   value       = local.api_origin_enabled ? local.api_origin_domain_name : ""
 }
 
+output "api_origin_https" {
+  description = "3.1.23 후속 CloudFront → ALB HTTPS 단계(prepare · on)와 원본 이름. off면 null(출력 변경으로 잡히지 않게)"
+  value       = local.api_origin_https_prepare ? "${var.api_origin_https}: ${local.api_origin_https_name}" : null
+}
+
 output "frontend_github_variables" {
   description = "레포 Settings → Secrets and variables → Actions → Variables 6개 (런북 7-3). 비밀 없음"
   value = {

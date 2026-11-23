@@ -779,6 +779,7 @@ aws sqs delete-message --queue-url "$DLQ" --receipt-handle '<위에서 나온 Re
 | 항목 | 값 |
 | --- | --- |
 | 큐 설정 | 긴 폴링 20초 · 가시성 제한 30초 · SSE-SQS · TLS 아닌 요청 거부. 보존: 명령·결과 1일, 이벤트 4일 |
+| 토픽 설정 | 저장 암호화 AWS 관리 키 `alias/aws/sns`(발행 역할에 KMS 권한 불필요) · TLS 아닌 발행 거부 |
 | 경보 | DLQ 5개 `…-dlq-not-empty`(1건 이상) · 받는 쪽 멈춤 `…-oldest`(명령·결과 300초, `user-booking-events` 1시간). `ai-catalog-events`는 `ng-ai`가 평소 0대라 쌓이는 것이 정상 → 오래된 메시지 경보 없음 |
 | Pod Identity | `cinema-staging-{payment,coupon,user,catalog,ai}-pod` 신규(ServiceAccount = 서비스 이름) · `cinema-staging-booking-pod`에 명령 발송·결과 수신·`booking-events` 발행 추가 |
 | ConfigMap 키 | `SNS_{BOOKING,CATALOG}_EVENTS_ARN` · `SQS_{COUPON,PAYMENT}_COMMANDS_URL` · `SQS_BOOKING_REPLIES_URL` · `SQS_{USER_BOOKING,AI_CATALOG}_EVENTS_URL` — 이름으로 만들어지는 값이라 staging apply 전에도 넣을 수 있다 |
@@ -810,8 +811,12 @@ aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --names
 ARN=$(kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.SNS_CATALOG_EVENTS_ARN}')
 URL=$(kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.SQS_AI_CATALOG_EVENTS_URL}')
 aws sns publish --topic-arn "$ARN" --message '{"check":"6-B-6"}' --message-attributes 'type={DataType=String,StringValue=check}'
-aws sqs receive-message --queue-url "$URL" --message-attribute-names All --wait-time-seconds 5   # Body가 {"check":"6-B-6"} 그대로, 속성 type=check
-aws sqs purge-queue --queue-url "$URL"          # 확인 메시지 지우기 (앱이 켜지기 전에만)
+# 받은 것 중 확인 메시지(Body {"check":"6-B-6"}, 속성 type=check)의 ReceiptHandle만 꺼낸다 — SNS 봉투 없이 Body 그대로여야 한다
+RH=$(aws sqs receive-message --queue-url "$URL" --message-attribute-names All --max-number-of-messages 10 --wait-time-seconds 5 \
+  --query "Messages[?contains(Body, '6-B-6')]|[0].ReceiptHandle" --output text)
+echo "$RH" | head -c 20; echo     # None이면 아직 안 왔거나 다른 메시지만 받은 것 → 30초(가시성 제한) 뒤 다시
+[ "$RH" != "None" ] && aws sqs delete-message --queue-url "$URL" --receipt-handle "$RH"   # 확인 메시지 **하나만** 지운다
+# purge-queue는 쓰지 않는다 — ng-ai가 꺼져 있는 동안 쌓인 실제 catalog 이벤트까지 전부 지워진다
 ```
 
 - [ ] 토픽 2 · 큐 10(원본 5 + DLQ 5) · Pod Identity 연결 6(booking 포함)
@@ -822,6 +827,7 @@ aws sqs purge-queue --queue-url "$URL"          # 확인 메시지 지우기 (�
 | 증상 | 원인 | 해결 |
 | --- | --- | --- |
 | 파드 `AccessDenied … sqs:ReceiveMessage`·`sns:Publish` | ServiceAccount가 없거나 Deployment가 쓰지 않음(gitops `base/{svc}/serviceaccount.yaml` · `serviceAccountName`) / 다른 서비스의 큐 | gitops 반영 뒤 파드 재시작. 권한은 자기 큐·토픽만이다 |
+| 파드 `sns:Publish`가 `KMSAccessDeniedException` | 토픽 키가 AWS 관리 키(`alias/aws/sns`)가 아닌 고객 관리 키로 바뀜 | `messaging.tf`의 `kms_master_key_id` 확인. 고객 관리 키를 쓰려면 발행 역할에 `kms:GenerateDataKey`·`kms:Decrypt`와 키 정책이 필요하다 |
 | 구독 큐에 메시지가 안 들어옴 | 큐 정책의 `AllowTopicDelivery`가 없거나 구독 미확정 | `aws sns list-subscriptions-by-topic`에 `PendingConfirmation`이 아닌 ARN, 큐 정책 확인 |
 | `…-dlq-not-empty` 경보 | 받는 서비스가 같은 메시지를 3번 처리하지 못함(예외·30초 초과) | 서비스 로그에서 `messageType`·`correlationId`로 원인 확인 → 고친 뒤 DLQ 재전송(redrive, 원본 큐로만 허용) |
 | `…-oldest` 경보 | 받는 파드 없음·멈춤 | 파드 상태 확인. ops-api 정지 시연 중이면 정상 — 「가동」 뒤 OK로 돌아온다 |

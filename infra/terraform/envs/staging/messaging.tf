@@ -7,7 +7,7 @@
 #     결과 큐      cinema-staging-booking-replies                   coupon·payment → booking
 #     DLQ          {큐}-dlq, maxReceiveCount 3, 메시지 1건 이상이면 경보
 #   - 받는 쪽은 서비스 파드(SQS long polling 20초). Lambda는 알림(sqs.tf)만
-#   - 암호화: SSE-SQS(KMS 권한 없이 발행·수신). TLS가 아닌 요청은 큐·토픽 정책으로 거부
+#   - 암호화: 큐는 SSE-SQS(KMS 권한 없이 발행·수신), 토픽은 AWS 관리 키(alias/aws/sns). TLS가 아닌 요청은 큐·토픽 정책으로 거부
 #   - 큐·토픽 주소는 이름으로 정해져 envs/staging-k8s의 ConfigMap cinema-infra-endpoints가 만든다(infra_endpoints.tf)
 #   - 파드 권한은 Pod Identity cinema-staging-{svc}-pod — ServiceAccount {svc}(cinema-staging)는 gitops base/{svc}/serviceaccount.yaml
 #     (booking은 이미 있다. payment·coupon·user·catalog·ai는 gitops PR에서 추가 — 그 전에는 연결만 있고 쓰는 파드가 없다)
@@ -35,6 +35,11 @@ locals {
 resource "aws_sns_topic" "events" {
   for_each = local.messaging_topics
   name     = "${var.name}-${each.key}" # cinema-staging-booking-events
+
+  # 저장 암호화: SNS용 AWS 관리 키. 이 키의 정책은 같은 계정에서 SNS를 거쳐 오는 요청을 허용하므로
+  # 발행하는 파드 역할(sns:Publish)에 KMS 권한을 따로 주지 않는다. 구독 큐는 SSE-SQS라 SNS → SQS 전달에도 키 권한이 필요 없다
+  # (고객 관리 키로 바꾸면 발행 역할에 kms:GenerateDataKey·kms:Decrypt, 키 정책에 sns.amazonaws.com이 필요하다)
+  kms_master_key_id = "alias/aws/sns"
 }
 
 data "aws_iam_policy_document" "events_topic" {

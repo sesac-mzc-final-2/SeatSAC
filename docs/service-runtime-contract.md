@@ -3,10 +3,11 @@
 > 기준 2026-10-21. 개발(서비스 코드)과 인프라/데브옵스(Terraform·gitops·CI)가 **맞닿는 모든 약속**을 한곳에 둔다. 이름 규칙은 `docs/conventions.md`, API는 `contracts/`.
 > 이 표대로 만들면 서로 회의 없이 붙는다. 표를 바꿀 때는 PR에 양쪽(서비스 담당 + 김종식) 승인을 받는다.
 > 범위: 노드 t3.xlarge 2대(ng-a 1 · ng-c 1, ADR-7·34 — 11/14 t3.large에서 변경) + ⚠️AI ai 전용 `ng-ai` t3.large 1대(평소 0대, ADR-86 — 변수 `ai_node_instance_type`으로 따로), 환경 staging 하나. 값은 10/22 확정(ADR-57·58·59·63), ⚠️AI 11/5 AI 재도입(ADR-82~87)은 각 장의 「ai」 항목과 9장.
+> 🆕 11/23 MSA 고도화(노션 ADR-114~125): 서비스별 RDS 인스턴스 6개 · NAT AZ별 · Multi-AZ · 핵심 서비스 replicas 최소 2 · Karpenter · External Secrets · SNS/SQS · `coupon`(Java)·`ops-api`(Python) 추가는 각 장의 🆕 항목과 **10장**. 적용 순서는 노션 「MSA 고도화 (WBS)」 「순서」 열.
 
 ---
 
-## 1. 모든 서비스 공통 (Java 5개 — ⚠️AI Python `ai`는 9장)
+## 1. 모든 서비스 공통 (Java 5개 + 🆕 coupon — ⚠️AI Python `ai`는 9장, 🆕 Python `ops-api`는 10장)
 
 | 항목 | 앱이 할 일 | 인프라가 할 일 |
 | --- | --- | --- |
@@ -30,8 +31,11 @@
 | catalog | 롤링 (maxUnavailable 0, maxSurge 1) | 1 (1~4) | 200m / 448Mi | 640Mi | ✅ | `catalog_db` | 없음 |
 | user | 롤링 | 1 (1~2) | 150m / 384Mi | 576Mi | — | `user_db` | 없음 (`GetUser`는 Access Token으로 호출, IAM 불필요) |
 | payment | 롤링 | 1 (고정) | 150m / 384Mi | 576Mi | — | `payment_db` | 없음 |
-| ⚠️AI ai | 롤링 (maxUnavailable 0, maxSurge 1) | 1 (고정, HPA 없음) | 250m / 1Gi (임베딩 모델 포함) | 1.5Gi | **ai Valkey**(별도) | **없음** (SQLite 메모리 스냅샷) | 없음 (Claude API는 키, AWS 권한 불필요) |
+| ⚠️AI ai | 롤링 (maxUnavailable 0, maxSurge 1) | 1 (고정, HPA 없음) | 250m / 1Gi (임베딩 모델 포함) | 1.5Gi | **ai Valkey**(별도) | ~~없음 (SQLite 메모리 스냅샷)~~ 🆕 `ai_db`(`APP_AI_DATA_SOURCE=db`일 때) | 없음 → 🆕 `cinema-staging-ai-pod`(SQS `ai-catalog-events` 수신) |
+| 🆕 coupon | 롤링 | 2 (2~4, CPU 70%) | 200m / 448Mi | 640Mi | ✅ (`coupon:*`) | `coupon_db` | `cinema-staging-coupon-pod`: `coupon-commands` 수신, `booking-replies` 발송 |
+| 🆕 ops-api | 롤링 | 1 (고정) | 100m / 256Mi | 384Mi | — | — | `cinema-staging-ops-api-pod`: Athena·Glue 조회, S3 `cinema-staging-reports-*` 읽기·쓰기 |
 
+- 🆕 11/23(ADR-115·117·122): **RDS 스키마 열은 이제 각자의 인스턴스**(`cinema-staging-{svc}-db`). gateway·catalog·booking·user·payment·coupon은 **replicas 최소 2** + `topologySpreadConstraints`(`topology.kubernetes.io/zone`, `whenUnsatisfiable: ScheduleAnyway`) — 두 AZ에 자리가 있으면 파드를 AZ마다 나눠 AZ 하나가 죽어도 남게 한다. **보장은 아니다**: `ScheduleAnyway`는 한 AZ에 자리가 없으면 같은 AZ에 둘 다 올린다(그때 그 AZ가 죽으면 다시 뜰 때까지 0개). 배포 뒤 `kubectl get pods -o wide`로 AZ가 나뉘었는지 확인하고, 강제(`DoNotSchedule`)는 AZ별 노드 용량이 확보되는 Karpenter(6.1.6) 뒤에 정한다 — `DoNotSchedule`은 자리가 없으면 파드가 Pending이라 블루/그린 preview가 멈춘다. booking HPA 2~4(자기 인스턴스라 블루/그린 순간 8 × 15 = 120 < 경보 130), gateway 2(블루/그린 중 4). 위 표의 replicas 열도 최소가 2로 바뀐다 — catalog 2~4, coupon 2~4, user 2(최대 2 그대로라 고정과 같다), payment 2(고정) — data-model 7-1의 연결 수 계산과 같은 값. Pod Identity 추가: booking(명령 발송·`booking-replies` 수신·SNS 발행), payment(`payment-commands` 수신·`booking-replies` 발송), user(`user-booking-events` 수신), catalog(SNS `catalog-events` 발행)
 - JVM: `-XX:MaxRAMPercentage=75` (Dockerfile). limits cpu는 두지 않는다(스로틀로 p95 악화)
 - ⚠️AI ai는 `ng-ai` 노드에만 뜬다(`nodeSelector cinema/workload=ai` + toleration). 기존 5개 서비스는 taint 때문에 `ng-ai`에 올라가지 않는다. `ng-ai` desired 0이면 ai 파드는 Pending(정상) — 나머지 서비스·데모에 영향 없음
 - 두 서비스 동시 블루/그린 금지(노드 2대). 공통 모듈 급한 반영도 한 번에 한 서비스씩: catalog·user·payment → booking → gateway
@@ -48,7 +52,10 @@
 
 | 키 | 값 | 쓰는 곳 |
 | --- | --- | --- |
-| `DB_HOST` | RDS 주소 (`aws_db_instance.address`) | `SPRING_DATASOURCE_URL`, Flyway Job `FLYWAY_URL` |
+| `DB_HOST` | RDS 주소 (`aws_db_instance.address`) — 🆕 인스턴스 분리 뒤에는 쓰지 않는다(옮기는 동안만 남김) | `SPRING_DATASOURCE_URL`, Flyway Job `FLYWAY_URL` |
+| 🆕 `DB_HOST_{BOOKING,PAYMENT,USER,CATALOG,COUPON,AI}` | 서비스별 RDS 주소(ADR-115) | 각 서비스 `SPRING_DATASOURCE_URL`·Flyway Job. ai는 이름 그대로 `DB_HOST_AI` |
+| 🆕 `SNS_{BOOKING,CATALOG}_EVENTS_ARN` · `SQS_{COUPON,PAYMENT}_COMMANDS_URL` · `SQS_BOOKING_REPLIES_URL` · `SQS_{USER_BOOKING,AI_CATALOG}_EVENTS_URL` | 메시징 주소(ADR-117, 계정 ID가 들어가 Terraform에만) | 각 서비스 `APP_MESSAGING_*` |
+| 🆕 `REPORTS_BUCKET` · `ATHENA_WORKGROUP` · `PROMETHEUS_URL` · `LOKI_URL` | 리포트 버킷·작업 그룹·클러스터 안 주소 | ops-api(이름 그대로) |
 | `VALKEY_HOST` | Valkey primary 엔드포인트 | `SPRING_DATA_REDIS_HOST` |
 | `SQS_NOTIFICATION_URL` | `https://sqs.ap-northeast-2.amazonaws.com/{계정ID}/cinema-staging-notification-events` | booking `APP_SQS_NOTIFICATION_QUEUE_URL` |
 | `COGNITO_ISSUER_URI` | `https://cognito-idp.ap-northeast-2.amazonaws.com/{userPoolId}` (Cognito 전에는 빈 값) | gateway `APP_COGNITO_ISSUER_URI` |
@@ -67,9 +74,9 @@
 | --- | --- |
 | `SPRING_PROFILES_ACTIVE` | `staging` |
 | `AWS_REGION` | `ap-northeast-2` |
-| `SPRING_DATASOURCE_URL` | `jdbc:mysql://${DB_HOST}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` |
+| `SPRING_DATASOURCE_URL` | `jdbc:mysql://${DB_HOST}:3306/{svc}_db?connectionTimeZone=UTC&sslMode=REQUIRED` → 🆕 `${DB_HOST_{SVC}}`(서비스마다 자기 인스턴스) |
 | `SPRING_DATASOURCE_USERNAME` | `{svc}_app` |
-| (`FLYWAY_URL`) | ⚠️ ConfigMap이 아니라 **Flyway Job의 env**(gitops `base/{svc}/flyway-job.yaml`): `DB_HOST`를 `cinema-infra-endpoints`에서 받아 `jdbc:mysql://$(DB_HOST):3306/{svc}_db?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&trustServerCertificate=false&disableSslHostnameVerification=false&sslMode=verify-full`로 조립(쿠버네티스 env 치환, 10/25). **Flyway Job 전용**(DB 쓰는 서비스만, 앱은 읽지 않는다). flyway 11.7 이미지에는 MySQL Connector/J가 없어 MariaDB Connector/J **2.7.x**가 `jdbc:mysql://`를 처리한다. 2.x의 TLS 옵션은 `useSsl`이고(`sslMode`는 3.x 옵션이라 2.x는 무시 → TLS가 켜지지 않아 `RSA public key is not available`로 실패), `serverSslCert`로 준 RDS CA로 **서버 인증서·호스트 이름을 검증**한다. `trustServerCertificate=false`·`disableSslHostnameVerification=false`는 2.x 기본값이지만 검증을 끄지 않는다는 뜻을 URL에 명시한다. CA는 ConfigMap `rds-ca-bundle`(Terraform `envs/staging-k8s/rds_ca.tf`)을 `/etc/rds-ca`에 마운트. `sslMode=verify-full`은 3.x로 바뀔 때를 위한 것 |
+| (`FLYWAY_URL`) | ⚠️ ConfigMap이 아니라 **Flyway Job의 env**(gitops `base/{svc}/flyway-job.yaml`): `DB_HOST`(🆕 인스턴스 분리 뒤에는 `DB_HOST_{SVC}` — 앱 `SPRING_DATASOURCE_URL`과 **같은 gitops PR에서** 바꾼다)를 `cinema-infra-endpoints`에서 받아 `jdbc:mysql://$(DB_HOST):3306/{svc}_db?useSsl=true&serverSslCert=/etc/rds-ca/rds-ca.pem&trustServerCertificate=false&disableSslHostnameVerification=false&sslMode=verify-full`로 조립(쿠버네티스 env 치환, 10/25). **Flyway Job 전용**(DB 쓰는 서비스만, 앱은 읽지 않는다). flyway 11.7 이미지에는 MySQL Connector/J가 없어 MariaDB Connector/J **2.7.x**가 `jdbc:mysql://`를 처리한다. 2.x의 TLS 옵션은 `useSsl`이고(`sslMode`는 3.x 옵션이라 2.x는 무시 → TLS가 켜지지 않아 `RSA public key is not available`로 실패), `serverSslCert`로 준 RDS CA로 **서버 인증서·호스트 이름을 검증**한다. `trustServerCertificate=false`·`disableSslHostnameVerification=false`는 2.x 기본값이지만 검증을 끄지 않는다는 뜻을 URL에 명시한다. CA는 ConfigMap `rds-ca-bundle`(Terraform `envs/staging-k8s/rds_ca.tf`)을 `/etc/rds-ca`에 마운트. `sslMode=verify-full`은 3.x로 바뀔 때를 위한 것 |
 | `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | `5` (booking만 `15` — 4.2.1 동시 선점에서 풀 대기 0.55초, 11/11). 연결 수(RDS db.t4g.small `max_connections` 약 170, 경보 `rds_connection_alarm` 130): booking `maxReplicas` 2(2장, 11/12)로 평소 booking 최대 2 × 15 = 30 + catalog 20·user 10·payment 5 = 65, 블루/그린 전환 순간~60초는 preview가 active 수까지 늘어(2장) 최대 4 × 15 = 60 + 35 = 95 < 경보. 같은 때 다른 서비스가 롤링 배포 중이면 `maxSurge: 1` 파드 몫(풀 5)이 더해진다 — catalog·user·payment가 모두 겹쳐도 + 15 = 110 < 경보(두 서비스 동시 블루/그린 금지는 롤링을 막지 않는다). (최대 4였다면 8 × 15 + 35 = 155 → 경보) |
 | `SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE` | 없음 = Hikari 기본(최대 풀과 같음) (booking만 `15` = 최대 풀, 11/12) — 몰리는 순간 연결을 새로 열지 않게 늘 열어 둔다. 줄이면(예: 5) 10분 쉰 파드에 연결이 5개만 남고, 100명이 몰릴 때 모자란 연결을 하나씩 새로 열어 풀 5처럼 줄을 선다. 동작은 기본값과 같고, 풀을 다시 조정할 때 찾기 쉽게 값을 적어 둔다. 상한은 maxReplicas가 정한다 |
 | `SPRING_FLYWAY_ENABLED` | `false` (마이그레이션은 Flyway 훅 Job) |
@@ -81,6 +88,12 @@
 | --- | --- | --- |
 | gateway | ⚠️AI `APP_AI_ENABLED`(기본 `false` — 꺼져 있으면 `/api/ai/**` 라우트 없음 → 유효한 토큰이면 404, 토큰이 없거나 잘못되면 인증이 먼저라 401, rc2 M6 테스트 후 `true`), `APP_SERVICES_AI_URL=http://ai:8080` — ai 라우트는 **metadata `response-timeout: 28000`**(ms, 전역 `httpclient.response-timeout: 15s`의 예외, SSE 라우트의 `-1`과 같은 방식. 없으면 15초에 `UPSTREAM_TIMEOUT`). 하위 연결 풀은 `httpclient.pool.max-idle-time: 30s`(앱 `application.yml`) — 하위 Tomcat keep-alive 60초보다 짧게 둬 이미 닫힌 연결을 꺼내 쓰는 503(PrematureClose)을 막는다. ai(uvicorn keep-alive 기본 5초)는 이 값으로 덮지 못해 ai 쪽 keep-alive를 늘려 맞춘다. gateway는 `APP_SERVICES_*_READ_TIMEOUT`을 읽지 않으므로 `APP_SERVICES_AI_READ_TIMEOUT`은 만들지 않는다, `APP_COGNITO_ISSUER_URI=${COGNITO_ISSUER_URI}`, `APP_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}`, `APP_SERVICES_{CATALOG,BOOKING,USER}_URL`, `APP_SERVICES_PAYMENT_URL=http://payment:8080`(포트원 웹훅 라우트 `POST /api/webhooks/portone`만, ADR-112) (issuer·client-id는 기본값이 없어 빠지면 기동 실패. `app.cognito.issuer-uri`·`app.cognito.client-id`로 바인딩 → `JwtDecoderConfig`가 issuer·`client_id` 검증) | 없음 |
 | catalog | `APP_SERVICES_BOOKING_URL`, `APP_SERVICES_BOOKING_READ_TIMEOUT=300ms`, `APP_CACHE_TTL=10m` | `SPRING_DATASOURCE_PASSWORD` |
+| 🆕 booking (추가) | `APP_CHECKOUT_SAGA_ENABLED`(기본 `false` — 체크아웃 API 404. 메시징·coupon 준비 뒤 `true`), ~~`APP_CHECKOUT_STEP_TIMEOUT=30s`~~ 🆕 `APP_CHECKOUT_STEP_TIMEOUT=10s`(쿠폰 예약·결제 준비만), ⏳ `APP_CHECKOUT_VERIFY_INTERVAL`(결제 재확인 간격, 5s 제안 — 재확인은 선점 만료 + `APP_PAYMENT_PENDING_GRACE`까지), `APP_MESSAGING_COUPON_COMMANDS_URL=${SQS_COUPON_COMMANDS_URL}`, `APP_MESSAGING_PAYMENT_COMMANDS_URL=${SQS_PAYMENT_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}`, `APP_MESSAGING_EVENTS_TOPIC_ARN=${SNS_BOOKING_EVENTS_ARN}`, (여유 시) `APP_SCREENING_LOOKUP_MODE=sync\|local` | 같음 |
+| 🆕 coupon | `SPRING_DATA_REDIS_*`(기존 Valkey), `APP_MESSAGING_COMMANDS_URL=${SQS_COUPON_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}`, `APP_COUPON_IDEMPOTENCY_TTL=24h`, `APP_COUPON_RESERVED_ALARM_AFTER=1h`, ⏳ 이벤트 값(수량·할인율·시각)은 6.0.1 | `SPRING_DATASOURCE_PASSWORD` |
+| 🆕 user (추가) | `APP_BOOKING_HISTORY_MODE=sync\|local`(`local`은 사용자별 첫 조회 때 1회 sync로 채운 뒤 복제본만 — API 명세서 v1.5 23-1), `APP_MESSAGING_BOOKING_EVENTS_URL=${SQS_USER_BOOKING_EVENTS_URL}` | 같음 |
+| 🆕 catalog (추가) | `APP_MESSAGING_EVENTS_TOPIC_ARN=${SNS_CATALOG_EVENTS_ARN}`, `APP_OUTBOX_RELAY_ENABLED`(기본 `false` — booking과 같은 플래그·같은 이유: SNS 토픽 `catalog-events`와 구독 큐(6.1.3)가 생기기 전에 켜면 재시도 끝에 아웃박스 행이 `FAILED`가 된다. 꺼 두면 `PENDING`으로 쌓였다가 켤 때 흘러간다. 토픽·`ai-catalog-events` 구독 뒤 gitops로 `true`) | 같음 |
+| 🆕 payment (추가) | `APP_MESSAGING_COMMANDS_URL=${SQS_PAYMENT_COMMANDS_URL}`, `APP_MESSAGING_REPLIES_URL=${SQS_BOOKING_REPLIES_URL}`. 포트원 스윕·웹훅이 saga 결제(`saga_payment`)를 닫으면 결과 이벤트도 낸다(data-model 7-2) — 새 설정 없음 | 같음 |
+| 🆕 gateway (추가) | `APP_SERVICES_COUPON_URL=http://coupon:8080`(다른 서비스 주소처럼 `application.yml`에 기본값을 둔다 — gitops `gateway-config`에 없어도 기동한다. 기본값 없이 넣으면 gitops보다 이미지가 먼저 나갈 때 기동 실패 → 블루/그린 abort. coupon이 아직 배포되지 않은 동안 `/api/coupons/**`는 503 `SERVICE_UNAVAILABLE`), `APP_GATEWAY_MAX_BODY_SIZE=64KB`(초과 413 `PAYLOAD_TOO_LARGE`) — `X-User-Grade`는 코드(토큰 `cognito:groups` ∋ `VIP` → `VIP`, 아니면 `NORMAL`, 외부 값은 모든 라우트에서 지움, VIP 지정은 토큰 재발급 뒤 반영). 401·403·413·차단 경로 404는 `errorCategory=SECURITY` 로그(`reason`·`status`·`route`·`traceId`, 토큰·IP 원문 없음) | 없음 |
 | booking | `APP_SERVICES_{CATALOG,PAYMENT}_URL`, `APP_SERVICES_PAYMENT_PG_READ_TIMEOUT=10s`(payment가 포트원을 부르는 verify·cancel만 응답 대기 — 포트원 최대 약 8초 < 10초 < gateway 15초, ADR-112. 나머지 payment 호출은 기본 3초), `APP_SQS_NOTIFICATION_QUEUE_URL=${SQS_NOTIFICATION_URL}`, `APP_SEAT_HOLD_TTL_SECONDS=300`(30~600, 벗어나면 기동 실패. 멱등 처리 중 키도 같은 값. 바꾸면 이전 TTL 동안 고아 판정이 어긋나므로 데모 준비 때 한 번만), `APP_SEAT_HOLD_STRATEGY=redis`(ADR-45 인터페이스, db-lock은 나중), `APP_OUTBOX_RELAY_INTERVAL=1s`, `APP_PAYMENT_PENDING_GRACE=2m`(ADR-112 — 결제 요청이 붙은 PENDING은 만료+이 유예가 지나면 만료 스캔이 Payment를 조회해 반영. 그 전에는 보류), ⚠️ `APP_OUTBOX_RELAY_ENABLED` — 알림 큐(3.1.9)가 생기기 전에는 **`false`**(기본값). 큐가 없는 동안 켜 두면 확정마다 10회 재시도 끝에 아웃박스 행이 `FAILED`가 되어 사람이 손으로 되살려야 한다. 꺼 두면 `PENDING`으로 쌓여 있다가 켜는 순간 흘러간다(쌓인 양은 지표 `booking_outbox_pending`). 3.1.9 큐와 3.1.8 알림 Lambda 연결 뒤 `true`(런북 6-B-3) — 큐만 있고 받는 쪽이 없으면 메시지가 DLQ로도 못 가고 7일 뒤 사라진다` | `SPRING_DATASOURCE_PASSWORD`, `APP_PAYMENT_MOCK_KEY`(모의 결제 허용 키, Terraform `random_password` — k6 Job·블루/그린 분석 Job이 Secret 참조로 받아 `X-Payment-Mock-Key`로 보낸다. 없으면 기계 경로 자체가 꺼짐) |
 | user | `APP_SERVICES_{BOOKING,CATALOG}_URL`, `APP_COGNITO_ENDPOINT`(선택, 기본 `https://cognito-idp.{AWS_REGION}.amazonaws.com`, `AWS_REGION`이 없으면 `ap-northeast-2` — 프로필 첫 생성 때 `GetUser`) | `SPRING_DATASOURCE_PASSWORD` |
 | payment | `APP_PAYMENT_MOCK_DELAY_CARD=9999`, `APP_PAYMENT_MOCK_DELAY=5s`, `APP_PORTONE_ENABLED`(코드 기본 `false` — TOSSPAY 준비가 503 `PORTONE_DISABLED`이고 스윕이 돌지 않는다. Secret·설정을 넣은 뒤 gitops PR로 `true`. 켰는데 Secret이 비어 있으면 기동은 되고 포트원이 401 → verify·취소 503 `PORTONE_UNAVAILABLE`), `APP_PORTONE_API_BASE_URL=https://api.portone.io`(로컬은 Stub), `APP_PORTONE_STORE_ID`·`APP_PORTONE_CHANNEL_KEY_TOSSPAY`(포트원 콘솔 공개 값 — 브라우저에 노출되는 값이라 ConfigMap 가능), `APP_PORTONE_PENDING_TIMEOUT=7m`(결제창 미완료 PROCESSING 정리) | `SPRING_DATASOURCE_PASSWORD`, `APP_PORTONE_API_SECRET`(V2 API Secret), `APP_PORTONE_WEBHOOK_SECRET`(웹훅 시크릿, 테스트용) |
@@ -88,6 +101,8 @@
 
 - 서비스 간 타임아웃 기본 `APP_SERVICES_{NAME}_CONNECT_TIMEOUT=1s`, `_READ_TIMEOUT=3s` (`libs/common-web` 기본값, 필요할 때만 덮어씀)
 - Flyway Job 전용 Secret `{svc}-migrator-secrets`: `FLYWAY_USER={svc}_migrator`, `FLYWAY_PASSWORD`. 앱 파드에는 마운트하지 않는다
+- 🆕 Secret은 External Secrets가 만든다(ADR-123): Secrets Manager `cinema/staging/{svc}` → `ExternalSecret` → 같은 이름의 K8s Secret. gitops에는 Secret **이름**만(ARN·계정 ID 금지). 빈 클러스터 순서: ESO(CRD) → ClusterSecretStore → ExternalSecret(sync wave **-3**) → ConfigMap(-2) → Flyway Job(-1) → 앱(0). 값을 바꾸면 env로 읽는 앱은 재시작해야 새 값을 쓴다
+- 🆕 로컬: 메시징은 ElasticMQ(같은 큐 이름, SNS는 로컬에서 큐 직접 발송으로 대체), coupon 8086·ops-api 8087
 - 로컬(`local` 프로필): Compose MySQL·Valkey·ElasticMQ, 계정 비밀번호 `local`, SQS 엔드포인트 `http://localhost:9324`. Cognito는 staging 사용자 풀을 같이 쓴다(콜백 `http://localhost:5173/callback`)
 - ⚠️AI 로컬 ai: Compose `valkey-ai`(6380) + `uvicorn` 직접 실행, `services/ai/.env`에 **개발 전용** `ANTHROPIC_API_KEY`(커밋 금지), `PUBLIC_API_BASE_URL=http://localhost:8080/api`(로컬 gateway) 또는 staging CloudFront
 
@@ -121,7 +136,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 
 | 항목 | 규칙 |
 | --- | --- |
-| 마이그레이션 실행 | ArgoCD 훅 Job `{svc}-flyway`(**Sync 단계 wave -1**: ConfigMap `{svc}-config` wave -2 → Job → Deployment/Rollout wave 0, 실패하면 sync 중단): initContainer(같은 앱 이미지)가 `/app/db/migration`을 emptyDir로 복사 → `flyway/flyway:11.7.2`(Spring Boot 3.5 Flyway 11.7과 같은 메이저) 컨테이너가 `{svc}_migrator`로 `migrate`. URL은 Job env `FLYWAY_URL`(호스트는 `cinema-infra-endpoints`의 `DB_HOST`, 3장, 앱 URL과 별도), 계정은 `{svc}-migrator-secrets`, RDS CA는 ConfigMap `rds-ca-bundle` → `/etc/rds-ca` |
+| 마이그레이션 실행 | ArgoCD 훅 Job `{svc}-flyway`(**Sync 단계 wave -1**: ConfigMap `{svc}-config` wave -2 → Job → Deployment/Rollout wave 0, 실패하면 sync 중단): initContainer(같은 앱 이미지)가 `/app/db/migration`을 emptyDir로 복사 → `flyway/flyway:11.7.2`(Spring Boot 3.5 Flyway 11.7과 같은 메이저) 컨테이너가 `{svc}_migrator`로 `migrate`. URL은 Job env `FLYWAY_URL`(호스트는 `cinema-infra-endpoints`의 `DB_HOST` → 🆕 `DB_HOST_{SVC}`, 3장. URL 문자열은 TLS 옵션이 달라 앱 URL과 따로 두지만 **호스트는 앱과 같은 인스턴스**다), 계정은 `{svc}-migrator-secrets`, RDS CA는 ConfigMap `rds-ca-bundle` → `/etc/rds-ca` |
 | 파일 위치 | `services/{svc}/src/main/resources/db/migration/V{yyyyMMddHHmm}__{설명}.sql` |
 | 호환 | 블루/그린·롤링 중 두 버전이 같은 DB를 쓴다 → 확장 → 전환 → 정리. 컬럼 삭제·이름 변경은 다음 배포 |
 | 실패 | Job 실패 = sync 실패 → 새 버전이 뜨지 않는다. 고친 마이그레이션은 새 V 번호로(이미 적용된 파일 수정 금지) |
@@ -144,7 +159,7 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | `payment_cancel_total` | counter | `reason`=취소 요청 `reason`(계약 `payment.internal.openapi.yaml` enum 값만) | payment | 환불 사유별 건수(OPS-05) |
 | `payment_pg_call_total` | counter | `result`=`ok`·`error`·`timeout`, `op`=`get`·`cancel` | payment | 포트원 호출 결과(ADR-112). 웹훅 수신은 `http_server_requests`(`uri=/webhooks/portone`)로 본다 |
 | `payment_refund_unresolved_total` | counter | — | payment | 환불 미완료(FAILED + pgTransactionId + canceledAt null) 행이 결제 생성 뒤 15분이 지나도 끝나지 않았으면 **스윕(1분)마다 1씩** 센다 — 건수가 아니라 「남아 있는 행 × 분」이다. 경보는 `increase(...[5m]) > 0`, 0이 아니면 포트원 콘솔과 대조(사람) |
-| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`·`hold_confirm`·`hold_result`·`hold_guide`, `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다. `hold_*`(채팅으로 좌석 잡기)는 **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 0으로 등록되고, 조회 답이 아니므로 **토큰 절감 계산의 분모·분자에서 `hold_*`를 제외**한다(`path!~"hold_.*"`). `preset`에는 Claude가 프리셋을 고른 답과 **문맥 이어받기 답 중 캐시가 비어 내부 틀을 직접 실행한 것(Claude 0회·토큰 0, 3.4.22)**이 함께 들어간다 — 이어받기 건수는 로그 `context carried`로 구분한다 |
+| ⚠️AI `ai_chat_total` | counter | `path`=`cache_exact`·`cache_semantic`·`preset`·`nl2sql`·`my_bookings`·`rejected`·`out_of_scope`·`clarify`·`hold_confirm`·`hold_result`·`hold_guide`·🆕 `rag`(6.4.7, 플래그가 켜져 있을 때만), `result`=`ok`·`error` | ai | 경로별 처리 수 — **토큰 절감 데모의 분모**. `clarify`(되묻기)는 Claude를 부르지만 답이 없는 경로다. `hold_*`(채팅으로 좌석 잡기)는 **기본 켜짐, 끄려면 `APP_AI_SEAT_HOLD_ENABLED=false`(3.4.19)** — 플래그가 켜져 있을 때만 0으로 등록되고, 조회 답이 아니므로 **토큰 절감 계산의 분모·분자에서 `hold_*`를 제외**한다(`path!~"hold_.*"`). `preset`에는 Claude가 프리셋을 고른 답과 **문맥 이어받기 답 중 캐시가 비어 내부 틀을 직접 실행한 것(Claude 0회·토큰 0, 3.4.22)**이 함께 들어간다 — 이어받기 건수는 로그 `context carried`로 구분한다 |
 | ⚠️AI `ai_tokens_total` | counter | `kind`=`input`·`output`·`cache_read`·`cache_write`, `path` | ai | 토큰 사용량. 절감 그래프는 `input+output`(우리 캐시 효과), 프롬프트 캐싱은 `cache_read`로 **따로** 표시 |
 | ⚠️AI `ai_cache_learned_total` | counter | `result`=`stored`·`known`·`dropped`·`skipped`·`full`·`error` | ai | 스스로 배우기: Claude가 프리셋을 골라 답한 말투를 장부(`ai:learned:v2`)에 적은 결과. `stored`=새로 배움, `known`=이미 같은 답으로 있음, `dropped`=같은 말투에 다른 답이 나와 지움, `skipped`=조건 밖(프리셋 `phrasings`에 있는 말투·SQL이 프리셋 SQL과 다름·날짜 말 없이 오늘로 굳은 SQL·값으로 뽑지 못한 날짜 말이 남은 질문·60자 초과), `full`=200줄 참, `error`=Valkey 실패 |
 | ⚠️AI `ai_cache_requests_total` | counter | `layer`=`exact`·`semantic`, `result`=`hit`·`miss` | ai | 캐시 적중률. 질문으로 캐시를 조회한 경우만 센다 — 문맥 이어받기(3.4.22)가 내부 틀 항목을 꺼낸 답은 `ai_chat_total{path="cache_exact"}`에는 잡히지만 여기에는 세지 않는다(그래서 `cache_exact` 합계가 `exact` `hit`보다 클 수 있다) |
@@ -152,6 +167,14 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 | ⚠️AI `ai_sql_exec_seconds` · `ai_rejected_total` | histogram · counter | — · `reason`(SQL 검증 거부 사유) | ai | SQLite 실행 시간 · 검증기 동작 |
 | ⚠️AI `ai_snapshot_age_seconds` · `ai_quota_rejected_total` | gauge · counter | `scope`=`today`·`other` · `window`=`minute`·`day` | ai | 스냅샷 신선도(오늘 1분·나머지 10분) · 한도 초과 |
 | ⚠️AI `ai_unmet_demand_total` | counter | `category`=`action_request`·`site_feature`·`recommendation`(조건 없는 영화 추천 요청, 3.4.25)·`unrelated`·`unknown` | ai | 범위 밖(OUT_OF_SCOPE)으로 끝난 요청의 분류별 수 — 다음 개발 후보의 근거. 욕설·인사·잡담(`chitchat`)은 수요가 아니라 세지 않는다. `unknown`은 `out_of_scope` 도구의 `category`가 정해진 값이 아닌 경우(도구 없이 끝난 폴백은 세지 않는다). 로그는 9장 |
+| 🆕 `ai_rag_search_total` | counter | `result`=`hit`·`miss` | ai | 이용 안내 검색 결과(6.4.7). `miss`는 하한을 넘는 조각이 없어 `OUT_OF_SCOPE`로 끝난 경우 — 안내 문서를 더 쓸 근거 |
+| 🆕 `booking_checkout_total` · `booking_checkout_seconds` · `booking_checkout_compensation_total` | counter · histogram · counter | `result`=`confirmed`·`failed`·`expired`·🆕 `coupon_rejected` · — · `reason`=`payment_declined`·`step_timeout`·`hold_expired`(🆕 쿠폰 거절은 보상이 아니라 `result`로 센다) | booking | 체크아웃 saga(ADR-116). 자동 롤백은 기존 `booking_payment_call_total` 그대로 |
+| 🆕 `booking_checkout_step_seconds` · `booking_checkout_verify_retry_total` | histogram · counter | `step`=`accepted`·`coupon_reserved`·`payment_prepared`·`verified`·`applied` · — | booking | 동기/비동기 비교 측정(API 명세서 v1.5 21-3) — 단계별 시간·결제 재확인 횟수 |
+| 🆕 `payment_command_total` · `payment_command_seconds` | counter · histogram | `type`, `result`=`ok`·`duplicate`·`error` · `type` | payment | saga 명령 처리 |
+| 🆕 `coupon_command_total` | counter | `type`, `result`=`ok`·`duplicate`·`rejected`·`error` | coupon | saga 명령 처리(거절 포함) |
+| 🆕 `{svc}_message_consumed_total` | counter | `type`(메시지 type), `result`=`ok`·`duplicate`·`error` | 메시지 받는 서비스 | inbox 중복·실패. DLQ 깊이는 CloudWatch |
+| 🆕 `coupon_claim_total` · `coupon_stock_remaining` | counter · gauge | `result`=`issued`·`sold_out`·`not_eligible`·`duplicate`·`closed` · — | coupon | 선착순 시연 |
+| 🆕 `ops_action_total` | counter | `action`=`stop`·`start`·`report`, `result`=`ok`·`denied`·`error` | ops-api | 관리자 조작(감사 로그와 함께) |
 | `cinema:http_requests:rate5m` | recording rule | `application` | 인프라 (gitops `observability/prometheusrule.yaml`, 3.1.7) | 신호등 계산용 서비스별 요청률(actuator 제외). **앱이 만드는 지표가 아니다** |
 | `cinema:http_5xx_ratio:rate5m` · `cinema:http_p95_seconds:rate5m` | recording rule | `application` | 인프라 (3.1.7) | 최근 5분 5xx 비율 · p95(SSE `…/stream` 제외). 트래픽이 없으면 값이 없다 |
 | `cinema:http_5xx_state` · `cinema:http_latency_state` · `cinema:service_state` | recording rule | `application` | 인프라 (3.1.7) | 신호등 상태 0 정상 · 1 주의 · 2 장애. 5xx 주의 ≥ 1%·장애 ≥ 5%, p95 주의 ≥ 300ms·장애 ≥ 1s, `service_state`는 둘 중 큰 값. 값이 없으면 대시보드가 회색 "트래픽 없음" |
@@ -178,8 +201,11 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 규칙 | 내용 |
 | --- | --- |
 | NetworkPolicy | 앱 namespace **ingress 기본 거부**(`default-deny-ingress`) + 허용: ALB(**public 서브넷 CIDR 2개**, VPC CIDR 전체가 아님 — 같은 VPC의 파드가 gateway에 붙지 못하게) → gateway, gateway → catalog·booking·user·**payment**(포트원 웹훅 `/webhooks/portone`만 쓰지만 L4라 포트 단위, ADR-112), catalog → booking, booking → catalog·payment, user → booking·catalog, 분석 트래픽 Job(`app.kubernetes.io/name: rollout-smoke`) → booking·gateway(3.1.6), 부하 테스트 Job(`app.kubernetes.io/name: k6-loadtest`) → gateway(4.2.1, 실행 중에만 — 런북 6-H), `monitoring` → 전체(8080). egress는 막지 않음. L4(포트)까지라 허용된 호출자는 `/internal/**`도 부를 수 있다(외부 `/api/internal/**`는 gateway가 404). kubelet 프로브·port-forward·exec는 대상 아님. 확인 `infra/scripts/np-check.sh`(런북 6-E) |
+| 🆕 NetworkPolicy 추가 (11/23) | gateway → **coupon**, ALB(public 서브넷 2개) → **ops-api**, ops-api → ai·coupon(8080, 내부 통계·이벤트 생성), `monitoring` → coupon·ops-api. `monitoring` namespace의 Prometheus·Loki 정책에 ops-api 허용. 메시징은 SQS(바깥)라 서비스 간 허용 규칙이 늘지 않는다. `np-check.sh` `SERVICES`에 `coupon`·`ops-api` |
 | 전제 | EKS VPC CNI `enableNetworkPolicy=true` (3.1.2) |
-| 보안그룹 | RDS 3306·Valkey 6379는 노드 보안그룹에서만. ALB는 CloudFront 관리형 접두사 목록만(80, `api_origin_https`를 켜면 443도 — 런북 7-8) |
+| 보안그룹 | RDS 3306·Valkey 6379는 노드 보안그룹에서만(🆕 RDS 6개 모두, Karpenter 노드도 같은 보안그룹 — EC2NodeClass `securityGroupSelectorTerms`). ALB는 CloudFront 관리형 접두사 목록만(80, `api_origin_https`를 켜면 443도 — 런북 7-8. 🆕 ADR-124에서 `on`) |
+| 🆕 NAT | **AZ별 2개**(`one_nat_gateway_per_az`, ADR-122) — AZ a 장애에도 AZ c 파드의 SQS·SNS·Secrets Manager·ECR·Cognito·Claude·EC2 API 호출 유지. 밤 끄기 대상이면 둘 다 |
+| 🆕 CloudFront `/ops/*` | ALB(같은 IngressGroup `cinema`) 규칙 → `ops-api`, CachingDisabled·AllViewer. WAF 웹 ACL `cinema-staging-waf`(관리형 규칙 + IP 요청 제한) |
 | 외부 호출 | booking → SQS, user → Cognito `GetUser`, gateway → Cognito JWKS, **payment → 포트원 `api.portone.io`**(ADR-112): NAT 경유 HTTPS. 포트원 → CloudFront `/api/webhooks/portone`(인바운드, gateway `permitAll`, 서명 검증은 payment). ⚠️AI ai → Claude API(`api.anthropic.com`), ai → **CloudFront `PUBLIC_API_BASE_URL`**(공개 API — 스냅샷·내 예매, 좌석 잡기(플래그 기본 켜짐) `GET /screenings/{id}/seats` · `GET /auditoriums/{id}/layout` · 확인 뒤 `POST /seats/hold` · 같은 확인의 재전송 때만 `GET /bookings/{id}`): NAT 경유 HTTPS. ai는 클러스터 안에서 gateway를 직접 부르지 않는다(gateway NetworkPolicy는 public 서브넷만 허용, 기존 정책은 수정하지 않음) |
 | ⚠️AI ai NetworkPolicy | **`base/ai/networkpolicy.yaml`만 신규**: gateway → ai(8080), `monitoring` → ai(8080). 기존 `base/{svc}/networkpolicy.yaml`은 수정하지 않는다. `np-check.sh` `SERVICES`에 `ai` 추가(gateway → ai ALLOWED, catalog → ai BLOCKED 확인) |
 | ⚠️AI ai Valkey 보안그룹 | 6379는 노드 보안그룹에서만(기존 Valkey와 같은 방식), TLS |
@@ -211,6 +237,16 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | ⚠️AI 18 | gateway `/api/ai/**` 라우트(플래그 off, 라우트 metadata `response-timeout: 28000`) + 분석 쿼리 `/ai` 제외 | 한채연(3.3.8)·김종식(3.1.21) | 김서현·한채연 화면 | **rc1(11/6)** | 플래그 off에서 유효한 토큰으로 `/api/ai/chat` 404(토큰이 없거나 잘못되면 401 — 인증이 라우팅보다 먼저), gateway 블루/그린 통과 |
 | ⚠️AI 19 | `contracts/openapi/ai.openapi.yaml` + 예시 | 김서현·한채연 (2.2.8) | 한채연 채팅 화면(3.3.7) | 11/6 | contract-check 통과 |
 
+| 🆕 20 | RDS 6개·`DB_HOST_{SVC}`·Secrets Manager·ESO | 김종식 (6.1.1·6.1.4) | 전원 (자기 인스턴스로 전환) | 11/23 오후 | 각 서비스 readiness 200 + Flyway Job 성공 |
+| 🆕 21 | SNS·SQS·DLQ·Pod Identity·`cinema-infra-endpoints` 메시징 키 | 김종식 (6.1.3) | 남궁일 6.2.x · 한채연 6.3.2·6.3.4 · 김서현 6.4.2 | 11/23 저녁 | 로컬 ElasticMQ 테스트 통과 → staging에서 명령 1건 왕복 |
+| 🆕 22 | 계약 PR 6.0.1 (API 명세서 v1.5 21~26장 → `contracts/`) | 전원 | 구현 전원 | 11/23 오전 | `contract-check` 통과 |
+| 🆕 23 | coupon ECR·gitops `base/coupon`·Application·NetworkPolicy | 김종식 (6.1.5) | 한채연 coupon 배포 | 11/24 오전 | `kubectl -n argocd get application cinema-coupon` Healthy |
+| 🆕 24 | ops-api(`/ops`)·Role·`ignoreDifferences` | 김종식 (6.1.7) | 남궁일 6.2.6 · 한채연 6.3.5·6.3.7 | 11/24 | `GET /ops/services` 200(ADMIN 토큰), 403(일반 토큰) |
+| 🆕 25 | ai 통계 내부 API | 김서현 (6.4.4) | 김종식 ops-api 7번 | 11/24 | ops-api → ai 200 |
+| 🆕 26 | catalog `screening.changed`·`movie.changed` 발행 | 한채연 (6.3.4) | 김서현 6.4.2 | 11/24 | `ai-catalog-events` 큐에 메시지 |
+| 🆕 27 | ai 응답 `path: RAG`·`sources` 계약(6.0.1에 포함) | 김서현 (6.4.7) | 한채연 챗 화면(라벨·출처 표시 — 없어도 깨지지 않는다: 모르는 `path`는 글자 그대로 보인다, `chat-labels.ts`) | 11/24 | `contract-check` 통과 |
+| 🆕 28 | 관리자 AI 범위 밖 통계 응답(JSON) | 김서현 6.4.4 · 김종식 6.1.7 | 김서현 6.4.8(워크플로우 입력) | 11/25 | 응답을 파일로 저장해 워크플로우 1회 실행(없으면 같은 모양의 샘플 파일) |
+
 ## 8. 인프라 쪽 남은 정리
 
 - [x] Compose·Terraform에서 `stats_db`·`stats_lambda`·`lambda-stats` 보안그룹·`lambdas/daily-stats` 삭제 (10/22, SG는 다음 apply에서 삭제)
@@ -232,8 +268,17 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] ⚠️AI gitops `base/ai`(Deployment·Service·NetworkPolicy·PodMonitor, HPA·Flyway Job 없음) · `overlays/staging/ai` · `np-check.sh` · 저장소 변수 `AI_BUILD_PUSH_ENABLED=true` (3.1.20). CI(`changed-services.sh`·`pr-check` `python`·`build-push` ai)는 #79에서 먼저
 - [ ] ⚠️AI gateway 분석 쿼리 `uri!~"/ai.*"` (3.1.21, **rc1 전**)
 - [ ] ⚠️AI AI 대시보드 `SeatSAC AI` + 런북 6-G(켜기·끄기·질의 금지 구간) (3.1.22, gitops `observability/dashboards/seatsac-ai.json` — 코드 11/17 · **런북 6-G-8 확인 후 체크**)
-- [ ] CloudFront → ALB 구간 HTTPS(3.1.23 후속, 선택 — **발표 뒤**): `api_origin_https` `prepare` apply → gitops `base/gateway/ingress.yaml` 443 리스너(`spec.tls.hosts: origin.<도메인>`) → `on` apply → 80 정리 (`envs/staging/origin_https.tf` — 코드 11/20 · **런북 7-8 적용·확인 후 체크**)
+- [x] CloudFront → ALB 구간 HTTPS(3.1.23 후속, 선택 — **발표 뒤**): `api_origin_https` `prepare` apply → gitops `base/gateway/ingress.yaml` 443 리스너(`spec.tls.hosts: origin.<도메인>`) → `on` apply → 80 정리 (`envs/staging/origin_https.tf` — 코드 11/20 · **11/23 `on`까지 적용**(#166·gitops #41·#167), 사용자 도메인·기본 도메인 두 주소 `/api/movies` 200 확인. 80 정리(런북 7-8 4번)는 하지 않았다 — 선택)
 - [ ] 로그 저장소 Loki·수집 Alloy·Grafana 데이터소스 `loki` · S3 `cinema-staging-loki-{계정ID}`(보존 7일·수명 주기 14일)·Pod Identity `cinema-staging-loki-pod`(monitoring/loki)·ConfigMap `monitoring/loki-storage` (3.1.24, ADR-113 가번호, `envs/staging/loki.tf`·`envs/staging-k8s/loki.tf`·gitops `platform/{loki,alloy}` — 코드 11/18 · **런북 6-J 적용·확인 후 체크**)
+
+- [ ] 🆕 RDS 6개(`cinema-staging-{svc}-db`, ai 외 Multi-AZ)·인스턴스별 db-bootstrap·`DB_HOST_{SVC}` (6.1.1, ADR-115)
+- [ ] 🆕 NAT AZ별·Valkey 2개 복제본·자동 장애 조치 (6.1.2, ADR-122)
+- [ ] 🆕 SNS 2·SQS(구독 2~3·명령 2·결과 1)·DLQ·경보·Pod Identity (6.1.3, ADR-117)
+- [ ] 🆕 External Secrets·Secrets Manager `cinema/staging/*`·ExternalSecret (6.1.4, ADR-123)
+- [ ] 🆕 Karpenter(NodePool·EC2NodeClass·중단 알림 SQS)·`cluster-scale.sh` 연동 (6.1.6, ADR-122)
+- [ ] 🆕 ops-api·`/ops` CloudFront 동작·ALB 규칙·Role·서비스 Application `ignoreDifferences` (6.1.7, ADR-119)
+- [ ] 🆕 WAF·리포트 버킷·Glue·Athena·내보내기 CronJob (6.1.8·6.1.9, ADR-121·124)
+- [ ] 🆕 CloudWatch EKS audit 로그 끄기(하루 약 1.5GB) · Budgets 일 경보 $50
 
 ## 9. ⚠️AI ai 서비스 (Python, ADR-82~87)
 
@@ -268,7 +313,13 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `APP_AI_CACHE_WARM_PRESETS` | `true` | 프리셋 `phrasings`(버튼 질문 말투)를 기동 때·캐시 TTL 절반마다 정확 일치·의미 캐시에 넣는다(`cache/warm.py`). 버튼 질문은 첫 사용자부터 토큰 0. 끄면 첫 질문은 Claude. 문맥 이어받기 내부 틀 7개(`context_templates.yaml`, 3.4.22)도 같이 넣되 키가 따로(`ctx {presetId}`)이고 의미 캐시에는 넣지 않는다 — 직접 친 질문은 적중하지 않고 이어받기 요청만 쓴다(끄면 이어받은 답의 `path`가 `PRESET`). 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_CACHE_LEARN_ENABLED` | `true` | 스스로 배우기(`cache/learned.py`): Claude가 프리셋을 골라 답한 새 말투를 `ai:learned:v2`에 적고 예열 루프가 캐시에 계속 다시 넣는다 — 캐시 TTL(1시간) 뒤에도 그 말투는 토큰 0. 끄면 새로 적지도 다시 넣지도 않는다(이미 적힌 줄은 키 TTL 7일 뒤 사라짐, 바로 지우려면 `DEL ai:learned:v2`). 한계: Claude가 조건을 빼먹고 프리셋을 고른 답은 구분하지 못해 최대 7일 캐시로 나간다. 기본값으로 동작해 gitops 변경 불필요 |
 | `APP_AI_SEMANTIC_CACHE_ENABLED` / `APP_AI_SEMANTIC_THRESHOLD` | `true` / `0.92` | rc2까지 의미 캐시가 안 되면 `false`로 정확 일치 캐시만(B1) |
+| 🆕 `APP_AI_RAG_ENABLED` | `false` | 이용 안내 검색(RAG, 6.4.7). 꺼져 있으면 Claude 도구 목록·system·처리 경로가 지금과 같다. 켜기는 평가(6.4.6) 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작) |
+| 🆕 `APP_AI_RAG_TOP_K` / `APP_AI_RAG_MIN_SCORE` | `3` / ⏳ | Claude에 주는 조각 수 / 코사인 유사도 하한. 하한은 6.4.6 평가 문항으로 재서 정한다 — 의미 캐시의 0.92를 그대로 쓰지 않는다(질문끼리가 아니라 질문과 문서를 비교해 값이 낮게 나온다) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |
+| 🆕 `APP_AI_DATA_SOURCE` | `snapshot` | `snapshot`(지금처럼 메모리 SQLite) · `db`(자기 인스턴스 `ai_db`, ADR-120). `db`로 바꾸기는 아래 세 줄이 준비된 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작). 되돌리기는 `snapshot` |
+| 🆕 `DB_HOST_AI` · `SQS_AI_CATALOG_EVENTS_URL` | `cinema-infra-endpoints`(Terraform, 6.1.1·6.1.3) | 이름 그대로 읽음. `APP_AI_DATA_SOURCE=db`일 때만 쓴다 |
+| 🆕 ⏳ ai DB 비밀번호 | Secret `ai-secrets`에 키 2개 — 제안 `APP_AI_DB_PASSWORD`(`ai_app`)·`APP_AI_QUERY_DB_PASSWORD`(`ai_query`) | **키 이름 미확정**(6.4.1에서 김서현 확정). 계정은 6.1.1 db-bootstrap이 만들고, Secret 전달은 6.1.4(External Secrets — `ai-secrets`는 지금 Terraform이 값을 다시 쓰지 않아 여기에 키를 더하지 않는다). 그 전에는 `db`로 켤 수 없다 |
+| 🆕 ⏳ `ai_db` 마이그레이션 | 제안: 다른 서비스와 같은 Flyway 훅 Job `ai-flyway`(`ai-migrator-secrets`, SQL은 이미지 `/app/db/migration`) | **방식 미확정**(6.4.1). `ai-migrator-secrets`는 6.1.1에서 만든다. 지금 gitops `base/ai`에는 Flyway Job이 없다 |
 | `ANTHROPIC_API_KEY` (Secret `ai-secrets`) | Terraform sensitive 변수 → K8s Secret | staging 키. 로컬은 개발 전용 키를 `.env`에 |
 
 **시간 예산** (`/api/ai/chat` 한 번, 바깥이 항상 안쪽보다 길다)
@@ -286,7 +337,9 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 ### 9-2. 실행 규칙
 
-- **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey
+- **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey. 🆕 11/23(노션 ADR-120): `APP_AI_DATA_SOURCE=db`면 **자기 인스턴스 `ai_db`만** 쓴다(`DB_HOST_AI`, 앱 `ai_app`·NL2SQL 실행 `ai_query` 읽기 전용 계정 — 실행 상한 5초·500행 그대로, MySQL `MAX_EXECUTION_TIME`). 복제본은 SQS `ai-catalog-events` 소비 + 최초 백필(공개 API) + 10분 전체 대조. 범위 밖 질문은 `ai_db.unmet_demand`. 다른 서비스 DB·기존 Valkey는 계속 금지. 기본값은 `snapshot`(복제본 준비 뒤 gitops로 `db`). `ng-ai`가 0대인 동안(평소) `ai-catalog-events`는 받는 파드가 없어 큐에 쌓이고 보존 기간이 지나면 사라진다 — DLQ로 가지 않아 경보도 울리지 않는다. 그래서 복제본은 이벤트만 믿지 않고 **기동 때 백필 + 10분 전체 대조**로 맞춘다(ai를 켠 직후 답은 첫 백필이 끝난 뒤부터, 그 전은 503 `AI_SNAPSHOT_NOT_READY`)
+- 🆕 **이용 안내 검색(RAG)**(`APP_AI_RAG_ENABLED` 기본 `false`, 6.4.7 — ADR-126): 켜져 있을 때만 Claude 도구에 `search_guide`가 추가된다. Claude가 이 도구를 고르면 ai가 질문을 임베딩해 메모리의 안내 조각(data-model 6-5)에서 상위 `APP_AI_RAG_TOP_K`개를 찾고, 하한을 넘는 조각만 Claude에 돌려줘 **그 조각만 근거로** 답하게 한다 → `path: RAG`, `sources`에 쓴 조각의 `id`·`title`. Claude 호출은 2회(도구 선택 1 + 답 1, `APP_AI_LLM_MAX_CALLS_PER_QUERY` 3 안). 하한을 넘는 조각이 없으면 지금처럼 `OUT_OF_SCOPE`(`site_feature`)로 끝나고 수요 기록에 남는다. RAG 답은 캐시에 저장하지 않는다(처음에는 단순하게 — 저장은 평가 뒤 검토). 외부 호출·DB·Valkey 키는 늘지 않는다. 로그에는 `path=RAG`와 `sourceIds`(문서 id)만 더 남긴다
+- 🆕 **수요 → 백로그 워크플로우**(6.4.8, LangGraph — ADR-126): `services/ai/backlog/`에 둔다. `eval/`처럼 **이미지에 들어가지 않고**(Dockerfile은 `src`만 복사) 클러스터에 배포하지 않는다 — 사람이 로컬에서 실행한다. 의존성 `langgraph`는 `pyproject.toml`의 별도 그룹 `workflow`에만 넣어 서비스 이미지(`--no-dev`)에 들어가지 않는다. 입력은 관리자 통계 API(6.4.4) 응답을 저장한 JSON 파일 — 분류·요약·횟수뿐이고 질문 원문·userId가 없다(6-4 `unmet_demand` 규칙). 단계: ① 읽기 ② 비슷한 요약 묶기 ③ 횟수가 기준 미만이면 건너뜀 ④ 상위 묶음의 기능 제안서 초안(Claude, 개발 전용 키) ⑤ **사람 승인 대기**(체크포인트 파일 — 껐다 켜도 이어진다) ⑥ 승인된 것만 마크다운 파일로 저장. 노션 WBS 등록은 사람이 한다(이슈는 노션 WBS만 — ADR-48·64). 코드·PR을 만드는 단계는 없다. `ai_db`·Valkey·다른 서비스에 쓰지 않는다
 - 회차 ID 넘기기(계약 `screeningIds`): 검증을 통과한 SQL을 실행할 때 행 하나가 회차 하나이면 회차 ID 열을 덧붙였다 떼어 `screeningIds`로 보낸다(프리셋·NL2SQL·캐시 적중 모두 같은 실행 경로, data-model 6-1). Claude에게 주는 프롬프트·스키마 설명과 로그 `sqlTemplate`은 덧붙이기 전 SQL 그대로다. 덧붙인 SQL만 실패하면 남은 시간 안에서 원래 SQL로 한 번 다시 실행해 답은 그대로 내고(`screeningIds: null`) WARNING 한 줄(오류 종류만)을 남긴다. ai는 화면 주소를 만들지 않는다
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
 - 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회, **잔여석을 읽는 질문마다 날짜 수 × 극장 수**(「오늘 건대입구」 1회, 극장을 안 정하면 4회, 확인 불가가 섞이면 한 번 더))은 CloudFront → gateway → catalog로 들어간다. 질문 시점 호출은 질문 하나에 최대 8회(날짜 2 × 극장 4 — 9-1)이고, 사용자당 동시 1건(`ai:inflight`)으로 묶이며(staging 한도는 11/18부터 분당 600·하루 300 — 9-1), 같은 범위 동시 질문은 한 번을 같이 쓴다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
@@ -295,3 +348,17 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - 플래그 켜기는 rc2(11/13) M6 테스트가 끝난 뒤 gitops PR 1회(gateway 블루/그린 1회). 이후 플래그·ai 코드 변경도 시연·측정 중이 아닐 때 머지할 수 있다(11/14 동결 삭제). 단 발표 당일 머지 마감(플래그는 gateway 블루/그린이라 **11/20 05:00**, ai 코드는 **11/20 07:00**, `docs/repo-workflow.md` 2장 동결) 뒤에는 시연·측정 중이 아니어도 머지하지 않는다
 
 <노션 반영 필요> WBS 3.1.5·3.1.6·3.1.12 메모에 "서비스 실행 계약(docs/service-runtime-contract.md) 기준", 기능명세서 OPS-11 "SSO" → "IAM 역할 + MFA(ADR-47)", OPS-15 허용 목록: ⚠️AI 11/5부터 ai 행 다시 추가(gateway → ai, monitoring → ai)
+
+## 10. 🆕 ops-api 서비스 (Python, 노션 ADR-119 · 11/23)
+
+| 항목 | 앱(김종식)이 할 일 | 인프라(김종식)가 할 일 |
+| --- | --- | --- |
+| 런타임 | Python 3.12 FastAPI(⏳ 6.0.1 확정), ai와 같은 골격(오류 `error.v1.json`·traceId·actuator 경로·JSON 로그) | `pr-check` `python`·`changed-services.sh`에 `ops-api`(Gradle 없이 `docker build`), ECR `cinema/ops-api` |
+| 경로·인증 | `/ops/**`만. Cognito JWKS로 Access Token 검증(issuer·`client_id`) + `cognito:groups` ∋ `ADMIN`(아니면 403). 모든 쓰기 조작은 `ops audit` 로그 한 줄(userId·action·target·result) | CloudFront 동작 `/ops/*` → ALB 규칙(같은 IngressGroup) → `ops-api:8080`. gateway를 거치지 않는다 |
+| 상태 조회 | 정해 둔 PromQL만(`cinema:service_state`, HPA 현재·최대, 노드 CPU) + Kubernetes API 읽기. 사용자 입력을 쿼리에 넣지 않는다 | Prometheus·Loki NetworkPolicy에 ops-api 허용 |
+| 정지/가동 | `deployments/scale`·`rollouts/scale` patch(0 ↔ 정지 전 값). 대상 gateway·catalog·booking·user·payment·coupon·ai(ops-api 제외). 블루/그린 진행 중이면 409 `ROLLOUT_IN_PROGRESS` | Role(`cinema-staging`): deployments·rollouts·hpa·pods get/list, `*/scale` patch만. 서비스 Application `ignoreDifferences: /spec/replicas` + `RespectIgnoreDifferences=true` |
+| 리포트 | Athena 쿼리 → CSV → presigned URL 5분. 열에 IP·토큰·질문 원문 없음 | Pod Identity `cinema-staging-ops-api-pod`(Athena·Glue·S3 reports), 내보내기 CronJob(1시간, Loki → S3 `errors/dt=`) |
+| 자원 | requests 100m / 256Mi, limits mem 384Mi, replicas 1 | 롤링, HPA 없음, Flyway Job 없음 |
+
+- 정지 버튼이 바꾼 replicas는 Git과 다르다(의도된 GitOps 예외, ADR-119). 시연 뒤 「가동」으로 되돌리고, ArgoCD Diff에 replicas가 안 보이는 것이 정상이다
+- replicas 0이면 HPA가 멈추고(scale-to-zero 아님), 1 이상으로 되돌리면 다시 동작한다

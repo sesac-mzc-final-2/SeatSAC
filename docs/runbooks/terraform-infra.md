@@ -512,14 +512,18 @@ terraform apply plan.out          # NAT 생성 2~3분
 
 # 1-b) 나머지: app-c 서브넷 연결을 새 라우트 테이블로, S3 Gateway Endpoint에 새 라우트 테이블 추가 (+ 아래 2번 Valkey)
 terraform plan -var-file=staging.tfvars -out=plan.out
-# 기대(NAT 몫): aws_route_table_association.private[1] 1건(update 또는 replace) · aws_vpc_endpoint.s3 update 1건
-#   기존 NAT(this[0])·EIP(nat[0])·라우트 테이블(private[0])에 destroy·replace가 보이면 멈춘다
+# 기대(네트워크 몫, 11/23 infra-plan 기준): add 1 = aws_route_table.database[1](data-c 전용 라우트 테이블 — NAT 라우트 없음)
+#   change 5 = aws_route_table_association.private[1]·database[1](새 라우트 테이블로, update in-place)
+#              · aws_route_table.private[0]·database[0](Name 태그에 AZ가 붙는다) · aws_vpc_endpoint.s3(라우트 테이블 목록)
+#   전체(Valkey·경보 포함)는 1-a 전 기준 9 add · 8 change · 0 destroy (change 1건은 무관한 RDS 파라미터 그룹)
+#   기존 NAT(this[0])·EIP(nat[0])에 변경이 있거나 destroy·replace가 하나라도 보이면 멈춘다
 terraform apply plan.out
 terraform output nat_public_ip    # IP가 2개 — 바깥 서비스에 NAT IP를 허용 목록으로 등록해 둔 곳이 있으면 새 IP도 추가
 ```
 
 - 1-b에서 연결이 바뀌는 순간 app-c에서 나가던 연결(기존 NAT 경유)은 끊긴다 → 앱은 재시도로 다시 붙는다. 새 연결은 AZ c의 NAT로 나간다
 - 연결 변경과 S3 엔드포인트 반영 사이 잠깐은 app-c의 S3 트래픽이 NAT로 나간다(동작에는 문제없음)
+- data-c 서브넷(RDS·Valkey)도 자기 라우트 테이블로 옮겨진다. data 서브넷에는 바깥 라우트가 원래 없고 VPC 안 통신(local 라우트)은 그대로라 DB·Valkey 연결에 영향이 없다
 
 **2) Valkey** (1-b의 apply에 같이 들어간다. 따로 하려면 `-target=aws_elasticache_replication_group.valkey` 등)
 

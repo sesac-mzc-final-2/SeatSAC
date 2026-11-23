@@ -194,6 +194,31 @@ variable "ops_namespace" {
   default     = "cinema-ops"
 }
 
+# ---- 6.1.11 Cognito 그룹 지정 -------------------------------------------
+variable "cognito_group_members" {
+  description = <<-EOT
+    시연 계정의 Cognito 그룹 지정: 그룹 이름(VIP·ADMIN) → 사용자 sub(UUID) 목록.
+    이메일은 넣지 않는다(레포가 공개된다) — sub는 런북 7-6-5의 명령으로 얻는다. 없는 sub를 넣으면 apply가 UserNotFoundException으로 멈춘다
+  EOT
+  type        = map(list(string))
+  default     = {}
+
+  validation {
+    condition     = alltrue([for g in keys(var.cognito_group_members) : contains(["VIP", "ADMIN"], g)])
+    error_message = "cognito_group_members의 키는 VIP·ADMIN만 쓴다 (docs/conventions.md 9장 Cognito 그룹)."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for subs in values(var.cognito_group_members) : [for s in subs : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", s))]
+    ]))
+    error_message = "cognito_group_members의 값은 사용자 sub(소문자 UUID)만 넣는다. 이메일 주소를 커밋하지 않는다."
+  }
+  validation {
+    condition     = alltrue([for subs in values(var.cognito_group_members) : length(subs) == length(distinct(subs))])
+    error_message = "같은 그룹에 같은 sub를 두 번 넣지 않는다."
+  }
+}
+
 # 3.1.14 가동 정책 — EventBridge Scheduler (cluster_schedule.tf)
 variable "cluster_keep_on" {
   description = "true면 예약 끄기(EventBridge·GitHub 백업 둘 다)를 멈춘다. 밤에도 켜 둘 때만 잠깐 true → apply, 끝나면 false → apply"

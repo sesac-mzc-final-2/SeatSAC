@@ -1830,7 +1830,7 @@ aws s3api get-public-access-block --bucket "$(terraform output -raw frontend_buc
 | 사용자 풀 | `cinema-staging-users` · 이메일 로그인(대소문자 무시) · 가입 필수 email·name · 비밀번호 8자(소문자·숫자) · 삭제 보호 끔(재생성 리허설) |
 | 앱 클라이언트 | `cinema-staging-web` · 공개(시크릿 없음) · 코드 + PKCE · 범위 `openid email profile aws.cognito.signin.user.admin` · 콜백 `https://<배포 도메인>/callback`·`http://localhost:5173/callback` · 로그아웃 `…/` · Access·ID 60분, Refresh 7일 |
 | Hosted UI 도메인 | `https://cinema-staging.auth.ap-northeast-2.amazoncognito.com` (클래식 Hosted UI) |
-| 그룹 | `ADMIN` — **쓰지 않는다**(11/14 관리자 역할 제거, gateway는 그룹을 읽지 않고 `X-User-Role`은 항상 `USER`). 그룹 리소스 삭제는 Terraform 후속 |
+| 그룹 | `VIP`(쿠폰 대상 — gateway `X-User-Grade: VIP`, ADR-118) · `ADMIN`(관리자 `/ops` 전용 — ops-api가 토큰에서 직접 확인, ADR-119). gateway는 `ADMIN`을 읽지 않는다(`X-User-Role`은 항상 `USER`, `/api/admin/**` 없음). 지정은 7-6-5 |
 | Pre sign-up Lambda | `cinema-staging-cognito-presignup`(Python 3.12, arm64) — Hosted UI 가입을 자동 확인(메일 발송 없음). 로그 7일 |
 
 **순서** (gateway 이미지 태그가 `CHANGE_ME`라 Application보다 먼저 태그를 넣는다)
@@ -1884,7 +1884,7 @@ kubectl -n cinema-staging get ingress gateway -o jsonpath='{.status.loadBalancer
 
 ```bash
 POOL=$(cd ../staging && terraform output -raw cognito_user_pool_id)
-# 가입은 화면(Hosted UI)에서. 앱 관리자 역할은 없다(11/14 제거) — ADMIN 그룹에 넣어도 달라지는 것이 없다
+# 가입은 화면(Hosted UI)에서. 그룹(VIP·ADMIN) 지정은 7-6-5
 # 비밀번호 분실(메일 발송 없음): cinema-admin이 임시 비밀번호 설정 → 다음 로그인 때 변경
 aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username '<이메일>' --password '<임시>' --no-permanent
 ```
@@ -1913,6 +1913,59 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://$DOMAIN/api/users/me"      # 4
 | 가입 후 "User is not confirmed" | Pre sign-up 연결 안 됨·Lambda 오류 | `aws cognito-idp describe-user-pool --user-pool-id $POOL --query 'UserPool.LambdaConfig'`, Lambda 로그 |
 | Hosted UI `redirect_mismatch` | 콜백 URL이 클라이언트 목록과 다름(끝 `/`·http/https) | 화면은 지금 주소 + `/callback`을 보낸다 — 그 주소(기본 도메인·사용자 도메인·로컬)가 `cognito_app_origins`에 있는지(7-7) |
 | 모든 API 401 | gateway issuer·client_id와 토큰이 다름(풀을 다시 만들었는데 ConfigMap 그대로) | 7-6-2 다시 apply → ArgoCD gateway **Restart** |
+
+#### 7-6-5. 그룹 VIP·ADMIN · 시연 계정 지정 (6.1.11, ADR-118·119)
+
+코드: `envs/staging/cognito.tf`(그룹 2개 · `aws_cognito_user_in_group.demo`) · 값 `staging.tfvars` `cognito_group_members`
+
+| 그룹 | 쓰는 곳 | 넣는 계정 |
+| --- | --- | --- |
+| `VIP` | gateway가 토큰 `cognito:groups`에 `VIP`가 있으면 `X-User-Grade: VIP` → coupon 발급 대상 | 쿠폰 시연 계정 |
+| `ADMIN` | ops-api가 토큰에서 직접 확인(`/ops`만) | 관리자 화면 시연 계정 — **서비스 정지/가동을 할 수 있으므로 시연에 쓰는 계정만** |
+
+- 사용자는 Terraform이 만들지 않는다. **화면에서 가입한 뒤** 그 계정의 `sub`를 tfvars에 넣는다(이메일은 넣지 않는다 — 변수 검증이 UUID가 아니면 막는다)
+- 그룹 변경은 **다음 토큰부터** 반영된다 → 지정한 뒤 로그아웃·로그인(Access Token 60분)
+
+```bash
+# 1) 시연 계정의 sub 얻기 (관리자. 이메일은 터미널에서만 쓰고 어디에도 적지 않는다)
+cd infra/terraform/envs/staging
+POOL=$(terraform output -raw cognito_user_pool_id)
+read -r -p 'email: ' EMAIL
+aws cognito-idp list-users --user-pool-id "$POOL" --filter "email = \"$EMAIL\"" --query 'Users[0].Username' --output text; unset EMAIL
+# → 3f9a…(UUID). None이면 아직 가입하지 않은 계정
+
+# 2) staging.tfvars 의 cognito_group_members 에 sub를 넣는 PR → 머지 → apply
+#    cognito_group_members = { VIP = ["<sub>"], ADMIN = ["<sub>"] }
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: aws_cognito_user_in_group.demo["VIP/<sub>"] 등 넣은 수만큼 add. 그룹·사용자 풀에 변경 없음
+terraform apply plan.out
+
+# 3) 확인
+aws cognito-idp list-users-in-group --user-pool-id "$POOL" --group-name VIP   --query 'Users[].Username' --output text
+aws cognito-idp list-users-in-group --user-pool-id "$POOL" --group-name ADMIN --query 'Users[].Username' --output text
+```
+
+- [ ] 그룹 `VIP`·`ADMIN`이 있다(`aws cognito-idp list-groups --user-pool-id "$POOL" --query 'Groups[].GroupName'`)
+- [ ] 다시 로그인한 시연 계정의 Access Token `cognito:groups`에 그룹이 들어 있다(화면 개발자 도구에서 토큰 본문 확인 — 토큰을 붙여 넣거나 공유하지 않는다)
+- [ ] (gateway 6.3.3 뒤) VIP 계정 `GET /api/users/me`의 `grade`가 `VIP`, 일반 계정은 `NORMAL`
+- [ ] (ops-api 6.1.7 뒤) ADMIN 계정 `GET /ops/services` 200, 일반 계정 403
+
+**임시 지정·해제** (리허설 중 잠깐, 또는 Terraform 밖 계정) — CLI로 넣은 지정은 Terraform이 건드리지 않는다. 끝나면 직접 뺀다
+
+```bash
+aws cognito-idp admin-add-user-to-group      --user-pool-id "$POOL" --username '<sub>' --group-name VIP
+aws cognito-idp admin-remove-user-from-group --user-pool-id "$POOL" --username '<sub>' --group-name VIP
+```
+
+- **부하 테스트 계정을 VIP로**(쿠폰 선착순 측정): `loadtest+NNN@example.com` 계정들은 Terraform에 넣지 않고 위 CLI를 계정 수만큼 돌린다(`tests/k6/tools/loadtest_users.py`의 상태 파일에 있는 계정). `ADMIN`에는 넣지 않는다 — 도구가 `ADMIN` 계정을 보면 멈춘다
+- tfvars에 넣은 계정을 Cognito에서 지우면 다음 plan이 그 지정을 다시 만들려다 `UserNotFoundException`으로 실패한다 → tfvars에서도 뺀다
+- Public 전환 전: tfvars의 sub는 비밀 값이 아니지만(로그인에 쓸 수 없다) 시연 계정을 지울 때 함께 비운다
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| apply `UserNotFoundException` | sub 오타·아직 가입하지 않은 계정·지운 계정 | 1)로 sub 다시 확인, 없는 계정은 tfvars에서 뺀다 |
+| plan이 `cognito_group_members의 값은 사용자 sub…`로 멈춤 | 이메일이나 대문자 UUID를 넣음 | sub(소문자 UUID)만 넣는다 |
+| 지정했는데 `grade`가 `NORMAL`·`/ops`가 403 | 지정 전에 받은 토큰을 쓰는 중 | 로그아웃 후 다시 로그인(새 토큰) |
 
 ### 7-7. 사용자 도메인 (3.1.23, 선택) — ⬜
 

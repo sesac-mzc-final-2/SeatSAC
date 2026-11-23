@@ -90,13 +90,14 @@ module "booking_pod_identity" {
 
   attach_custom_policy      = true
   custom_policy_description = "3.1.9 booking outbox relay: send to notification queue only"
-  policy_statements = [
+  # 6.1.3(ADR-117): saga 명령 발송·결과 수신·booking-events 발행을 더한다 (messaging.tf)
+  policy_statements = concat([
     {
       sid       = "SendNotification"
       actions   = ["sqs:SendMessage", "sqs:GetQueueUrl"]
       resources = [aws_sqs_queue.notification.arn]
     }
-  ]
+  ], local.booking_messaging_statements)
 
   associations = {
     this = {
@@ -211,10 +212,10 @@ resource "aws_iam_role_policy" "sqs_metrics_lambda" {
       Sid    = "ReadQueueAttributes"
       Effect = "Allow"
       Action = ["sqs:GetQueueAttributes"]
-      Resource = [
+      Resource = concat([
         aws_sqs_queue.notification.arn,
         aws_sqs_queue.notification_dlq.arn,
-      ]
+      ], [for q in aws_sqs_queue.messaging_dlq : q.arn]) # 6.1.3 메시징 DLQ
     }]
   })
 }
@@ -252,10 +253,11 @@ resource "aws_iam_role_policy" "sqs_metrics_scheduler" {
 }
 
 resource "aws_scheduler_schedule" "sqs_metrics" {
-  for_each = {
+  # 6.1.3: 메시징 DLQ도 같은 이유로 조회한다(원본 큐는 파드가 계속 폴링해 활성 상태다)
+  for_each = merge({
     notification = aws_sqs_queue.notification.url
     dlq          = aws_sqs_queue.notification_dlq.url
-  }
+  }, { for k, q in aws_sqs_queue.messaging_dlq : "${k}-dlq" => q.url })
 
   name                = "keep-active-${each.key}"
   group_name          = aws_scheduler_schedule_group.sqs_metrics.name

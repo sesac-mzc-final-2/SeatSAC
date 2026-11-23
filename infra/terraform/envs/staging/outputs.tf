@@ -171,3 +171,19 @@ output "custom_domain_url" {
   description = "3.1.23 사용자 도메인 주소(없으면 null — 출력 변경으로 잡히지 않게). 기본 도메인(cloudfront_domain_name)도 계속 동작한다"
   value       = local.custom_domain_enabled ? "https://${var.custom_domain}" : null
 }
+
+# ---- 6.1.3 메시징 (ADR-117) ------------------------------------------------
+output "messaging_topics" {
+  description = "SNS 이벤트 토픽 이름 (ARN은 ConfigMap cinema-infra-endpoints의 SNS_*_EVENTS_ARN)"
+  value       = sort([for t in aws_sns_topic.events : t.name])
+}
+
+output "messaging_queues" {
+  description = "SQS 구독·명령·결과 큐 이름 (URL은 ConfigMap cinema-infra-endpoints의 SQS_*_URL). DLQ는 {이름}-dlq"
+  value       = sort([for q in aws_sqs_queue.messaging : q.name])
+}
+
+output "messaging_pod_role_arns" {
+  description = "메시징 Pod Identity 역할 (ServiceAccount cinema-staging/{svc}). booking은 booking_pod_role_arn"
+  value       = { for k, m in module.messaging_pod_identity : k => m.iam_role_arn }
+}

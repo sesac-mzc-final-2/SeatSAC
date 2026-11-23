@@ -98,6 +98,12 @@ variable "notification_queue_name" {
   default     = "cinema-staging-notification-events"
 }
 
+variable "messaging_name_prefix" {
+  description = "6.1.3 메시징 토픽·큐 이름 접두사 → {접두사}-booking-events 등 (envs/staging var.name과 같은 값, docs/conventions.md 5장)"
+  type        = string
+  default     = "cinema-staging"
+}
+
 variable "cognito_enabled" {
   description = "Cognito 사용자 풀(3.3.x)을 만든 뒤 true. false면 COGNITO_ISSUER_URI·COGNITO_CLIENT_ID가 빈 값"
   type        = bool

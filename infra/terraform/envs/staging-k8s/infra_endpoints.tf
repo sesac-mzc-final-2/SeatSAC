@@ -47,6 +47,9 @@ locals {
   account_id   = data.aws_caller_identity.current.account_id
   ecr_registry = "${local.account_id}.dkr.ecr.${var.region}.amazonaws.com"
 
+  sns_arn_prefix = "arn:aws:sns:${var.region}:${local.account_id}:${var.messaging_name_prefix}"
+  sqs_url_prefix = "https://sqs.${var.region}.amazonaws.com/${local.account_id}/${var.messaging_name_prefix}"
+
   cognito_pool_id   = var.cognito_enabled ? one(data.aws_cognito_user_pools.this[0].ids) : ""
   cognito_client_id = var.cognito_enabled ? one(data.aws_cognito_user_pool_clients.this[0].client_ids) : ""
 
@@ -62,6 +65,14 @@ locals {
   infra_endpoints = merge({
     DB_HOST     = data.aws_db_instance.mysql.address
     VALKEY_HOST = data.aws_elasticache_replication_group.valkey.primary_endpoint_address
+    # 6.1.3 메시징(ADR-117) — 토픽 ARN·큐 URL은 이름으로 정해진다(envs/staging messaging.tf). 계정 ID가 들어가 gitops에 두지 않는다
+    SNS_BOOKING_EVENTS_ARN      = "${local.sns_arn_prefix}-booking-events"
+    SNS_CATALOG_EVENTS_ARN      = "${local.sns_arn_prefix}-catalog-events"
+    SQS_COUPON_COMMANDS_URL     = "${local.sqs_url_prefix}-coupon-commands"
+    SQS_PAYMENT_COMMANDS_URL    = "${local.sqs_url_prefix}-payment-commands"
+    SQS_BOOKING_REPLIES_URL     = "${local.sqs_url_prefix}-booking-replies"
+    SQS_USER_BOOKING_EVENTS_URL = "${local.sqs_url_prefix}-user-booking-events"
+    SQS_AI_CATALOG_EVENTS_URL   = "${local.sqs_url_prefix}-ai-catalog-events"
     # 큐 URL은 이름으로 정해진다 → 3.1.8 큐가 생기기 전에도 값을 둘 수 있다(그 전에는 booking 발행만 실패)
     SQS_NOTIFICATION_URL = "https://sqs.${var.region}.amazonaws.com/${local.account_id}/${var.notification_queue_name}"
     COGNITO_ISSUER_URI   = var.cognito_enabled ? "https://cognito-idp.${var.region}.amazonaws.com/${local.cognito_pool_id}" : ""

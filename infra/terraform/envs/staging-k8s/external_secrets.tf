@@ -30,8 +30,9 @@ locals {
 resource "aws_secretsmanager_secret" "app" {
   for_each = local.sm_secrets
 
-  name        = "${local.sm_prefix}/${each.key}"
-  description = "SeatSAC ${var.env} ${each.key} — External Secrets가 K8s Secret ${each.value.k8s_secret}으로 동기화 (Terraform 관리, 콘솔에서 고치지 않는다)"
+  name = "${local.sm_prefix}/${each.key}"
+  # 설명은 ASCII로 둔다(AWS 리소스 설명은 서비스마다 허용 문자가 달라 다른 리소스와 같은 기준으로)
+  description = "SeatSAC ${var.env} ${each.key}: synced to K8s Secret ${each.value.k8s_secret} by External Secrets. Managed by Terraform - do not edit in console"
 
   # 재생성 리허설(OPS-14)에서 같은 이름으로 바로 다시 만들 수 있게 삭제 대기 없음. 값은 Terraform이 다시 만든다
   recovery_window_in_days = 0

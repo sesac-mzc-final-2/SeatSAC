@@ -749,8 +749,8 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 #### 9-2. 실행 규칙
 
 - **ai는 RDS·기존 Valkey에 연결하지 않는다.** 데이터는 공개 API(`PUBLIC_API_BASE_URL`)로 채운 메모리 SQLite, 캐시·세션·한도는 ai Valkey. 🆕 11/23(노션 ADR-120): `APP_AI_DATA_SOURCE=db`면 **자기 인스턴스 `ai_db`만** 쓴다(`DB_HOST_AI`, 앱 `ai_app`·NL2SQL 실행 `ai_query` 읽기 전용 계정 — 실행 상한 5초·500행 그대로, MySQL `MAX_EXECUTION_TIME`). 복제본은 SQS `ai-catalog-events` 소비 + 최초 백필(공개 API) + 10분 전체 대조. 범위 밖 질문은 `ai_db.unmet_demand`. 다른 서비스 DB·기존 Valkey는 계속 금지. 기본값은 `snapshot`(복제본 준비 뒤 gitops로 `db`)
-- 🆕 **이용 안내 검색(RAG)**(`APP_AI_RAG_ENABLED` 기본 `false`, 6.4.7 — ADR-126 가번호): 켜져 있을 때만 Claude 도구에 `search_guide`가 추가된다. Claude가 이 도구를 고르면 ai가 질문을 임베딩해 메모리의 안내 조각(data-model 6-5)에서 상위 `APP_AI_RAG_TOP_K`개를 찾고, 하한을 넘는 조각만 Claude에 돌려줘 **그 조각만 근거로** 답하게 한다 → `path: RAG`, `sources`에 쓴 조각의 `id`·`title`. Claude 호출은 2회(도구 선택 1 + 답 1, `APP_AI_LLM_MAX_CALLS_PER_QUERY` 3 안). 하한을 넘는 조각이 없으면 지금처럼 `OUT_OF_SCOPE`(`site_feature`)로 끝나고 수요 기록에 남는다. RAG 답은 캐시에 저장하지 않는다(처음에는 단순하게 — 저장은 평가 뒤 검토). 외부 호출·DB·Valkey 키는 늘지 않는다. 로그에는 `path=RAG`와 `sourceIds`(문서 id)만 더 남긴다
-- 🆕 **수요 → 백로그 워크플로우**(6.4.8, LangGraph — ADR-126 가번호): `services/ai/backlog/`에 둔다. `eval/`처럼 **이미지에 들어가지 않고**(Dockerfile은 `src`만 복사) 클러스터에 배포하지 않는다 — 사람이 로컬에서 실행한다. 의존성 `langgraph`는 `pyproject.toml`의 별도 그룹 `workflow`에만 넣어 서비스 이미지(`--no-dev`)에 들어가지 않는다. 입력은 관리자 통계 API(6.4.4) 응답을 저장한 JSON 파일 — 분류·요약·횟수뿐이고 질문 원문·userId가 없다(6-4 `unmet_demand` 규칙). 단계: ① 읽기 ② 비슷한 요약 묶기 ③ 횟수가 기준 미만이면 건너뜀 ④ 상위 묶음의 기능 제안서 초안(Claude, 개발 전용 키) ⑤ **사람 승인 대기**(체크포인트 파일 — 껐다 켜도 이어진다) ⑥ 승인된 것만 마크다운 파일로 저장. 노션 WBS 등록은 사람이 한다(이슈는 노션 WBS만 — ADR-48·64). 코드·PR을 만드는 단계는 없다. `ai_db`·Valkey·다른 서비스에 쓰지 않는다
+- 🆕 **이용 안내 검색(RAG)**(`APP_AI_RAG_ENABLED` 기본 `false`, 6.4.7 — ADR-126): 켜져 있을 때만 Claude 도구에 `search_guide`가 추가된다. Claude가 이 도구를 고르면 ai가 질문을 임베딩해 메모리의 안내 조각(data-model 6-5)에서 상위 `APP_AI_RAG_TOP_K`개를 찾고, 하한을 넘는 조각만 Claude에 돌려줘 **그 조각만 근거로** 답하게 한다 → `path: RAG`, `sources`에 쓴 조각의 `id`·`title`. Claude 호출은 2회(도구 선택 1 + 답 1, `APP_AI_LLM_MAX_CALLS_PER_QUERY` 3 안). 하한을 넘는 조각이 없으면 지금처럼 `OUT_OF_SCOPE`(`site_feature`)로 끝나고 수요 기록에 남는다. RAG 답은 캐시에 저장하지 않는다(처음에는 단순하게 — 저장은 평가 뒤 검토). 외부 호출·DB·Valkey 키는 늘지 않는다. 로그에는 `path=RAG`와 `sourceIds`(문서 id)만 더 남긴다
+- 🆕 **수요 → 백로그 워크플로우**(6.4.8, LangGraph — ADR-126): `services/ai/backlog/`에 둔다. `eval/`처럼 **이미지에 들어가지 않고**(Dockerfile은 `src`만 복사) 클러스터에 배포하지 않는다 — 사람이 로컬에서 실행한다. 의존성 `langgraph`는 `pyproject.toml`의 별도 그룹 `workflow`에만 넣어 서비스 이미지(`--no-dev`)에 들어가지 않는다. 입력은 관리자 통계 API(6.4.4) 응답을 저장한 JSON 파일 — 분류·요약·횟수뿐이고 질문 원문·userId가 없다(6-4 `unmet_demand` 규칙). 단계: ① 읽기 ② 비슷한 요약 묶기 ③ 횟수가 기준 미만이면 건너뜀 ④ 상위 묶음의 기능 제안서 초안(Claude, 개발 전용 키) ⑤ **사람 승인 대기**(체크포인트 파일 — 껐다 켜도 이어진다) ⑥ 승인된 것만 마크다운 파일로 저장. 노션 WBS 등록은 사람이 한다(이슈는 노션 WBS만 — ADR-48·64). 코드·PR을 만드는 단계는 없다. `ai_db`·Valkey·다른 서비스에 쓰지 않는다
 - 회차 ID 넘기기(계약 `screeningIds`): 검증을 통과한 SQL을 실행할 때 행 하나가 회차 하나이면 회차 ID 열을 덧붙였다 떼어 `screeningIds`로 보낸다(프리셋·NL2SQL·캐시 적중 모두 같은 실행 경로, data-model 6-1). Claude에게 주는 프롬프트·스키마 설명과 로그 `sqlTemplate`은 덧붙이기 전 SQL 그대로다. 덧붙인 SQL만 실패하면 남은 시간 안에서 원래 SQL로 한 번 다시 실행해 답은 그대로 내고(`screeningIds: null`) WARNING 한 줄(오류 종류만)을 남긴다. ai는 화면 주소를 만들지 않는다
 - SQLite 읽기 전용: `:memory:`를 URI `mode=ro`로 열면 비어 있는 읽기 전용 DB가 되어 적재할 수 없다. 그래서 **적재 → 잠금 → 교체** 순서로 한다. ① 갱신마다 **새** `:memory:` 연결을 쓰기 가능으로 열어 적재 ② 끝나면 그 연결에 `PRAGMA query_only=ON` + `set_authorizer`(SELECT·READ·FUNCTION만 허용, 나머지 DENY — `PRAGMA query_only=OFF`·`ATTACH`·쓰기 SQL도 여기서 막힌다. `query_only`만으로는 SQL로 다시 끌 수 있다) ③ 질의용 참조를 새 연결로 바꾸고 이전 연결은 진행 중 질의가 끝나면 닫는다(이중 버퍼). 질의 쪽은 쓰기 가능한 연결을 받을 수 없다. 적재 실패면 이전 스냅샷을 그대로 쓰고 `ai_snapshot_age_seconds`가 늘어난다
 - 스냅샷 적재 호출(오늘 1분마다 4회, 10분마다 약 50회, **잔여석을 읽는 질문마다 날짜 수 × 극장 수**(「오늘 건대입구」 1회, 극장을 안 정하면 4회, 확인 불가가 섞이면 한 번 더))은 CloudFront → gateway → catalog로 들어간다. 질문 시점 호출은 질문 하나에 최대 8회(날짜 2 × 극장 4 — 9-1)이고, 사용자당 동시 1건(`ai:inflight`)으로 묶이며(staging 한도는 11/18부터 분당 600·하루 300 — 9-1), 같은 범위 동시 질문은 한 번을 같이 쓴다. **부하 테스트(4.2.1)·블루/그린 전환 테스트(4.2.2) 중에는 `ng-ai` desired 0 · 플래그 off, 좌석 데모 중에는 `ng-ai` desired 0 · AI 질의 금지(플래그는 rc2에서 켜 둔 채)** → 테스트 환경 = 데모 환경 (런북 6-G)
@@ -910,7 +910,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 
 - 계정: `ai_app`(DML), `ai_migrator`(DDL), `ai_query`(NL2SQL 실행 전용, `movie`·`theater`·`screening` SELECT만, `MAX_EXECUTION_TIME` 5초)
 
-#### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126 가번호)
+#### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126)
 
 `APP_AI_RAG_ENABLED=true`일 때만 쓴다(기본 `false`). DB·Valkey에 넣지 않는다 — 조각이 20개 안팎이라 파드 메모리로 충분하다(늘어나면 ai Valkey 벡터 인덱스로 옮긴다).
 
@@ -1080,7 +1080,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-eso-pod` | 10 대체 |
 | 124 | ⏳ 보안: WAF(관리형 규칙 + IP 요청 제한), gateway 본문 64KB(413 `PAYLOAD_TOO_LARGE`), `SECURITY` 로그, 원본 HTTPS `on` | 검토 중. 62 재검토 |
 | 125 | 새 AWS 계정 이전: 기존 계정 리소스를 그대로 두고 Terraform을 새 계정에 다시 apply(bootstrap → global → staging → staging-k8s), 도메인은 Route 53 등록 이전 + 새 호스팅 영역, ECR 이미지는 CI 재빌드 | 이전할 때만 |
-| 126 (가번호) | ai 추가 고도화 두 가지. **이용 안내 RAG**: 사이트 이용 안내 문서만, 파드 메모리 색인, 플래그 `APP_AI_RAG_ENABLED`(기본 off), 응답 `path: RAG`·`sources`. **수요 → 백로그 워크플로우**(LangGraph): 통계 API 응답 → 묶기 → 기준 미달은 건너뜀 → 제안서 초안 → 사람 승인 → 파일. 로컬 실행, 클러스터 배포 없음, 코드·PR 생성 없음 | 120 보완. 노션 등록 후 번호 확정. WBS 6.4.7·6.4.8(6.4.1~6.4.4·6.4.6은 그대로) |
+| 126 | ai 추가 고도화 두 가지. **이용 안내 RAG**: 사이트 이용 안내 문서만, 파드 메모리 색인, 플래그 `APP_AI_RAG_ENABLED`(기본 off), 응답 `path: RAG`·`sources`. **수요 → 백로그 워크플로우**(LangGraph): 통계 API 응답 → 묶기 → 기준 미달은 건너뜀 → 제안서 초안 → 사람 승인 → 파일. 로컬 실행, 클러스터 배포 없음, 코드·PR 생성 없음 | 120 보완(노션 ADR-120에 표시). WBS 6.4.7·6.4.8(6.4.1~6.4.4·6.4.6은 그대로) |
 
 ---
 

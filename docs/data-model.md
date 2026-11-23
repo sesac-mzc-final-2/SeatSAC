@@ -132,7 +132,7 @@
 
 - 계정: `ai_app`(DML), `ai_migrator`(DDL), `ai_query`(NL2SQL 실행 전용, `movie`·`theater`·`screening` SELECT만, `MAX_EXECUTION_TIME` 5초)
 
-### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126 가번호)
+### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126)
 
 `APP_AI_RAG_ENABLED=true`일 때만 쓴다(기본 `false`). DB·Valkey에 넣지 않는다 — 조각이 20개 안팎이라 파드 메모리로 충분하다(늘어나면 ai Valkey 벡터 인덱스로 옮긴다).
 

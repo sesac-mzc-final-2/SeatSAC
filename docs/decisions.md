@@ -95,4 +95,4 @@
 | 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-eso-pod` | 10 대체 |
 | 124 | ⏳ 보안: WAF(관리형 규칙 + IP 요청 제한), gateway 본문 64KB(413 `PAYLOAD_TOO_LARGE`), `SECURITY` 로그, 원본 HTTPS `on` | 검토 중. 62 재검토 |
 | 125 | 새 AWS 계정 이전: 기존 계정 리소스를 그대로 두고 Terraform을 새 계정에 다시 apply(bootstrap → global → staging → staging-k8s), 도메인은 Route 53 등록 이전 + 새 호스팅 영역, ECR 이미지는 CI 재빌드 | 이전할 때만 |
-| 126 (가번호) | ai 추가 고도화 두 가지. **이용 안내 RAG**: 사이트 이용 안내 문서만, 파드 메모리 색인, 플래그 `APP_AI_RAG_ENABLED`(기본 off), 응답 `path: RAG`·`sources`. **수요 → 백로그 워크플로우**(LangGraph): 통계 API 응답 → 묶기 → 기준 미달은 건너뜀 → 제안서 초안 → 사람 승인 → 파일. 로컬 실행, 클러스터 배포 없음, 코드·PR 생성 없음 | 120 보완. 노션 등록 후 번호 확정. WBS 6.4.7·6.4.8(6.4.1~6.4.4·6.4.6은 그대로) |
+| 126 | ai 추가 고도화 두 가지. **이용 안내 RAG**: 사이트 이용 안내 문서만, 파드 메모리 색인, 플래그 `APP_AI_RAG_ENABLED`(기본 off), 응답 `path: RAG`·`sources`. **수요 → 백로그 워크플로우**(LangGraph): 통계 API 응답 → 묶기 → 기준 미달은 건너뜀 → 제안서 초안 → 사람 승인 → 파일. 로컬 실행, 클러스터 배포 없음, 코드·PR 생성 없음 | 120 보완(노션 ADR-120에 표시). WBS 6.4.7·6.4.8(6.4.1~6.4.4·6.4.6은 그대로) |

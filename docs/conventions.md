@@ -211,7 +211,7 @@
 | 플랫폼 namespace | 도구 기본값 | `argocd`, `argo-rollouts`, `monitoring`, `kube-system`, 🆕 `external-secrets`, `karpenter` |
 | 관리자 namespace | `cinema-ops` (팀원 조회 범위 밖, Terraform이 만드는 운영 Job·그 입력 Secret) | `db-bootstrap-*` Job (3.1.12) |
 | AWS 리소스 | `cinema-staging-{대상}` | `cinema-staging-eks`, `cinema-staging-valkey`, `cinema-staging-users`(Cognito), ⚠️AI `cinema-staging-ai-valkey`, `cinema-staging-ng-ai`(노드그룹), 🆕 `cinema-staging-{svc}-db`(RDS 6), `cinema-staging-{도메인}-events`(SNS), `cinema-staging-{svc}-commands`(SQS), `cinema-staging-reports`(Athena 작업 그룹), `cinema-staging-waf` |
-| 🆕 Secrets Manager | `cinema/staging/{service}` | `cinema/staging/booking` |
+| 🆕 Secrets Manager | `cinema/staging/{service}`(앱 → K8s Secret `{service}-secrets`) · `cinema/staging/{service}-migrator`(Flyway Job → `{service}-migrator-secrets`). 값은 키 = 값 JSON, 키 이름은 K8s Secret과 같다 | `cinema/staging/booking`, `cinema/staging/booking-migrator` |
 | 🆕 Cognito 그룹 | `VIP`(쿠폰 대상), `ADMIN`(관리자 `/ops`만) | — |
 | 계정 단위 리소스 | `cinema-{대상}` | `cinema-admin`, `cinema-developer`, `cinema-gha-ecr-push`, `cinema-tfstate-{계정ID}` |
 | S3 버킷 | `cinema-staging-frontend-{계정ID}`, `cinema-tfstate-{계정ID}`, `cinema-staging-loki-{계정ID}`(3.1.24 로그), 🆕 `cinema-staging-reports-{계정ID}`(오류·보안 리포트·Athena 결과) | — |

@@ -35,6 +35,7 @@
       "expiresAt": "2026-11-17T19:45:05+09:00",
       "confirmExpiresAt": null,
       "reason": null
-    }
+    },
+    "sources": null
   }
 }

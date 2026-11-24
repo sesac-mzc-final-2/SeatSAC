@@ -129,6 +129,7 @@ paths:
                 holdResult: { $ref: "./examples/ai/chat-hold-result.json" }
                 holdGuide: { $ref: "./examples/ai/chat-hold-guide.json" }
                 holdGuideScreenings: { $ref: "./examples/ai/chat-hold-guide-screenings.json" }
+                rag: { $ref: "./examples/ai/chat-rag.json" }
         "400":
           description: |
             VALIDATION_FAILED — `message` 없음·빈 문자열(공백만)·300자 초과(`details[{ field: "message", reason: LENGTH }]`),
@@ -258,7 +259,7 @@ components:
 
     ChatPath:
       type: string
-      enum: [CACHE_EXACT, CACHE_SEMANTIC, PRESET, NL2SQL, MY_BOOKINGS, REJECTED, OUT_OF_SCOPE, CLARIFY, HOLD_CONFIRM, HOLD_RESULT, HOLD_GUIDE]
+      enum: [CACHE_EXACT, CACHE_SEMANTIC, PRESET, NL2SQL, MY_BOOKINGS, REJECTED, OUT_OF_SCOPE, CLARIFY, HOLD_CONFIRM, HOLD_RESULT, HOLD_GUIDE, RAG]
       description: |
         CACHE_EXACT 정확 일치 캐시(토큰 0) · CACHE_SEMANTIC 의미 캐시(토큰 0) · PRESET 프리셋 실행(Claude가 선택, 또는 문맥 이어받기 — `llm.calls` 0) ·
         NL2SQL Claude가 SQL 생성 · MY_BOOKINGS 내 예매(공개 API, 토큰 0) · REJECTED SQL 검증 거부(`rejection` 참고) ·
@@ -266,6 +267,9 @@ components:
         좌석 잡기(플래그 `APP_AI_SEAT_HOLD_ENABLED`가 켜졌을 때만 — 기본 켜짐): HOLD_CONFIRM 확인 요청(아직 선점하지 않음 — `choices` 확인·취소) ·
         HOLD_RESULT 선점을 시도한 결과(성공이면 `seatHold.bookingId`, 실패면 `seatHold.reason`. 확인 단계라 토큰 0) ·
         HOLD_GUIDE 선점하지 않고 안내(회차·빠진 조건(영화·날짜·극장) 고르기 `choices`·없는 좌석·이미 잡힌 좌석·좌석 미지정·취소·확인 시간 만료 — `seatHold.reason`)
+        이용 안내(6.4.7, ADR-126 — 플래그 `APP_AI_RAG_ENABLED`가 켜졌을 때만, 기본 꺼짐): RAG 사이트 이용 안내 문서에서 찾은 조각만 근거로 답함
+        (`sources`에 쓴 문서. 표·SQL 없음, Claude 호출 2회, 캐시에 저장하지 않아 `cache`는 null). 하한을 넘는 조각이 없으면 RAG가 아니라 OUT_OF_SCOPE로 끝난다.
+        값이 더 늘 수 있다 — 화면은 모르는 값을 글자 그대로 보여 준다
 
     Column:
       type: object
@@ -340,8 +344,8 @@ components:
 
     ChatResponse:
       type: object
-      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`context`·`rejection`·`choices`·`cache`·`seatHold`)
-      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, context, asOf, llm, latencyMs, rejection, choices, cache, seatHold]
+      description: 모든 필드가 항상 있다. 경로에 해당 없는 값은 null(`columns`·`rows`·`screeningIds`·`sql`·`presetId`·`context`·`rejection`·`choices`·`cache`·`seatHold`·`sources`)
+      required: [sessionId, answer, path, columns, rows, screeningIds, rowCount, truncated, sql, presetId, context, asOf, llm, latencyMs, rejection, choices, cache, seatHold, sources]
       properties:
         sessionId: { type: string, format: uuid, description: "서버가 발급. 후속 질문에 그대로 보낸다(30분)" }
         answer: { type: string, description: "답 문장(결과 행을 템플릿에 채워 만듦, Claude에 결과를 다시 보내지 않음). 끝에 \"○시 ○분 기준\"" }
@@ -410,6 +414,12 @@ components:
             - { type: "null" }
             - { $ref: "#/components/schemas/SeatHold" }
           description: "항상 있다. HOLD_* 경로(ai 플래그 `APP_AI_SEAT_HOLD_ENABLED`가 켜졌을 때만 나온다 — 기본 켜짐)에서만 객체, 그 밖은 null"
+        sources:
+          type: [array, "null"]
+          minItems: 1
+          maxItems: 10
+          items: { $ref: "#/components/schemas/GuideSource" }
+          description: "항상 있다(6.4.7). `path: RAG`일 때만 답의 근거로 쓴 이용 안내 문서 목록(1개 이상 `APP_AI_RAG_TOP_K`개 이하 — 기본 3, 유사도 높은 순), 그 밖은 null. 화면의 출처 표시는 선택이다"
 
     SeatHold:
       type: object
@@ -440,6 +450,14 @@ components:
             HOLD_RESULT 같은 확인의 재전송(선점 성공 뒤 5분 이내 — ai가 `GET /bookings/{bookingId}`로 그 예매를 다시 본다. PENDING이면 처음과 같은 성공 답):
             HOLD_ENDED(그 사이 취소·만료·결제 실패 — `bookingId` null, 결제 화면 링크 없음) · ALREADY_PAID(결제 완료 — `bookingId` null) ·
             UPSTREAM_UNAVAILABLE(예매 상태를 확인하지 못함 — 마이페이지 예매 내역에서 확인)
+
+    GuideSource:
+      type: object
+      description: "이용 안내 문서 조각 하나(`services/ai` `resources/guides.yaml`의 항목). 본문은 싣지 않는다 — 답 문장에 이미 들어 있다"
+      required: [id, title]
+      properties:
+        id: { type: string, maxLength: 64, description: "문서 조각 id(영문 소문자·숫자·하이픈). 로그 `sourceIds`와 같은 값" }
+        title: { type: string, maxLength: 100, description: "화면에 보여 줄 제목" }
 
     Choice:
       type: object

@@ -1,0 +1,124 @@
+openapi: 3.1.0
+info:
+  title: seatsac ai internal API
+  version: "1.5"
+  description: |
+    API 명세서 v1.5 24장 (6.4.4 · 김서현, ADR-120). Gateway가 라우팅하지 않는다. 호출자는 NetworkPolicy로 제한(OPS-15):
+    ops-api → ai. 타임아웃 연결 1초 / 응답 3초, 재시도 없음(`docs/contracts.md` 서비스 간 호출 표).
+    관리자 화면의 「AI 범위 밖 질문 통계」(OPS-23)가 쓰는 값이다 — ops-api `GET /ops/ai/unmet-demand`가 이 응답을 **그대로** 돌려준다.
+    그래서 응답 스키마 `UnmetDemandStats`는 `ops.openapi.yaml`의 같은 이름 스키마와 필드·형식이 같아야 한다(한쪽을 바꾸면 같은 PR에서 함께).
+    재료는 `ai_db.unmet_demand`(data-model 6-4: 범위 밖 질문 1건 = 1행, **질문 원문·userId 없음**)이다.
+    `X-Trace-Id`는 받은 값을 그대로 쓴다. 오류 형식은 `contracts/schemas/error.v1.json` 그대로.
+servers:
+  - url: http://ai:8080
+security: []   # 내부 API: 사용자 인증 없음. 호출자는 NetworkPolicy로 제한 (OPS-15) — 관리자 인증(ADMIN)은 ops-api가 한다
+
+paths:
+
+  /internal/ai/unmet-demand/stats:
+    get:
+      operationId: getUnmetDemandStatsInternal
+      summary: 범위 밖 질문 통계 (호출자 ops-api — OPS-23)
+      description: |
+        기간 안에 `OUT_OF_SCOPE`로 끝난 질문을 분류별로 세고, 많이 나온 요약 상위 `limit`개를 준다.
+        - 기간은 KST 날짜이고 양끝을 포함한다. `created_at`(UTC)을 KST 날짜 경계로 바꿔 센다
+          (`2026-11-24` = `2026-11-23T15:00:00Z` 이상 `2026-11-24T15:00:00Z` 미만).
+        - `total`·`byCategory`는 기간 안의 모든 행을 센다(요약이 없는 행 포함).
+        - `top`은 **요약(`reason`)이 있는 행만** (`category`, `reason`)의 글자가 완전히 같은 것끼리 센다.
+          비슷한 요약을 묶지 않는다(묶는 일은 6.4.8 워크플로우가 한다). 그래서 `top`의 `count` 합은 `total`보다 작을 수 있고,
+          요약은 Claude가 매번 새로 쓰는 문장이라 `count`가 1인 항목이 많은 것이 정상이다.
+        - 요약이 없는 행: Claude가 요약을 주지 않았거나, 요약이 질문을 그대로 베껴 ai가 버린 경우다(원문 저장 금지).
+        - 정렬: `byCategory`·`top` 모두 `count` 내림차순, 같으면 `category`, `reason` 오름차순(같은 입력이면 같은 순서).
+        - `byCategory`에는 1건 이상인 분류만 넣는다. 기간 안에 행이 없으면 `total: 0`, `byCategory: []`, `top: []`.
+        - ai도 입력을 검증한다(ops-api가 먼저 걸러도 같다): 날짜 형식 오류, `from > to`, 기간 31일 초과, `limit` 범위 밖은 400.
+        - `ai_db`를 쓸 수 없으면(연결 안 됨·연결 실패·조회 3초 초과) 503 — ops-api는 이를 503으로 돌려주고 화면은 「통계 없음」으로 보인다.
+      x-caller: [ops-api]
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: 시작 날짜(KST, 포함). 생략하면 `to`의 6일 전
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: 끝 날짜(KST, 포함). 생략하면 오늘(KST)
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: "`top`에 담을 요약 수"
+      responses:
+        "200":
+          description: 기간 통계. `from`·`to`는 기본값을 채운 뒤 실제로 적용한 기간
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UnmetDemandStats" }
+              examples:
+                week:
+                  summary: 최근 7일 — 요약이 없는 행 3건이 있어 top의 합(8)이 total(11)보다 작다
+                  value:
+                    from: "2026-11-18"
+                    to: "2026-11-24"
+                    total: 11
+                    byCategory:
+                      - { category: recommendation, count: 5 }
+                      - { category: action_request, count: 3 }
+                      - { category: site_feature, count: 2 }
+                      - { category: unknown, count: 1 }
+                    top:
+                      - { category: recommendation, reason: "조건 없이 볼 만한 영화를 추천해 달라는 요청", count: 2 }
+                      - { category: action_request, reason: "예매 취소를 채팅으로 해 달라는 요청", count: 1 }
+                      - { category: action_request, reason: "예매한 좌석을 다른 좌석으로 바꿔 달라는 요청", count: 1 }
+                      - { category: recommendation, reason: "아이와 함께 볼 영화를 골라 달라는 요청", count: 1 }
+                      - { category: recommendation, reason: "요즘 인기 있는 영화를 알려 달라는 요청", count: 1 }
+                      - { category: site_feature, reason: "극장 주차 요금을 묻는 질문", count: 1 }
+                      - { category: site_feature, reason: "매점 메뉴와 가격을 묻는 질문", count: 1 }
+                empty:
+                  summary: 기간 안에 범위 밖 질문이 없음
+                  value:
+                    from: "2026-11-24"
+                    to: "2026-11-24"
+                    total: 0
+                    byCategory: []
+                    top: []
+        "400":
+          description: "VALIDATION_FAILED — 날짜 형식 오류, `from > to`, 기간 31일 초과, `limit` 범위 밖(`details[].field` = `from`·`to`·`limit`)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "503":
+          description: "SERVICE_UNAVAILABLE — `ai_db`를 쓸 수 없음(ai가 `ai_db`에 연결돼 있지 않거나, 연결 실패·조회 시간 초과). `details[{field: upstream, value: ai_db}]`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+components:
+  schemas:
+    ErrorResponse:
+      $ref: "../../schemas/error.v1.json"
+    UnmetDemandStats:
+      type: object
+      description: "`ops.openapi.yaml` `UnmetDemandStats`와 같은 모양(ops-api가 그대로 전달)"
+      required: [from, to, total, byCategory, top]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        total: { type: integer, minimum: 0, description: "기간 안의 범위 밖 질문 수(요약이 없는 행 포함)" }
+        byCategory:
+          type: array
+          description: 1건 이상인 분류만, `count` 내림차순
+          items:
+            type: object
+            required: [category, count]
+            properties:
+              category: { type: string, description: "`action_request`·`site_feature`·`recommendation`·`unrelated`·`unknown`(지표 `ai_unmet_demand_total`과 같은 값. 늘 수 있어 enum으로 두지 않는다)" }
+              count: { type: integer, minimum: 1 }
+        top:
+          type: array
+          maxItems: 100
+          description: 요약이 있는 행을 (category, reason) 글자 일치로 센 상위 `limit`개, `count` 내림차순
+          items:
+            type: object
+            required: [category, reason, count]
+            properties:
+              category: { type: string }
+              reason: { type: string, minLength: 1, maxLength: 120, description: "Claude가 쓴 요약(질문 원문 아님, 숫자 연속·이메일은 가려짐)" }
+              count: { type: integer, minimum: 1 }

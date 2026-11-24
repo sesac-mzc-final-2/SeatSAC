@@ -70,6 +70,15 @@ public class BookingPaymentResultApplier {
     private final Clock clock;
 
     public Applied applyApproved(Booking booking, PaymentResult payment) {
+        return applyApproved(booking, payment, true);
+    }
+
+    /**
+     * @param refundOnMiss 확정하지 못했을 때(만료) 여기서 payment 취소를 부를지. 체크아웃 saga는 {@code false} —
+     *                     saga 경로에는 booking → payment 동기 호출을 두지 않는다(D16). 예매는 만료 처리가 닫고
+     *                     환불은 payment가 해제 명령으로 맡는다. 그때는 {@link Applied#REFUND_PENDING}(확정 안 됨)을 돌려준다
+     */
+    public Applied applyApproved(Booking booking, PaymentResult payment, boolean refundOnMiss) {
         String messageKey = BookingConfirmedEvent.newMessageKey();
         String traceId = traceId();
         // 느린 일(Catalog 조회·좌석 ID 읽기)을 먼저 끝낸다
@@ -96,6 +105,11 @@ public class BookingPaymentResultApplier {
                 return Applied.ALREADY_CONFIRMED;
             }
 
+            if (!refundOnMiss) {
+                log.warn("saga 승인 뒤 확정 실패(만료) — 동기 취소 없이 만료·해제 명령에 맡긴다 bookingId={} paymentId={}",
+                    booking.getBookingId(), payment.paymentId());
+                return Applied.REFUND_PENDING;
+            }
             log.warn("승인 뒤 확정 실패(만료·취소) — 결제를 취소하고 예매를 만료로 끝낸다 bookingId={} paymentId={}",
                 booking.getBookingId(), payment.paymentId());
             // 환불을 먼저 한다. 만료로 바꾼 뒤 취소가 실패하면 「예매 없는 승인 결제」가 남는다 —

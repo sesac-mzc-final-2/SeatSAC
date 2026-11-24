@@ -1,0 +1,521 @@
+openapi: 3.1.0
+info:
+  title: seatsac ops API
+  version: "1.5"
+  description: |
+    API 명세서 v1.5 25장 (OPS-20~24 · 김종식, ADR-119·121). 관리자 대시보드가 부르는 API — 서비스 상태,
+    정지/가동, 오류 리포트, AI 범위 밖 질문 통계, 쿠폰 이벤트 생성.
+    **gateway 라우트가 아니다**: `https://{도메인}/ops/**` → CloudFront 동작 `/ops/*`(CachingDisabled) → ALB 규칙 → `ops-api:8080`.
+    gateway를 정지해도 관리자 화면이 동작해야 해서 따로 둔다. 그래서 `/api` 접두사·StripPrefix가 없고 경로를 `/ops/...` 그대로 적는다.
+    `/api/admin/**`은 계속 없다.
+    인증은 ops-api가 직접 한다 — Cognito Access Token을 JWKS·issuer·`client_id`로 검증하고(실패 401 `UNAUTHORIZED`),
+    토큰의 `cognito:groups`에 `ADMIN`이 없으면 403 `FORBIDDEN`. gateway가 붙이는 `X-User-*` 헤더는 쓰지 않는다.
+    `X-Trace-Id`는 받으면 그대로 쓰고 없으면 32자리를 만든다(응답 헤더에도).
+    모든 쓰기 조작(정지·가동·쿠폰 이벤트 생성)은 감사 로그 한 줄(`ops audit`: userId·action·target·result)을 남긴다.
+    오류 형식은 `contracts/schemas/error.v1.json` 그대로이고, 코드 3개(`SERVICE_NOT_STOPPABLE`·`ROLLOUT_IN_PROGRESS`·`REPORT_UNAVAILABLE`)는
+    `services/ops-api` 안에서 정의한다(`docs/conventions.md` 6장).
+servers:
+  - url: /
+security: []   # 기본 인증 없음. 모든 operation이 security: [ { bearerAuth: [] } ] (ADMIN 그룹)
+tags:
+  - { name: services, description: "서비스 상태 · 정지/가동 (OPS-20·21)" }
+  - { name: reports, description: "일자별 오류 리포트 (OPS-22)" }
+  - { name: ai, description: "AI 범위 밖 질문 통계 (OPS-23)" }
+  - { name: coupons, description: "쿠폰 이벤트 생성 (OPS-24)" }
+
+paths:
+
+  /ops/services:
+    get:
+      tags: [services]
+      operationId: listServices
+      summary: OPS-20 서비스·노드 상태
+      x-feature-id: OPS-20
+      description: |
+        정해 둔 PromQL(`cinema:service_state`, HPA 현재·최대, 노드 CPU·메모리)과 Kubernetes API 읽기만으로 만든다.
+        사용자 입력을 쿼리에 넣지 않는다. 화면은 5초마다 다시 부른다.
+        Prometheus를 읽지 못하면 오류로 끝내지 않고 지표 칸(`state`·`cpuPercent`·`memoryPercent`)을 null로 준다 —
+        Kubernetes API까지 읽지 못할 때만 503.
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200":
+          description: 서비스·노드 상태
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceStatusList" }
+              examples:
+                bookingStopped:
+                  summary: booking을 정지한 상태
+                  value:
+                    items:
+                      - service: gateway
+                        kind: ROLLOUT
+                        desired: 2
+                        ready: 2
+                        state: 0
+                        hpa: null
+                        stopped: false
+                      - service: booking
+                        kind: ROLLOUT
+                        desired: 0
+                        ready: 0
+                        state: null
+                        hpa: { min: 2, max: 4, current: 0, cpuPercent: null }
+                        stopped: true
+                      - service: catalog
+                        kind: DEPLOYMENT
+                        desired: 2
+                        ready: 2
+                        state: 1
+                        hpa: { min: 2, max: 4, current: 2, cpuPercent: 41 }
+                        stopped: false
+                    nodes:
+                      - name: ip-10-0-11-23.ap-northeast-2.compute.internal
+                        zone: ap-northeast-2a
+                        cpuPercent: 37
+                        memoryPercent: 62
+                        capacityType: ON_DEMAND
+                    asOf: "2026-11-24T14:00:05+09:00"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /ops/services/{service}/stop:
+    post:
+      tags: [services]
+      operationId: stopService
+      summary: OPS-21 서비스 정지 (replicas 0)
+      x-feature-id: OPS-21
+      description: |
+        `deployments/scale`·`rollouts/scale`을 0으로 patch한다. 정지 전 replicas는 기억해 두었다가 `start`가 되돌린다.
+        이미 정지된 서비스에 다시 보내도 202(같은 응답, 멱등). replicas가 0이면 HPA는 멈춘다.
+        Git과 다른 replicas는 의도된 GitOps 예외다(ADR-119, 서비스 Application `ignoreDifferences: /spec/replicas`).
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - { $ref: "#/components/parameters/Service" }
+      responses:
+        "202":
+          description: 정지 요청을 받음. 파드가 실제로 내려가는 것은 `GET /ops/services`의 `ready`로 본다
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScaleResult" }
+              examples:
+                stopped:
+                  value: { service: booking, desired: 0 }
+        "400": { $ref: "#/components/responses/ServiceNotStoppable" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/RolloutInProgress" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /ops/services/{service}/start:
+    post:
+      tags: [services]
+      operationId: startService
+      summary: OPS-21 서비스 가동 (정지 전 replicas로)
+      x-feature-id: OPS-21
+      description: |
+        정지 전 값으로 되돌린다. 기억해 둔 값이 없으면(ops-api가 정지한 적 없음) Git 값으로 맞춘다.
+        이미 가동 중이면 바꾸지 않고 지금 값으로 202(멱등).
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - { $ref: "#/components/parameters/Service" }
+      responses:
+        "202":
+          description: 가동 요청을 받음
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScaleResult" }
+              examples:
+                started:
+                  value: { service: booking, desired: 2 }
+        "400": { $ref: "#/components/responses/ServiceNotStoppable" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/RolloutInProgress" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /ops/reports/errors/dates:
+    get:
+      tags: [reports]
+      operationId: listErrorReportDates
+      summary: OPS-22 리포트가 있는 날짜
+      x-feature-id: OPS-22
+      description: 리포트 버킷의 S3 파티션(`errors/dt=`)에 있는 날짜. 화면 드롭다운용, 최근 날짜가 먼저
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200":
+          description: 날짜 목록(KST)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportDateList" }
+              examples:
+                dates:
+                  value: { items: ["2026-11-24", "2026-11-23"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ReportUnavailable" }
+
+  /ops/reports/errors:
+    get:
+      tags: [reports]
+      operationId: requestErrorReport
+      summary: OPS-22 일자별 오류 리포트 만들기
+      x-feature-id: OPS-22
+      description: |
+        Athena 쿼리를 시작하고 **202** `{queryId, state: RUNNING}`을 준다. 화면은 `GET /ops/reports/errors/{queryId}`를 다시 부른다.
+        같은 날짜의 결과가 1시간 안에 있으면 쿼리를 다시 돌리지 않고 **200** `{downloadUrl, rowCount, generatedAt}`을 바로 준다.
+        GET이지만 Athena 쿼리를 시작하므로 감사 로그(`action: report`)를 남긴다.
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          description: 리포트 날짜(KST, `YYYY-MM-DD`). `GET /ops/reports/errors/dates`에 있는 값
+      responses:
+        "200":
+          description: 캐시된 결과(1시간)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportReady" }
+              examples:
+                cached:
+                  value:
+                    downloadUrl: "https://reports.example.invalid/errors/2026-11-24.csv?signature=example"
+                    rowCount: 128
+                    generatedAt: "2026-11-24T14:02:11+09:00"
+        "202":
+          description: 쿼리를 시작함
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportQueryStarted" }
+              examples:
+                running:
+                  value: { queryId: "0b6f6a3e-5a53-4c2f-9d58-3f1f0f2a7c11", state: RUNNING }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ReportUnavailable" }
+
+  /ops/reports/errors/{queryId}:
+    get:
+      tags: [reports]
+      operationId: getErrorReport
+      summary: OPS-22 리포트 쿼리 상태·내려받기 주소
+      x-feature-id: OPS-22
+      description: |
+        `SUCCEEDED`면 `downloadUrl`(S3 presigned, **5분**)과 `rowCount`가 있다. 주소가 만료되면 이 API를 다시 불러 새 주소를 받는다.
+        CSV 열: `timestamp, service, level, errorCategory, status, path, traceId, message` — IP·토큰·질문 원문은 없다.
+        쿼리가 `FAILED`여도 이 조회는 200이다(`state`로 구분).
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: queryId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+          description: "`GET /ops/reports/errors`가 준 `queryId`"
+      responses:
+        "200":
+          description: 쿼리 상태
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportQueryStatus" }
+              examples:
+                running:
+                  value: { state: RUNNING }
+                succeeded:
+                  value:
+                    state: SUCCEEDED
+                    downloadUrl: "https://reports.example.invalid/errors/2026-11-24.csv?signature=example"
+                    rowCount: 128
+                failed:
+                  value: { state: FAILED }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/ReportUnavailable" }
+
+  /ops/ai/unmet-demand:
+    get:
+      tags: [ai]
+      operationId: getUnmetDemandStats
+      summary: OPS-23 AI 범위 밖 질문 통계
+      x-feature-id: OPS-23
+      description: |
+        ai 내부 API `GET /internal/ai/unmet-demand/stats`(명세서 24장, `ai.internal.openapi.yaml`)의 결과를 **그대로** 돌려준다.
+        화면은 분류별 막대와 요약 상위 N을 그린다. 질문 원문은 없다(분류·Claude가 쓴 120자 이하 요약·횟수만).
+        ai를 부르지 못하면(연결 1초·응답 3초, 재시도 없음) 503 — 화면은 「통계 없음」으로 보인다.
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: 시작 날짜(KST, 포함). 생략하면 `to`의 6일 전
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: 끝 날짜(KST, 포함). 생략하면 오늘
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+          description: "`top`에 담을 요약 수"
+      responses:
+        "200":
+          description: 기간 통계
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UnmetDemandStats" }
+              examples:
+                week:
+                  value:
+                    from: "2026-11-18"
+                    to: "2026-11-24"
+                    total: 42
+                    byCategory:
+                      - { category: recommendation, count: 19 }
+                      - { category: action_request, count: 14 }
+                      - { category: site_feature, count: 9 }
+                    top:
+                      - { category: recommendation, reason: "조건 없이 볼 만한 영화를 추천해 달라는 요청", count: 11 }
+                      - { category: action_request, reason: "예매 취소를 채팅으로 해 달라는 요청", count: 8 }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /ops/coupons/events:
+    post:
+      tags: [coupons]
+      operationId: createCouponEvent
+      summary: OPS-24 쿠폰 이벤트 생성 (시연 준비)
+      x-feature-id: OPS-24
+      description: |
+        coupon 내부 API `POST /internal/coupon-events`(명세서 22-3, `coupon.internal.openapi.yaml`)로 그대로 넘기고 결과를 돌려준다.
+        검증(시각·수량·할인율)과 Valkey 재고 키 생성은 coupon이 한다 — coupon의 400은 그대로 400으로 전달한다.
+        coupon을 부르지 못하면(연결 1초·응답 3초, 재시도 없음) 503. `Idempotency-Key`는 받지 않는다 — 503 뒤에는
+        이벤트가 만들어졌는지 관리자 화면 목록에서 확인하고 다시 보낸다.
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CouponEventCreateRequest" }
+            examples:
+              vipHalf:
+                value:
+                  title: VIP 선착순 50% 할인
+                  discountRate: 50
+                  startsAt: "2026-11-27T14:00:00+09:00"
+                  durationMinutes: 60
+                  totalQuantity: 100
+                  eligibleGrade: VIP
+      responses:
+        "201":
+          description: 만들어짐
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CouponEvent" }
+              examples:
+                created:
+                  value:
+                    eventId: 3
+                    title: VIP 선착순 50% 할인
+                    discountRate: 50
+                    startsAt: "2026-11-27T14:00:00+09:00"
+                    endsAt: "2026-11-27T15:00:00+09:00"
+                    totalQuantity: 100
+                    eligibleGrade: VIP
+                    state: UPCOMING
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT   # Cognito Access Token (ID 토큰 아님). ops-api가 직접 검증하고 cognito:groups에 ADMIN이 있는지 본다
+
+  parameters:
+    Service:
+      name: service
+      in: path
+      required: true
+      schema: { type: string, maxLength: 32 }
+      description: |
+        서비스 이름(K8s 리소스 이름). 정지/가동 대상은 `gateway`·`catalog`·`booking`·`user`·`payment`·`coupon`·`ai`.
+        그 밖의 값(`ops-api` 자신 포함)은 400 `SERVICE_NOT_STOPPABLE` — 대상이 늘 수 있어 enum으로 두지 않는다
+
+  responses:
+    ValidationFailed:
+      description: "VALIDATION_FAILED — details[]에 { field, reason }"
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    ServiceNotStoppable:
+      description: "SERVICE_NOT_STOPPABLE — 정지/가동 대상이 아님(`ops-api` 자신·모르는 이름). details[{ field: service, value }]"
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Unauthorized:
+      description: UNAUTHORIZED (ops-api) — 토큰 없음(reason TOKEN_REQUIRED)·만료·서명·issuer·client_id 불일치(reason INVALID_TOKEN)
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    Forbidden:
+      description: FORBIDDEN (ops-api) — 토큰은 유효하지만 `cognito:groups`에 `ADMIN`이 없음. 그룹 지정 뒤에는 토큰을 새로 받아야 반영된다
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    NotFound:
+      description: NOT_FOUND — 모르는 `queryId`
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    RolloutInProgress:
+      description: ROLLOUT_IN_PROGRESS — booking·gateway 블루/그린이 진행 중이라 replicas를 바꾸지 않음. 전환이 끝난 뒤 다시 시도
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    ReportUnavailable:
+      description: REPORT_UNAVAILABLE — Athena·S3 오류. 다시 시도하면 될 수 있다
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    ServiceUnavailable:
+      description: "SERVICE_UNAVAILABLE — Kubernetes API 또는 하위 서비스(ai·coupon)를 부르지 못함. details[{ field: upstream, value, reason }]"
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  schemas:
+    ErrorResponse:
+      $ref: "../schemas/error.v1.json"
+
+    ServiceStatus:
+      type: object
+      required: [service, kind, desired, ready, state, hpa, stopped]
+      properties:
+        service: { type: string, description: "서비스 이름(`gateway`·`catalog`·`booking`·`user`·`payment`·`coupon`·`ai`·`ops-api`)" }
+        kind:
+          type: string
+          enum: [ROLLOUT, DEPLOYMENT]
+          description: ROLLOUT 블루/그린(booking·gateway) · DEPLOYMENT 롤링
+        desired: { type: integer, minimum: 0, description: "지금 `spec.replicas`" }
+        ready: { type: integer, minimum: 0, description: "Ready 파드 수" }
+        state:
+          type: [integer, "null"]
+          enum: [0, 1, 2, null]
+          description: 신호등 `cinema:service_state` — 0 정상 · 1 주의 · 2 장애. 트래픽이 없거나 Prometheus를 읽지 못하면 null
+        hpa:
+          oneOf:
+            - { $ref: "#/components/schemas/HpaStatus" }
+            - { type: "null" }
+          description: HPA가 없는 서비스는 null
+        stopped: { type: boolean, description: "ops-api가 정지해 둔 상태(`desired` 0이고 정지 전 값을 기억하고 있음)" }
+
+    HpaStatus:
+      type: object
+      required: [min, max, current, cpuPercent]
+      properties:
+        min: { type: integer, minimum: 0 }
+        max: { type: integer, minimum: 0 }
+        current: { type: integer, minimum: 0, description: "HPA가 본 현재 replicas" }
+        cpuPercent: { type: [integer, "null"], minimum: 0, description: "requests 대비 평균 CPU(%). 파드가 없거나 지표가 없으면 null" }
+
+    NodeStatus:
+      type: object
+      required: [name, zone, cpuPercent, memoryPercent, capacityType]
+      properties:
+        name: { type: string }
+        zone: { type: string, description: "`topology.kubernetes.io/zone`" }
+        cpuPercent: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        memoryPercent: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        capacityType:
+          type: string
+          enum: [ON_DEMAND, SPOT]
+          description: 노드 라벨의 구매 방식
+
+    ServiceStatusList:
+      type: object
+      required: [items, nodes, asOf]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ServiceStatus" } }
+        nodes: { type: array, items: { $ref: "#/components/schemas/NodeStatus" } }
+        asOf: { type: string, format: date-time, description: "조회 시각(`+09:00`)" }
+
+    ScaleResult:
+      type: object
+      required: [service, desired]
+      properties:
+        service: { type: string }
+        desired: { type: integer, minimum: 0, description: "patch한 뒤의 `spec.replicas`(정지는 0)" }
+
+    ReportDateList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { type: string, format: date } }
+
+    ReportQueryStarted:
+      type: object
+      required: [queryId, state]
+      properties:
+        queryId: { type: string, maxLength: 128 }
+        state: { type: string, enum: [RUNNING] }
+
+    ReportReady:
+      type: object
+      required: [downloadUrl, rowCount, generatedAt]
+      properties:
+        downloadUrl: { type: string, format: uri, description: "S3 presigned URL(5분). 로그·감사 로그에 남기지 않는다" }
+        rowCount: { type: integer, minimum: 0 }
+        generatedAt: { type: string, format: date-time, description: "쿼리가 끝난 시각(`+09:00`)" }
+
+    ReportQueryStatus:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [RUNNING, SUCCEEDED, FAILED] }
+        downloadUrl: { type: string, format: uri, description: "`SUCCEEDED`일 때만. S3 presigned URL(5분)" }
+        rowCount: { type: integer, minimum: 0, description: "`SUCCEEDED`일 때만" }
+
+    UnmetDemandStats:
+      type: object
+      required: [from, to, total, byCategory, top]
+      properties:
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        total: { type: integer, minimum: 0 }
+        byCategory:
+          type: array
+          items:
+            type: object
+            required: [category, count]
+            properties:
+              category: { type: string, description: "`action_request`·`site_feature`·`recommendation`·`unrelated`·`unknown`(지표 `ai_unmet_demand_total`과 같은 값. 늘 수 있어 enum으로 두지 않는다)" }
+              count: { type: integer, minimum: 0 }
+        top:
+          type: array
+          items:
+            type: object
+            required: [category, reason, count]
+            properties:
+              category: { type: string }
+              reason: { type: string, maxLength: 120, description: "Claude가 쓴 요약(질문 원문 아님, 숫자 연속·이메일은 가려짐)" }
+              count: { type: integer, minimum: 0 }
+
+    CouponEventCreateRequest:
+      type: object
+      required: [title, discountRate, startsAt, totalQuantity]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 100 }
+        discountRate: { type: integer, minimum: 1, maximum: 100, description: "할인율(%)" }
+        startsAt: { type: string, format: date-time, description: "시작 시각(`+09:00`)" }
+        durationMinutes: { type: integer, minimum: 1, default: 60, description: "진행 시간(분). 종료 = 시작 + 이 값" }
+        totalQuantity: { type: integer, minimum: 1, description: "선착순 수량" }
+        eligibleGrade: { type: string, enum: [VIP], default: VIP, description: "발급 대상 등급" }
+
+    CouponEvent:
+      type: object
+      description: coupon 내부 API 응답 그대로. `eventId`만 필수로 두고 나머지는 `coupon.internal.openapi.yaml`이 들어오면 맞춘다(필수 추가는 응답이라 하위 호환)
+      required: [eventId]
+      properties:
+        eventId: { type: integer, format: int64 }
+        title: { type: string }
+        discountRate: { type: integer }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        totalQuantity: { type: integer }
+        eligibleGrade: { type: string }
+        state: { type: string, enum: [UPCOMING, OPEN, CLOSED] }

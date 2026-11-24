@@ -1,0 +1,26 @@
+{
+  "eventId": "7c8d9e0f-1a2b-4d3e-9f40-e7f8a9b0c1d2",
+  "type": "screening.changed",
+  "version": 1,
+  "occurredAt": "2026-11-24T10:00:00+09:00",
+  "producer": "catalog",
+  "traceId": "9c3e1a2d4f6b48c0d5e7f9a1b3c4d5e6",
+  "payload": {
+    "screeningId": 5123,
+    "version": 2,
+    "deleted": false,
+    "changedAt": "2026-11-24T10:00:00+09:00",
+    "movieId": 17,
+    "theaterId": 1004,
+    "theaterName": "예시 극장",
+    "auditoriumId": 100403,
+    "auditoriumName": "3관",
+    "screenType": "NORMAL",
+    "layoutVersion": 1,
+    "businessDate": "2026-11-27",
+    "startsAt": "2026-11-27T20:00:00+09:00",
+    "endsAt": "2026-11-27T22:10:00+09:00",
+    "filmFormat": "2D",
+    "totalSeats": 172
+  }
+}

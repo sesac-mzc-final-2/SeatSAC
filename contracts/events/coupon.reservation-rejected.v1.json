@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/coupon.reservation-rejected.v1.json",
+  "title": "CouponReservationRejected",
+  "description": "SQS cinema-staging-booking-replies. coupon → booking(체크아웃 saga). 메시지 속성 type·traceId·correlationId. coupon은 결과를 같은 트랜잭션의 outbox_message에 넣고 릴레이(1초)가 보낸다. booking은 processed_message(eventId)로 한 번만, checkout_saga 상태를 조건으로 건 UPDATE로 반영한다(늦은 결과는 0행 → 무시). 쿠폰 예약 거절 — booking은 보상 없이 체크아웃 COUPON_REJECTED(failure.code COUPON_NOT_USABLE, failure.reason = 이 reason)로 끝낸다. 예매·좌석·선점 만료 시각은 그대로라 사용자가 다른 쿠폰이나 쿠폰 없이 다시 시작한다.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행마다 새 UUID. 재전송해도 같은 값(소비자 inbox processed_message가 중복 제거). 같은 명령을 다시 보낼 때(재시도)는 새 행·새 eventId"
+    },
+    "type": {
+      "type": "string",
+      "const": "coupon.reservation-rejected"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "coupon"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕·릴레이)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "체크아웃 saga ID(checkoutId). SQS 메시지 속성 correlationId와 같은 값"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "checkoutId",
+        "couponIssueId",
+        "reason"
+      ],
+      "properties": {
+        "checkoutId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "= correlationId"
+        },
+        "couponIssueId": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "명령의 couponIssueId 그대로(coupon에 없는 값일 수 있어 uuid 형식을 강제하지 않는다)"
+        },
+        "reason": {
+          "type": "string",
+          "x-extensible-enum": [
+            "NOT_OWNER",
+            "NOT_ISSUED",
+            "EXPIRED",
+            "ALREADY_RELEASED"
+          ],
+          "description": "NOT_OWNER 다른 사람 쿠폰 또는 없는 쿠폰 · NOT_ISSUED 이미 사용·예약 중(다른 체크아웃과 동시 예약이면 하나만 성공) · EXPIRED 이벤트 종료 · ALREADY_RELEASED 이 체크아웃의 반환이 먼저 도착함(순서 역전). 열린 집합 — booking은 모두 COUPON_NOT_USABLE로 보인다"
+        },
+        "bookingId": {
+          "type": "integer",
+          "description": "예매 ID(로그·추적용)"
+        }
+      }
+    }
+  }
+}

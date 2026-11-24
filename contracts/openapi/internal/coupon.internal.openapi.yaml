@@ -1,0 +1,154 @@
+openapi: 3.1.0
+info:
+  title: seatsac coupon internal API
+  version: "1.5"
+  description: |
+    API 명세서 v1.5 22-3 (MSA 고도화 6.3.2, ADR-118·119). 외부 비노출, 호출자는 ops-api만(NetworkPolicy ops-api → coupon 8080).
+    관리자 화면 `POST /ops/coupons/events`(ops.openapi.yaml OPS-24)가 이 API를 그대로 부르고 결과를 돌려준다 — 요청·응답 모양이 같다.
+    ops-api가 ADMIN 그룹을 확인하므로 coupon은 사용자 인증을 하지 않는다(X-User-Id는 감사 로그용으로만 받으면 남긴다).
+    오류 code는 공통 코드, 세부는 details[].reason.
+servers:
+  - url: http://coupon:8080
+security: []   # 내부 API: 사용자 인증 없음. 호출자는 NetworkPolicy로 제한
+
+paths:
+  /internal/coupon-events:
+    post:
+      operationId: createCouponEvent
+      summary: 쿠폰 이벤트 생성 (시연 준비, 호출자 ops-api만)
+      x-caller: [ops-api]
+      description: |
+        `coupon_event` 행을 만들고 같은 트랜잭션 커밋 뒤 Valkey `SET coupon:stock:{eventId} {totalQuantity} NX`(TTL = 종료 + 1일).
+        재고 키를 만들지 못해도(Valkey 장애) 이벤트는 만들어진다 — 첫 claim이 `totalQuantity − 발급 수`로 다시 만든다(data-model 7-2).
+        종료 = `startsAt + durationMinutes`. 받은 쿠폰의 `expiresAt`도 이 종료 시각이다.
+        검증(400 VALIDATION_FAILED, details[].reason):
+          `STARTS_IN_PAST` — `startsAt`이 지금보다 1분 넘게 이전(바로 시작하려면 지금 시각을 보낸다) ·
+          `EVENT_OVERLAP` — 기간이 아직 끝나지 않은 다른 이벤트와 겹침(`GET /coupons/events/current`·지표 `coupon_stock_remaining`이 진행 중 이벤트 1개를 전제로 한다) ·
+          범위 밖 값(`discountRate` 1~99, `totalQuantity` 1~10000, `durationMinutes` 1~1440, `title` 1~100자).
+        `Idempotency-Key`는 받지 않는다 — 응답을 못 받았으면 `GET /internal/coupon-events`로 만들어졌는지 확인한 뒤 다시 보낸다(겹치면 EVENT_OVERLAP으로 막힌다).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CouponEventCreateRequest" }
+            example:
+              title: VIP 선착순 50% 할인
+              discountRate: 50
+              startsAt: "2026-11-27T14:00:00+09:00"
+              durationMinutes: 60
+              totalQuantity: 100
+              eligibleGrade: VIP
+      responses:
+        "201":
+          description: 만들어짐
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CouponEvent" }
+              example:
+                eventId: 3
+                title: VIP 선착순 50% 할인
+                discountRate: 50
+                startsAt: "2026-11-27T14:00:00+09:00"
+                endsAt: "2026-11-27T15:00:00+09:00"
+                totalQuantity: 100
+                issuedQuantity: 0
+                remainingQuantity: 100
+                eligibleGrade: VIP
+                state: UPCOMING
+                createdAt: "2026-11-27T13:40:00+09:00"
+        "400":
+          description: VALIDATION_FAILED — details[]에 { field, value?, reason } (STARTS_IN_PAST·EVENT_OVERLAP·범위 밖)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                code: VALIDATION_FAILED
+                message: 다른 이벤트와 기간이 겹칩니다
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+                details: [ { field: startsAt, value: "2026-11-27T14:30:00+09:00", reason: EVENT_OVERLAP } ]
+        "503":
+          description: SERVICE_UNAVAILABLE — coupon DB 응답 없음(이벤트 안 만들어짐)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+    get:
+      operationId: listCouponEvents
+      summary: 쿠폰 이벤트 목록 (관리자 화면, 호출자 ops-api만)
+      x-caller: [ops-api]
+      description: |
+        `startsAt` 내림차순, 최근 50개까지(시연용 — 페이징 없음). `state`를 주면 그 상태만(서버 시각으로 계산한 값 기준).
+        `issuedQuantity`는 DB 발급 수(정확), `remainingQuantity`는 Valkey 재고 키 값(키가 없으면 `totalQuantity − issuedQuantity`, 음수는 0).
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/CouponEventState" }
+      responses:
+        "200":
+          description: OK. 없으면 items []
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CouponEventList" }
+              example:
+                items:
+                  - eventId: 3
+                    title: VIP 선착순 50% 할인
+                    discountRate: 50
+                    startsAt: "2026-11-27T14:00:00+09:00"
+                    endsAt: "2026-11-27T15:00:00+09:00"
+                    totalQuantity: 100
+                    issuedQuantity: 64
+                    remainingQuantity: 36
+                    eligibleGrade: VIP
+                    state: OPEN
+                    createdAt: "2026-11-27T13:40:00+09:00"
+        "400":
+          description: VALIDATION_FAILED — state 값 오류
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "503":
+          description: SERVICE_UNAVAILABLE — coupon DB 응답 없음
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+components:
+  schemas:
+    ErrorResponse:
+      $ref: "../../schemas/error.v1.json"
+
+    CouponEventState:
+      type: string
+      enum: [UPCOMING, OPEN, CLOSED]
+      description: "서버 시각으로 계산. UPCOMING now < startsAt · OPEN startsAt ≤ now < endsAt · CLOSED endsAt ≤ now"
+
+    CouponEventCreateRequest:
+      type: object
+      required: [title, discountRate, startsAt, totalQuantity]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 100 }
+        discountRate: { type: integer, minimum: 1, maximum: 99, description: "할인율(%). 상한 99 — 결제 금액은 1원 이상(booking `amount.final`)" }
+        startsAt: { type: string, format: date-time, description: "시작 시각(`+09:00`). 지금보다 1분 넘게 이전이면 400 STARTS_IN_PAST" }
+        durationMinutes: { type: integer, minimum: 1, maximum: 1440, default: 60, description: "진행 시간(분). 종료 = 시작 + 이 값" }
+        totalQuantity: { type: integer, minimum: 1, maximum: 10000, description: "선착순 수량" }
+        eligibleGrade: { type: string, enum: [VIP], default: VIP, description: "발급 대상 등급" }
+
+    CouponEvent:
+      type: object
+      required: [eventId, title, discountRate, startsAt, endsAt, totalQuantity, issuedQuantity, remainingQuantity, eligibleGrade, state, createdAt]
+      properties:
+        eventId: { type: integer, format: int64 }
+        title: { type: string }
+        discountRate: { type: integer, minimum: 1, maximum: 99 }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        totalQuantity: { type: integer, minimum: 1 }
+        issuedQuantity: { type: integer, minimum: 0, description: "DB 발급 수(coupon_issue 행 수)" }
+        remainingQuantity: { type: integer, minimum: 0, description: "Valkey 재고 키 값(표시용)" }
+        eligibleGrade: { type: string, x-extensible-enum: [VIP] }
+        state: { $ref: "#/components/schemas/CouponEventState" }
+        createdAt: { type: string, format: date-time }
+
+    CouponEventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CouponEvent" }

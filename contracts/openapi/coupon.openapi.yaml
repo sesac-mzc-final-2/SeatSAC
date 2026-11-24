@@ -1,0 +1,283 @@
+openapi: 3.1.0
+info:
+  title: seatsac coupon API
+  version: "1.5"
+  description: |
+    API 명세서 v1.5 22-1·22-2 (CPN-01~03, MSA 고도화 6.3.2, ADR-118). 외부 호출은 `/api` 접두사, Gateway 라우트 `/api/coupons/**` → coupon(USER).
+    VIP 선착순 쿠폰. 등급은 Gateway가 토큰 `cognito:groups`로 만든 `X-User-Grade`(`NORMAL`·`VIP`)를 그대로 믿는다 — 외부에서 보낸 값은 Gateway가 지운다.
+    VIP 지정은 토큰을 새로 받아야 반영된다(Access Token 1시간 — 시연 준비는 지정 → 로그아웃·재로그인).
+    발급 판정 순서: 등급(403) → 이벤트 시각(409 COUPON_EVENT_NOT_OPEN) → Valkey `DECR coupon:stock:{eventId}`(음수면 `INCR`로 되돌리고 409 COUPON_SOLD_OUT)
+    → DB `coupon_issue` INSERT(UK event_id·user_id, 중복이면 재고를 되돌리고 409 COUPON_ALREADY_CLAIMED). 1인 1매의 최종 방어선은 DB UK.
+    쿠폰 하나는 한 이벤트에서 받은 할인권 한 장이다. 할인은 체크아웃(booking `POST /bookings/{id}/checkout`의 `couponIssueId`) 때 saga 명령으로
+    예약(RESERVED) → 결제 승인 뒤 사용(USED)·실패면 반환(ISSUED). 금액은 `final = original − floor(original × discountRate / 100)`(원 단위 내림, booking이 계산).
+    이벤트는 관리자만 만든다(ops-api → `POST /internal/coupon-events`, `internal/coupon.internal.openapi.yaml`).
+    Gateway 전역 응답 타임아웃 15초, Gateway 재시도 없음. claim 재시도는 사용자가 같은 `Idempotency-Key`로.
+servers:
+  - url: /api
+security: []   # 기본 인증 없음. 인증이 필요한 operation에 security: [ { bearerAuth: [] } ]
+tags:
+  - { name: events, description: "쿠폰 이벤트 조회·발급 (CPN-01·02)" }
+  - { name: my-coupons, description: "내 쿠폰 (CPN-03)" }
+
+paths:
+
+  /coupons/events/current:
+    get:
+      tags: [events]
+      operationId: getCurrentCouponEvent
+      summary: CPN-01 지금 보여 줄 쿠폰 이벤트 (진행 중, 없으면 가장 가까운 진행 예정)
+      x-feature-id: CPN-01
+      description: |
+        진행 중(OPEN) 이벤트가 있으면 그것을, 없으면 시작 시각이 가장 가까운 진행 예정(UPCOMING) 이벤트를 돌려준다.
+        둘 다 없으면 404(종료된 이벤트만 있을 때도 404 — 화면은 배너를 숨긴다).
+        **NORMAL 사용자도 200**이다. 화면은 `eligibleGrade`와 `GET /users/me`의 `grade`를 비교해 「VIP 전용」 안내를 띄우고, 최종 판정은 claim이 한다.
+        `state`는 서버 시각으로 계산한다(`startsAt ≤ now < endsAt`이면 OPEN). 화면 카운트다운은 `startsAt`·`endsAt`을 기준으로 하고,
+        시각이 되면 이 API를 다시 불러 `state`를 확인한다.
+        `remainingQuantity`는 Valkey 재고 키 값이라 몰릴 때 몇 장 차이가 날 수 있다(표시용, 음수는 0으로). 키가 없으면 `totalQuantity − 발급 수`로 계산해 준다.
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CurrentCouponEvent" }
+              examples:
+                openNotClaimed:
+                  summary: 진행 중, 아직 안 받음
+                  value:
+                    eventId: 3
+                    title: VIP 선착순 50% 할인
+                    discountRate: 50
+                    startsAt: "2026-11-27T14:00:00+09:00"
+                    endsAt: "2026-11-27T15:00:00+09:00"
+                    totalQuantity: 100
+                    remainingQuantity: 37
+                    eligibleGrade: VIP
+                    state: OPEN
+                    myIssue: null
+                openClaimed:
+                  summary: 진행 중, 이미 받음
+                  value:
+                    eventId: 3
+                    title: VIP 선착순 50% 할인
+                    discountRate: 50
+                    startsAt: "2026-11-27T14:00:00+09:00"
+                    endsAt: "2026-11-27T15:00:00+09:00"
+                    totalQuantity: 100
+                    remainingQuantity: 36
+                    eligibleGrade: VIP
+                    state: OPEN
+                    myIssue: { couponIssueId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", state: ISSUED }
+                upcoming:
+                  summary: 진행 예정 (카운트다운)
+                  value:
+                    eventId: 4
+                    title: VIP 선착순 30% 할인
+                    discountRate: 30
+                    startsAt: "2026-11-27T16:00:00+09:00"
+                    endsAt: "2026-11-27T17:00:00+09:00"
+                    totalQuantity: 100
+                    remainingQuantity: 100
+                    eligibleGrade: VIP
+                    state: UPCOMING
+                    myIssue: null
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: NOT_FOUND — 진행 중·진행 예정 이벤트 없음
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /coupons/events/{eventId}/claim:
+    post:
+      tags: [events]
+      operationId: claimCoupon
+      summary: CPN-02 선착순 쿠폰 받기 (VIP만, 1인 1매)
+      x-feature-id: CPN-02
+      description: |
+        요청 본문 없음. `Idempotency-Key` 필수 — Valkey `coupon:idem:{userId}:{Idempotency-Key}` 24시간(`APP_COUPON_IDEMPOTENCY_TTL`)에
+        요청 해시(eventId) + 처리 상태 + 첫 응답을 둔다(booking `idem:`과 같은 방식).
+        같은 키·같은 eventId 재요청은 첫 응답(201 또는 409)을 그대로 재생하고, 같은 키에 다른 eventId면 409 IDEMPOTENCY_KEY_CONFLICT,
+        첫 요청이 아직 처리 중이면 409 IDEMPOTENCY_IN_PROGRESS(화면은 잠시 뒤 같은 키로 재시도).
+        **다른 키**로 다시 보내면 DB UK 때문에 409 COUPON_ALREADY_CLAIMED(`details[{field: couponIssueId, value: 이미 받은 ID}]`) — 화면은 「이미 받았어요」로 보이고 내 쿠폰을 다시 읽는다.
+        재고 되돌림(`INCR`)은 `DECR`이 성공한 뒤 결과가 음수이거나 DB INSERT가 실패한 경우만. `DECR` 결과를 모르면 되돌리지 않는다(초과 발급 대신 덜 발급, data-model 7-2).
+        지표 `coupon_claim_total{result=issued|sold_out|not_eligible|duplicate|closed}`.
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - $ref: "#/components/parameters/IdempotencyKeyRequired"
+      responses:
+        "201":
+          description: 발급됨 — 같은 Idempotency-Key 재요청도 같은 201
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CouponIssue" }
+              example:
+                couponIssueId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+                eventId: 3
+                title: VIP 선착순 50% 할인
+                discountRate: 50
+                state: ISSUED
+                expiresAt: "2026-11-27T15:00:00+09:00"
+        "400":
+          description: VALIDATION_FAILED — Idempotency-Key 없음·uuid 형식 아님, eventId 형식 오류
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "COUPON_NOT_ELIGIBLE — VIP가 아님. details[{ field: grade, value: NORMAL }]. 재고·DB를 건드리지 않는다"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              example:
+                code: COUPON_NOT_ELIGIBLE
+                message: VIP 등급만 받을 수 있습니다
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+                details: [ { field: grade, value: NORMAL } ]
+        "404":
+          description: NOT_FOUND — 없는 eventId
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+        "409":
+          description: |
+            COUPON_EVENT_NOT_OPEN — 시작 전·종료 뒤(details[{ field: eventId, value, reason: UPCOMING | CLOSED }]) ·
+            COUPON_SOLD_OUT — 선착순 수량 소진 ·
+            COUPON_ALREADY_CLAIMED — 이 이벤트에서 이미 받음(details[{ field: couponIssueId, value: 이미 받은 ID }]) ·
+            IDEMPOTENCY_KEY_CONFLICT — 같은 키에 다른 eventId ·
+            IDEMPOTENCY_IN_PROGRESS — 같은 키의 첫 요청이 처리 중
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+              examples:
+                soldOut:
+                  value:
+                    code: COUPON_SOLD_OUT
+                    message: 쿠폰이 모두 소진됐습니다
+                    traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+                    details: []
+                notOpen:
+                  value:
+                    code: COUPON_EVENT_NOT_OPEN
+                    message: 이벤트 시간이 아닙니다
+                    traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+                    details: [ { field: eventId, value: "4", reason: UPCOMING } ]
+                alreadyClaimed:
+                  value:
+                    code: COUPON_ALREADY_CLAIMED
+                    message: 이미 받은 쿠폰입니다
+                    traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+                    details: [ { field: couponIssueId, value: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" } ]
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /coupons/me:
+    get:
+      tags: [my-coupons]
+      operationId: listMyCoupons
+      summary: CPN-03 내 쿠폰 (결제 화면 쿠폰 선택)
+      x-feature-id: CPN-03
+      description: |
+        이 사용자가 받은 쿠폰 전부, 받은 시각 내림차순(이벤트가 짧고 1인 1매라 페이징 없음 — `{items}`). 없으면 `items: []`.
+        결제 화면은 `state = ISSUED`이고 `expiresAt`이 지나지 않은 것만 고를 수 있게 한다. 고른 `couponIssueId`를 체크아웃 요청에 그대로 넣는다.
+        `state`는 저장된 값이 ISSUED라도 `expiresAt`이 지났으면 EXPIRED로 돌려준다(종료 스윕 전이라도). RESERVED는 체크아웃이 진행 중인 쿠폰이다.
+        등급과 상관없이 200(NORMAL이 VIP 때 받은 쿠폰도 그대로 보이고 쓸 수 있다 — 사용 조건은 발급 때만 본다).
+      security: [ { bearerAuth: [] } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyCouponList" }
+              example:
+                items:
+                  - couponIssueId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+                    eventId: 3
+                    title: VIP 선착순 50% 할인
+                    discountRate: 50
+                    state: ISSUED
+                    expiresAt: "2026-11-27T15:00:00+09:00"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT   # Cognito Access Token (ID 토큰 아님). coupon은 토큰을 보지 않고 Gateway가 넣는 X-User-Id·X-User-Grade를 쓴다
+
+  parameters:
+    EventId: { name: eventId, in: path, required: true, schema: { type: integer, format: int64 } }
+    IdempotencyKeyRequired:
+      { name: Idempotency-Key, in: header, required: true, description: "요청마다 새 UUID, 재시도만 같은 값", schema: { type: string, format: uuid } }
+
+  responses:
+    Unauthorized:
+      description: UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+    ServiceUnavailable:
+      description: "SERVICE_UNAVAILABLE — coupon DB·Valkey 응답 없음(아무것도 바뀌지 않음), 또는 Gateway가 coupon에 닿지 못함(details[{ field: service, value: coupon, reason: UPSTREAM_UNAVAILABLE | UPSTREAM_TIMEOUT }])"
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
+
+  schemas:
+    ErrorResponse:
+      $ref: "../schemas/error.v1.json"
+
+    CouponEventState:
+      type: string
+      enum: [UPCOMING, OPEN, CLOSED]
+      description: "서버 시각으로 계산. UPCOMING now < startsAt · OPEN startsAt ≤ now < endsAt · CLOSED endsAt ≤ now"
+
+    CouponIssueState:
+      type: string
+      x-extensible-enum: [ISSUED, RESERVED, USED, EXPIRED]
+      description: |
+        ISSUED 받음(쓸 수 있음) · RESERVED 체크아웃이 예약함(결제 진행 중) · USED 결제 승인으로 사용됨 · EXPIRED 이벤트 종료(`expiresAt`)가 지남.
+        열린 집합 — 모르는 값은 「사용할 수 없음」으로 보여 준다
+
+    DiscountRate:
+      type: integer
+      minimum: 1
+      maximum: 99
+      description: "할인율(%). 상한 99 — 결제 금액은 1원 이상이다(booking `amount.final`)"
+
+    CurrentCouponEvent:
+      type: object
+      required: [eventId, title, discountRate, startsAt, endsAt, totalQuantity, remainingQuantity, eligibleGrade, state, myIssue]
+      properties:
+        eventId: { type: integer, format: int64 }
+        title: { type: string, maxLength: 100 }
+        discountRate: { $ref: "#/components/schemas/DiscountRate" }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time, description: "종료 시각. 받은 쿠폰의 expiresAt과 같다" }
+        totalQuantity: { type: integer, minimum: 1 }
+        remainingQuantity: { type: integer, minimum: 0, description: "표시용(Valkey 값). 발급 판정은 claim이 한다" }
+        eligibleGrade: { type: string, x-extensible-enum: [VIP], description: "받을 수 있는 등급. 지금은 VIP만" }
+        state: { $ref: "#/components/schemas/CouponEventState" }
+        myIssue:
+          description: 이 사용자가 이 이벤트에서 받은 쿠폰. 안 받았으면 null
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [couponIssueId, state]
+              properties:
+                couponIssueId: { type: string, format: uuid }
+                state: { $ref: "#/components/schemas/CouponIssueState" }
+
+    CouponIssue:
+      type: object
+      required: [couponIssueId, eventId, title, discountRate, state, expiresAt]
+      properties:
+        couponIssueId:
+          type: string
+          format: uuid
+          description: "coupon 발급 UUID(`coupon_issue.coupon_issue_id` CHAR(36)). 체크아웃 요청 `couponIssueId`에 그대로"
+        eventId: { type: integer, format: int64 }
+        title: { type: string, maxLength: 100, description: "이벤트 제목(화면 표시용)" }
+        discountRate: { $ref: "#/components/schemas/DiscountRate" }
+        state: { $ref: "#/components/schemas/CouponIssueState" }
+        expiresAt: { type: string, format: date-time, description: "= 이벤트 종료 시각. 지나면 ISSUED는 EXPIRED. RESERVED는 체크아웃이 끝날 때까지 그대로" }
+
+    MyCouponList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CouponIssue" }

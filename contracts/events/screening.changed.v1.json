@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/screening.changed.v1.json",
+  "title": "ScreeningChanged",
+  "description": "SNS cinema-staging-catalog-events → SQS cinema-staging-ai-catalog-events(ai_db 복제본, (여유 시) booking-catalog-events). raw message delivery, 메시지 속성 type·traceId. 발행자 catalog만 — 변경과 같은 트랜잭션의 outbox_message(aggregate_id = 원본 ID, aggregate_key = version, 변경 1번 = 새 행 1개) → 릴레이(1초, APP_OUTBOX_RELAY_ENABLED). 표준 큐라 순서가 바뀌거나 두 번 올 수 있다 — 받는 쪽은 processed_message(eventId)로 한 번만, 복제본은 version이 지금 값보다 클 때만 덮어쓴다(같거나 작으면 무시). 사이트에서 누구나 볼 수 있는 공개 필드만 — 포스터(롯데 이미지)·시드 원본·좌석 배치는 넣지 않는다(API 명세서 v1.5 26장, ADR-117·120). 회차가 생기거나 바뀌거나 없어질 때(시드 재적재 포함). 회차 공개 필드 전체를 매번 보낸다(바뀐 필드만이 아님) — 받는 쪽은 행을 통째로 바꾼다. 잔여 좌석은 booking 값이라 넣지 않는다(totalSeats만).",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행마다 새 UUID. 재전송해도 같은 값(소비자 inbox processed_message가 중복 제거). 같은 명령을 다시 보낼 때(재시도)는 새 행·새 eventId"
+    },
+    "type": {
+      "type": "string",
+      "const": "screening.changed"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "catalog"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕·릴레이)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "catalog 이벤트는 saga가 아니라 null(또는 없음)"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "screeningId",
+        "version",
+        "deleted",
+        "changedAt"
+      ],
+      "properties": {
+        "screeningId": {
+          "type": "integer"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "이 원본 행의 버전. catalog가 바꿀 때마다 1씩 올린다(삭제도 한 번의 변경). 받는 쪽은 이 값이 클 때만 덮어쓴다"
+        },
+        "deleted": {
+          "type": "boolean",
+          "description": "true면 원본이 없어졌거나 더 보여 주지 않는다 → 복제본에서 지운다(또는 숨김). 이때 ID·version·changedAt 외 필드는 null일 수 있다"
+        },
+        "changedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "catalog에서 바뀐 시각"
+        },
+        "movieId": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "theaterId": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "theaterName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "auditoriumId": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "auditoriumName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "screenType": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-extensible-enum": [
+            "NORMAL",
+            "RECLINER"
+          ],
+          "description": "catalog.openapi.yaml ScreenType"
+        },
+        "layoutVersion": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "businessDate": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date",
+          "description": "상영 영업일 (Asia/Seoul)"
+        },
+        "startsAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "+09:00"
+        },
+        "endsAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "+09:00"
+        },
+        "filmFormat": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "예: 2D"
+        },
+        "totalSeats": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

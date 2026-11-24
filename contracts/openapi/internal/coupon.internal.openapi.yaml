@@ -19,7 +19,10 @@ paths:
       x-caller: [ops-api]
       description: |
         `coupon_event` 행을 만들고 같은 트랜잭션 커밋 뒤 Valkey `SET coupon:stock:{eventId} {totalQuantity} NX`(TTL = 종료 + 1일).
-        재고 키를 만들지 못해도(Valkey 장애) 이벤트는 만들어진다 — 첫 claim이 `totalQuantity − 발급 수`로 다시 만든다(data-model 7-2).
+        재고 키를 만들지 못해도(Valkey 장애) 이벤트는 만들어진다 — claim이 키가 없으면 `totalQuantity − 발급 수`로 `SET NX` 해 다시 만든다.
+        이 재생성은 진행 중인 발급을 세지 못해 실제보다 많은 값이 될 수 있지만 **초과 발급으로 이어지지 않는다**: 발급 확정은 DB가 한 트랜잭션에서
+        총수량 상한(발급 수 < totalQuantity)을 원자적으로 확인하므로, 키 값이 틀려도 DB가 넘는 요청을 매진으로 거절한다(coupon.openapi.yaml claim).
+        키 값을 실제와 맞추는 대조(덜 발급된 수량 복구)는 발급이 멈춘 뒤(이벤트 종료 뒤 또는 coupon 정지 뒤)에만 한다(data-model 7-2).
         종료 = `startsAt + durationMinutes`. 받은 쿠폰의 `expiresAt`도 이 종료 시각이다.
         검증(400 VALIDATION_FAILED, details[].reason):
           `STARTS_IN_PAST` — `startsAt`이 지금보다 1분 넘게 이전(바로 시작하려면 지금 시각을 보낸다) ·
@@ -67,7 +70,7 @@ paths:
                 traceId: 4bf92f3577b34da6a3ce929d0e0e4736
                 details: [ { field: startsAt, value: "2026-11-27T14:30:00+09:00", reason: EVENT_OVERLAP } ]
         "503":
-          description: SERVICE_UNAVAILABLE — coupon DB 응답 없음(이벤트 안 만들어짐)
+          description: SERVICE_UNAVAILABLE — coupon DB 응답 없음. 커밋 뒤 응답만 잃었을 수 있어 **생성 여부가 불확실**하다 — 다시 보내기 전에 GET /internal/coupon-events로 만들어졌는지 확인한다(위 설명)
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
     get:

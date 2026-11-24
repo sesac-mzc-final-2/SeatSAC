@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seatsac.dev/events/coupon.reservation-requested.v1.json",
   "title": "CouponReservationRequested",
-  "description": "SQS cinema-staging-coupon-commands. booking(체크아웃 saga 오케스트레이터) → coupon. 메시지 속성 type·traceId·correlationId. 표준 큐라 순서가 바뀌거나 두 번 올 수 있다 — coupon은 processed_message(eventId)로 한 번만 처리하고, 결과는 coupon_reservation(PK checkout_id, 체크아웃 1건 = 1행)으로 도착 순서와 상관없이 같게 만든다(API 명세서 v1.5 22-4, ADR-116·117·118). 쿠폰 예약 — 예약 행이 이미 RESERVED면 같은 coupon.reserved를 다시 보내고, RELEASED(반환이 먼저 와서 기록됨)면 ALREADY_RELEASED로 거절, 행이 없으면 본인·ISSUED·만료 전 조건부 UPDATE(WHERE state='ISSUED') → 쿠폰 RESERVED + 예약 행 RESERVED(같은 트랜잭션). 같은 checkoutId의 재시도(새 eventId)는 예약 행으로 같은 결과를 다시 보낸다(쿠폰을 두 번 잡지 않음). 결과: coupon.reserved 또는 coupon.reservation-rejected.",
+  "description": "SQS cinema-staging-coupon-commands. booking(체크아웃 saga 오케스트레이터) → coupon. 메시지 속성 type·traceId·correlationId. 표준 큐라 순서가 바뀌거나 두 번 올 수 있다 — coupon은 processed_message(eventId)로 한 번만 처리하고, 결과는 coupon_reservation(PK checkout_id, 체크아웃 1건 = 1행)으로 도착 순서와 상관없이 같게 만든다(API 명세서 v1.5 22-4, ADR-116·117·118). 쿠폰 예약 — 예약 행이 이미 RESERVED면 같은 coupon.reserved를 다시 보내고, RELEASED(반환이 먼저 와서 기록됨)면 ALREADY_RELEASED로 거절, 행이 없으면 본인·ISSUED·만료 전 조건부 UPDATE(WHERE state='ISSUED') → 쿠폰 RESERVED + 예약 행 RESERVED(같은 트랜잭션). 거절도 checkoutId 기준으로 결과(reason)를 남긴다(저장 방식은 구현이 정한다). 같은 checkoutId의 재시도(새 eventId)는 처음 결과를 그대로 다시 보낸다 — 성공이면 같은 coupon.reserved, 거절이면 같은 coupon.reservation-rejected(그 사이 쿠폰이 반환돼 ISSUED가 됐어도 새로 예약하지 않는다. booking은 끝난 체크아웃의 늦은 coupon.reserved를 무시하므로 새로 예약하면 쿠폰이 RESERVED로 남는다). 쿠폰을 두 번 잡지 않는다. 결과: coupon.reserved 또는 coupon.reservation-rejected.",
   "type": "object",
   "required": [
     "eventId",

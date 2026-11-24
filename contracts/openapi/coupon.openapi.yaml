@@ -7,7 +7,10 @@ info:
     VIP 선착순 쿠폰. 등급은 Gateway가 토큰 `cognito:groups`로 만든 `X-User-Grade`(`NORMAL`·`VIP`)를 그대로 믿는다 — 외부에서 보낸 값은 Gateway가 지운다.
     VIP 지정은 토큰을 새로 받아야 반영된다(Access Token 1시간 — 시연 준비는 지정 → 로그아웃·재로그인).
     발급 판정 순서: 등급(403) → 이벤트 시각(409 COUPON_EVENT_NOT_OPEN) → Valkey `DECR coupon:stock:{eventId}`(음수면 `INCR`로 되돌리고 409 COUPON_SOLD_OUT)
-    → DB `coupon_issue` INSERT(UK event_id·user_id, 중복이면 재고를 되돌리고 409 COUPON_ALREADY_CLAIMED). 1인 1매의 최종 방어선은 DB UK.
+    → DB 한 트랜잭션에서 총수량 상한 확인(조건부 증가 등 원자적으로 — 발급 수가 totalQuantity 미만일 때만) + `coupon_issue` INSERT
+    (UK event_id·user_id, 중복이면 재고를 되돌리고 409 COUPON_ALREADY_CLAIMED). 최종 방어선은 DB다 — 1인 1매는 UK, 총수량은 이 상한 확인.
+    Valkey 재고 키는 DB까지 오는 요청을 줄이는 앞단 거름망이라, 키가 사라져 다시 만들 때 값이 틀려도 totalQuantity를 넘겨 발급하지 않는다.
+    매진(DECR 음수 또는 DB 상한 0행)일 때는 이 사용자가 이미 받았는지 DB를 한 번 확인해, 받았으면 409 COUPON_ALREADY_CLAIMED(이미 받은 ID)를 준다.
     쿠폰 하나는 한 이벤트에서 받은 할인권 한 장이다. 할인은 체크아웃(booking `POST /bookings/{id}/checkout`의 `couponIssueId`) 때 saga 명령으로
     예약(RESERVED) → 결제 승인 뒤 사용(USED)·실패면 반환(ISSUED). 금액은 `final = original − floor(original × discountRate / 100)`(원 단위 내림, booking이 계산).
     이벤트는 관리자만 만든다(ops-api → `POST /internal/coupon-events`, `internal/coupon.internal.openapi.yaml`).
@@ -99,7 +102,11 @@ paths:
         같은 키·같은 eventId 재요청은 첫 응답(201 또는 409)을 그대로 재생하고, 같은 키에 다른 eventId면 409 IDEMPOTENCY_KEY_CONFLICT,
         첫 요청이 아직 처리 중이면 409 IDEMPOTENCY_IN_PROGRESS(화면은 잠시 뒤 같은 키로 재시도).
         **다른 키**로 다시 보내면 DB UK 때문에 409 COUPON_ALREADY_CLAIMED(`details[{field: couponIssueId, value: 이미 받은 ID}]`) — 화면은 「이미 받았어요」로 보이고 내 쿠폰을 다시 읽는다.
-        재고 되돌림(`INCR`)은 `DECR`이 성공한 뒤 결과가 음수이거나 DB INSERT가 실패한 경우만. `DECR` 결과를 모르면 되돌리지 않는다(초과 발급 대신 덜 발급, data-model 7-2).
+        재고 되돌림(`INCR`)은 `DECR`이 성공한 뒤 결과가 음수이거나 DB 발급이 실패한 경우만. `DECR` 결과를 모르면 되돌리지 않는다(초과 발급 대신 덜 발급, data-model 7-2).
+        매진 분기(`DECR` 음수 또는 DB 상한 확인 0행)에서도 이 사용자의 기존 발급을 먼저 확인한다 — 마지막 쿠폰을 받은 사람이 다른 키로 다시 보내도
+        COUPON_SOLD_OUT이 아니라 COUPON_ALREADY_CLAIMED(이미 받은 ID)를 받는다. 받은 적 없는 사용자만 COUPON_SOLD_OUT.
+        503이면 발급이 일부 적용됐을 수 있다(Valkey 재고가 줄었거나 DB에 커밋된 뒤 응답만 잃었을 수 있음) — 화면은 같은 `Idempotency-Key`로 다시 보내거나
+        `GET /coupons/me`로 받았는지 확인한다.
         지표 `coupon_claim_total{result=issued|sold_out|not_eligible|duplicate|closed}`.
       security: [ { bearerAuth: [] } ]
       parameters:
@@ -138,7 +145,7 @@ paths:
         "409":
           description: |
             COUPON_EVENT_NOT_OPEN — 시작 전·종료 뒤(details[{ field: eventId, value, reason: UPCOMING | CLOSED }]) ·
-            COUPON_SOLD_OUT — 선착순 수량 소진 ·
+            COUPON_SOLD_OUT — 선착순 수량 소진(이 사용자가 받은 적 없을 때만 — 받았으면 COUPON_ALREADY_CLAIMED) ·
             COUPON_ALREADY_CLAIMED — 이 이벤트에서 이미 받음(details[{ field: couponIssueId, value: 이미 받은 ID }]) ·
             IDEMPOTENCY_KEY_CONFLICT — 같은 키에 다른 eventId ·
             IDEMPOTENCY_IN_PROGRESS — 같은 키의 첫 요청이 처리 중
@@ -164,7 +171,11 @@ paths:
                     message: 이미 받은 쿠폰입니다
                     traceId: 4bf92f3577b34da6a3ce929d0e0e4736
                     details: [ { field: couponIssueId, value: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" } ]
-        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        "503":
+          description: |
+            SERVICE_UNAVAILABLE — coupon DB·Valkey 응답 없음, 또는 Gateway가 coupon에 닿지 못함(details[{ field: service, value: coupon, reason: UPSTREAM_UNAVAILABLE | UPSTREAM_TIMEOUT }]).
+            처리가 일부 적용됐을 수 있다(재고만 줄었거나, 발급이 커밋된 뒤 응답만 잃었을 수 있음). 같은 Idempotency-Key로 다시 보내거나 GET /coupons/me로 발급 여부를 확인한다
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   /coupons/me:
     get:
@@ -212,7 +223,7 @@ components:
       description: UNAUTHORIZED (Gateway) — 토큰 없음·만료·서명 불일치
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
     ServiceUnavailable:
-      description: "SERVICE_UNAVAILABLE — coupon DB·Valkey 응답 없음(아무것도 바뀌지 않음), 또는 Gateway가 coupon에 닿지 못함(details[{ field: service, value: coupon, reason: UPSTREAM_UNAVAILABLE | UPSTREAM_TIMEOUT }])"
+      description: "SERVICE_UNAVAILABLE — coupon DB·Valkey 응답 없음(조회 전용이라 바뀌는 것 없음), 또는 Gateway가 coupon에 닿지 못함(details[{ field: service, value: coupon, reason: UPSTREAM_UNAVAILABLE | UPSTREAM_TIMEOUT }])"
       content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
 
   schemas:

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seatsac.dev/events/movie.changed.v1.json",
   "title": "MovieChanged",
-  "description": "SNS cinema-staging-catalog-events → SQS cinema-staging-ai-catalog-events(ai_db 복제본, (여유 시) booking-catalog-events). raw message delivery, 메시지 속성 type·traceId. 발행자 catalog만 — 변경과 같은 트랜잭션의 outbox_message(aggregate_id = 원본 ID, aggregate_key = version, 변경 1번 = 새 행 1개) → 릴레이(1초, APP_OUTBOX_RELAY_ENABLED). 표준 큐라 순서가 바뀌거나 두 번 올 수 있다 — 받는 쪽은 processed_message(eventId)로 한 번만, 복제본은 version이 지금 값보다 클 때만 덮어쓴다(같거나 작으면 무시). 사이트에서 누구나 볼 수 있는 공개 필드만 — 포스터(롯데 이미지)·시드 원본·좌석 배치는 넣지 않는다(API 명세서 v1.5 26장, ADR-117·120). 영화가 생기거나 바뀌거나(TMDB 메타 보충 포함) 없어질 때. 영화 공개 필드 전체를 매번 보낸다. posterUrl은 넣지 않는다.",
+  "description": "SNS cinema-staging-catalog-events → SQS cinema-staging-ai-catalog-events(ai_db 복제본, (여유 시) booking-catalog-events). raw message delivery, 메시지 속성 type·traceId. 발행자 catalog만 — 변경과 같은 트랜잭션의 outbox_message(aggregate_id = 원본 ID, aggregate_key = version, 변경 1번 = 새 행 1개) → 릴레이(1초, APP_OUTBOX_RELAY_ENABLED). 표준 큐라 순서가 바뀌거나 두 번 올 수 있다 — 받는 쪽은 processed_message(eventId)로 한 번만, 복제본은 version이 지금 값보다 클 때만 덮어쓴다(같거나 작으면 무시). 사이트에서 누구나 볼 수 있는 공개 필드만 — 포스터(롯데 이미지)·시드 원본·좌석 배치는 넣지 않는다(API 명세서 v1.5 26장, ADR-117·120). 영화가 생기거나 바뀌거나(TMDB 메타 보충 포함) 없어질 때. 영화 공개 필드 전체를 매번 보낸다. posterUrl은 넣지 않는다. 삭제(deleted=true)를 반영한 뒤에도 그 ID의 마지막 version을 보존하고(행 숨김·삭제 기록 등 방식은 구현이 정한다), 그 값 이하의 메시지는 무시한다 — 삭제 v3이 upsert v2보다 먼저 와도 삭제된 원본이 되살아나지 않게. 같은 ID가 다시 생기면 catalog가 더 큰 version으로 보낸다.",
   "type": "object",
   "required": [
     "eventId",
@@ -67,7 +67,7 @@
         },
         "deleted": {
           "type": "boolean",
-          "description": "true면 원본이 없어졌거나 더 보여 주지 않는다 → 복제본에서 지운다(또는 숨김). 이때 ID·version·changedAt 외 필드는 null일 수 있다"
+          "description": "true면 원본이 없어졌거나 더 보여 주지 않는다 → 복제본에서 지우거나 숨기되 마지막 version은 남긴다. 이때 ID·version·changedAt 외 필드는 없거나 null일 수 있다"
         },
         "changedAt": {
           "type": "string",
@@ -160,6 +160,32 @@
             "null"
           ]
         }
+      },
+      "description": "deleted=false면 공개 필드 전체가 반드시 있다(값이 없는 필드는 null). deleted=true면 movieId·version·deleted·changedAt만 있어도 된다",
+      "if": {
+        "properties": {
+          "deleted": {
+            "const": false
+          }
+        },
+        "required": [
+          "deleted"
+        ]
+      },
+      "then": {
+        "required": [
+          "title",
+          "titleEn",
+          "viewGrade",
+          "status",
+          "slotMinutes",
+          "runtimeMinutes",
+          "releaseDate",
+          "director",
+          "cast",
+          "genres",
+          "synopsis"
+        ]
       }
     }
   }

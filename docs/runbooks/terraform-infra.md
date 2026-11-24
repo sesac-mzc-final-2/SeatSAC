@@ -764,6 +764,75 @@ aws sqs delete-message --queue-url "$DLQ" --receipt-handle '<위에서 나온 Re
 | 코드(`handler.py`)를 고쳤는데 반영 안 됨 | apply 전 | PR 머지 뒤 plan에 `aws_lambda_function.notification` 1 update가 보이면 apply |
 
 
+#### 6-B-6. 서비스 간 메시징 — SNS·SQS·DLQ·Pod Identity (6.1.3, ADR-117)
+
+코드: `envs/staging/messaging.tf`(토픽 2·큐 5·DLQ 5·구독 2·경보·Pod Identity 5) · `envs/staging/sqs.tf`(booking 역할에 권한 추가, 지표 유지 일정에 DLQ 추가) · `envs/staging-k8s/infra_endpoints.tf`(메시징 키 7개)
+
+| 종류 | 이름 (`cinema-staging-` 접두사) | 보내는 쪽 → 받는 쪽 |
+| --- | --- | --- |
+| 이벤트 토픽(SNS) | `booking-events` · `catalog-events` | booking · catalog |
+| 구독 큐 | `user-booking-events` · `ai-catalog-events` | SNS(raw) → user · ai |
+| 명령 큐 | `coupon-commands` · `payment-commands` | booking → coupon · payment |
+| 결과 큐 | `booking-replies` | coupon · payment → booking |
+| DLQ | 위 큐 5개마다 `…-dlq`(3번 받고도 못 지우면 이동, 보존 14일) | — |
+
+| 항목 | 값 |
+| --- | --- |
+| 큐 설정 | 긴 폴링 20초 · 가시성 제한 30초 · SSE-SQS · TLS 아닌 요청 거부. 보존: 명령·결과 1일, 이벤트 4일 |
+| 토픽 설정 | 저장 암호화 AWS 관리 키 `alias/aws/sns`(발행 역할에 KMS 권한 불필요) · TLS 아닌 발행 거부 |
+| 경보 | DLQ 5개 `…-dlq-not-empty`(1건 이상) · 받는 쪽 멈춤 `…-oldest`(명령·결과 300초, `user-booking-events` 1시간). `ai-catalog-events`는 `ng-ai`가 평소 0대라 쌓이는 것이 정상 → 오래된 메시지 경보 없음 |
+| Pod Identity | `cinema-staging-{payment,coupon,user,catalog,ai}-pod` 신규(ServiceAccount = 서비스 이름) · `cinema-staging-booking-pod`에 명령 발송·결과 수신·`booking-events` 발행 추가 |
+| ConfigMap 키 | `SNS_{BOOKING,CATALOG}_EVENTS_ARN` · `SQS_{COUPON,PAYMENT}_COMMANDS_URL` · `SQS_BOOKING_REPLIES_URL` · `SQS_{USER_BOOKING,AI_CATALOG}_EVENTS_URL` — 이름으로 만들어지는 값이라 staging apply 전에도 넣을 수 있다 |
+| 만들지 않은 것 | `booking-catalog-events`(여유 시 — booking 회차 사본을 할 때) |
+
+```bash
+# 1) staging
+cd infra/terraform/envs/staging
+terraform init -backend-config=backend.hcl     # 모듈 추가(messaging_pod_identity) → 한 번
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대 add: SNS 토픽 2 + 토픽 정책 2 · 큐 5 + DLQ 5 · 큐 정책 10 · redrive 허용 5 · 구독 2 · 경보 9(DLQ 5 + oldest 4)
+#           · Pod Identity 5 × (역할·정책·연결·연결 리소스) · 지표 유지 일정 5
+#      change: booking Pod Identity 정책 1 · sqs-metrics Lambda 역할 정책 1.  destroy 0
+#      기존 알림 큐(cinema-staging-notification-events)에 변경이 보이면 멈춘다
+terraform apply plan.out
+
+# 2) staging-k8s — ConfigMap 키 7개 추가(update in-place 1건)
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out && terraform apply plan.out
+```
+
+확인(관리자):
+
+```bash
+aws sns list-topics --query "Topics[?contains(TopicArn,'cinema-staging-')].TopicArn" --output text
+aws sqs list-queues --queue-name-prefix cinema-staging- --query 'QueueUrls' --output text | tr '\t' '\n'
+aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace cinema-staging --query 'associations[].serviceAccount' --output text
+# SNS → SQS 전달: 토픽에 한 건 발행해 구독 큐에 그대로(raw) 들어오는지
+ARN=$(kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.SNS_CATALOG_EVENTS_ARN}')
+URL=$(kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data.SQS_AI_CATALOG_EVENTS_URL}')
+aws sns publish --topic-arn "$ARN" --message '{"check":"6-B-6"}' --message-attributes 'type={DataType=String,StringValue=check}'
+# 받은 것 중 확인 메시지(Body {"check":"6-B-6"}, 속성 type=check)의 ReceiptHandle만 꺼낸다 — SNS 봉투 없이 Body 그대로여야 한다
+RH=$(aws sqs receive-message --queue-url "$URL" --message-attribute-names All --max-number-of-messages 10 --wait-time-seconds 5 \
+  --query "Messages[?contains(Body, '6-B-6')]|[0].ReceiptHandle" --output text)
+echo "$RH" | head -c 20; echo     # None이면 아직 안 왔거나 다른 메시지만 받은 것 → 30초(가시성 제한) 뒤 다시
+[ "$RH" != "None" ] && aws sqs delete-message --queue-url "$URL" --receipt-handle "$RH"   # 확인 메시지 **하나만** 지운다
+# purge-queue는 쓰지 않는다 — ng-ai가 꺼져 있는 동안 쌓인 실제 catalog 이벤트까지 전부 지워진다
+```
+
+- [ ] 토픽 2 · 큐 10(원본 5 + DLQ 5) · Pod Identity 연결 6(booking 포함)
+- [ ] 발행한 확인 메시지가 구독 큐에 SNS 봉투 없이 들어온다(Body 그대로 + 메시지 속성)
+- [ ] ConfigMap에 메시징 키 7개, 두 번째 plan No changes
+- [ ] 로컬 ElasticMQ(`infra/compose/elasticmq.conf`에 같은 이름의 큐 5개 + DLQ — `docker compose up -d elasticmq`로 다시 띄운다) 테스트 통과 뒤 staging에서 명령 1건 왕복(런타임 계약 7장 21번 — 서비스 구현 뒤)
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 파드 `AccessDenied … sqs:ReceiveMessage`·`sns:Publish` | ServiceAccount가 없거나 Deployment가 쓰지 않음(gitops `base/{svc}/serviceaccount.yaml` · `serviceAccountName`) / 다른 서비스의 큐 | gitops 반영 뒤 파드 재시작. 권한은 자기 큐·토픽만이다 |
+| 파드 `sns:Publish`가 `KMSAccessDeniedException` | 토픽 키가 AWS 관리 키(`alias/aws/sns`)가 아닌 고객 관리 키로 바뀜 | `messaging.tf`의 `kms_master_key_id` 확인. 고객 관리 키를 쓰려면 발행 역할에 `kms:GenerateDataKey`·`kms:Decrypt`와 키 정책이 필요하다 |
+| 구독 큐에 메시지가 안 들어옴 | 큐 정책의 `AllowTopicDelivery`가 없거나 구독 미확정 | `aws sns list-subscriptions-by-topic`에 `PendingConfirmation`이 아닌 ARN, 큐 정책 확인 |
+| `…-dlq-not-empty` 경보 | 받는 서비스가 같은 메시지를 3번 처리하지 못함(예외·30초 초과) | 서비스 로그에서 `messageType`·`correlationId`로 원인 확인 → 고친 뒤 DLQ 재전송(redrive, 원본 큐로만 허용) |
+| `…-oldest` 경보 | 받는 파드 없음·멈춤 | 파드 상태 확인. ops-api 정지 시연 중이면 정상 — 「가동」 뒤 OK로 돌아온다 |
+| `user-booking-events-oldest`가 계속 울림 | booking이 `booking-events`를 내기 시작했는데 user 소비자(6.3.4)가 아직 배포되지 않음 — 알림 큐(6-B-3)와 같은 순서 문제 | **받는 쪽을 먼저 배포하고 보내는 쪽을 켠다**: user 소비자 → booking SNS 발행, coupon·payment 소비자 → `APP_CHECKOUT_SAGA_ENABLED`, ai·user 소비자 → catalog `APP_OUTBOX_RELAY_ENABLED`. 이미 쌓였으면 소비자 배포 뒤 흘러간다(보존 4일) |
+
 ### 6-C. gitops Public 준비: 엔드포인트 ConfigMap · 서비스 ArgoCD Application (ADR-74)
 
 SeatSAC-gitops는 Public이다(무료 플랜에서 ruleset을 쓰려면 Public이어야 한다). 그래서 **계정 ID·엔드포인트를 gitops에 두지 않고** 둘 다 `envs/staging-k8s`가 클러스터에 넣는다.

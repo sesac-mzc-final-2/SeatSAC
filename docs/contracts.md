@@ -28,7 +28,7 @@
 | `events/booking.confirmed.v1.json` | SQS 예매 완료 알림. 🆕 SNS `booking-events`로도 발행(user 복제본), 선택 필드 `amount`·`discountAmount` 추가 | 남궁일 (소비 Lambda 김종식, user ~~한채연~~ 🆕 김종식) |
 | 🆕 `events/booking.canceled.v1.json` | 예매 취소·만료·결제 실패(`reason`) | 남궁일 |
 | 🆕 `events/screening.changed.v1.json` · `movie.changed.v1.json` | catalog 변경(`version`, `deleted`) → ai·(booking) 복제본 | 한채연 |
-| 🆕 `events/coupon.{reservation-requested,use-requested,release-requested}.v1.json` | saga 명령 → coupon | 남궁일(보냄) · ~~한채연~~ 🆕 김종식(받음) |
+| 🆕 `events/coupon.{reservation-requested,use-requested,release-requested}.v1.json` | saga 명령 → coupon | 남궁일(보냄) · 한채연(받음) |
 | 🆕 `events/payment.{preparation-requested,charge-requested,verification-requested}.v1.json` | saga 명령 → payment | 남궁일 |
 | 🆕 `events/coupon.{reserved,reservation-rejected}.v1.json` · `payment.{prepared,preparation-failed,approved,declined,result-unknown}.v1.json` | saga 결과 → booking | 한채연·남궁일 |
 | `schemas/error.v1.json` | 공통 오류 응답 | 전원 |

@@ -77,6 +77,8 @@ class PaymentCommandFlowTest {
     ObjectMapper objectMapper;
     @MockitoBean
     ReplyPublisher publisher;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    SagaResultWriter writer;
 
     private long booking = 9_100L;
 
@@ -323,6 +325,23 @@ class PaymentCommandFlowTest {
         assertThat(last.at("/payload/reason").asText()).isEqualTo("PAYMENT_CONFLICT");
     }
 
+    /** 유일 키 충돌인데 inbox에 이 명령이 없다(다른 표의 충돌) — 중복으로 지우지 않고 재배달시킨다 */
+    @Test
+    void uniqueKeyClashOutsideTheInboxIsRedeliveredNotDropped() {
+        Ids ids = new Ids();
+        doThrow(new org.springframework.dao.DataIntegrityViolationException("saga_payment PK"))
+            .when(writer).recordRelease(any(), org.mockito.ArgumentMatchers.anyBoolean(),
+                org.mockito.ArgumentMatchers.anyBoolean(), any(), any());
+
+        assertThatThrownBy(() -> handler.handle(release(ids)))
+            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(inbox.existsById(ids.releaseCommand)).isFalse();
+
+        org.mockito.Mockito.reset(writer);
+        handler.handle(release(ids));   // 재배달 — 이번에는 처리된다
+        assertThat(sagaPayments.isReleased(ids.payment)).isTrue();
+    }
+
     @Test
     void relaySendsPendingRepliesOnceAndRetriesOnFailure() {
         handler.handle(charge(new Ids(), 30_000, "4242"));
@@ -359,6 +378,7 @@ class PaymentCommandFlowTest {
         final String checkout = UUID.randomUUID().toString();
         final String payment = UUID.randomUUID().toString();
         final String command = UUID.randomUUID().toString();
+        final String releaseCommand = UUID.randomUUID().toString();
     }
 
     private String charge(Ids ids, int amount, String last4) {
@@ -380,7 +400,7 @@ class PaymentCommandFlowTest {
     }
 
     private String release(Ids ids) {
-        return envelope(UUID.randomUUID().toString(), "payment.release-requested", """
+        return envelope(ids.releaseCommand, "payment.release-requested", """
             {"checkoutId":"%s","paymentId":"%s","bookingId":%d,"reason":"HOLD_EXPIRED"}
             """.formatted(ids.checkout, ids.payment, booking), ids.checkout);
     }

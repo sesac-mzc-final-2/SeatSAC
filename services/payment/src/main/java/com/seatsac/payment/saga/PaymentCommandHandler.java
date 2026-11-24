@@ -76,10 +76,16 @@ public class PaymentCommandHandler {
             result = "ok";
             return Result.OK;
         } catch (DataIntegrityViolationException e) {
-            // 같은 명령이 동시에 두 번 처리됐다(가시성 만료 재배달). 한쪽이 inbox·결과를 이미 커밋했다
-            result = "duplicate";
-            log.info("같은 명령의 동시 처리 — 먼저 끝난 쪽 결과를 쓴다 eventId={} type={}", command.eventId(), command.type());
-            return Result.DUPLICATE;
+            // 유일 키 충돌이 모두 「같은 명령의 동시 처리」는 아니다 — 해제와 준비가 동시에 와서 saga_payment 행을 같이
+            // 만들다 충돌할 수도 있다(그때 해제는 처리되지 않았다). inbox에 이 명령이 있을 때만 중복으로 보고 지우고,
+            // 없으면 예외를 올려 재배달한다(다음 배달은 이미 생긴 행을 보고 정상 처리한다)
+            if (inbox.existsById(command.eventId())) {
+                result = "duplicate";
+                log.info("같은 명령의 동시 처리 — 먼저 끝난 쪽 결과를 쓴다 eventId={} type={}", command.eventId(), command.type());
+                return Result.DUPLICATE;
+            }
+            log.warn("명령 처리 중 유일 키 충돌 — 재배달한다 eventId={} type={}", command.eventId(), command.type());
+            throw e;
         } finally {
             meterRegistry.counter("payment_command_total", "type", command.type(), "result", result).increment();
             sample.stop(meterRegistry.timer("payment_command_seconds", "type", command.type()));

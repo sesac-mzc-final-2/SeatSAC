@@ -10,6 +10,7 @@ import com.seatsac.payment.portone.PortOneClient.CancelOutcome;
 import com.seatsac.payment.portone.PortOneClient.PortOneRejectedException;
 import com.seatsac.payment.portone.PortOnePayment;
 import com.seatsac.payment.portone.PortOneUnavailableException;
+import com.seatsac.payment.saga.SagaPaymentRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
@@ -35,6 +36,7 @@ public class PortOneReconcileService {
     private final Clock clock;
     private final PaymentStateService paymentState;
     private final PortOneClient portOne;
+    private final SagaPaymentRepository sagaPayments;
 
     /** {@link #reconcileProcessing} 결과 */
     public enum Outcome {
@@ -44,6 +46,8 @@ public class PortOneReconcileService {
         FAILED,
         /** 포트원 PAID인데 금액이 다름 → FAILED(AMOUNT_MISMATCH) + 환불 미완료 표식, 환불 시도 */
         MISMATCH,
+        /** 포트원 PAID인데 booking이 이미 놓은 saga 결제(선점 만료) → FAILED(BOOKING_EXPIRED) + 환불 미완료 표식, 환불 시도(D16) */
+        RELEASED,
         /** 포트원에서 이미 취소됨 → APPROVED → CANCELED */
         CANCELED,
         /** 아직 결제창이 끝나지 않았다(READY·PENDING, 또는 포트원에 없음) — 그대로 PROCESSING */
@@ -77,6 +81,17 @@ public class PortOneReconcileService {
         String paymentId = payment.getPaymentId();
 
         if (remote.isPaid()) {
+            if (sagaPayments.isReleased(paymentId)) {
+                // booking이 선점 만료로 이 결제를 놓았다 — 예매에 쓰이지 않는 돈이다. 승인 대신 환불 대상으로 남긴다(D16·D22)
+                boolean changed = paymentState.settle(paymentId, PaymentStatus.FAILED, PaymentFailureCode.BOOKING_EXPIRED,
+                    remote.transactionId(), now);
+                log.warn("놓은 saga 결제가 PAID — FAILED(BOOKING_EXPIRED), 환불 미완료로 둔다 paymentId={} bookingId={}",
+                    paymentId, payment.getBookingId());
+                if (changed && refundNow) {
+                    tryRefund(paymentId, payment.getAmount(), "BOOKING_EXPIRED", now);
+                }
+                return Outcome.RELEASED;
+            }
             if (remote.matches(payment.getAmount(), CURRENCY)) {
                 paymentState.approve(paymentId, remote.transactionId(), remote.paidAtOr(now), now);
                 log.info("포트원 결제 확인 → APPROVED paymentId={} bookingId={}", paymentId, payment.getBookingId());

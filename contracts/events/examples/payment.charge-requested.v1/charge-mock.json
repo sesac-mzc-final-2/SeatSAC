@@ -12,10 +12,6 @@
     "bookingId": 1042,
     "amount": 30000,
     "method": "CARD",
-    "card": {
-      "number": "4242424242424242",
-      "expiry": "12/28",
-      "holder": "KIM"
-    }
+    "cardLast4": "4242"
   }
 }

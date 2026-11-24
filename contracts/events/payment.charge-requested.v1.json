@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seatsac.dev/events/payment.charge-requested.v1.json",
   "title": "PaymentChargeRequested",
-  "description": "SQS cinema-staging-payment-commands. booking(체크아웃 saga 오케스트레이터) → payment. 메시지 속성 type·traceId·correlationId. 받는 쪽은 processed_message(eventId)로 한 번만 처리하고, 처리 자체도 멱등이라 재배달이 안전하다(API 명세서 v1.5 21·26장, ADR-116·117). CARD(모의) 청구 — 테스트·분석 전용(booking이 X-Payment-Mock-Key를 확인한 요청만). payment는 모의 판정(지연 카드는 sleep 뒤)을 끝내고 payment.approved·payment.declined를 돌려준다.",
+  "description": "SQS cinema-staging-payment-commands. booking(체크아웃 saga 오케스트레이터) → payment. 메시지 속성 type·traceId·correlationId. 받는 쪽은 processed_message(eventId)로 한 번만 처리하고, 처리 자체도 멱등이라 재배달이 안전하다(API 명세서 v1.5 21·26장, ADR-116·117). CARD(모의) 청구 — 테스트·분석 전용(booking이 X-Payment-Mock-Key를 확인한 요청만). 카드는 끝 4자리만 싣는다 — 이 명령은 아웃박스·큐·DLQ에 남기 때문(번호 전체·유효기간·소유자는 booking이 HTTP 요청에서 형식만 검사하고 버린다). payment는 모의 판정(지연 카드는 sleep 뒤)을 끝내고 payment.approved·payment.declined를 돌려준다.",
   "type": "object",
   "required": [
     "eventId",
@@ -54,7 +54,7 @@
         "bookingId",
         "amount",
         "method",
-        "card"
+        "cardLast4"
       ],
       "properties": {
         "checkoutId": {
@@ -73,35 +73,16 @@
         "amount": {
           "type": "integer",
           "minimum": 1,
-          "description": "쿠폰 할인 뒤 최종 금액(원). 15,000의 배수가 아닐 수 있다(ADR-24 11/24 보완·D20)"
+          "description": "쿠폰 할인 뒤 최종 금액(원). 15,000의 배수가 아닐 수 있다(ADR-24 11/24 보완·D20). 0원은 없다 — 쿠폰 할인율 상한 99%"
         },
         "method": {
           "type": "string",
           "const": "CARD"
         },
-        "card": {
-          "type": "object",
-          "description": "모의 카드만. 실제 카드 번호를 넣지 않는다(큐·로그에 남는다). payment는 card_last4만 저장",
-          "required": [
-            "number",
-            "expiry",
-            "holder"
-          ],
-          "properties": {
-            "number": {
-              "type": "string",
-              "pattern": "^[0-9]{12,19}$"
-            },
-            "expiry": {
-              "type": "string",
-              "pattern": "^(0[1-9]|1[0-2])/[0-9]{2}$"
-            },
-            "holder": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 50
-            }
-          }
+        "cardLast4": {
+          "type": "string",
+          "pattern": "^[0-9]{4}$",
+          "description": "모의 카드 끝 4자리(판정용: 0000 거절 · 1111 잔액 부족 · 9999 지연 승인). 카드 번호 전체는 싣지 않는다 — 아웃박스·큐·DLQ에 남기 때문. payment는 이 값을 card_last4로 저장한다"
         }
       }
     }

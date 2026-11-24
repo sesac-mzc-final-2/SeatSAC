@@ -2,7 +2,7 @@
   "eventId": "d1e2f3a4-b5c6-47d8-99ea-2f3a4b5c6d7e",
   "type": "booking.canceled",
   "version": 1,
-  "occurredAt": "2026-11-24T14:00:12+09:00",
+  "occurredAt": "2026-11-24T15:10:00+09:00",
   "producer": "booking",
   "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
   "payload": {

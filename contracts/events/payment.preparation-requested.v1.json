@@ -73,7 +73,7 @@
         "amount": {
           "type": "integer",
           "minimum": 1,
-          "description": "쿠폰 할인 뒤 최종 금액(원). 15,000의 배수가 아닐 수 있다(ADR-24 11/24 보완·D20)"
+          "description": "쿠폰 할인 뒤 최종 금액(원). 15,000의 배수가 아닐 수 있다(ADR-24 11/24 보완·D20). 0원은 없다 — 쿠폰 할인율 상한 99%"
         },
         "method": {
           "type": "string",

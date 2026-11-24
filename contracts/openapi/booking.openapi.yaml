@@ -330,7 +330,7 @@ paths:
       description: |
         좌석을 잡은 예매(PENDING)의 결제를 saga로 시작한다(ADR-116, API 명세서 v1.5 21장). 요청 스레드는 payment·coupon을 부르지 않고
         `checkout_saga` 행과 첫 명령(아웃박스)을 한 트랜잭션에 쓰고 202를 돌려준다. 화면은 `GET /bookings/{id}/checkout`을 `pollAfterMs`마다 조회한다.
-        - 쿠폰(`couponRef`)이 있으면 coupon 예약 → 할인 뒤 최종 금액으로 결제 준비. 쿠폰이 거절되면 `COUPON_REJECTED`(끝) — 예매·좌석·선점 시간은 그대로이고
+        - 쿠폰(`couponIssueId`)이 있으면 coupon 예약 → 할인 뒤 최종 금액으로 결제 준비. 쿠폰이 거절되면 `COUPON_REJECTED`(끝) — 예매·좌석·선점 시간은 그대로이고
           남은 시간 안에 다른 쿠폰이나 쿠폰 없이 **새 Idempotency-Key로 다시** 부른다(D14).
         - `TOSSPAY`: 결제 준비 → `READY_TO_PAY`(응답 `payment.portone`으로 결제창) → 결제창이 닫히면 `POST …/checkout/confirm`.
         - `CARD`(모의, `X-Payment-Mock-Key` 필수): 준비·결제창 없이 `CHARGING` → 확정/실패. k6 비교 측정용.
@@ -349,7 +349,7 @@ paths:
             schema: { $ref: "#/components/schemas/CheckoutRequest" }
             examples:
               tosspayWithCoupon:
-                value: { method: TOSSPAY, couponRef: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }
+                value: { method: TOSSPAY, couponIssueId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }
               tosspay:
                 value: { method: TOSSPAY }
               mockCard:
@@ -411,7 +411,7 @@ paths:
                     attempt: 1
                     retryable: false
                     amount: { original: 30000, discount: 15000, final: 15000 }
-                    coupon: { couponRef: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", discount: { kind: RATE, value: 50 }, state: RESERVED }
+                    coupon: { couponIssueId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", discount: { kind: RATE, value: 50 }, state: RESERVED }
                     payment:
                       paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13"
                       portone: { storeId: "store-00000000-0000-0000-0000-000000000000", channelKey: "channel-key-00000000-0000-0000-0000-000000000000", paymentId: "3f2b8c1e-7a4d-4e9b-9c61-2d5f0a8e7b13", orderName: "SeatSAC 영화 예매 2석", totalAmount: 15000, currency: KRW, payMethod: EASY_PAY }
@@ -447,7 +447,7 @@ paths:
                     attempt: 1
                     retryable: true
                     amount: { original: 30000, discount: 0, final: 30000 }
-                    coupon: { couponRef: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", discount: null, state: REJECTED }
+                    coupon: { couponIssueId: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", discount: null, state: REJECTED }
                     payment: null
                     failure: { code: COUPON_NOT_USABLE, reason: EXPIRED }
                     refundNotice: null
@@ -664,10 +664,10 @@ components:
       required: [method]
       properties:
         method: { $ref: "#/components/schemas/PaymentMethod" }
-        couponRef:
+        couponIssueId:
           type: string
           maxLength: 64
-          description: "GET /coupons/me가 준 쿠폰 식별자를 그대로. booking은 해석·검증하지 않는다(coupon이 판정). 형식은 coupon 계약이 정한다"
+          description: "GET /coupons/me가 준 쿠폰 발급 ID를 그대로. booking은 해석·검증하지 않는다(coupon이 판정). 형식은 coupon 계약이 정하고, 여기서는 불투명 문자열(≤ 64)로 받는다 — uuid도 그대로 들어간다"
         card:
           type: object
           description: "CARD(모의) 필수. TOSSPAY에서는 보내지 않는다"
@@ -709,14 +709,14 @@ components:
           properties:
             original: { type: integer, description: "seatCount × 15000" }
             discount: { type: integer, minimum: 0 }
-            final: { type: integer, minimum: 1, description: "포트원 결제창 totalAmount. 15,000의 배수가 아닐 수 있다" }
+            final: { type: integer, minimum: 1, description: "포트원 결제창 totalAmount. 15,000의 배수가 아닐 수 있다. 0원은 없다 — 쿠폰 할인율 상한이 99%(coupon·ops 계약, `final = original − floor(original × rate / 100)`)" }
         coupon:
           oneOf:
             - type: "null"
             - type: object
-              required: [couponRef, discount, state]
+              required: [couponIssueId, discount, state]
               properties:
-                couponRef: { type: string }
+                couponIssueId: { type: string }
                 discount:
                   oneOf:
                     - type: "null"
@@ -755,7 +755,7 @@ components:
               properties:
                 code:
                   type: string
-                  x-extensible-enum: [COUPON_NOT_USABLE, PAYMENT_DECLINED, STEP_TIMEOUT, HOLD_EXPIRED, PAYMENT_PATH_CONFLICT]
+                  x-extensible-enum: [COUPON_NOT_USABLE, PAYMENT_DECLINED, STEP_TIMEOUT, HOLD_EXPIRED]
                   description: "STEP_TIMEOUT은 돈이 움직이기 전 단계(COUPON_RESERVING·PAYMENT_PREPARING, 10초)만. 결제 결과 불명은 HOLD_EXPIRED + reason PAYMENT_RESULT_UNKNOWN"
                 reason: { type: [string, "null"], description: "coupon 거절 reason · payment failureCode · 단계 이름 · PAYMENT_RESULT_UNKNOWN. 값 집합은 보낸 쪽 소유" }
         refundNotice:

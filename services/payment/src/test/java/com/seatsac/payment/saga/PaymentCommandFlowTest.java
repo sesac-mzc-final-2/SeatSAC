@@ -299,10 +299,10 @@ class PaymentCommandFlowTest {
     @Test
     void malformedCommandIsRejectedWithoutTouchingTheDatabase() {
         assertThatThrownBy(() -> handler.handle("{\"type\":\"payment.charge-requested\"}"))
-            .isInstanceOf(IllegalArgumentException.class);
+            .isInstanceOf(MalformedCommandException.class);
         assertThatThrownBy(() -> handler.handle(envelope(UUID.randomUUID().toString(), "payment.unknown",
             "{\"checkoutId\":\"%s\",\"paymentId\":\"%s\",\"bookingId\":1}".formatted(UUID.randomUUID(), UUID.randomUUID()))))
-            .isInstanceOf(IllegalArgumentException.class);
+            .isInstanceOf(MalformedCommandException.class);
         assertThat(inbox.count()).isZero();
     }
 
@@ -320,9 +320,26 @@ class PaymentCommandFlowTest {
         Ids third = new Ids();
         handler.handle(charge(third, 30_000, "4242"));   // 살아 있는 결제(APPROVED)가 있다
         assertThat(payments.findById(third.payment)).isEmpty();
+        // 청구 결과는 approved·declined뿐(02) — preparation-failed면 CHARGING인 booking이 받지 않는다
         JsonNode last = replies().get(replies().size() - 1);
-        assertThat(last.get("type").asText()).isEqualTo("payment.preparation-failed");
-        assertThat(last.at("/payload/reason").asText()).isEqualTo("PAYMENT_CONFLICT");
+        assertThat(last.get("type").asText()).isEqualTo("payment.declined");
+        assertThat(last.at("/payload/failureCode").asText()).isEqualTo("PAYMENT_CONFLICT");
+        assertThat(last.at("/payload/retryable").asBoolean()).isFalse();
+    }
+
+    /** 해제가 청구보다 먼저 왔다 — 청구하지 않고 declined(BOOKING_EXPIRED) */
+    @Test
+    void releaseBeforeChargeDeclinesWithoutCharging() {
+        Ids ids = new Ids();
+        handler.handle(release(ids));
+
+        handler.handle(charge(ids, 30_000, "4242"));
+
+        assertThat(payments.findById(ids.payment)).isEmpty();
+        JsonNode reply = onlyReply();
+        assertThat(reply.get("type").asText()).isEqualTo("payment.declined");
+        assertThat(reply.at("/payload/failureCode").asText()).isEqualTo("BOOKING_EXPIRED");
+        assertThat(reply.at("/payload/retryable").asBoolean()).isFalse();
     }
 
     /** 유일 키 충돌인데 inbox에 이 명령이 없다(다른 표의 충돌) — 중복으로 지우지 않고 재배달시킨다 */

@@ -33,12 +33,17 @@ import org.springframework.stereotype.Service;
  * ②의 기존 메서드는 멱등이라(같은 결제 ID면 저장된 상태, 조건부 UPDATE) 재배달 재처리가 안전하다.
  *
  * <p>업무 결과(거절·결과 불명·포트원 무응답)는 예외가 아니라 결과 메시지다 — 재배달로 포트원을 연타하지 않는다.
- * 예외로 올라가는 것은 형식이 틀린 메시지·DB 오류뿐이고, 재배달 3회 뒤 DLQ로 간다.
+ * 형식이 틀린 명령은 {@link MalformedCommandException}(리스너가 지운다, 04 5장), DB 오류 등 처리 중 장애만 예외로 올라가
+ * 재배달 3회 뒤 DLQ로 간다.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PaymentCommandHandler {
+
+    /** 지표 {@code type} 라벨에 쓰는 값 — 모르는 type은 {@code unknown}으로 묶는다(라벨 값이 늘지 않게) */
+    private static final Set<String> KNOWN_TYPES = Set.of(SagaMessages.PREPARATION_REQUESTED,
+        SagaMessages.CHARGE_REQUESTED, SagaMessages.VERIFICATION_REQUESTED, SagaMessages.RELEASE_REQUESTED);
 
     /** 같은 예매로 다시 결제할 수 있는 실패 — 포트원 FAILED(돈이 안 빠짐). MOCK 거절·금액 불일치·만료는 아니다(06) */
     private static final Set<PaymentFailureCode> RETRYABLE = Set.of(
@@ -57,10 +62,16 @@ public class PaymentCommandHandler {
     public enum Result { OK, DUPLICATE }
 
     /**
-     * @throws IllegalArgumentException 형식이 틀린 명령(재배달해도 같다 → DLQ)
+     * @throws MalformedCommandException 형식이 틀린 명령(재배달해도 같다 → 리스너가 지운다)
      */
     public Result handle(String body) {
-        SagaMessages.Command command = messages.parse(body);
+        SagaMessages.Command command;
+        try {
+            command = messages.parse(body);
+        } catch (MalformedCommandException e) {
+            meterRegistry.counter("payment_command_total", "type", "unknown", "result", "error").increment();
+            throw e;
+        }
         MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.isValid(command.traceId()) ? command.traceId() : TraceIds.newId());
         MDC.put(TraceKeys.MDC_PAYMENT_ID, String.valueOf(command.paymentId()));
         Timer.Sample sample = Timer.start(meterRegistry);
@@ -87,8 +98,9 @@ public class PaymentCommandHandler {
             log.warn("명령 처리 중 유일 키 충돌 — 재배달한다 eventId={} type={}", command.eventId(), command.type());
             throw e;
         } finally {
-            meterRegistry.counter("payment_command_total", "type", command.type(), "result", result).increment();
-            sample.stop(meterRegistry.timer("payment_command_seconds", "type", command.type()));
+            String type = typeLabel(command.type());
+            meterRegistry.counter("payment_command_total", "type", type, "result", result).increment();
+            sample.stop(meterRegistry.timer("payment_command_seconds", "type", type));
             MDC.remove(TraceKeys.MDC_PAYMENT_ID);
             MDC.remove(TraceKeys.MDC_TRACE_ID);
         }
@@ -100,7 +112,7 @@ public class PaymentCommandHandler {
             case SagaMessages.CHARGE_REQUESTED -> charge(command);
             case SagaMessages.VERIFICATION_REQUESTED -> verify(command);
             case SagaMessages.RELEASE_REQUESTED -> release(command);
-            default -> throw new IllegalArgumentException("모르는 명령 type=" + command.type());
+            default -> throw new MalformedCommandException("모르는 명령 type=" + command.type());
         }
     }
 
@@ -128,11 +140,17 @@ public class PaymentCommandHandler {
         writer.record(command, true, reply, done);
     }
 
-    /** CARD(모의) 청구 — 판정까지 끝낸다. 지연 카드는 이 스레드가 기다린다(트랜잭션 밖) */
+    /**
+     * CARD(모의) 청구 — 판정까지 끝낸다. 지연 카드는 이 스레드가 기다린다(트랜잭션 밖).
+     * 결과는 설계 02대로 {@code approved}·{@code declined}뿐이다 — 청구는 준비 단계가 없어 booking이
+     * {@code preparation-failed}를 받지 않는다(CHARGING에서 받으면 선점 만료까지 멈춘다). 청구를 못 했으면
+     * 돈이 안 움직였으므로 {@code declined{retryable=false}}
+     */
     private void charge(SagaMessages.Command command) {
         Instant now = clock.instant();
         if (sagaPayments.isReleased(command.paymentId())) {
-            writer.record(command, false, messages.preparationFailed(command, "BOOKING_EXPIRED", now), now);
+            writer.record(command, false,
+                messages.declined(command, PaymentFailureCode.BOOKING_EXPIRED.name(), false, now), now);
             return;
         }
         PaymentResponse response;
@@ -142,7 +160,7 @@ public class PaymentCommandHandler {
         } catch (BusinessException e) {
             String reason = preparationFailureReason(e);
             log.warn("모의 청구 실패 bookingId={} reason={}", command.bookingId(), reason);
-            writer.record(command, false, messages.preparationFailed(command, reason, now), now);
+            writer.record(command, false, messages.declined(command, reason, false, now), now);
             return;
         }
         Instant done = clock.instant();
@@ -222,9 +240,13 @@ public class PaymentCommandHandler {
         return e.code().responseCode();
     }
 
+    static String typeLabel(String type) {
+        return KNOWN_TYPES.contains(type) ? type : "unknown";
+    }
+
     private static void requireIds(SagaMessages.Command command) {
         if (command.checkoutId() == null || command.paymentId() == null || command.bookingId() == null) {
-            throw new IllegalArgumentException("명령에 checkoutId·paymentId·bookingId가 없다 type=" + command.type());
+            throw new MalformedCommandException("명령에 checkoutId·paymentId·bookingId가 없다 type=" + command.type());
         }
     }
 }

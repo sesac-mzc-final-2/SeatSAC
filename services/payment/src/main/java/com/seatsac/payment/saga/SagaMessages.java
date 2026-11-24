@@ -70,21 +70,21 @@ public class SagaMessages {
     }
 
     /**
-     * @throws IllegalArgumentException JSON이 아니거나 envelope 필수 값(eventId·type·payload)이 없다 — 재배달해도 같으니
-     *                                  부르는 쪽이 DLQ로 보낸다
+     * @throws MalformedCommandException JSON이 아니거나 envelope 필수 값(eventId·type·payload)이 없다 — 재배달해도 같으니
+     *                                   부르는 쪽이 지운다(04 5장)
      */
     public Command parse(String body) {
         JsonNode root;
         try {
             root = objectMapper.readTree(body);
         } catch (JsonProcessingException e) {
-            throw new IllegalArgumentException("명령 본문이 JSON이 아니다", e);
+            throw new MalformedCommandException("명령 본문이 JSON이 아니다", e);
         }
         String eventId = textOf(root, "eventId");
         String type = textOf(root, "type");
         JsonNode payload = root.get("payload");
         if (eventId == null || type == null || payload == null || !payload.isObject()) {
-            throw new IllegalArgumentException("명령 envelope에 eventId·type·payload가 없다");
+            throw new MalformedCommandException("명령 envelope에 eventId·type·payload가 없다");
         }
         return new Command(eventId, type, textOf(root, "traceId"), textOf(root, "correlationId"), payload);
     }

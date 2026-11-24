@@ -42,3 +42,10 @@ custom_domain = "seatsac.com"
 
 # 3.1.23 후속 CloudFront → ALB HTTPS(런북 7-8). off → prepare → (gitops 443 리스너) → on 순서로 한 단계씩 PR
 api_origin_https = "on"
+
+# 6.1.11 Cognito 그룹 지정(ADR-118·119): 시연 계정의 sub(UUID)만 넣는다 — 이메일 금지. sub 얻기·확인은 런북 7-6-5
+#   VIP = 쿠폰 대상(X-User-Grade: VIP) · ADMIN = 관리자 /ops(서비스 정지/가동 가능 — 시연 계정만)
+cognito_group_members = {
+  VIP   = []
+  ADMIN = []
+}

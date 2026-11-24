@@ -2,12 +2,15 @@
 # 3.1.16 Cognito 사용자 풀 · 앱 클라이언트 · Hosted UI 도메인 · ADMIN 그룹 · Pre sign-up Lambda (ADR-37·63)
 #   - 이름(conventions 9장): 사용자 풀 cinema-staging-users · Lambda cinema-staging-cognito-presignup · 도메인 cinema-staging
 #   - 로그인: Hosted UI(클래식) + 코드 + PKCE, 공개 클라이언트(시크릿 없음). 토큰은 화면 메모리(ADR-63)
-#   - gateway: Access Token을 JWKS로 검증(iss·token_use=access·client_id) → X-User-Id(sub)·X-User-Role(cognito:groups의 ADMIN)
+#   - gateway: Access Token을 JWKS로 검증(iss·token_use=access·client_id) → X-User-Id(sub)·X-User-Role(항상 USER, 11/14)
+#              · X-User-Grade(Access Token cognito:groups에 VIP가 있으면 VIP, 6.1.11)
 #   - user: 같은 Access Token으로 GetUser(email·name) → 클라이언트가 aws.cognito.signin.user.admin 범위를 허용해야 하고
 #           화면도 그 범위를 요청해야 한다(런타임 계약 3장 frontend)
 #   - 이메일 실발송 없음: Pre sign-up Lambda가 가입을 자동 확인(autoConfirmUser·autoVerifyEmail) → Cognito 기본 메일 한도와 무관
 #   - 이 풀을 envs/staging-k8s가 이름으로 찾는다(cognito_enabled = true) → ConfigMap COGNITO_* · gateway Application
-#   - 사용자·ADMIN 지정은 Terraform 밖(가입 후 CLI로 그룹 추가, 런북 7-6). 이메일 주소를 코드에 두지 않는다
+#   - 그룹(6.1.11, ADR-118·119): VIP(쿠폰 대상 — gateway가 X-User-Grade: VIP) · ADMIN(관리자 /ops — ops-api가 토큰에서 직접 확인)
+#     가입은 화면(Hosted UI)에서 하고, 시연 계정의 그룹 지정만 var.cognito_group_members(사용자 sub)로 Terraform이 한다
+#     이메일 주소를 코드에 두지 않는다 — sub(UUID)만 받는다(변수 검증). 임시 지정·부하 테스트 계정은 CLI(런북 7-6-5)
 # ------------------------------------------------------------------
 
 locals {
@@ -191,17 +194,52 @@ resource "aws_cognito_user_pool_domain" "this" {
   managed_login_version = 1 # 클래식 Hosted UI (2 = 관리형 로그인은 브랜딩 리소스가 따로 필요)
 }
 
-# gateway: cognito:groups에 ADMIN이 있으면 X-User-Role: ADMIN (/api/admin/**)
+# ---- 그룹 (6.1.11) --------------------------------------------------------
+# ADMIN: 관리자 화면 /ops 전용(ADR-119). ops-api가 Access Token의 cognito:groups에서 직접 확인한다.
+#   gateway는 이 그룹을 읽지 않는다 — X-User-Role은 항상 USER, /api/admin/**은 없다(11/14)
+#   ⚠ ops-api는 서비스 정지/가동을 할 수 있다 → 시연에 쓰는 계정만 넣는다
 resource "aws_cognito_user_group" "admin" {
   name         = "ADMIN"
   user_pool_id = aws_cognito_user_pool.this.id
-  description  = "SeatSAC 관리자 (/api/admin/**). 사람 지정은 런북 7-6"
+  description  = "SeatSAC 관리자 (/ops 전용, ADR-119). 지정은 staging.tfvars cognito_group_members · 런북 7-6-5"
+}
+
+# VIP: 쿠폰 대상(ADR-118). gateway가 토큰 cognito:groups에 VIP가 있으면 X-User-Grade: VIP, 없으면 NORMAL
+resource "aws_cognito_user_group" "vip" {
+  name         = "VIP"
+  user_pool_id = aws_cognito_user_pool.this.id
+  description  = "SeatSAC VIP 등급 (쿠폰 대상, ADR-118). 지정은 staging.tfvars cognito_group_members · 런북 7-6-5"
+}
+
+# 시연 계정의 그룹 지정. 사용자는 Terraform이 만들지 않는다(화면에서 가입) → 가입한 뒤 sub를 tfvars에 넣는다
+#   그룹 변경은 다음 토큰부터 반영(다시 로그인). 여기에 없는 지정(CLI로 넣은 것)은 Terraform이 건드리지 않는다
+locals {
+  cognito_groups = {
+    ADMIN = aws_cognito_user_group.admin.name
+    VIP   = aws_cognito_user_group.vip.name
+  }
+  cognito_memberships = merge([
+    for group, subs in var.cognito_group_members : { for sub in subs : "${group}/${sub}" => { group = group, sub = sub } }
+  ]...)
+}
+
+resource "aws_cognito_user_in_group" "demo" {
+  for_each = local.cognito_memberships
+
+  user_pool_id = aws_cognito_user_pool.this.id
+  group_name   = local.cognito_groups[each.value.group]
+  username     = each.value.sub # 이메일 로그인 풀에서 실제 Username은 sub(UUID)다
 }
 
 # ---- 출력 -----------------------------------------------------------------
 output "cognito_user_pool_id" {
   description = "envs/staging-k8s가 이름(cinema-staging-users)으로 찾는다. 사용자 관리 CLI(--user-pool-id)용"
   value       = aws_cognito_user_pool.this.id
+}
+
+output "cognito_group_member_counts" {
+  description = "6.1.11 Terraform이 지정한 그룹별 계정 수 (sub는 출력하지 않는다. CLI로 넣은 지정은 세지 않는다)"
+  value       = { for g in ["ADMIN", "VIP"] : g => length(lookup(var.cognito_group_members, g, [])) }
 }
 
 output "cognito_issuer_uri" {

@@ -246,7 +246,10 @@ paths:
       description: |
         ai 내부 API `GET /internal/ai/unmet-demand/stats`(명세서 24장, `ai.internal.openapi.yaml`)의 결과를 **그대로** 돌려준다.
         화면은 분류별 막대와 요약 상위 N을 그린다. 질문 원문은 없다(분류·Claude가 쓴 120자 이하 요약·횟수만).
-        ai를 부르지 못하면(연결 1초·응답 3초, 재시도 없음) 503 — 화면은 「통계 없음」으로 보인다.
+        `total`·`byCategory`는 기간 안의 모든 질문을 세고, `top`은 요약이 있는 것만 (분류, 요약) 글자가 같은 것끼리 센다 —
+        그래서 `top`의 `count` 합은 `total`보다 작을 수 있다(비슷한 요약을 묶지 않는다).
+        입력 검증은 ai가 한다 — 날짜 형식 오류, `from > to`, **기간 31일 초과**, `limit` 범위 밖은 ai의 400을 그대로 400으로 전달한다.
+        ai를 부르지 못하거나 ai가 503(`ai_db`를 쓸 수 없음)이면 503(연결 1초·응답 3초, 재시도 없음) — 화면은 「통계 없음」으로 보인다.
       security: [ { bearerAuth: [] } ]
       parameters:
         - name: from
@@ -283,7 +286,9 @@ paths:
                     top:
                       - { category: recommendation, reason: "조건 없이 볼 만한 영화를 추천해 달라는 요청", count: 11 }
                       - { category: action_request, reason: "예매 취소를 채팅으로 해 달라는 요청", count: 8 }
-        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "400":
+          description: "VALIDATION_FAILED — 날짜 형식 오류, `from > to`, 기간 31일 초과, `limit` 범위 밖(`details[].field` = `from`·`to`·`limit`). ai 내부 API의 400을 그대로 전달"
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }

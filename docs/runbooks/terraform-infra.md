@@ -1116,6 +1116,19 @@ kubectl -n cinema-staging get jobs | grep -i preview-traffic                    
 | AnalysisRun `Error`(Failed 아님) | Prometheus 주소·쿼리 오류 | `kubectl -n cinema-staging describe analysisrun <이름>` 메시지 |
 | booking·gateway가 동시에 preview | 블루/그린 동시 금지(노드 2대) | build-push가 booking만 커밋. 사람 PR도 하나씩 |
 
+#### 6-D-6. 체크아웃 saga 플래그와 booking 롤백 (6.2.1·6.2.2, #183)
+
+booking 아웃박스 표 하나를 알림과 saga 명령이 같이 쓴다. **#183보다 옛 booking**은 saga 명령 종류(`PAYMENT_*`)를 읽지 못해, 안 보낸 saga 명령 행이 하나라도 있으면 릴레이 조회 전체가 실패한다 → **알림(`booking.confirmed`)까지 멈춘다**. #183부터는 모르는 종류·목적지를 건너뛰므로(앞으로 새 명령을 더한 버전에서 #183 이상으로 되돌리는 것은 안전) 이 순서는 **#183 이전으로 되돌릴 때만** 필요하다.
+
+| 할 일 | 순서 |
+| --- | --- |
+| 플래그 켜기 | #183 이상이 booking **모든 파드**에 뜬 뒤(블루/그린 전환·preview 정리 끝) gitops PR로 `APP_CHECKOUT_SAGA_ENABLED=true` |
+| 플래그를 켠 뒤 **#183 이전**으로 롤백 | ① gitops PR로 `APP_CHECKOUT_SAGA_ENABLED=false`(새 체크아웃이 404) ② 진행 중 체크아웃이 끝나고(선점 5분 + 스윕 1초) 안 보낸 saga 명령 행이 0이 될 때까지 기다린다 — 아래 확인 ③ 그다음 이미지 revert PR(6-D-4) |
+| ②의 확인(관리자, 읽기만) | `select event_type, status, count(*) from outbox_message where destination <> 'NOTIFICATION' and status in ('PENDING','SENDING') group by 1,2;` → 0행. 진행 중 saga는 `select state, count(*) from checkout_saga where active_booking_id is not null group by 1;` → 0행 |
+
+- 플래그를 끈 채로 되돌리면 진행 중이던 saga 예매는 옛 만료 처리가 맡는다(결제 ID가 붙어 있으면 2분 유예 뒤 payment 동기 조회 — 승인이면 환불·만료, 실패면 좌석 해제). 돈은 사라지지 않지만 그 saga 행은 진행 중으로 남는다 — 다시 #183 이상으로 올리면 스윕이 예매 상태를 따라 닫는다.
+- payment는 같은 문제가 없다(옛 payment에는 결과 아웃박스가 없다).
+
 ### 6-E. NetworkPolicy 허용 목록 확인 (3.1.13, OPS-15)
 
 코드: SeatSAC-gitops `base/common/default-deny-ingress.yaml`(앱 namespace 인바운드 기본 거부) · `base/{svc}/networkpolicy.yaml`(허용) · 확인 스크립트 `infra/scripts/np-check.sh`. 집행은 VPC CNI 네트워크 정책 에이전트(`enableNetworkPolicy = "true"`, 3.1.2). Terraform 변경 없음

@@ -78,7 +78,13 @@ public class CheckoutReplyHandler {
             dispatch(eventId, type, payload, saga.get());
             result = "ok";
         } catch (DataIntegrityViolationException e) {
-            result = "duplicate";   // 같은 결과가 동시에 두 번 — 먼저 끝난 쪽이 반영했다
+            // inbox에 이 결과가 있을 때만 「같은 결과의 동시 처리」다. 그 밖의 유일 키 충돌은 처리되지 않은 것이라
+            // 예외를 올려 재배달한다(지우면 결과가 사라진다)
+            if (!inbox.existsById(eventId)) {
+                log.warn("결과 처리 중 유일 키 충돌 — 재배달한다 eventId={} type={}", eventId, type);
+                throw e;
+            }
+            result = "duplicate";
         } finally {
             meterRegistry.counter("booking_message_consumed_total", "type", type, "result", result).increment();
             MDC.remove(TraceKeys.MDC_TRACE_ID);
@@ -110,19 +116,31 @@ public class CheckoutReplyHandler {
 
     private void onApproved(String eventId, String type, JsonNode payload, CheckoutSaga saga) {
         Booking booking = booking(saga);
+        String paymentId = text(payload, "paymentId");
         if (saga.getState() == CheckoutState.EXPIRED) {
             // payment가 해제 명령을 못 받고 승인했다(D16) — 확정하지 않는다. 해제를 한 번 더 보내 payment가 환불하게 한다
             log.warn("만료된 체크아웃에 승인 — 해제를 다시 보낸다 checkoutId={} bookingId={}", saga.getCheckoutId(),
                 saga.getBookingId());
-            tx.refundInProgress(eventId, type, saga, true, 2, clock.instant());
+            tx.refundInProgress(eventId, type, saga, paymentId, clock.instant());
+            return;
+        }
+        if (!saga.getState().isActive()) {
+            if (saga.getState() == CheckoutState.CONFIRMED && paymentId != null && paymentId.equals(saga.getPaymentId())) {
+                tx.ignore(eventId, type, clock.instant());   // 이 saga를 확정한 결제의 중복 승인
+                return;
+            }
+            // 끝난 saga(실패·재결제 대기·다른 결제로 확정)에 온 승인 — 확정에 쓰지 않는 돈이라 환불한다(06 5장)
+            log.warn("끝난 체크아웃에 승인 — 해제 명령으로 환불한다 checkoutId={} state={} bookingId={}",
+                saga.getCheckoutId(), saga.getState(), saga.getBookingId());
+            tx.releaseLate(eventId, type, saga, paymentId, clock.instant());
             return;
         }
         if (!PAYING.contains(saga.getState()) || booking.getStatus() != BookingStatus.PENDING) {
-            // 예매가 이미 닫혔으면 스윕이 saga를 닫고 해제 명령을 보낸다(그 승인은 payment가 환불)
+            // 진행 중인데 예매가 이미 닫혔으면 스윕이 saga를 닫고 해제 명령을 보낸다(그 승인은 payment가 환불)
             tx.ignore(eventId, type, clock.instant());
             return;
         }
-        PaymentResult payment = new PaymentResult(text(payload, "paymentId"), saga.getBookingId(),
+        PaymentResult payment = new PaymentResult(paymentId, saga.getBookingId(),
             payload.path("amount").asInt(), "APPROVED", null, null, null, instant(payload, "approvedAt"), null,
             saga.getMethod().name(), null, text(payload, "pgTransactionId"), null);
         Applied applied = resultApplier.applyApproved(booking, payment, false);
@@ -143,7 +161,7 @@ public class CheckoutReplyHandler {
         if (saga.getState() == CheckoutState.EXPIRED) {
             if ("BOOKING_EXPIRED".equals(failureCode)) {
                 // 해제 명령을 받은 payment가 늦은 PAID를 환불 대상으로 닫았다(D22)
-                tx.refundInProgress(eventId, type, saga, false, 0, now);
+                tx.refundInProgress(eventId, type, saga, null, now);
             } else {
                 tx.ignore(eventId, type, now);
             }

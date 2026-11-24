@@ -124,6 +124,13 @@ public class OutboxRelay {
      * @return 보냈으면 true. 다른 파드가 먼저 집었거나 실패하면 false
      */
     private boolean relay(OutboxMessage message) {
+        if (message.getEventType() == null || message.getDestination() == null) {
+            // 이 버전이 모르는 종류(더 새 버전이 넣은 행 — 롤백 뒤). 보낼 곳을 모르니 손대지 않고 둔다.
+            // 다시 새 버전이 뜨면 그쪽이 보낸다. 점유하지 않으므로 재시도 횟수도 늘지 않는다(11/24 리뷰 4번)
+            log.warn("모르는 아웃박스 종류 — 건너뛴다 eventId={} bookingId={}", message.getMessageKey(),
+                message.getAggregateId());
+            return false;
+        }
         Long outboxId = message.getOutboxId();
         Instant claimedAt = clock.instant();
         Instant claimUntil = claimedAt.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT);

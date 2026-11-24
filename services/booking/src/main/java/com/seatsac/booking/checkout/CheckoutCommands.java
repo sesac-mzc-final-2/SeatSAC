@@ -20,7 +20,8 @@ import org.springframework.stereotype.Component;
  *
  * <p>{@code aggregate_key}: 같은 체크아웃의 같은 명령은 한 번만(유일 키) — 준비·청구 {@code {checkoutId}:payment},
  * 재확인 {@code {checkoutId}:verify:{attempt}}(시도마다 새 행·새 eventId — payment inbox가 중복으로 버리지 않게),
- * 해제 {@code {checkoutId}:release:{n}}(늦은 승인 뒤 한 번 더 보낼 수 있게, D16).
+ * 해제 {@code {checkoutId}:release:expire}(만료 때 한 번) · {@code {checkoutId}:release:{결과 eventId}}(늦은 승인마다 한 번, D16 —
+ * 설계 01의 {@code {n}}을 결과 eventId로: 같은 결과는 inbox가 막고, 서로 다른 늦은 승인은 각자 한 번씩 보낸다).
  */
 @Component
 @RequiredArgsConstructor
@@ -54,10 +55,15 @@ public class CheckoutCommands {
             });
     }
 
-    /** @param sequence 같은 체크아웃의 몇 번째 해제인지(만료 1, 늦은 승인 뒤 재발송 2…) */
-    public void release(CheckoutSaga saga, int sequence, Instant now) {
-        save(saga, OutboxEventType.PAYMENT_RELEASE_REQUESTED, saga.getCheckoutId() + ":release:" + sequence,
-            saga.getPaymentId(), now, p -> p.put("reason", "HOLD_EXPIRED"));
+    /**
+     * @param paymentId 놓을 결제(보통 saga의 결제, 늦은 승인이면 그 승인의 결제)
+     * @param keySuffix {@code expire} 또는 늦은 결과의 eventId — 같은 키는 한 번만 들어간다
+     */
+    public void release(CheckoutSaga saga, String paymentId, String keySuffix, Instant now) {
+        // aggregate_key VARCHAR(80): checkoutId 36 + ":release:" 9 + eventId 하이픈 없이 32 = 77
+        save(saga, OutboxEventType.PAYMENT_RELEASE_REQUESTED,
+            saga.getCheckoutId() + ":release:" + keySuffix.replace("-", ""), paymentId, now,
+            p -> p.put("reason", "HOLD_EXPIRED"));
     }
 
     private void save(CheckoutSaga saga, OutboxEventType type, String aggregateKey, String paymentId, Instant now,

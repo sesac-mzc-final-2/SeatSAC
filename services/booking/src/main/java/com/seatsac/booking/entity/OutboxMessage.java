@@ -2,6 +2,9 @@ package com.seatsac.booking.entity;
 
 import com.seatsac.booking.enums.OutboxDestination;
 import com.seatsac.booking.enums.OutboxEventType;
+import com.seatsac.booking.enums.OutboxDestinationConverter;
+import com.seatsac.booking.enums.OutboxEventTypeConverter;
+import jakarta.persistence.Convert;
 import com.seatsac.booking.enums.OutboxStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -40,7 +43,8 @@ public class OutboxMessage {
     @Column(name = "message_key", length = 36, nullable = false, unique = true, updatable = false)
     private String messageKey;
 
-    @Enumerated(EnumType.STRING)
+    /** 모르는 값(더 새 버전이 넣은 종류)은 null로 읽는다 — 릴레이가 그 행만 건너뛴다({@link OutboxEventTypeConverter}) */
+    @Convert(converter = OutboxEventTypeConverter.class)
     @Column(name = "event_type", length = 40, nullable = false, updatable = false)
     private OutboxEventType eventType;
 
@@ -56,7 +60,7 @@ public class OutboxMessage {
     @Column(name = "aggregate_key", length = 80, nullable = false, updatable = false)
     private String aggregateKey;
 
-    @Enumerated(EnumType.STRING)
+    @Convert(converter = OutboxDestinationConverter.class)
     @Column(name = "destination", length = 40, nullable = false, updatable = false)
     private OutboxDestination destination;
 

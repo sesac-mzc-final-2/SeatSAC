@@ -128,6 +128,26 @@ class OutboxRelayFlowTest {
             .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
     }
 
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @Test
+    @DisplayName("모르는 종류의 행(더 새 버전이 넣음)은 건너뛰고 아는 행은 그대로 보낸다 — 롤백 뒤에도 알림이 멈추지 않는다")
+    void unknownEventTypeIsSkippedWithoutBlockingOthers() {
+        OutboxMessage known = save(7001L, NOW);
+        OutboxMessage future = save(7002L, NOW);
+        jdbc.update("update outbox_message set event_type = 'COUPON_FUTURE_REQUESTED' where outbox_id = ?",
+            future.getOutboxId());
+
+        assertThat(relay.relayOnce()).isEqualTo(1);
+
+        assertThat(outboxRepository.findById(known.getOutboxId())).get()
+            .extracting(OutboxMessage::getStatus).isEqualTo(OutboxStatus.SENT);
+        assertThat(jdbc.queryForObject("select status from outbox_message where outbox_id = ?", String.class,
+            future.getOutboxId())).isEqualTo("PENDING");
+        then(publisher).should(times(1)).publish(anyString(), anyString(), anyString());
+    }
+
     @Test
     @DisplayName("보낼 차례가 된 메시지를 보내고 SENT로 기록한다")
     void sendsDueMessage() throws Exception {

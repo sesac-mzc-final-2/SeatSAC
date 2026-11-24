@@ -72,7 +72,7 @@ public class CheckoutResultTx {
             couponPort.release(saga.getCheckoutId(), saga.getBookingId(), saga.getCouponIssueId());
         }
         if (releasePayment && saga.getPaymentId() != null) {
-            commands.release(saga, 1, now);
+            commands.release(saga, saga.getPaymentId(), "expire", now);
         }
         return true;
     }
@@ -91,17 +91,27 @@ public class CheckoutResultTx {
     }
 
     /**
-     * 만료된 saga에 늦은 결과 — 환불 안내만 바꾼다. {@code resendRelease}면 해제 명령을 한 번 더(payment가 해제 명령을
-     * 못 받고 승인한 경우, D16). {@code sequence}는 같은 체크아웃의 몇 번째 해제인지(유일 키가 같은 재발송을 막는다)
+     * 만료된 saga에 늦은 결과 — 환불 안내를 바꾼다. {@code releasePaymentId}가 있으면 그 결제에 해제 명령을 한 번 더
+     * (payment가 해제 명령을 못 받고 승인한 경우, D16). 키는 이 결과의 eventId라 서로 다른 늦은 승인마다 한 번씩 나간다
      */
     @Transactional
-    public void refundInProgress(String messageId, String messageType, CheckoutSaga saga, boolean resendRelease,
-                                 int sequence, Instant now) {
+    public void refundInProgress(String messageId, String messageType, CheckoutSaga saga, String releasePaymentId,
+                                 Instant now) {
         received(messageId, messageType, now);
         sagas.noteRefund(saga.getCheckoutId(), "REFUND_IN_PROGRESS", now);
-        if (resendRelease && saga.getPaymentId() != null) {
-            commands.release(saga, sequence, now);
+        if (releasePaymentId != null) {
+            commands.release(saga, releasePaymentId, messageId, now);
         }
+    }
+
+    /**
+     * 끝난 saga(실패·재결제 대기 등)에 온 승인 — 확정에 쓰지 않는 돈이다. 해제 명령을 보내 payment가 환불하게 한다(06 5장).
+     * 환불 안내는 만료 화면에만 있어 바꾸지 않는다
+     */
+    @Transactional
+    public void releaseLate(String messageId, String messageType, CheckoutSaga saga, String paymentId, Instant now) {
+        received(messageId, messageType, now);
+        commands.release(saga, paymentId, messageId, now);
     }
 
     /** 스윕 재확인 — 처리권을 잡은 파드만 다음 확인 명령을 보낸다 */

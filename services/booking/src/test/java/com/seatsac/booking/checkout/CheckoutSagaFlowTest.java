@@ -70,6 +70,8 @@ class CheckoutSagaFlowTest {
     CatalogClient catalogClient;
     @MockitoBean
     PaymentClient paymentClient;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
+    CheckoutResultTx resultTx;
 
     @Autowired
     ScreeningCache screeningCache;
@@ -283,6 +285,77 @@ class CheckoutSagaFlowTest {
         assertThat(saga(accepted).getRefundNotice()).isEqualTo("REFUND_IN_PROGRESS");
         assertThat(commands("payment.release-requested")).hasSize(2);
         verifyNoInteractions(paymentClient);   // 동기 취소를 부르지 않는다(D16)
+    }
+
+    /** 06 5장 — 끝난 saga(실패)에 온 승인은 확정에 쓰지 않고 해제 명령으로 환불한다 */
+    @Test
+    void approvalOnAFailedSagaSendsReleaseInsteadOfIgnoring() {
+        Long bookingId = hold();
+        CheckoutAcceptedResponse accepted = start(bookingId, card(), null);
+        String paymentId = bookings.findById(bookingId).orElseThrow().getCurrentPaymentId();
+        replies.handle(reply(accepted.checkoutId(), "payment.declined", paymentId, bookingId,
+            "\"failureCode\":\"CARD_DECLINED\",\"retryable\":false"));
+
+        replies.handle(reply(accepted.checkoutId(), "payment.approved", paymentId, bookingId,
+            "\"amount\":30000,\"approvedAt\":\"2026-11-24T14:00:13+09:00\",\"pgTransactionId\":null"));
+
+        assertThat(bookings.findById(bookingId)).get().extracting(Booking::getStatus)
+            .isEqualTo(BookingStatus.PAYMENT_FAILED);
+        JsonNode release = command("payment.release-requested");
+        assertThat(release.at("/payload/paymentId").asText()).isEqualTo(paymentId);
+    }
+
+    /** 확정한 결제의 승인이 한 번 더 왔다(확인 명령 두 개가 둘 다 답함) — 환불하지 않는다 */
+    @Test
+    void duplicateApprovalOfTheConfirmingPaymentDoesNotRelease() {
+        Long bookingId = hold();
+        CheckoutAcceptedResponse accepted = start(bookingId, card(), null);
+        String paymentId = bookings.findById(bookingId).orElseThrow().getCurrentPaymentId();
+        String fields = "\"amount\":30000,\"approvedAt\":\"2026-11-24T14:00:13+09:00\",\"pgTransactionId\":null";
+        replies.handle(reply(accepted.checkoutId(), "payment.approved", paymentId, bookingId, fields));
+
+        replies.handle(reply(accepted.checkoutId(), "payment.approved", paymentId, bookingId, fields));
+
+        assertThat(saga(accepted).getState()).isEqualTo(CheckoutState.CONFIRMED);
+        assertThat(commands("payment.release-requested")).isEmpty();
+    }
+
+    /** 만료 뒤 서로 다른 늦은 승인이 두 번 — 각자 해제를 한 번씩(유일 키에 걸리지 않는다) */
+    @Test
+    void twoDifferentLateApprovalsEachResendRelease() {
+        Long bookingId = hold();
+        CheckoutAcceptedResponse accepted = start(bookingId, card(), null);
+        String paymentId = bookings.findById(bookingId).orElseThrow().getCurrentPaymentId();
+        jdbc.update("update booking set expires_at = utc_timestamp(3) - interval 1 second where booking_id = ?",
+            bookingId);
+        holdExpiryService.expire(bookingId);
+        sweeper.sweepOnce();
+        String fields = "\"amount\":30000,\"approvedAt\":\"2026-11-24T14:00:13+09:00\",\"pgTransactionId\":null";
+
+        replies.handle(reply(accepted.checkoutId(), "payment.approved", paymentId, bookingId, fields));
+        replies.handle(reply(accepted.checkoutId(), "payment.approved", paymentId, bookingId, fields));
+
+        assertThat(commands("payment.release-requested")).hasSize(3);   // 만료 1 + 늦은 승인 2
+    }
+
+    /** 유일 키 충돌인데 inbox에 이 결과가 없다 — 지우지 않고 재배달시킨다 */
+    @Test
+    void uniqueKeyClashOutsideTheInboxIsRedelivered() {
+        Long bookingId = hold();
+        CheckoutAcceptedResponse accepted = start(bookingId, card(), null);
+        String paymentId = bookings.findById(bookingId).orElseThrow().getCurrentPaymentId();
+        String unknown = reply(accepted.checkoutId(), "payment.result-unknown", paymentId, bookingId,
+            "\"reason\":\"NOT_YET\",\"attempt\":1");
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException("outbox UK"))
+            .when(resultTx).noteUnknown(any(), any(), any(), any(), any(), any());
+
+        assertThatThrownBy(() -> replies.handle(unknown))
+            .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(inbox.count()).isZero();
+
+        org.mockito.Mockito.reset(resultTx);
+        replies.handle(unknown);   // 재배달 — 이번에는 처리된다
+        assertThat(inbox.count()).isEqualTo(1);
     }
 
     // --- 쿠폰(none 어댑터) · 재시도 ---

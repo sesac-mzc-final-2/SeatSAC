@@ -122,6 +122,25 @@ variable "rds_connection_alarm" {
   default     = 130
 }
 
+variable "service_databases" {
+  description = <<-EOT
+    6.1.1 서비스별 RDS 인스턴스(ADR-115). 키 = 서비스 이름 → cinema-staging-{키}-db, 스키마 {키}_db.
+    값은 docs/data-model.md 7-1 표와 같게 둔다. connection_alarm은 그 클래스 max_connections의 약 75%
+    (db.t4g.small 약 170 → 130, db.t4g.micro 약 60 → 45). 비우면 인스턴스를 만들지 않는다
+  EOT
+  type = map(object({
+    instance_class   = string
+    multi_az         = bool
+    connection_alarm = number
+  }))
+  default = {}
+
+  validation {
+    condition     = alltrue([for k in keys(var.service_databases) : contains(["booking", "payment", "user", "catalog", "coupon", "ai"], k)])
+    error_message = "service_databases 키는 booking·payment·user·catalog·coupon·ai 중에서만 쓴다 (docs/conventions.md 3장 스키마 표)."
+  }
+}
+
 variable "valkey_engine_version" {
   type    = string
   default = "8.2"

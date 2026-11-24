@@ -22,6 +22,16 @@ rds_instance_class    = "db.t4g.small"
 valkey_engine_version = "8.2"
 valkey_node_type      = "cache.t4g.micro"
 
+# 6.1.1 서비스별 RDS 인스턴스 (ADR-115, docs/data-model.md 7-1). 기존 cinema-staging-mysql은 다 옮길 때까지 둔다(런북 8-E)
+service_databases = {
+  booking = { instance_class = "db.t4g.small", multi_az = true, connection_alarm = 130 }
+  payment = { instance_class = "db.t4g.micro", multi_az = true, connection_alarm = 45 }
+  user    = { instance_class = "db.t4g.micro", multi_az = true, connection_alarm = 45 }
+  catalog = { instance_class = "db.t4g.micro", multi_az = true, connection_alarm = 45 }
+  coupon  = { instance_class = "db.t4g.micro", multi_az = true, connection_alarm = 45 }
+  ai      = { instance_class = "db.t4g.micro", multi_az = false, connection_alarm = 45 }
+}
+
 # 3.1.23 사용자 도메인(선택). Route 53에서 등록한 뒤에만 채운다(런북 7-7). 비우면 CloudFront 기본 도메인만
 custom_domain = "seatsac.com"
 

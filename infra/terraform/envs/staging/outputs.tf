@@ -77,6 +77,11 @@ output "rds_master_secret_arn" {
   value       = aws_db_instance.mysql.master_user_secret[0].secret_arn
 }
 
+output "service_db_endpoints" {
+  description = "6.1.1 서비스별 RDS 주소 (ConfigMap cinema-infra-endpoints의 DB_HOST_{SVC} — envs/staging-k8s가 식별자로 다시 조회한다)"
+  value       = { for svc, db in aws_db_instance.service : svc => db.address }
+}
+
 output "valkey_primary_endpoint" {
   description = "SPRING_DATA_REDIS_HOST (포트 6379, SSL true)"
   value       = aws_elasticache_replication_group.valkey.primary_endpoint_address

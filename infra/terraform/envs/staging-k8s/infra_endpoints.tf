@@ -66,7 +66,12 @@ locals {
     SQS_NOTIFICATION_URL = "https://sqs.${var.region}.amazonaws.com/${local.account_id}/${var.notification_queue_name}"
     COGNITO_ISSUER_URI   = var.cognito_enabled ? "https://cognito-idp.${var.region}.amazonaws.com/${local.cognito_pool_id}" : ""
     COGNITO_CLIENT_ID    = local.cognito_client_id
-  }, { for k, v in local.ai_endpoints : k => v if var.ai_enabled }, local.portone_endpoints) # 포트원 공개 값(ADR-112, portone.tf)
+    },
+    # 6.1.1 서비스별 RDS 주소(ADR-115): DB_HOST_BOOKING … 옮기는 동안 DB_HOST(기존 인스턴스)도 남긴다
+    { for svc in local.service_dbs : "DB_HOST_${upper(svc)}" => data.aws_db_instance.service[svc].address },
+    { for k, v in local.ai_endpoints : k => v if var.ai_enabled },
+    local.portone_endpoints, # 포트원 공개 값(ADR-112, portone.tf)
+  )
 }
 
 resource "kubernetes_config_map_v1" "infra_endpoints" {

@@ -73,6 +73,27 @@ variable "rds_identifier" {
   default     = "cinema-staging-mysql"
 }
 
+variable "service_db_services" {
+  description = <<-EOT
+    6.1.1 자기 RDS 인스턴스(cinema-staging-{svc}-db)가 있는 서비스(ADR-115). envs/staging의 service_databases 키와 같게 둔다.
+    여기 넣은 서비스마다 인스턴스를 조회해 db-bootstrap Job·DB_HOST_{SVC}를 만든다 → **envs/staging apply로 인스턴스가 생긴 뒤** 채운다
+    (없는 인스턴스를 넣으면 plan이 DBInstanceNotFound로 멈춘다)
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for s in var.service_db_services : contains(["booking", "payment", "user", "catalog", "coupon", "ai"], s)]) && length(var.service_db_services) == length(distinct(var.service_db_services))
+    error_message = "service_db_services는 booking·payment·user·catalog·coupon·ai 중에서 중복 없이 쓴다."
+  }
+}
+
+variable "service_db_identifier_prefix" {
+  description = "서비스별 RDS 식별자 접두사 → {접두사}-{svc}-db (envs/staging var.name과 같은 값)"
+  type        = string
+  default     = "cinema-staging"
+}
+
 variable "mysql_client_image" {
   description = "DB 계정 생성 Job의 mysql 클라이언트 이미지 (RDS 8.4와 같은 메이저, 버전 고정)"
   type        = string

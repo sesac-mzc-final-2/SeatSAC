@@ -131,6 +131,7 @@
 | `unmet_demand` | PK `id`, INDEX (`created_at`), (`category`) | 범위 밖·거부 질문 1건 = 1행: `category`·`reason`·`question_hash`·`slots` JSON·`created_at`. **질문 원문·userId 없음** |
 
 - 계정: `ai_app`(DML), `ai_migrator`(DDL), `ai_query`(NL2SQL 실행 전용, `movie`·`theater`·`screening` SELECT만, `MAX_EXECUTION_TIME` 5초)
+- `ai_query`의 테이블 권한은 **ai 마이그레이션이 준다**(6.1.1): db-bootstrap은 계정만 만든다(권한 없음) — 그때는 테이블이 없고 MySQL은 없는 테이블에 SELECT만 줄 수 없다. 테이블을 만드는 마이그레이션 뒤에 `GRANT SELECT ON ai_db.movie TO 'ai_query'@'%'`(`theater`·`screening`도)를 넣는다. 그래서 `ai_migrator`만 `ai_db` 범위의 GRANT OPTION을 갖는다(다른 서비스의 migrator에는 없다). 세 테이블 밖의 권한을 주면 다음 db-bootstrap 실행이 실패한다. 5초 상한은 계정에 걸 수 없어 ai가 연결마다 세션에 건다
 
 ### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126)
 

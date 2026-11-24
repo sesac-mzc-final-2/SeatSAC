@@ -1,13 +1,20 @@
 # GitHub 아이디로 바꿔 커밋한다
-/services/gateway/      @imi21123
-/services/catalog/      @imi21123
-/services/user/         @imi21123
+# 11/23~ 한채연(@imi21123) 부재 중 gateway·catalog·user·coupon은 김종식(@pinodo)이 대행한다 → 두 사람을 함께 둔다.
+#   소유자가 한 명뿐이면 대행자가 올린 PR이 코드 소유자 승인(ruleset)을 받지 못해 머지되지 않는다.
+#   복귀하면 @pinodo를 이 네 경로에서 뺀다
+/services/gateway/      @imi21123 @pinodo
+/services/catalog/      @imi21123 @pinodo
+/services/user/         @imi21123 @pinodo
 /services/booking/      @namgungil
 /services/payment/      @namgungil
 /services/ai/           @seohyeon-tomato
+# MSA 고도화(ADR-118·119): coupon(Java)·ops-api(Python)
+/services/coupon/       @imi21123 @pinodo
+/services/ops-api/      @pinodo @namgungil
 /frontend/              @imi21123 @namgungil
 /contracts/             @imi21123 @namgungil
 /contracts/openapi/ai*  @seohyeon-tomato @imi21123
+/contracts/openapi/ops* @pinodo @imi21123
 /contracts/tools/       @pinodo
 /contracts/redocly.yaml @pinodo
 /libs/                  @pinodo @imi21123 @namgungil

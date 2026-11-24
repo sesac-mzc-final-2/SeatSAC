@@ -501,7 +501,7 @@ components:
       required: [title, discountRate, startsAt, totalQuantity]
       properties:
         title: { type: string, minLength: 1, maxLength: 100 }
-        discountRate: { type: integer, minimum: 1, maximum: 100, description: "할인율(%)" }
+        discountRate: { type: integer, minimum: 1, maximum: 99, description: "할인율(%). 상한 99 — 100이면 결제 금액이 0원이 되는데 체크아웃·payment 금액은 1원 이상이다(booking.openapi.yaml `amount.final`, #176)" }
         startsAt: { type: string, format: date-time, description: "시작 시각(`+09:00`)" }
         durationMinutes: { type: integer, minimum: 1, default: 60, description: "진행 시간(분). 종료 = 시작 + 이 값" }
         totalQuantity: { type: integer, minimum: 1, description: "선착순 수량" }

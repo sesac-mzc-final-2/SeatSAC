@@ -36,6 +36,10 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class CheckoutReplyHandler {
 
+    private static final Set<String> KNOWN_TYPES = Set.of("payment.prepared", "payment.preparation-failed",
+        "payment.approved", "payment.declined", "payment.result-unknown",
+        "coupon.reserved", "coupon.reservation-rejected");
+
     static final Set<CheckoutState> PAYING = EnumSet.of(CheckoutState.READY_TO_PAY, CheckoutState.VERIFYING,
         CheckoutState.CHARGING);
 
@@ -52,12 +56,19 @@ public class CheckoutReplyHandler {
 
     /** 메시지 하나 — 끝까지 처리했거나(중복 포함) 무시해도 되면 정상 반환, 다시 받아야 하면 예외 */
     public void handle(String body) {
-        JsonNode root = parse(body);
+        JsonNode root;
+        try {
+            root = parse(body);
+        } catch (MalformedReplyException e) {
+            countMalformed();
+            throw e;
+        }
         String eventId = text(root, "eventId");
         String type = text(root, "type");
         JsonNode payload = root.get("payload");
         if (eventId == null || type == null || payload == null || !payload.isObject()) {
-            throw new IllegalArgumentException("결과 envelope에 eventId·type·payload가 없다");
+            countMalformed();
+            throw new MalformedReplyException("결과 envelope에 eventId·type·payload가 없다");
         }
         String traceId = text(root, "traceId");
         MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.isValid(traceId) ? traceId : TraceIds.newId());
@@ -86,7 +97,7 @@ public class CheckoutReplyHandler {
             }
             result = "duplicate";
         } finally {
-            meterRegistry.counter("booking_message_consumed_total", "type", type, "result", result).increment();
+            meterRegistry.counter("booking_message_consumed_total", "type", typeLabel(type), "result", result).increment();
             MDC.remove(TraceKeys.MDC_TRACE_ID);
         }
     }
@@ -213,6 +224,16 @@ public class CheckoutReplyHandler {
             .orElseThrow(() -> new IllegalStateException("체크아웃의 예매가 없다 bookingId=" + saga.getBookingId()));
     }
 
+    /** 지표 {@code type} 라벨 — 모르는 type은 {@code unknown}으로 묶는다(라벨 값이 늘지 않게) */
+    static String typeLabel(String type) {
+        return KNOWN_TYPES.contains(type) ? type : "unknown";
+    }
+
+    /** 형식 오류(04 5장) — 지우기 전에 센다 */
+    private void countMalformed() {
+        meterRegistry.counter("booking_message_consumed_total", "type", "unknown", "result", "error").increment();
+    }
+
     private void count(String result) {
         meterRegistry.counter("booking_checkout_total", "result", result).increment();
     }
@@ -221,7 +242,7 @@ public class CheckoutReplyHandler {
         try {
             return objectMapper.readTree(body);
         } catch (JsonProcessingException e) {
-            throw new IllegalArgumentException("결과 본문이 JSON이 아니다", e);
+            throw new MalformedReplyException("결과 본문이 JSON이 아니다", e);
         }
     }
 

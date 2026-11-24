@@ -1123,7 +1123,8 @@ booking 아웃박스 표 하나를 알림과 saga 명령이 같이 쓴다. **#18
 | 할 일 | 순서 |
 | --- | --- |
 | 플래그 켜기 | #183 이상이 booking **모든 파드**에 뜬 뒤(블루/그린 전환·preview 정리 끝) gitops PR로 `APP_CHECKOUT_SAGA_ENABLED=true` |
-| 플래그를 켠 뒤 **#183 이전**으로 롤백 | ① gitops PR로 `APP_CHECKOUT_SAGA_ENABLED=false`(새 체크아웃이 404) ② 진행 중 체크아웃이 끝나고(선점 5분 + 스윕 1초) 안 보낸 saga 명령 행이 0이 될 때까지 기다린다 — 아래 확인 ③ 그다음 이미지 revert PR(6-D-4) |
+| 켜기 전 조건(토스페이) | ① payment가 스윕·웹훅으로 saga 결제를 닫을 때 결과 이벤트를 낸다(설계 D7 — 6.2.3 후속, **미구현**). 없으면 만료 뒤 결제를 마친 사용자의 해제 명령이 사라졌을 때(형식 오류 삭제·DLQ) payment가 그 결제를 승인으로 닫고 booking은 모른다 → 돈은 빠졌는데 예매가 없다(환불 미완료 경보도 잡지 못한다). D7 전에는 **모의 카드(측정)만** 켠다 ② 소비 실패 경보: `payment_command_total{result="error"}`·`booking_message_consumed_total{result="error"}` 증가 > 0 — 형식 오류는 DLQ로 가지 않고 지워지므로(04 5장) DLQ 경보가 울리지 않는다 |
+| 플래그를 켠 뒤 **#183 이전**으로 롤백 | ① gitops PR로 `APP_CHECKOUT_SAGA_ENABLED=false`(새 체크아웃이 404 — 스윕·결과 소비자는 계속 돌아 진행 중 체크아웃을 닫는다) ② 진행 중 체크아웃이 끝나고(선점 5분 + 스윕 1초) 안 보낸 saga 명령 행이 0이 될 때까지 기다린다 — 아래 확인 ③ 그다음 이미지 revert PR(6-D-4) |
 | ②의 확인(관리자, 읽기만) | `select event_type, status, count(*) from outbox_message where destination <> 'NOTIFICATION' and status in ('PENDING','SENDING') group by 1,2;` → 0행. 진행 중 saga는 `select state, count(*) from checkout_saga where active_booking_id is not null group by 1;` → 0행 |
 
 - 플래그를 끈 채로 되돌리면 진행 중이던 saga 예매는 옛 만료 처리가 맡는다(결제 ID가 붙어 있으면 2분 유예 뒤 payment 동기 조회 — 승인이면 환불·만료, 실패면 좌석 해제). 돈은 사라지지 않지만 그 saga 행은 진행 중으로 남는다 — 다시 #183 이상으로 올리면 스윕이 예매 상태를 따라 닫는다.

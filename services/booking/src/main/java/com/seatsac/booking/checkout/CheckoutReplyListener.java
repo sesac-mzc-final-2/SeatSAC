@@ -29,7 +29,7 @@ public class CheckoutReplyListener {
     public void onMessage(String body, Acknowledgement acknowledgement) {
         try {
             handler.handle(body);
-        } catch (IllegalArgumentException e) {
+        } catch (MalformedReplyException e) {
             log.error("결과 형식 오류 — 지운다(재배달해도 같다): {}", e.getMessage());
         }
         acknowledgement.acknowledge();

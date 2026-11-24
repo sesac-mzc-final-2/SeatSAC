@@ -106,7 +106,7 @@ public class CheckoutSagaService {
         }
         log.info("체크아웃 시작 checkoutId={} bookingId={} method={} state={}", checkoutId, bookingId,
             request.method(), state);
-        return new CheckoutAcceptedResponse(checkoutId, bookingId, state, state.isActive() ? POLL_AFTER_MS : null);
+        return new CheckoutAcceptedResponse(checkoutId, bookingId, state, POLL_AFTER_MS);
     }
 
     /** {@code POST /bookings/{id}/checkout/confirm} — 결제창이 닫혔다(성공·취소 어느 쪽이든). 202 */

@@ -171,6 +171,8 @@ class CheckoutSagaFlowTest {
     void declinedReleasesSeatsAndFailsTheSaga() {
         Long bookingId = hold();
         CheckoutAcceptedResponse accepted = start(bookingId, card(), null);
+        // 청구 중(CHARGING) 거절 — payment는 청구 실패도 declined로 낸다(02, #182 리뷰)
+        assertThat(accepted.state()).isEqualTo(CheckoutState.CHARGING);
         String paymentId = bookings.findById(bookingId).orElseThrow().getCurrentPaymentId();
 
         replies.handle(reply(accepted.checkoutId(), "payment.declined", paymentId, bookingId,
@@ -338,6 +340,15 @@ class CheckoutSagaFlowTest {
         assertThat(commands("payment.release-requested")).hasSize(3);   // 만료 1 + 늦은 승인 2
     }
 
+    /** 형식이 틀린 결과는 전용 예외 — 리스너가 지운다(04 5장). inbox·saga는 건드리지 않는다 */
+    @Test
+    void malformedReplyIsRejectedWithItsOwnException() {
+        assertThatThrownBy(() -> replies.handle("not json")).isInstanceOf(MalformedReplyException.class);
+        assertThatThrownBy(() -> replies.handle("{\"type\":\"payment.approved\"}"))
+            .isInstanceOf(MalformedReplyException.class);
+        assertThat(inbox.count()).isZero();
+    }
+
     /** 유일 키 충돌인데 inbox에 이 결과가 없다 — 지우지 않고 재배달시킨다 */
     @Test
     void uniqueKeyClashOutsideTheInboxIsRedelivered() {
@@ -367,7 +378,7 @@ class CheckoutSagaFlowTest {
         CheckoutAcceptedResponse rejected = start(bookingId, card(), "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d");
 
         assertThat(rejected.state()).isEqualTo(CheckoutState.COUPON_REJECTED);
-        assertThat(rejected.pollAfterMs()).isNull();
+        assertThat(rejected.pollAfterMs()).isEqualTo(1000L);   // 계약 CheckoutAccepted는 필수 정수
         Booking booking = bookings.findById(bookingId).orElseThrow();
         assertThat(booking.getStatus()).isEqualTo(BookingStatus.PENDING);
         assertThat(booking.getCurrentPaymentId()).isNull();   // 쿠폰 단계에서는 붙이지 않는다(D14)

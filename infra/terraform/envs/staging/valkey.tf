@@ -1,6 +1,10 @@
 # ------------------------------------------------------------------
 # 3.1.3 ElastiCache Valkey 8.2 (ADR-33·44·59)
-#   - cache.t4g.micro 1노드(복제본 없음), data 서브넷, 전송 중·저장 암호화
+#   - cache.t4g.micro, data 서브넷, 전송 중·저장 암호화. 기본 1노드 — 6.1.2(ADR-122) var.valkey_replicas = 1이면
+#     AZ c에 복제본 1개 + 자동 장애 조치·Multi-AZ. 앱은 primary 엔드포인트(VALKEY_HOST) 하나만 쓰므로 설정 변경이 없다
+#     장애 조치 중(보통 1분 안팎)에는 쓰기가 실패하고, 끝나면 같은 주소가 새 primary를 가리킨다. 복제는 비동기라
+#     넘어가는 순간의 마지막 쓰기(선점 키·Pub/Sub 메시지)는 사라질 수 있다 → 좌석은 RDS(booking_seat UK)가 최종 방어선
+#     쿠폰 재고(coupon:stock:*)는 DECR이 사라지면 재고가 많게 보여 초과 발급될 수 있다 → 이벤트 중 장애 조치 금지·대조(런북 5-6)
 #   - noeviction: 선점 키(seat:*·user-hold:*)가 메모리 부족으로 밀려나면 이중 선점 위험 → 차라리 쓰기 오류
 #   - TTL 없는 키(conventions 4장): hold-expiry(sorted set, 앱이 ZREM으로 정리)·seat-seq:{회차}(회차별 일련번호, 계속 남음).
 #     noeviction이라 지워지지 않는다(의도). 회차 수 × 수십 바이트라 데모 기간 메모리 영향은 작지만,
@@ -41,16 +45,16 @@ resource "aws_elasticache_replication_group" "valkey" {
   engine               = "valkey"
   engine_version       = var.valkey_engine_version
   node_type            = var.valkey_node_type
-  num_cache_clusters   = 1 # 복제본 없음 (Single-AZ, ADR-61과 같은 기준)
+  num_cache_clusters   = 1 + var.valkey_replicas # 0이면 1노드(ADR-61과 같은 기준), 1이면 primary + 복제본(ADR-122)
   parameter_group_name = aws_elasticache_parameter_group.valkey.name
   port                 = 6379
 
   subnet_group_name           = aws_elasticache_subnet_group.valkey.name
   security_group_ids          = [aws_security_group.valkey.id]
-  preferred_cache_cluster_azs = [var.azs[0]] # RDS와 같은 AZ(a)
+  preferred_cache_cluster_azs = slice(var.azs, 0, 1 + var.valkey_replicas) # primary는 AZ a, 복제본은 AZ c
 
-  automatic_failover_enabled = false
-  multi_az_enabled           = false
+  automatic_failover_enabled = var.valkey_replicas > 0
+  multi_az_enabled           = var.valkey_replicas > 0
 
   transit_encryption_enabled = true # 앱: SPRING_DATA_REDIS_SSL_ENABLED=true
   transit_encryption_mode    = "required"

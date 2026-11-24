@@ -16,6 +16,11 @@ node_instance_type    = "t3.xlarge" # ng-a·ng-c (11/14 t3.large → t3.xlarge, 
 ai_node_instance_type = "t3.large"  # ng-ai — 기본 노드와 따로
 developer_namespaces  = ["cinema-staging", "monitoring"]
 
+# 6.1.2 가용성(ADR-122): NAT AZ별 · Valkey 2개 복제본 + 자동 장애 조치. NAT는 런북 5-6 순서로 apply
+nat_gateway_per_az = true
+valkey_replicas    = 1
+ai_valkey_replicas = 1
+
 # RDS·Valkey (3.1.3)
 rds_engine_version    = "8.4"
 rds_instance_class    = "db.t4g.small"

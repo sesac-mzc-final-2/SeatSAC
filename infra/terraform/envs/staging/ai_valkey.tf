@@ -51,16 +51,16 @@ resource "aws_elasticache_replication_group" "ai_valkey" {
   engine               = "valkey"
   engine_version       = var.valkey_engine_version # 8.2 — 벡터 검색 지원
   node_type            = var.ai_valkey_node_type
-  num_cache_clusters   = 1
+  num_cache_clusters   = 1 + var.ai_valkey_replicas # 6.1.2(ADR-122): 1이면 AZ c에 복제본 + 자동 장애 조치
   parameter_group_name = aws_elasticache_parameter_group.ai_valkey.name
   port                 = 6379
 
   subnet_group_name           = aws_elasticache_subnet_group.valkey.name # data 서브넷(기존과 같은 그룹)
   security_group_ids          = [aws_security_group.ai_valkey.id]
-  preferred_cache_cluster_azs = [var.azs[0]]
+  preferred_cache_cluster_azs = slice(var.azs, 0, 1 + var.ai_valkey_replicas)
 
-  automatic_failover_enabled = false
-  multi_az_enabled           = false
+  automatic_failover_enabled = var.ai_valkey_replicas > 0
+  multi_az_enabled           = var.ai_valkey_replicas > 0
 
   transit_encryption_enabled = true # 앱: APP_AI_VALKEY_TLS=true
   transit_encryption_mode    = "required"
@@ -75,9 +75,10 @@ resource "aws_elasticache_replication_group" "ai_valkey" {
 }
 
 locals {
-  ai_valkey_cluster_id = tolist(aws_elasticache_replication_group.ai_valkey.member_clusters)[0]
+  # 노드 ID는 {복제 그룹}-001, -002 … 로 정해진다(member_clusters는 apply 뒤에야 알 수 있어 for_each 키로 쓸 수 없다)
+  ai_valkey_cluster_id = "${aws_elasticache_replication_group.ai_valkey.replication_group_id}-001"
 
-  ai_valkey_alarms = {
+  ai_valkey_alarm_defs = {
     ai-valkey-memory-80 = {
       metric      = "DatabaseMemoryUsagePercentage"
       statistic   = "Maximum"
@@ -93,6 +94,14 @@ locals {
       description = "ai Valkey Evictions 발생 — noeviction인데 0이 아니면 파라미터 그룹이 적용되지 않은 것"
     }
   }
+
+  # 001은 이전과 같은 경보 이름. 복제본(002)은 장애 조치 뒤 primary가 될 수 있어 같은 경보를 -002로 둔다
+  ai_valkey_alarms = merge(
+    { for k, v in local.ai_valkey_alarm_defs : k => merge(v, { cluster_id = local.ai_valkey_cluster_id }) },
+    var.ai_valkey_replicas > 0 ? {
+      for k, v in local.ai_valkey_alarm_defs : "${k}-002" => merge(v, { cluster_id = "${aws_elasticache_replication_group.ai_valkey.replication_group_id}-002" })
+    } : {},
+  )
 }
 
 resource "aws_cloudwatch_metric_alarm" "ai_valkey" {
@@ -102,7 +111,7 @@ resource "aws_cloudwatch_metric_alarm" "ai_valkey" {
   alarm_description   = each.value.description
   namespace           = "AWS/ElastiCache"
   metric_name         = each.value.metric
-  dimensions          = { CacheClusterId = local.ai_valkey_cluster_id }
+  dimensions          = { CacheClusterId = each.value.cluster_id }
   statistic           = each.value.statistic
   period              = 300
   evaluation_periods  = each.value.periods

@@ -11,9 +11,10 @@ data "aws_sns_topic" "alerts" {
 }
 
 locals {
-  valkey_cluster_id = tolist(aws_elasticache_replication_group.valkey.member_clusters)[0]
+  # 노드 ID는 {복제 그룹}-001, -002 … 로 정해진다(member_clusters는 apply 뒤에야 알 수 있어 for_each 키로 쓸 수 없다)
+  valkey_cluster_id = "${aws_elasticache_replication_group.valkey.replication_group_id}-001"
 
-  data_alarms = {
+  data_alarm_defs = {
     valkey-memory-80 = {
       namespace   = "AWS/ElastiCache"
       metric      = "DatabaseMemoryUsagePercentage"
@@ -51,6 +52,16 @@ locals {
       description = "RDS 연결 수가 한도에 가까움 — Hikari 풀(파드당 5) × 파드 수 확인"
     }
   }
+
+  # 6.1.2: 복제본(002)은 장애 조치 뒤 primary가 될 수 있어 Valkey 경보를 -002로 하나씩 더 둔다(001은 이전과 같은 이름)
+  data_alarms = merge(
+    local.data_alarm_defs,
+    var.valkey_replicas > 0 ? {
+      for k, v in local.data_alarm_defs : "${k}-002" => merge(v, {
+        dimensions = { CacheClusterId = "${aws_elasticache_replication_group.valkey.replication_group_id}-002" }
+      }) if v.namespace == "AWS/ElastiCache"
+    } : {},
+  )
 }
 
 resource "aws_cloudwatch_metric_alarm" "data" {

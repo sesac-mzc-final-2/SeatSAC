@@ -485,6 +485,86 @@ docker compose -f infra/compose/docker-compose.yml exec valkey valkey-cli CONFIG
 - Valkey 메모리가 부하 테스트에서 70%를 넘으면 `valkey_node_type = "cache.t4g.small"` (재생성 없이 변경, 잠깐 끊김). `noeviction`이라 가득 차면 선점 쓰기가 `OOM` 오류로 실패한다
 - Evictions 경보가 울리면 파라미터 그룹이 적용되지 않은 것 → 5-3 `describe-cache-parameters`로 확인
 
+### 5-6. NAT AZ별 · Valkey 복제본·자동 장애 조치 (6.1.2, ADR-122)
+
+코드: `envs/staging/network.tf`(`nat_gateway_per_az`) · `valkey.tf`·`ai_valkey.tf`(`valkey_replicas`·`ai_valkey_replicas`) · `alerts.tf`(복제본 노드 경보) · 값은 `staging.tfvars`
+
+| 대상 | 전 | 후 |
+| --- | --- | --- |
+| NAT Gateway | 1개(AZ a) — 두 AZ의 app 서브넷이 같이 씀 | **AZ마다 1개**(a·c). app 서브넷마다 자기 라우트 테이블·자기 AZ의 NAT |
+| Valkey `cinema-staging-valkey` | 1노드(AZ a) | primary(AZ a) + 복제본(AZ c), 자동 장애 조치·Multi-AZ |
+| ai Valkey `cinema-staging-ai-valkey` | 1노드(AZ a) | 같음 |
+| 경보 | 노드 001의 메모리 80%·Evictions | 복제본 002에도 같은 경보(`…-002`) — 장애 조치 뒤 primary가 될 수 있다 |
+
+- 앱 설정은 바뀌지 않는다: `VALKEY_HOST`·`AI_VALKEY_HOST`는 primary 엔드포인트 그대로이고, 장애 조치 뒤에도 같은 주소가 새 primary를 가리킨다
+- 비용: NAT 1개(시간당 요금 + EIP) · `cache.t4g.micro` 2개가 더해진다
+- 시연·측정이 없는 시간에 스크럼 공유 뒤 한다(repo-workflow 2장 MSA 머지 규칙 ③)
+
+**1) NAT — 두 번에 나눠 apply** (한 번에 하면 app-c 서브넷이 NAT 라우트가 아직 없는 새 라우트 테이블로 먼저 옮겨져, NAT가 만들어지는 몇 분 동안 AZ c 파드의 바깥 호출이 끊길 수 있다)
+
+```bash
+cd infra/terraform/envs/staging
+# 1-a) 새 NAT·EIP·라우트 테이블·NAT 라우트만 먼저 (서브넷 연결은 그대로)
+terraform plan -var-file=staging.tfvars -out=plan.out \
+  -target='module.vpc.aws_route.private_nat_gateway[1]'
+# 기대: add 4 = aws_eip.nat[1] · aws_nat_gateway.this[1] · aws_route_table.private[1] · aws_route.private_nat_gateway[1]. change·destroy 0
+terraform apply plan.out          # NAT 생성 2~3분
+
+# 1-b) 나머지: app-c 서브넷 연결을 새 라우트 테이블로, S3 Gateway Endpoint에 새 라우트 테이블 추가 (+ 아래 2번 Valkey)
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대(네트워크 몫, 11/23 infra-plan 기준): add 1 = aws_route_table.database[1](data-c 전용 라우트 테이블 — NAT 라우트 없음)
+#   change 5 = aws_route_table_association.private[1]·database[1](새 라우트 테이블로, update in-place)
+#              · aws_route_table.private[0]·database[0](Name 태그에 AZ가 붙는다) · aws_vpc_endpoint.s3(라우트 테이블 목록)
+#   전체(Valkey·경보 포함)는 1-a 전 기준 9 add · 8 change · 0 destroy (change 1건은 무관한 RDS 파라미터 그룹)
+#   기존 NAT(this[0])·EIP(nat[0])에 변경이 있거나 destroy·replace가 하나라도 보이면 멈춘다
+terraform apply plan.out
+terraform output nat_public_ip    # IP가 2개 — 바깥 서비스에 NAT IP를 허용 목록으로 등록해 둔 곳이 있으면 새 IP도 추가
+```
+
+- 1-b에서 연결이 바뀌는 순간 app-c에서 나가던 연결(기존 NAT 경유)은 끊긴다 → 앱은 재시도로 다시 붙는다. 새 연결은 AZ c의 NAT로 나간다
+- 연결 변경과 S3 엔드포인트 반영 사이 잠깐은 app-c의 S3 트래픽이 NAT로 나간다(동작에는 문제없음)
+- data-c 서브넷(RDS·Valkey)도 자기 라우트 테이블로 옮겨진다. data 서브넷에는 바깥 라우트가 원래 없고 VPC 안 통신(local 라우트)은 그대로라 DB·Valkey 연결에 영향이 없다
+
+**2) Valkey** (1-b의 apply에 같이 들어간다. 따로 하려면 `-target=aws_elasticache_replication_group.valkey` 등)
+
+```bash
+# 기대: aws_elasticache_replication_group.valkey · ai_valkey 각각 update in-place
+#   (num_cache_clusters 1 → 2, automatic_failover_enabled·multi_az_enabled false → true, preferred_cache_cluster_azs)
+#   + 경보 add 4(valkey 2 · ai-valkey 2의 -002)
+#   ⚠ 복제 그룹이 `must be replaced`로 나오면 apply하지 않는다 — 엔드포인트가 바뀌고 선점 키·AI 캐시가 사라진다
+aws elasticache describe-replication-groups --replication-group-id cinema-staging-valkey \
+  --query 'ReplicationGroups[0].[Status,AutomaticFailover,MultiAZ,MemberClusters]'
+# 기대: available · enabled · enabled · [-001, -002]   (복제본 추가·동기화에 10분 안팎)
+```
+
+확인:
+
+- [ ] NAT 2개가 서로 다른 AZ(`aws ec2 describe-nat-gateways --filter Name=state,Values=available --query 'NatGateways[].[NatGatewayId,SubnetId]'`), app-a·app-c 라우트 테이블의 `0.0.0.0/0`이 각자 AZ의 NAT
+- [ ] AZ c 노드의 파드에서 바깥 호출(예: gateway 로그인 — Cognito JWKS, booking 릴레이 — SQS)이 정상
+- [ ] Valkey 2개 모두 `AutomaticFailover enabled`·`MultiAZ enabled`·노드 2개
+- [ ] 두 번째 plan No changes
+- [ ] (시연 준비) 장애 조치 한 번 해 보기 — 측정이 없는 시간에:
+
+```bash
+aws elasticache test-failover --replication-group-id cinema-staging-valkey --node-group-id 0001
+# 1분 안팎 쓰기 실패(선점 5xx) → 같은 주소로 복구. booking의 SSE·만료 구독(Pub/Sub·keyspace)이 다시 붙는지,
+# 신호등이 정상으로 돌아오는지 본다. 넘어가는 순간의 선점 키는 사라질 수 있다(복제가 비동기) — 좌석 이중 확정은 RDS booking_seat UK가 막는다
+```
+
+- **쿠폰 재고(`coupon:stock:{eventId}`)는 장애 조치에 약하다**: 복제가 비동기라 넘어가는 순간의 `DECR` 몇 건이 새 primary에 없을 수 있다 → 재고가 실제보다 **많게** 보여 `total_quantity`를 넘겨 발급될 수 있다(DB 유일 제약은 1인 1매만 막는다). 쿠폰 이벤트 중에 장애 조치를 시연하지 않는다. 일어났다면 발급을 멈추고 `total_quantity − 발급 수`로 키를 다시 쓴다(data-model 7-2 대조 규칙). 근본 방어는 coupon(6.3.2)이 INSERT 뒤 발급 수를 확인하는 것이다
+- catalog 캐시(`catalog:*`)는 사라져도 다시 채워진다. `seat-seq`는 키가 없으면 현재 시각 기준으로 다시 시작해 번호가 뒤로 가지 않는다(conventions 4장)
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 1-b 뒤 AZ c 파드만 바깥 호출 실패 | 1-a를 건너뛰어 새 라우트 테이블에 NAT 라우트가 아직 없음 | NAT 생성이 끝나면(2~3분) 돌아온다. `aws ec2 describe-route-tables`로 app-c의 `0.0.0.0/0` 확인 |
+| Valkey apply가 `automatic failover … requires at least 2 nodes`류 오류로 멈춤 | 복제본 추가와 자동 장애 조치 켜기가 한 번에 들어갔는데 순서가 맞지 않음(provider가 보통 복제본을 먼저 늘리지만 실행해 확인한 것은 아니다) | 다시 apply한다(복제본이 이미 늘어 있으면 통과). 그래도 안 되면 두 번에: 먼저 `-var valkey_replicas=1`은 두고 코드에서 `automatic_failover_enabled`·`multi_az_enabled`만 잠깐 `false`로 apply → 되돌려 apply |
+| 복제 그룹 plan이 replace | provider가 AZ 목록 변경을 재생성으로 판단 | apply하지 않는다. `preferred_cache_cluster_azs`를 그대로 두고 복제본만 늘리는 방법을 찾는다(PR로) |
+| 장애 조치 뒤 booking이 계속 5xx | 연결 풀이 옛 primary(지금 복제본, 읽기 전용)에 붙어 있음 | booking 재시작(ArgoCD Restart). 반복되면 클라이언트 재연결 설정을 본다 |
+| 밤에 NAT를 끌 때 | NAT가 2개다 | 둘 다 끈다(`enable_nat_gateway`) — 하나만 남기면 그 AZ만 바깥으로 나간다 |
+
+
+---
+
 ## 6. staging 4) ECR·SQS·Lambda (3.1.4·3.1.8·3.1.9)
 
 ### 6-A. ECR·build-push (3.1.4)

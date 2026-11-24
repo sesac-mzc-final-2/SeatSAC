@@ -16,6 +16,9 @@ resource "aws_db_parameter_group" "mysql" {
   parameter {
     name  = "time_zone"
     value = "UTC"
+    # AWS가 이 파라미터를 pending-reboot로 돌려줘 기본값(immediate)과 매번 차이가 났다(plan마다 change 1).
+    # 값은 같다(UTC) — 표시 방법만 AWS 쪽에 맞춘다
+    apply_method = "pending-reboot"
   }
   parameter {
     name  = "character_set_server"

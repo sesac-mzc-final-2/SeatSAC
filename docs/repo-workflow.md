@@ -89,15 +89,16 @@ SeatSAC-gitops/
 
 | 경로 | 담당 |
 | --- | --- |
-| `services/gateway·catalog/` | 한채연 (🆕 부재 중 대행 김종식 + 승인용 남궁일, #171·#186) |
+| `services/gateway·catalog/` | 한채연 (🆕 + 승인용 남궁일) |
 | 🆕 `services/user/` | 김종식 · 남궁일 (11/24 한채연에서, #186) |
 | `services/booking·payment/` | 남궁일 |
-| ⚠️AI `services/ai/`, `contracts/openapi/ai*` | 김서현 (계약은 + 한채연, 🆕 + 김종식 대행) |
+| ⚠️AI `services/ai/`, `contracts/openapi/ai*` | 김서현 (계약은 + 한채연) |
 | 🆕 `services/coupon/`, `contracts/openapi/coupon*`·`openapi/internal/coupon*`·`events/coupon*` | 김종식 · 남궁일 (11/24 한채연에서, #178) |
+| 🆕 `contracts/openapi/user*` | 김종식 · 한채연 (11/24) |
 | 🆕 `services/ops-api/`, `contracts/openapi/ops*` | 김종식 (계약은 + 한채연 · 남궁일) |
 | 🆕 `contracts/events/payment.*`·`screening.*`·`movie.*`·`booking.*` | 아래 `contracts/` 규칙 (+ 소비 담당 리뷰) |
-| `frontend/` | 한채연 · 남궁일 (🆕 + 김종식 대행) |
-| `contracts/` | 한채연 · 남궁일 (🆕 + 김종식 대행) |
+| `frontend/` | 한채연 · 남궁일 |
+| `contracts/` | 한채연 · 남궁일 |
 | `contracts/tools/`, `contracts/redocly.yaml`, `build-logic/`, `gradle/`, `lambdas/`, `infra/`, `.github/`, `tests/k6/` | 김종식 |
 | `libs/` | 김종식 · 한채연 · 남궁일 |
 

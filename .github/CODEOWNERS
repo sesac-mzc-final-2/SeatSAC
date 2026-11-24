@@ -1,13 +1,10 @@
 # GitHub 아이디로 바꿔 커밋한다
-# 11/23~ 한채연(@imi21123) 부재 중 gateway·catalog와 그 화면·계약은 김종식(@pinodo)이 대행한다 → 함께 둔다.
-#   /frontend/·/contracts/는 경로 전체에 함께 둔다 — 남궁일 담당분(좌석·결제 화면, booking·payment 계약)의 코드 소유자 승인도 줄 수 있게 된다
-#   소유자가 한 명뿐이면 대행자가 올린 PR이 코드 소유자 승인(ruleset)을 받지 못해 머지되지 않는다.
-#   복귀하면 @pinodo를 이 네 경로(gateway·catalog·frontend·contracts)에서 뺀다
-#   11/24 @namgungil 추가: 소유자가 두 명이고 그중 한 명이 작성자면 GitHub은 **나머지 한 명**의 승인을 요구한다(#184에서 확인).
-#   대행자(@pinodo)가 올린 PR은 부재 중인 @imi21123만 승인할 수 있게 되므로, 승인할 수 있는 세 번째 소유자를 둔다
-/services/gateway/      @imi21123 @pinodo @namgungil
-/services/catalog/      @imi21123 @pinodo @namgungil
-# 11/24 user 도메인은 김종식(@pinodo) 담당으로 바꿨다(대행 → 담당, coupon과 같은 방식). 한채연은 gateway·catalog·프론트엔드. 두 번째 소유자 @namgungil
+# 11/24 담당 확정: 한채연(@imi21123) gateway·catalog·프론트엔드, 김종식(@pinodo) coupon·user·ops-api·Infra/DevOps.
+#   11/23~24 한채연 부재 중 두었던 대행(@pinodo)은 뺐다(#171·#178의 대행 줄).
+#   소유자가 두 명이고 그중 한 명이 작성자면 GitHub은 **나머지 한 명**의 승인을 요구한다(#184에서 확인) — 그래서 줄마다 승인할 두 번째 소유자를 둔다
+/services/gateway/      @imi21123 @namgungil
+/services/catalog/      @imi21123 @namgungil
+# 11/24 user 도메인은 김종식(@pinodo) 담당(coupon과 같은 방식). 두 번째 소유자 @namgungil
 /services/user/         @pinodo @namgungil
 /services/booking/      @namgungil
 /services/payment/      @namgungil
@@ -16,14 +13,16 @@
 #   11/24 coupon 도메인은 김종식(@pinodo) 담당으로 바꿨다(대행이 아니라 담당 — 서비스·계약 모두). 두 번째 소유자는 saga 상대편 @namgungil(ops-api와 같은 방식)
 /services/coupon/       @pinodo @namgungil
 /services/ops-api/      @pinodo @namgungil
-/frontend/              @imi21123 @namgungil @pinodo
-/contracts/             @imi21123 @namgungil @pinodo
-# ai*·ops*도 같은 이유로 세 번째 소유자를 둔다 — ai*는 대행 @pinodo(작성자 김서현의 PR을 승인), ops*는 @namgungil(작성자 김종식의 PR을 승인)
-/contracts/openapi/ai*  @seohyeon-tomato @imi21123 @pinodo
+/frontend/              @imi21123 @namgungil
+/contracts/             @imi21123 @namgungil
+# ops*는 세 번째 소유자 @namgungil — 작성자 김종식의 PR을 한채연 없이도 승인할 수 있게
+/contracts/openapi/ai*  @seohyeon-tomato @imi21123
 /contracts/openapi/ops* @pinodo @imi21123 @namgungil
 # coupon 계약: 외부·내부 OpenAPI와 saga 명령·결과 메시지. 작성자가 @pinodo일 때 승인할 소유자로 @namgungil(saga 상대편)을 함께 둔다
 /contracts/openapi/coupon*          @pinodo @namgungil
 /contracts/openapi/internal/coupon* @pinodo @namgungil
+# user 계약도 담당(김종식)을 따른다. 두 번째 소유자는 소비하는 화면·gateway 쪽 @imi21123
+/contracts/openapi/user*            @pinodo @imi21123
 /contracts/events/coupon*           @pinodo @namgungil
 /contracts/tools/       @pinodo
 /contracts/redocly.yaml @pinodo

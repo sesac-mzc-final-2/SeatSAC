@@ -89,14 +89,15 @@ SeatSAC-gitops/
 
 | 경로 | 담당 |
 | --- | --- |
-| `services/gateway·catalog·user/` | 한채연 |
+| `services/gateway·catalog/` | 한채연 (🆕 부재 중 대행 김종식 + 승인용 남궁일, #171·#186) |
+| 🆕 `services/user/` | 김종식 · 남궁일 (11/24 한채연에서, #186) |
 | `services/booking·payment/` | 남궁일 |
-| ⚠️AI `services/ai/`, `contracts/openapi/ai*` | 김서현 (계약은 + 한채연) |
-| 🆕 `services/coupon/`, `contracts/openapi/coupon*` | 한채연 (계약은 + 남궁일) |
-| 🆕 `services/ops-api/`, `contracts/openapi/ops*` | 김종식 (계약은 + 한채연) |
-| 🆕 `contracts/events/coupon.*`·`payment.*`·`screening.*`·`movie.*`·`booking.*` | 남궁일 · 한채연 (+ 소비 담당) |
-| `frontend/` | 한채연 · 남궁일 |
-| `contracts/` | 한채연 · 남궁일 |
+| ⚠️AI `services/ai/`, `contracts/openapi/ai*` | 김서현 (계약은 + 한채연, 🆕 + 김종식 대행) |
+| 🆕 `services/coupon/`, `contracts/openapi/coupon*`·`openapi/internal/coupon*`·`events/coupon*` | 김종식 · 남궁일 (11/24 한채연에서, #178) |
+| 🆕 `services/ops-api/`, `contracts/openapi/ops*` | 김종식 (계약은 + 한채연 · 남궁일) |
+| 🆕 `contracts/events/payment.*`·`screening.*`·`movie.*`·`booking.*` | 아래 `contracts/` 규칙 (+ 소비 담당 리뷰) |
+| `frontend/` | 한채연 · 남궁일 (🆕 + 김종식 대행) |
+| `contracts/` | 한채연 · 남궁일 (🆕 + 김종식 대행) |
 | `contracts/tools/`, `contracts/redocly.yaml`, `build-logic/`, `gradle/`, `lambdas/`, `infra/`, `.github/`, `tests/k6/` | 김종식 |
 | `libs/` | 김종식 · 한채연 · 남궁일 |
 
@@ -136,4 +137,4 @@ SeatSAC-gitops/
 
 <노션 반영 필요> 03b 결정 칸에 "10/22 확정 + 레포 이름 SeatSAC·SeatSAC-gitops, `libs/` 유지(08 B안), contract-check 필수 검사, 브랜치 WBS ID 보완(ADR-48)", 최종 결정 21번 "공통 코드 복사" → "공유 모듈"
 
-<노션 반영 필요> 03b에 11/23 MSA 고도화 반영: `services/coupon`·`services/ops-api`, CODEOWNERS(coupon 한채연·ops-api 김종식), 11/23~27 머지 규칙(2장)
+<노션 반영 필요> 03b에 11/23 MSA 고도화 반영: `services/coupon`·`services/ops-api`, CODEOWNERS(~~coupon 한채연~~ 🆕 coupon·user 김종식(11/24)·ops-api 김종식), 11/23~27 머지 규칙(2장)

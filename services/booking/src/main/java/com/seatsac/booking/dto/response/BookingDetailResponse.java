@@ -24,9 +24,19 @@ public record BookingDetailResponse(
     OffsetDateTime createdAt,
     OffsetDateTime confirmedAt,
     OffsetDateTime canceledAt,
-    PaymentView payment
+    PaymentView payment,
+    /** 6.2.1 — 체크아웃 saga 경로면 가장 최근 체크아웃(없으면 null). 상세는 GET /bookings/{id}/checkout */
+    CheckoutRef checkout
 ) {
+    public record CheckoutRef(String checkoutId, String state) {
+    }
+
     public static BookingDetailResponse from(Booking booking, List<Long> seatIds, PaymentView payment) {
+        return from(booking, seatIds, payment, null);
+    }
+
+    public static BookingDetailResponse from(Booking booking, List<Long> seatIds, PaymentView payment,
+                                             CheckoutRef checkout) {
         return BookingDetailResponse.builder()
             .bookingId(booking.getBookingId())
             .screeningId(booking.getScreeningId())
@@ -40,6 +50,7 @@ public record BookingDetailResponse(
             .confirmedAt(Times.toApi(booking.getConfirmedAt()))
             .canceledAt(Times.toApi(booking.getCanceledAt()))
             .payment(payment)
+            .checkout(checkout)
             .build();
     }
 }

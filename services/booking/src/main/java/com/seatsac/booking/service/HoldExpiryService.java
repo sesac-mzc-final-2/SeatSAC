@@ -1,5 +1,7 @@
 package com.seatsac.booking.service;
 
+import com.seatsac.booking.checkout.CheckoutSagaRepository;
+
 import com.seatsac.booking.component.PaymentClient;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
 import com.seatsac.booking.component.SeatEventPublisher;
@@ -48,12 +50,14 @@ public class HoldExpiryService {
     private final BookingPaymentResultApplier resultApplier;
     private final Duration pendingGrace;
     private final Timer expiryLag;
+    private final CheckoutSagaRepository checkoutSagas;
 
     public HoldExpiryService(Clock clock, BookingRepositoryReader bookingReader,
                              BookingStateService bookingState, SeatHoldStrategy seatHold,
                              SeatEventPublisher eventPublisher, PaymentClient paymentClient,
                              BookingPaymentResultApplier resultApplier, PaymentProperties paymentProperties,
-                             MeterRegistry meterRegistry) {
+                             MeterRegistry meterRegistry, CheckoutSagaRepository checkoutSagas) {
+        this.checkoutSagas = checkoutSagas;
         this.clock = clock;
         this.bookingReader = bookingReader;
         this.bookingState = bookingState;
@@ -91,7 +95,9 @@ public class HoldExpiryService {
             return Outcome.ALREADY_SETTLED;
         }
         Booking booking = pending.get();
-        if (booking.getCurrentPaymentId() != null) {
+        // saga 경로 예매(체크아웃 행이 있음)는 선점 5분에 바로 닫는다(D15·D23) — 유예·payment 조회 없음.
+        // 결제가 실제로 됐는지와 환불은 payment가 맡고(해제 명령), saga는 스윕이 예매 상태를 따라 닫는다
+        if (booking.getCurrentPaymentId() != null && !checkoutSagas.existsByBookingId(bookingId)) {
             if (now.isBefore(booking.getExpiresAt().plus(pendingGrace))) {
                 // 결제 결과가 상태를 정한다. 장부에서 지우지 않아야 다음 주기에 다시 본다
                 log.debug("결제 중인 예매는 만료를 보류한다 bookingId={}", bookingId);

@@ -58,6 +58,19 @@ public enum BookingErrorCode implements ErrorCode {
     IDEMPOTENCY_KEY_CONFLICT(CommonResponseCode.IDEMPOTENCY_KEY_CONFLICT, "같은 키로 다른 요청을 보냈습니다."),
     IDEMPOTENCY_IN_PROGRESS(CommonResponseCode.IDEMPOTENCY_IN_PROGRESS, "같은 요청이 처리 중입니다. 잠시 후 다시 확인해 주세요."),
 
+    // 409 — 체크아웃 saga(6.2.1, conventions 6장 🆕). 응답 code는 공통 enum에 없는 이름이라 여기서 정한다(libs/ 변경 없음)
+    CHECKOUT_IN_PROGRESS(CommonResponseCode.BOOKING_STATE_CONFLICT, "CHECKOUT_IN_PROGRESS",
+        "결제가 진행 중인 예매입니다. 결제 상태를 확인해 주세요."),
+    CHECKOUT_NOT_READY(CommonResponseCode.BOOKING_STATE_CONFLICT, "CHECKOUT_NOT_READY",
+        "결제창을 열 수 있는 상태가 아닙니다."),
+    PAYMENT_PATH_CONFLICT(CommonResponseCode.BOOKING_STATE_CONFLICT, "PAYMENT_PATH_CONFLICT",
+        "이 예매는 다른 결제 방식으로 진행 중입니다."),
+    CHECKOUT_RETRY_LIMIT(CommonResponseCode.BOOKING_STATE_CONFLICT, "결제 시도 횟수를 넘었습니다."),
+    // 400 — 확인 요청의 paymentId가 체크아웃과 다름
+    CHECKOUT_PAYMENT_ID_MISMATCH(CommonResponseCode.VALIDATION_FAILED, "체크아웃의 결제 ID와 다릅니다."),
+    // 404 — 이 예매에 체크아웃 없음
+    CHECKOUT_NOT_FOUND(CommonResponseCode.NOT_FOUND, "체크아웃을 찾을 수 없습니다."),
+
     // 503
     PAYMENT_RESULT_UNKNOWN(CommonResponseCode.PAYMENT_RESULT_UNKNOWN,
         "결제 결과를 확인하지 못했습니다. 잠시 후 예매 상태를 확인해 주세요."),
@@ -67,11 +80,23 @@ public enum BookingErrorCode implements ErrorCode {
         "결제 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.");
 
     private final CommonResponseCode commonCode;
+    private final String responseCode;
     private final String message;
 
     BookingErrorCode(CommonResponseCode commonCode, String message) {
+        this(commonCode, null, message);
+    }
+
+    /** @param responseCode 응답 {@code code}가 공통 코드 이름과 다를 때(HTTP 상태는 공통 코드를 따른다) */
+    BookingErrorCode(CommonResponseCode commonCode, String responseCode, String message) {
         this.commonCode = commonCode;
+        this.responseCode = responseCode;
         this.message = message;
+    }
+
+    @Override
+    public String responseCode() {
+        return responseCode != null ? responseCode : commonCode.name();
     }
 
     @Override

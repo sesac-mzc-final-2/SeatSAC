@@ -1,5 +1,6 @@
 package com.seatsac.booking.entity;
 
+import com.seatsac.booking.enums.OutboxDestination;
 import com.seatsac.booking.enums.OutboxEventType;
 import com.seatsac.booking.enums.OutboxStatus;
 import jakarta.persistence.Column;
@@ -47,6 +48,18 @@ public class OutboxMessage {
     @Column(name = "aggregate_id", nullable = false, updatable = false)
     private Long aggregateId;
 
+    /**
+     * 같은 예매에 같은 종류가 여러 번 나갈 때 구분(설계 04, D13). 알림은 {@code ''}(예매당 1건 그대로),
+     * saga 명령은 {@code {checkoutId}:{단계}} · 재확인은 {@code {checkoutId}:verify:{attempt}}.
+     * 유일 키 (event_type, aggregate_id, aggregate_key)가 같은 명령 두 번을 막는다
+     */
+    @Column(name = "aggregate_key", length = 80, nullable = false, updatable = false)
+    private String aggregateKey;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "destination", length = 40, nullable = false, updatable = false)
+    private OutboxDestination destination;
+
     /** 메시지 본문 JSON 문자열. 트랜잭션 전에 만든 값 그대로 저장한다 */
     @Column(name = "payload", nullable = false, updatable = false, columnDefinition = "json")
     private String payload;
@@ -54,6 +67,11 @@ public class OutboxMessage {
     @JdbcTypeCode(SqlTypes.CHAR)
     @Column(name = "trace_id", length = 32, updatable = false)
     private String traceId;
+
+    /** saga 명령의 checkoutId → SQS 속성 correlationId. 알림은 null */
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "correlation_id", length = 36, updatable = false)
+    private String correlationId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", length = 20, nullable = false)
@@ -99,6 +117,8 @@ public class OutboxMessage {
         message.messageKey = messageKey;
         message.eventType = eventType;
         message.aggregateId = aggregateId;
+        message.aggregateKey = "";
+        message.destination = OutboxDestination.NOTIFICATION;
         message.payload = payload;
         message.traceId = traceId == null ? TraceIds.newId() : traceId;
         message.status = OutboxStatus.PENDING;
@@ -109,4 +129,18 @@ public class OutboxMessage {
         return message;
     }
 
+    /**
+     * saga 명령 행(6.2.1) — {@code payload}는 envelope 전체(계약 {@code payment.*-requested.v1.json}).
+     *
+     * @param aggregateKey 같은 체크아웃의 같은 명령은 한 번만 들어가게 하는 키
+     */
+    public static OutboxMessage command(String messageKey, OutboxEventType eventType, Long bookingId,
+                                        String aggregateKey, String payload, String traceId, String correlationId,
+                                        Instant now) {
+        OutboxMessage message = pending(messageKey, eventType, bookingId, payload, traceId, now);
+        message.aggregateKey = Objects.requireNonNull(aggregateKey, "aggregateKey");
+        message.destination = OutboxDestination.PAYMENT_COMMANDS;
+        message.correlationId = correlationId;
+        return message;
+    }
 }

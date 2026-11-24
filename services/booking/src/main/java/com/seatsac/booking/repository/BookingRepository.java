@@ -59,6 +59,23 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
      * BKG-06 확정. <b>선점이 아직 살아 있을 때만</b>({@code expiresAt > :now}) 1행이다 —
      * 승인을 받았는데 그 사이 만료됐으면 0행이고, 부르는 쪽이 결제를 취소한다(환불).
      */
+    /**
+     * saga 재결제(D25) — 앞 결제가 포트원 FAILED로 확인된 예매에 새 결제 ID를 붙인다(비교 후 교체).
+     * 지금 붙은 ID가 {@code :oldPaymentId}일 때만 1행 — 동시에 두 번 다시 시작해도 하나만 바뀐다
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Booking b
+           set b.currentPaymentId = :newPaymentId,
+               b.updatedAt = :now
+         where b.bookingId = :bookingId
+           and b.status = com.seatsac.booking.enums.BookingStatus.PENDING
+           and b.currentPaymentId = :oldPaymentId
+           and b.expiresAt > :now
+        """)
+    int replacePayment(@Param("bookingId") Long bookingId, @Param("oldPaymentId") String oldPaymentId,
+                       @Param("newPaymentId") String newPaymentId, @Param("now") Instant now);
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update Booking b

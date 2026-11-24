@@ -1,5 +1,8 @@
 package com.seatsac.booking.service;
 
+import com.seatsac.booking.checkout.CheckoutSagaRepository;
+import com.seatsac.booking.checkout.CheckoutState;
+
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.component.SeatHoldStrategy;
@@ -39,6 +42,7 @@ public class SeatReleaseService {
     private final BookingStateService bookingState;
     private final SeatHoldStrategy seatHold;
     private final SeatEventPublisher eventPublisher;
+    private final CheckoutSagaRepository checkoutSagas;
 
     public BookingCancelResponse release(String userId, Long bookingId) {
         Instant now = clock.instant();
@@ -47,6 +51,11 @@ public class SeatReleaseService {
 
         if (!booking.isOwnedBy(userId)) {
             throw BookingErrorCode.NOT_OWNER.exception();
+        }
+        if (checkoutSagas.existsActive(bookingId, CheckoutState.ACTIVE)) {
+            // 체크아웃 진행 중 — 결제 결과가 예매를 정한다. 쿠폰 거절 뒤에는 진행 중이 아니라 해제할 수 있다
+            throw BookingErrorCode.CHECKOUT_IN_PROGRESS.exception(ErrorDetail.of("bookingId", bookingId,
+                BookingErrorCode.CHECKOUT_IN_PROGRESS.name()));
         }
         if (booking.getCurrentPaymentId() != null) {
             throw BookingErrorCode.PAYMENT_IN_PROGRESS.exception(ErrorDetail.of("status",

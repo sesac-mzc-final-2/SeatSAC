@@ -1,5 +1,8 @@
 package com.seatsac.booking.service;
 
+import com.seatsac.booking.checkout.CheckoutSaga;
+import com.seatsac.booking.checkout.CheckoutSagaRepository;
+
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.component.PaymentClient;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
@@ -36,6 +39,7 @@ public class BookingDetailService {
     private final BookingRepositoryReader bookingReader;
     private final BookingPaymentResultApplier resultApplier;
     private final PaymentClient paymentClient;
+    private final CheckoutSagaRepository checkoutSagas;
 
     public BookingDetailResponse get(String userId, Long bookingId) {
         Booking booking = bookingReader.findById(bookingId)
@@ -44,14 +48,17 @@ public class BookingDetailService {
             throw BookingErrorCode.NOT_OWNER.exception();
         }
 
-        PaymentResult payment = reconcile(booking);
+        // saga 경로 예매는 payment를 조회·반영하지 않는다(D8·D26) — 결과는 결과 메시지만 반영한다
+        Optional<CheckoutSaga> checkout = checkoutSagas.findFirstByBookingIdOrderByCreatedAtDescCheckoutIdDesc(bookingId);
+        PaymentResult payment = checkout.isPresent() ? null : reconcile(booking);
         Booking current = booking.getStatus() == BookingStatus.PENDING
             ? bookingReader.findById(bookingId).orElse(booking)   // 반영됐을 수 있다
             : booking;
 
         List<Long> seatIds = holdsSeats(current)
             ? bookingReader.findOccupiedSeatIds(bookingId) : List.of();
-        return BookingDetailResponse.from(current, seatIds, viewOf(payment));
+        return BookingDetailResponse.from(current, seatIds, viewOf(payment),
+            checkout.map(s -> new BookingDetailResponse.CheckoutRef(s.getCheckoutId(), s.getState().name())).orElse(null));
     }
 
     /**

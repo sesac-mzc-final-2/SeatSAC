@@ -123,7 +123,9 @@ class OutboxRelayFlowTest {
     }
 
     private double counter(String result) {
-        return meterRegistry.counter("booking_notification_publish_total", "result", result).count();
+        // 11/24 destination 라벨 추가(알림·saga 명령) — 같은 result의 모든 목적지 합
+        return meterRegistry.find("booking_notification_publish_total").tag("result", result).counters().stream()
+            .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
     }
 
     @Test

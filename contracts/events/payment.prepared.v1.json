@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/payment.prepared.v1.json",
+  "title": "PaymentPrepared",
+  "description": "SQS cinema-staging-booking-replies. payment → booking(체크아웃 saga). 메시지 속성 type·traceId·correlationId. booking은 processed_message(eventId)로 한 번만, checkout_saga 상태를 조건으로 건 UPDATE로 반영한다(늦은 결과는 0행 → 무시). 결제 준비 완료 — booking은 READY_TO_PAY로 바꾸고 checkout 값을 GET /bookings/{id}/checkout에 그대로 내보낸다.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행마다 새 UUID. 재전송해도 같은 값(소비자 inbox processed_message가 중복 제거). 재확인 명령은 시도마다 새 행·새 eventId"
+    },
+    "type": {
+      "type": "string",
+      "const": "payment.prepared"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "payment"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "체크아웃 saga ID(checkoutId). SQS 메시지 속성 correlationId와 같은 값"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "checkoutId",
+        "paymentId",
+        "bookingId",
+        "checkout"
+      ],
+      "properties": {
+        "checkoutId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "= correlationId"
+        },
+        "paymentId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "booking 발급. payment 행의 PK"
+        },
+        "bookingId": {
+          "type": "integer"
+        },
+        "checkout": {
+          "type": "object",
+          "description": "포트원 브라우저 SDK requestPayment에 그대로 넘기는 공개 값(비밀 아님). 기존 POST /bookings/{id}/payments 응답과 같은 모양",
+          "required": [
+            "provider",
+            "storeId",
+            "channelKey",
+            "payMethod",
+            "currency"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": [
+                "PORTONE"
+              ]
+            },
+            "storeId": {
+              "type": "string"
+            },
+            "channelKey": {
+              "type": "string"
+            },
+            "payMethod": {
+              "type": "string",
+              "enum": [
+                "EASY_PAY"
+              ]
+            },
+            "currency": {
+              "type": "string",
+              "enum": [
+                "KRW"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

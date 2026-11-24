@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seatsac.dev/events/booking.confirmed.v1.json",
   "title": "BookingConfirmed",
-  "description": "SQS cinema-staging-notification-events. 발행자 booking만 (ADR-30). 확정 트랜잭션의 아웃박스 행을 릴레이가 발송(API 명세서 v1.1 9-2, 10/21). 메시지 속성 type·traceId. 개인정보(이메일·이름) 금지.",
+  "description": "SQS cinema-staging-notification-events. 발행자 booking만 (ADR-30). 확정 트랜잭션의 아웃박스 행을 릴레이가 발송(API 명세서 v1.1 9-2, 10/21). 메시지 속성 type·traceId. 개인정보(이메일·이름) 금지. 11/24(MSA 고도화 D28): SNS cinema-staging-booking-events로도 같은 payload를 발행(아웃박스 행 2개, eventId는 다름 — user 예매 내역 복제본). amount는 쿠폰 할인 뒤 최종 금액이고 선택 필드 discountAmount를 추가했다.",
   "type": "object",
   "required": [
     "eventId",
@@ -39,6 +39,11 @@
       "type": "string",
       "description": "Gateway X-Trace-Id (소문자 16진수 32자리)",
       "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "체크아웃 saga로 확정된 경우 checkoutId. 동기 경로(/pay)는 null 또는 없음"
     },
     "payload": {
       "type": "object",
@@ -88,7 +93,13 @@
           }
         },
         "amount": {
-          "type": "integer"
+          "type": "integer",
+          "description": "결제 금액(원). 쿠폰 할인이 있으면 할인 뒤 최종 금액(= 포트원 결제 금액)"
+        },
+        "discountAmount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "쿠폰 할인액(원). 이전 발행자는 이 필드가 없다 → 0으로 본다"
         },
         "screeningId": {
           "type": "integer"

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/booking.canceled.v1.json",
+  "title": "BookingCanceled",
+  "description": "SNS cinema-staging-booking-events → SQS cinema-staging-user-booking-events(user 예매 내역 복제본). 발행자 booking만. 확정 예매 취소(BKG-07, USER_CANCELED — 동기·saga 공통)와 체크아웃 saga의 보상·만료(PAYMENT_FAILED·EXPIRED)에서 아웃박스로 발행. user는 확정된 적 없는 예매의 EXPIRED·PAYMENT_FAILED를 무시한다(명세 v1.5 23-1). 동기 경로의 결제 실패·만료는 보내지 않는다. 개인정보 금지.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행 UUID. 재전송해도 같은 값"
+    },
+    "type": {
+      "type": "string",
+      "const": "booking.canceled"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "booking"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid",
+      "description": "체크아웃 saga에서 낸 경우 checkoutId, BKG-07 취소는 null"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "bookingId",
+        "userId",
+        "screeningId",
+        "reason",
+        "canceledAt"
+      ],
+      "properties": {
+        "bookingId": {
+          "type": "integer"
+        },
+        "userId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Cognito sub"
+        },
+        "screeningId": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "USER_CANCELED",
+            "EXPIRED",
+            "PAYMENT_FAILED"
+          ]
+        },
+        "canceledAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

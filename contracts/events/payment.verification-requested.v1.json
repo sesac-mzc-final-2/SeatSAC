@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/payment.verification-requested.v1.json",
+  "title": "PaymentVerificationRequested",
+  "description": "SQS cinema-staging-payment-commands. booking(체크아웃 saga 오케스트레이터) → payment. 메시지 속성 type·traceId·correlationId. 받는 쪽은 processed_message(eventId)로 한 번만 처리하고, 처리 자체도 멱등이라 재배달이 안전하다(API 명세서 v1.5 21·26장, ADR-116·117). 결제 확인 — 결제창이 닫힌 뒤(TOSSPAY) 또는 CHARGING 재확인(CARD). payment는 PORTONE이면 포트원 단건 조회(reconcile), MOCK이면 현재 상태만 읽는다. 행이 아직 없으면(표준 큐 순서 역전) 예외가 아니라 payment.result-unknown{NOT_FOUND}. 같은 checkoutId로 여러 번 와도 안전하다(조회만).",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행마다 새 UUID. 재전송해도 같은 값(소비자 inbox processed_message가 중복 제거). 재확인 명령은 시도마다 새 행·새 eventId"
+    },
+    "type": {
+      "type": "string",
+      "const": "payment.verification-requested"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "booking"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "체크아웃 saga ID(checkoutId). SQS 메시지 속성 correlationId와 같은 값"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "checkoutId",
+        "paymentId",
+        "bookingId",
+        "expectedAmount",
+        "attempt"
+      ],
+      "properties": {
+        "checkoutId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "= correlationId"
+        },
+        "paymentId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "booking 발급. payment 행의 PK"
+        },
+        "bookingId": {
+          "type": "integer"
+        },
+        "expectedAmount": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "checkout_saga.final_amount. payment가 포트원 응답 amount.total과 대조(다르면 AMOUNT_MISMATCH)"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "재확인 횟수(1부터). 아웃박스 aggregate_key = {checkoutId}:{attempt}"
+        }
+      }
+    }
+  }
+}

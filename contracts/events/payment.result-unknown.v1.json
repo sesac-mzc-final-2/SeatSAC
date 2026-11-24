@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/payment.result-unknown.v1.json",
+  "title": "PaymentResultUnknown",
+  "description": "SQS cinema-staging-booking-replies. payment → booking(체크아웃 saga). 메시지 속성 type·traceId·correlationId. booking은 processed_message(eventId)로 한 번만, checkout_saga 상태를 조건으로 건 UPDATE로 반영한다(늦은 결과는 0행 → 무시). 아직 모른다 — 실패가 아니라 재확인 신호. booking은 보상하지 않고 간격(NOT_YET 5초, 무응답 2배씩, ±20%)을 두고 payment.verification-requested를 다시 보낸다. 선점 만료까지 모르면 예매는 만료로 닫고 환불은 payment가 맡는다.",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행마다 새 UUID. 재전송해도 같은 값(소비자 inbox processed_message가 중복 제거). 재확인 명령은 시도마다 새 행·새 eventId"
+    },
+    "type": {
+      "type": "string",
+      "const": "payment.result-unknown"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "payment"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "체크아웃 saga ID(checkoutId). SQS 메시지 속성 correlationId와 같은 값"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "checkoutId",
+        "paymentId",
+        "bookingId",
+        "reason",
+        "attempt"
+      ],
+      "properties": {
+        "checkoutId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "= correlationId"
+        },
+        "paymentId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "booking 발급. payment 행의 PK"
+        },
+        "bookingId": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "NOT_YET",
+            "PORTONE_UNAVAILABLE",
+            "NOT_FOUND"
+          ],
+          "description": "NOT_YET = 포트원에 결제가 없거나 미완료(결제창 진행 중) · PORTONE_UNAVAILABLE = 포트원 응답 없음·서킷 열림 · NOT_FOUND = payment에 결제 행이 아직 없음(준비·청구 명령보다 먼저 도착)"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "요청의 attempt 그대로"
+        }
+      }
+    }
+  }
+}

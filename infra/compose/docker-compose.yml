@@ -11,7 +11,8 @@ services:
       - ./mysql-init:/docker-entrypoint-initdb.d:ro   # 스키마·계정 생성 SQL (03a 2️⃣)
       - mysql-data:/var/lib/mysql
   valkey:
-    image: valkey/valkey:8.2
+    # Docker Hub에 valkey/valkey:8.2 태그가 없다(staging ElastiCache는 Valkey 8.2). Testcontainers(libs/common-test)와 같은 8.1 패치로 고정
+    image: valkey/valkey:8.1.10
     ports: ["127.0.0.1:6379:6379"]
     # staging ElastiCache 파라미터 그룹과 같게 (3.1.3): noeviction, 만료 이벤트 Ex
     command: ["valkey-server", "--notify-keyspace-events", "Ex", "--maxmemory-policy", "noeviction"]

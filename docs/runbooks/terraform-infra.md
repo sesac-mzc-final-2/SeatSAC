@@ -432,7 +432,7 @@ aws cloudwatch describe-alarms --alarm-name-prefix cinema-staging- --query 'Metr
 
 ```bash
 # Valkey: TLS로 PING → PONG
-kubectl run valkey-check -n default --rm -it --restart=Never --image=valkey/valkey:8.2 -- \
+kubectl run valkey-check -n default --rm -it --restart=Never --image=valkey/valkey:8.1.10 -- \
   valkey-cli -h <valkey_primary_endpoint> --tls PING
 
 # MySQL: 네트워크·TLS 확인 (계정 없이 접속 시도 → Access denied면 연결 자체는 정상)

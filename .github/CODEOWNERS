@@ -1,5 +1,6 @@
 # GitHub 아이디로 바꿔 커밋한다
-# 11/23~ 한채연(@imi21123) 부재 중 gateway·catalog·user와 그 화면(/frontend/)·계약(/contracts/)은 김종식(@pinodo)이 대행한다 → 함께 둔다.
+# 11/23~ 한채연(@imi21123) 부재 중 gateway·catalog·user와 그 화면·계약은 김종식(@pinodo)이 대행한다 → 함께 둔다.
+#   /frontend/·/contracts/는 경로 전체에 함께 둔다 — 남궁일 담당분(좌석·결제 화면, booking·payment 계약)의 코드 소유자 승인도 줄 수 있게 된다
 #   소유자가 한 명뿐이면 대행자가 올린 PR이 코드 소유자 승인(ruleset)을 받지 못해 머지되지 않는다.
 #   복귀하면 @pinodo를 이 다섯 경로(gateway·catalog·user·frontend·contracts)에서 뺀다
 /services/gateway/      @imi21123 @pinodo
@@ -9,8 +10,8 @@
 /services/payment/      @namgungil
 /services/ai/           @seohyeon-tomato
 # MSA 고도화(ADR-118·119): coupon(Java)·ops-api(Python)
-#   11/24 coupon 도메인은 김종식(@pinodo) 담당으로 바꿨다(대행이 아니라 담당 — 서비스·계약 모두)
-/services/coupon/       @pinodo
+#   11/24 coupon 도메인은 김종식(@pinodo) 담당으로 바꿨다(대행이 아니라 담당 — 서비스·계약 모두). 두 번째 소유자는 saga 상대편 @namgungil(ops-api와 같은 방식)
+/services/coupon/       @pinodo @namgungil
 /services/ops-api/      @pinodo @namgungil
 /frontend/              @imi21123 @namgungil @pinodo
 /contracts/             @imi21123 @namgungil @pinodo

@@ -31,7 +31,7 @@ paths:
         - 정렬: `byCategory`·`top` 모두 `count` 내림차순, 같으면 `category`, `reason` 오름차순(같은 입력이면 같은 순서).
         - `byCategory`에는 1건 이상인 분류만 넣는다. 기간 안에 행이 없으면 `total: 0`, `byCategory: []`, `top: []`.
         - ai도 입력을 검증한다(ops-api가 먼저 걸러도 같다): 날짜 형식 오류, `from > to`, 기간 31일 초과, `limit` 범위 밖은 400.
-        - `ai_db`를 쓸 수 없으면(연결 안 됨·연결 실패·조회 3초 초과) 503 — ops-api는 이를 503으로 돌려주고 화면은 「통계 없음」으로 보인다.
+        - `ai_db`를 쓸 수 없으면(연결 안 됨·연결 실패·조회 2초 초과 — ops-api 응답 타임아웃 3초보다 짧게 해 ai의 503이 도착하게 한다) 503 — ops-api는 이를 503으로 돌려주고 화면은 「통계 없음」으로 보인다.
       x-caller: [ops-api]
       parameters:
         - name: from

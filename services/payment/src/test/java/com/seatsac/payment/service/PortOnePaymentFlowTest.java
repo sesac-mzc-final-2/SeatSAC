@@ -68,6 +68,8 @@ class PortOnePaymentFlowTest {
     CircuitBreakerRegistry circuitBreakers;
     @Autowired
     MeterRegistry meterRegistry;
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @BeforeEach
     void setUp() {
@@ -414,6 +416,60 @@ class PortOnePaymentFlowTest {
         } finally {
             circuit.transitionToClosedState();
         }
+    }
+
+    // --- D18 재확인 백오프 ---
+
+    /** 포트원 응답이 없어 결제창 미완료 정리를 미룬 행은 1분 뒤까지 다시 묻지 않고, 때가 되면 다시 본다 */
+    @Test
+    void abandonedCheckWhenPortOneIsDownBacksOffPerRow() {
+        circuitBreakers.circuitBreaker("portone").reset();
+        String id = UUID.randomUUID().toString();
+        paymentState.startOrFind(id, 7501L, 30_000, PaymentMethod.TOSSPAY, null, Instant.now().minus(Duration.ofMinutes(8)));
+        PORTONE.getStatus = 500;
+
+        sweeper.sweep();
+
+        Payment row = paymentRepository.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(PaymentStatus.PROCESSING);   // 돈이 잡혔는지 모른다 — 닫지 않는다
+        assertThat(row.getCheckAttempt()).isEqualTo(1);
+        assertThat(row.getNextCheckAt()).isBetween(Instant.now().plusSeconds(50), Instant.now().plusSeconds(70));
+
+        int gets = PORTONE.gets().size();
+        sweeper.sweep();                                                   // 1분이 안 지났다 — 묻지 않는다
+        assertThat(PORTONE.gets()).hasSize(gets);
+
+        PORTONE.getStatus = 0;
+        PORTONE.payments.put(id, Remote.paid(30_000));
+        paymentState.deferCheck(id, Instant.now().minusSeconds(1), Instant.now());   // 다음 확인 시각이 됐다
+        sweeper.sweep();
+        assertThat(paymentRepository.findById(id).orElseThrow().getStatus()).isEqualTo(PaymentStatus.APPROVED);
+    }
+
+    /** 환불이 끝나지 않으면 행마다 미루되, 15분 넘은 미완료 경보는 미룬 동안에도 스윕마다 센다(「행 × 분」 그대로) */
+    @Test
+    void unresolvedRefundBacksOffButIsStillCountedEverySweep() {
+        String id = prepared(30_000);
+        PORTONE.payments.put(id, Remote.paid(45_000));
+        PORTONE.cancelStatus = 500;
+        paymentService.verify(id);                                         // 금액 불일치 → 환불 미완료
+        // DB는 UTC(JVM은 KST라 Timestamp 변환을 피한다) — 생성 20분 전, 손댄 지 2분
+        jdbc.update("UPDATE payment SET created_at = utc_timestamp(3) - INTERVAL 20 MINUTE,"
+            + " updated_at = utc_timestamp(3) - INTERVAL 2 MINUTE WHERE payment_id = ?", id);
+        double before = unresolvedCount();
+
+        sweeper.sweep();                                                   // 다시 보냈지만 또 실패 → 1분 뒤로
+        int cancels = PORTONE.cancels().size();
+        assertThat(paymentRepository.findById(id).orElseThrow().getCheckAttempt()).isEqualTo(1);
+        sweeper.sweep();                                                   // 미룬 동안 — 취소를 다시 보내지 않는다
+
+        assertThat(PORTONE.cancels()).hasSize(cancels);
+        assertThat(unresolvedCount() - before).isEqualTo(2.0);            // 두 번 다 센다
+    }
+
+    private double unresolvedCount() {
+        var counter = meterRegistry.find("payment_refund_unresolved_total").counter();
+        return counter == null ? 0 : counter.count();
     }
 
     /** 결제창 미완료로 닫은 뒤 결제가 끝났는데 웹훅이 오지 않아도 스윕이 찾아 환불 미완료로 표시한다 */

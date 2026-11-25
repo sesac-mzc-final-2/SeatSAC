@@ -87,6 +87,14 @@ public class Payment {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /** D18 — 포트원 재확인을 미룬 횟수. 스윕만 올린다({@code PaymentRepository#deferCheck}) */
+    @Column(name = "check_attempt", nullable = false)
+    private int checkAttempt;
+
+    /** D18 — 이 시각 전에는 스윕이 다시 보지 않는다. null이면 기존 기준 */
+    @Column(name = "next_check_at")
+    private Instant nextCheckAt;
+
     /**
      * 판정 전 행 — 명세 4장 2단계. <b>먼저 INSERT하고 커밋</b>한 뒤 판정은 트랜잭션 밖에서 한다.
      * 지연 카드({@code 9999})를 기다리는 동안 DB 커넥션을 쥐지 않고, 같은 결제 ID로 재호출이 와도

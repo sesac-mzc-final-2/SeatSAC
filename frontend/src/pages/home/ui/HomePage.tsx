@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { CouponEventBanner } from "@/features/coupon-claim";
 import { routes } from "@/shared/config";
 import { useDocumentTitle } from "@/shared/lib";
 import { Icon } from "@/shared/ui";
@@ -6,12 +7,14 @@ import { HomeHero } from "@/widgets/home-hero";
 import { MovieCatalog } from "@/widgets/movie-catalog";
 import styles from "./HomePage.module.css";
 
-/** W1 메인 — 서비스 소개 히어로 · 상영시간표 바로가기 줄 · 상영중 영화 (CAT-01) */
+/** W1 메인 — 서비스 소개 히어로 · VIP 쿠폰 이벤트 배너(로그인·이벤트 있을 때만, 6.3.6) · 상영시간표 바로가기 줄 · 상영중 영화 (CAT-01) */
 export function HomePage() {
   useDocumentTitle("상영중인 영화");
   return (
     <div className={styles.page}>
       <HomeHero />
+
+      <CouponEventBanner />
 
       <section className={styles.banner} aria-label="상영시간표 바로가기">
         <div className={styles.bannerIcon}>

@@ -6,7 +6,14 @@ export interface Profile {
   name: string | null;
   // 계약의 role(USER·ADMIN)은 받지만 쓰지 않는다 — 관리자 화면·기능이 없다
   createdAt: string;
+  /**
+   * 회원 등급(MSA 6.3.1, ADR-118) — Gateway 가 토큰 `cognito:groups` 로 정한 값 그대로(저장 안 함). 열린 집합이고,
+   * 필드가 없던 이전 응답·모르는 값은 NORMAL 로 본다. VIP 지정은 다시 로그인해야 반영된다
+   */
+  grade?: UserGrade;
 }
+
+export type UserGrade = "NORMAL" | "VIP" | (string & {});
 
 /** 마이페이지 내역은 PENDING 을 뺀 네 상태만 온다 (USR-04). 배지 4종 = 예매 완료 · 결제 실패 · 시간 초과 · 취소됨 */
 export type MyBookingStatus = "CONFIRMED" | "PAYMENT_FAILED" | "EXPIRED" | "CANCELED";

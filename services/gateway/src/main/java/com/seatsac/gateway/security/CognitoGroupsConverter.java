@@ -9,7 +9,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import reactor.core.publisher.Mono;
 
-/** 검증된 토큰 → ROLE_USER. 관리자 역할은 없다 — cognito:groups 클레임은 읽지 않는다 */
+/** 검증된 토큰 → ROLE_USER. 관리자 역할은 없다 — 인가에는 cognito:groups를 쓰지 않는다(등급 헤더 X-User-Grade는 UserHeaderFilter가 따로 만든다, 6.3.1a) */
 public class CognitoGroupsConverter implements Converter<Jwt, Mono<AbstractAuthenticationToken>> {
 
     @Override

@@ -43,6 +43,10 @@ spring:
               uri: ${app.services.user-url}
               predicates:
                 - Path=/api/users/**
+            - id: coupon                        # 6.3.3 CPN-01~03 (ADR-118). 로그인 필요(/api/** 규칙), VIP 판정은 coupon이 X-User-Grade로
+              uri: ${app.services.coupon-url}
+              predicates:
+                - Path=/api/coupons/**
             - id: payment-webhook               # ADR-112 PAY-05. 호출자는 포트원 서버 — Bearer 없음, SecurityConfig permitAll
               uri: ${app.services.payment-url}  # payment가 webhook-id·webhook-timestamp·webhook-signature 서명을 원본 본문 그대로 검증한다
               predicates:
@@ -56,6 +60,9 @@ app:
     user-url: http://user:8080
     payment-url: http://payment:8080          # APP_SERVICES_PAYMENT_URL. 포트원 웹훅 라우트만 쓴다 (ADR-112)
     ai-url: http://ai:8080                    # APP_SERVICES_AI_URL. app.ai.enabled 가 true 일 때만 쓴다
+    coupon-url: http://coupon:8080            # APP_SERVICES_COUPON_URL. 기본값을 둬 gitops 보다 이미지가 먼저 나가도 기동한다 (coupon 배포 전에는 503)
+  gateway:
+    max-body-size: 64KB                       # APP_GATEWAY_MAX_BODY_SIZE. 넘으면 413 PAYLOAD_TOO_LARGE (6.3.3, ADR-124)
   ai:
     enabled: false                            # APP_AI_ENABLED. false(기본)면 /api/ai/** 라우트 자체가 없어 404 (rc2 M6 테스트 뒤 gitops 에서 true)
   cognito:                                    # ADR-37. 값은 Terraform 출력 → gitops env. 기본값을 두지 않아 env가 빠지면 기동이 실패한다

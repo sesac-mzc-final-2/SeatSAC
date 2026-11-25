@@ -37,7 +37,10 @@ import com.seatsac.common.test.ValkeyContainerSupport;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.IntStream;
@@ -50,6 +53,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 6.2.1·6.2.2 체크아웃 saga — 시작 → 명령(outbox) → 결과(핸들러에 직접) → 예매 반영, 스윕(시간 초과·재확인·만료),
@@ -102,7 +106,7 @@ class CheckoutSagaFlowTest {
     @Autowired
     ProcessedMessageRepository inbox;
     @Autowired
-    org.springframework.transaction.support.TransactionTemplate transactions;
+    TransactionTemplate transactions;
     @Autowired
     StringRedisTemplate redis;
     @Autowired
@@ -151,6 +155,8 @@ class CheckoutSagaFlowTest {
         assertThat(bookings.findById(bookingId)).get().extracting(Booking::getStatus).isEqualTo(BookingStatus.CONFIRMED);
         assertThat(saga(accepted).getState()).isEqualTo(CheckoutState.CONFIRMED);
         assertThat(outbox.findAll()).anyMatch(m -> m.getDestination() == OutboxDestination.NOTIFICATION);
+        // 6.2.4 — 보낼 곳(SNS 토픽)이 설정되지 않으면 예매 이벤트 행을 만들지 않는다
+        assertThat(outbox.findAll()).noneMatch(m -> m.getDestination() == OutboxDestination.BOOKING_EVENTS);
         verifyNoInteractions(paymentClient);
     }
 
@@ -377,15 +383,15 @@ class CheckoutSagaFlowTest {
     @Test
     void inboxCleanerDeletesOnlyRowsOlderThanSevenDays() {
         Instant now = Instant.now();
-        java.util.List<ProcessedMessage> old = new java.util.ArrayList<>();
+        List<ProcessedMessage> old = new ArrayList<>();
         for (int i = 0; i < 1_001; i++) {   // 한 번(1,000건)으로 끝나지 않게
-            old.add(ProcessedMessage.of(java.util.UUID.randomUUID().toString(), "payment.approved",
-                now.minus(java.time.Duration.ofDays(8))));
+            old.add(ProcessedMessage.of(UUID.randomUUID().toString(), "payment.approved",
+                now.minus(Duration.ofDays(8))));
         }
         inbox.saveAll(old);
-        String recent = java.util.UUID.randomUUID().toString();
-        inbox.save(ProcessedMessage.of(recent, "payment.approved", now.minus(java.time.Duration.ofDays(6))));
-        InboxCleaner cleaner = new InboxCleaner(inbox, transactions, java.time.Clock.systemUTC());
+        String recent = UUID.randomUUID().toString();
+        inbox.save(ProcessedMessage.of(recent, "payment.approved", now.minus(Duration.ofDays(6))));
+        InboxCleaner cleaner = new InboxCleaner(inbox, transactions, Clock.systemUTC());
 
         assertThat(cleaner.cleanOnce()).isEqualTo(1_001);
 

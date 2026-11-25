@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
+import com.seatsac.booking.dto.event.BookingConfirmedEvent;
 import com.seatsac.booking.entity.Booking;
 import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.service.BookingPaymentResultApplier;
@@ -52,6 +53,7 @@ public class CheckoutReplyHandler {
     private final CheckoutProperties properties;
     private final CheckoutIntervals intervals;
     private final MeterRegistry meterRegistry;
+    private final CheckoutTimings timings;
     private final Clock clock;
 
     /** 메시지 하나 — 끝까지 처리했거나(중복 포함) 무시해도 되면 정상 반환, 다시 받아야 하면 예외 */
@@ -154,7 +156,13 @@ public class CheckoutReplyHandler {
         PaymentResult payment = new PaymentResult(paymentId, saga.getBookingId(),
             payload.path("amount").asInt(), "APPROVED", null, null, null, instant(payload, "approvedAt"), null,
             saga.getMethod().name(), null, text(payload, "pgTransactionId"), null);
-        Applied applied = resultApplier.applyApproved(booking, payment, false);
+        timings.step("verified", saga.getCreatedAt(), clock.instant());
+        // 6.2.4 — booking.confirmed의 amount는 할인 뒤 최종 금액, discountAmount·correlationId(checkoutId)
+        int original = saga.getOriginalAmount() == null ? booking.getAmount() : saga.getOriginalAmount();
+        BookingConfirmedEvent.Pricing pricing = new BookingConfirmedEvent.Pricing(
+            saga.getFinalAmount() == null ? original : saga.getFinalAmount(),
+            saga.getDiscountAmount() == null ? 0 : saga.getDiscountAmount(), saga.getCheckoutId());
+        Applied applied = resultApplier.applyApproved(booking, payment, false, pricing);
         Instant now = clock.instant();
         if (applied == Applied.CONFIRMED || applied == Applied.ALREADY_CONFIRMED) {
             if (tx.confirmed(eventId, type, saga, PAYING, now)) {

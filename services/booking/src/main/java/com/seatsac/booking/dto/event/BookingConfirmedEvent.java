@@ -24,6 +24,8 @@ public record BookingConfirmedEvent(
     OffsetDateTime occurredAt,
     String producer,
     String traceId,
+    /** 6.2.4 — 체크아웃 saga로 확정되면 checkoutId, 동기 경로는 null(계약 null 허용) */
+    String correlationId,
     Payload payload
 ) {
 
@@ -43,7 +45,10 @@ public record BookingConfirmedEvent(
         OffsetDateTime startsAt,
         List<String> seatLabels,
         Integer seatCount,
+        /** 결제 금액 — 쿠폰 할인이 있으면 할인 뒤 최종 금액(= 포트원 결제 금액, 6.2.4) */
         Integer amount,
+        /** 6.2.4 쿠폰 할인액(원). 할인이 없으면 0 */
+        Integer discountAmount,
         OffsetDateTime confirmedAt
     ) {
         public Payload {
@@ -59,8 +64,25 @@ public record BookingConfirmedEvent(
     public static BookingConfirmedEvent of(String messageKey, Booking booking,
                                            CatalogClient.Screening screening, String traceId,
                                            Instant occurredAt) {
+        return of(messageKey, booking, screening, traceId, occurredAt, Pricing.of(booking));
+    }
+
+    /**
+     * 결제 금액·할인·saga ID. 동기 경로는 {@link #of(Booking)}(예매 원가, 할인 0, correlationId 없음), 체크아웃 saga는
+     * {@code checkout_saga}의 최종 금액·할인액·checkoutId
+     */
+    public record Pricing(int amount, int discountAmount, String correlationId) {
+
+        public static Pricing of(Booking booking) {
+            return new Pricing(booking.getAmount(), 0, null);
+        }
+    }
+
+    public static BookingConfirmedEvent of(String messageKey, Booking booking,
+                                           CatalogClient.Screening screening, String traceId,
+                                           Instant occurredAt, Pricing pricing) {
         return new BookingConfirmedEvent(messageKey, TYPE, VERSION, Times.toApi(occurredAt), PRODUCER,
-            traceId, Payload.builder()
+            traceId, pricing.correlationId(), Payload.builder()
             .bookingId(booking.getBookingId())
             .userId(booking.getUserId())
             .screeningId(booking.getScreeningId())
@@ -70,7 +92,8 @@ public record BookingConfirmedEvent(
             .startsAt(screening == null ? null : Times.toApi(screening.startsAt()))
             .seatLabels(booking.getSeatLabels())
             .seatCount(booking.getSeatCount())
-            .amount(booking.getAmount())
+            .amount(pricing.amount())
+            .discountAmount(pricing.discountAmount())
             .confirmedAt(Times.toApi(booking.getConfirmedAt() == null ? occurredAt
                 : booking.getConfirmedAt()))
             .build());

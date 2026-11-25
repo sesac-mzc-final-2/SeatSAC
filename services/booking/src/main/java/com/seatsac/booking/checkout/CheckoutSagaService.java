@@ -43,6 +43,7 @@ public class CheckoutSagaService {
     private final CheckoutSagaRepository sagas;
     private final CheckoutStateService stateService;
     private final MeterRegistry meterRegistry;
+    private final CheckoutTimings timings;
 
     /** {@code POST /bookings/{id}/checkout} — 202 */
     public CheckoutAcceptedResponse start(String userId, String mockKey, Long bookingId, CheckoutRequest request) {
@@ -103,7 +104,9 @@ public class CheckoutSagaService {
         }
         if (state == CheckoutState.COUPON_REJECTED) {
             meterRegistry.counter("booking_checkout_total", "result", "coupon_rejected").increment();
+            timings.total(now, clock.instant());
         }
+        timings.step("accepted", now, clock.instant());   // 202 응답까지(saga 행 생성 기준)
         log.info("체크아웃 시작 checkoutId={} bookingId={} method={} state={}", checkoutId, bookingId,
             request.method(), state);
         return new CheckoutAcceptedResponse(checkoutId, bookingId, state, POLL_AFTER_MS);

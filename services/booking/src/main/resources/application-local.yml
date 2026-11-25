@@ -16,6 +16,8 @@ app:
     consumer-enabled: true
     payment-commands-url: http://localhost:9324/queue/cinema-staging-payment-commands
     replies-url: http://localhost:9324/queue/cinema-staging-booking-replies
+    # 로컬은 SNS가 없다 — user 구독 큐로 바로 보낸다(런타임 계약 3장)
+    events-local-queue-url: http://localhost:9324/queue/cinema-staging-user-booking-events
 
 # ElasticMQ (infra/compose). 자격 증명 값은 쓰이지 않지만 SDK가 요구한다
 spring.cloud.aws:

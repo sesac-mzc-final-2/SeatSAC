@@ -8,5 +8,7 @@ public enum OutboxDestination {
     /** 기존 알림 큐 {@code cinema-staging-notification-events} */
     NOTIFICATION,
     /** saga 명령 → {@code cinema-staging-payment-commands} */
-    PAYMENT_COMMANDS
+    PAYMENT_COMMANDS,
+    /** 6.2.4 SNS {@code cinema-staging-booking-events}(user 예매 내역 복제본, D28·D29) */
+    BOOKING_EVENTS
 }

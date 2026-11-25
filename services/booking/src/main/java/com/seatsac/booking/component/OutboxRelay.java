@@ -43,6 +43,7 @@ public class OutboxRelay {
     private final OutboxMessageRepository outboxRepository;
     private final NotificationPublisher publisher;
     private final CommandPublisher commandPublisher;
+    private final BookingEventPublisher bookingEventPublisher;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
@@ -148,6 +149,7 @@ public class OutboxRelay {
                 case NOTIFICATION -> publisher.publish(message.getEventType().messageType(), message.getTraceId(),
                     message.getPayload());
                 case PAYMENT_COMMANDS -> commandPublisher.publish(message);
+                case BOOKING_EVENTS -> bookingEventPublisher.publish(message);
             }
         } catch (RuntimeException e) {
             recordFailure(message, attempt, e);

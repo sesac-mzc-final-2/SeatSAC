@@ -57,7 +57,8 @@ jobs:
         env:
           MODE: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || 'push' }}
           INPUT_SERVICES: ${{ inputs.services }}
-          EXCLUDE: ${{ vars.AI_BUILD_PUSH_ENABLED != 'true' && 'ai' || '' }} # 배포 준비 전 ai 제외
+          # 배포 준비 전 서비스 제외 — ai(ECR·gitops 3.1.18·3.1.20 전), coupon(ECR cinema/coupon·gitops overlays/staging/coupon 6.1.5 전)
+          EXCLUDE: ${{ format('{0} {1}', vars.AI_BUILD_PUSH_ENABLED != 'true' && 'ai' || '', vars.COUPON_BUILD_PUSH_ENABLED != 'true' && 'coupon' || '') }}
           BASE: ${{ github.event.before }}
           HEAD: ${{ github.sha }}
         run: |

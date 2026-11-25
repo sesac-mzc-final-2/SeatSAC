@@ -1,0 +1,67 @@
+spring:
+  application:
+    name: coupon
+  profiles:
+    default: local
+server:
+  port: 8080            # 컨테이너·Service 포트. 로컬은 local 프로필에서 8086
+  shutdown: graceful
+spring.lifecycle.timeout-per-shutdown-phase: 20s   # preStop 5s + graceful 20s (ADR-35)
+management:
+  endpoints.web.exposure.include: health,prometheus,info
+  endpoint.health.probes.enabled: true
+  # readiness = readinessState + db (서비스 실행 계약 1장). Valkey는 넣지 않는다 — 조회는 Valkey 없이도 답하고(재고는 DB로 계산),
+  # 발급만 503이 된다. readiness에 넣으면 Valkey 장애 때 조회까지 같이 빠진다
+  endpoint.health.group.readiness.include: readinessState,db
+  endpoint.health.show-details: never
+  metrics.tags.application: coupon
+  metrics.distribution.percentiles-histogram.http.server.requests: true
+logging:
+  config: classpath:logback-spring.xml
+
+# DB: 자기 RDS 인스턴스(cinema-staging-coupon-db, ADR-115). 비밀번호는 Secret coupon-secrets
+spring.datasource:
+  url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/coupon_db?connectionTimeZone=UTC&characterEncoding=utf8}
+  username: ${SPRING_DATASOURCE_USERNAME:coupon_app}
+  password: ${SPRING_DATASOURCE_PASSWORD:local}
+  hikari.maximum-pool-size: 5     # data-model 7-1: coupon 4 × 5
+spring.jpa:
+  open-in-view: false
+  hibernate.ddl-auto: validate
+  properties.hibernate.jdbc.time_zone: UTC
+spring.flyway:
+  enabled: ${APP_FLYWAY_ON_STARTUP:true}   # 클러스터에서는 Flyway 훅 Job이 돌리므로 false
+  user: ${SPRING_FLYWAY_USER:coupon_migrator}
+  password: ${SPRING_FLYWAY_PASSWORD:local}
+
+# 재고 coupon:stock · 멱등 coupon:idem — 기존 Valkey(cinema-staging-valkey, conventions 4장)
+spring.data.redis:
+  host: ${SPRING_DATA_REDIS_HOST:localhost}
+  port: ${SPRING_DATA_REDIS_PORT:6379}
+  ssl.enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # ElastiCache는 true
+  timeout: 1s
+
+# 앱 고유 설정 — 이름은 docs/service-runtime-contract.md 3장 그대로
+app:
+  coupon:
+    idempotency-ttl: ${APP_COUPON_IDEMPOTENCY_TTL:24h}        # coupon:idem 키 TTL
+    reserved-alarm-after: ${APP_COUPON_RESERVED_ALARM_AFTER:1h} # 이벤트 종료 뒤 이만큼 RESERVED로 남으면 경보(자동 반환하지 않는다)
+    sweep-interval: ${APP_COUPON_SWEEP_INTERVAL:1m}           # 종료 스윕(ISSUED → EXPIRED)·RESERVED 경보
+
+  # saga 명령·결과 (ADR-117). 큐 주소는 cinema-infra-endpoints → gitops coupon-config
+  messaging:
+    # 기본 false — 큐·Pod Identity(6.1.3, gitops coupon ServiceAccount) 전에 켜면 기동 때 큐를 못 찾아 실패한다
+    consumer-enabled: ${APP_MESSAGING_CONSUMER_ENABLED:false}
+    commands-url: ${APP_MESSAGING_COMMANDS_URL:}
+    replies-url: ${APP_MESSAGING_REPLIES_URL:}
+    max-concurrent: ${APP_MESSAGING_MAX_CONCURRENT:10}
+    max-messages-per-poll: ${APP_MESSAGING_MAX_MESSAGES_PER_POLL:10}
+  outbox:
+    # booking·payment와 같은 이름·뜻. booking-replies 큐 전에 켜면 결과가 10회 재시도 끝에 FAILED
+    relay-enabled: ${APP_OUTBOX_RELAY_ENABLED:false}
+    relay-interval: ${APP_OUTBOX_RELAY_INTERVAL:1s}
+
+# SQS: 자격 증명은 Pod Identity(액세스 키 없음, cinema-staging-coupon-pod). 로컬은 ElasticMQ
+spring.cloud.aws:
+  region.static: ${AWS_REGION:ap-northeast-2}
+  sqs.enabled: true

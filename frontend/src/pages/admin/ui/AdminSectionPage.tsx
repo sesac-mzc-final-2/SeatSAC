@@ -8,7 +8,7 @@ interface Props {
 }
 
 /**
- * 아직 채우지 않은 관리자 패널 자리 (6.3.5 골격). 서비스 상태(6.2.6)·오류 리포트·AI 범위 밖 질문(6.3.7)·쿠폰 이벤트(OPS-24)
+ * 아직 채우지 않은 관리자 패널 자리 (6.3.5 골격). 서비스 상태(6.2.6)·쿠폰 이벤트(OPS-24)
  * 작업이 이 자리를 실제 패널로 바꾼다 — 라우트·메뉴는 그대로 둔다
  */
 export function AdminSectionPage({ title, description, icon }: Props) {

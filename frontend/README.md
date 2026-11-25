@@ -32,7 +32,7 @@ npm run build               # tsc -b && vite build → dist/
 관리자 대시보드(6.3.5, ADR-119): 화면 경로는 `/admin/*`, API 는 gateway 가 아니라 `/ops/**` 그대로다(`opsHttp`, CloudFront `/ops/*` → ops-api).
 개발 서버는 `/ops` 를 `DEV_OPS_PROXY`(기본 `http://localhost:8087` ops-api, `dev:mock` 은 목 서버)로 보낸다.
 메뉴는 Access Token `cognito:groups` 에 `ADMIN` 이 있을 때만 보이고(표시용 — 허용은 ops-api 가 토큰을 검증해 정한다), 403 이면 권한 안내.
-`DEV_SESSION_GROUPS` 도 `__DEV_SESSION_GROUPS__` define 이라 빌드에서는 항상 비어 있다. 목 재현: `MOCK_OPS=forbidden`(403)·`MOCK_OPS=down`(503).
+`DEV_SESSION_GROUPS` 도 `__DEV_SESSION_GROUPS__` define 이라 빌드에서는 항상 비어 있다. 목 재현: `MOCK_OPS=forbidden`(403)·`MOCK_OPS=down`(503)·`MOCK_OPS=empty`(리포트 날짜·AI 통계 없음)·`MOCK_OPS=report-fail`(리포트 쿼리 FAILED). 오류 리포트(6.3.7)는 날짜마다 첫 요청이 202 → 상태 2번 RUNNING 뒤 SUCCEEDED, 1시간 안 같은 날짜는 200(캐시)이고 CSV 는 목 서버가 준다.
 
 결제 화면(BKG-10, 토스페이 — ADR-112): `DEV_SESSION=1 npm run dev:mock` 뒤 `/bookings/7001/pay`(7001~7999)로 들어가면 그 번호의
 PENDING 예매(선점 5분, J7·J8)가 처음 조회 때 생긴다. 다시 보려면 번호를 바꾼다. 결제 버튼은 개발용 가짜 토스페이 창을 띄우고

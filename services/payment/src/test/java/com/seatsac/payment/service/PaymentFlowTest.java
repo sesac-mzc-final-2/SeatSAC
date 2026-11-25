@@ -160,13 +160,18 @@ class PaymentFlowTest {
             .isEqualTo(CommonResponseCode.PAYMENT_CONFLICT.name());
     }
 
+    /** 11/24(D20) — 쿠폰 할인 금액(15,000 배수가 아님)은 받고, 범위(1원 ~ 4석 원가) 밖은 행을 만들기 전에 막는다 */
     @Test
-    void amountMustBeAMultipleOfSeatPrice() {
-        assertThatThrownBy(() -> paymentService.pay(request(BOOKING, 20_000, "4111111111111112")))
+    void discountedAmountIsAcceptedButOutOfRangeIsRejected() {
+        PaymentResponse discounted = paymentService.pay(request(BOOKING, 7_500, "4111111111111112"));
+        assertThat(discounted.status()).isEqualTo(PaymentStatus.APPROVED);
+        assertThat(discounted.amount()).isEqualTo(7_500);
+
+        assertThatThrownBy(() -> paymentService.pay(request(BOOKING + 1, 75_000, "4111111111111112")))
             .isInstanceOf(BusinessException.class)
             .extracting(e -> ((BusinessException) e).code().responseCode())
             .isEqualTo(CommonResponseCode.VALIDATION_FAILED.name());
-        assertThat(paymentRepository.count()).isZero();   // 행을 만들지 않는다
+        assertThat(paymentRepository.count()).isEqualTo(1);   // 범위 밖은 행을 만들지 않는다
     }
 
     // --- 조회 ---

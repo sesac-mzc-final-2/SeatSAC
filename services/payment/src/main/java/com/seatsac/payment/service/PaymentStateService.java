@@ -109,6 +109,12 @@ public class PaymentStateService {
         return paymentRepository.findRecentlyFailedWithoutTransaction(since, pageable);
     }
 
+    /** saga 해제 — 승인된 PORTONE 결제를 환불 미완료(FAILED BOOKING_EXPIRED)로 바꾼다. 0행이면 승인 상태가 아니다 */
+    @Transactional
+    public boolean releaseApprovedPortOne(String paymentId, Instant now) {
+        return paymentRepository.releaseApprovedPortOne(paymentId, now) == 1;
+    }
+
     /** PAY-03 — 승인된 결제만 취소한다. 0행이면 이미 취소됐거나 승인 상태가 아니다 */
     @Transactional
     public boolean cancel(String paymentId, PaymentCancelReason reason, Instant now) {

@@ -100,6 +100,18 @@ resource "kubernetes_secret_v1" "app" {
   data = merge({
     SPRING_DATASOURCE_PASSWORD = random_password.db["${each.key}_app"].result
   }, lookup(local.app_secret_extra, each.key, {}))
+
+  # 6.1.4 External Secrets(Merge)와 ArgoCD가 이 Secret에 메타데이터를 덧붙인다
+  #   annotations: reconcile.external-secrets.io/data-hash · argocd.argoproj.io/{tracking-id,sync-wave,sync-options}
+  #   labels:      reconcile.external-secrets.io/managed
+  # 이걸 지우려는 change가 plan마다 생기고, 지우면 ESO가 다음 주기에 다시 붙인다 → Terraform은 data만 관리한다
+  # (Terraform이 쓰는 annotation은 없고, label 3개는 그대로 관리한다)
+  lifecycle {
+    ignore_changes = [
+      metadata[0].annotations,
+      metadata[0].labels["reconcile.external-secrets.io/managed"],
+    ]
+  }
 }
 
 resource "kubernetes_secret_v1" "migrator" {
@@ -118,6 +130,18 @@ resource "kubernetes_secret_v1" "migrator" {
   data = {
     FLYWAY_USER     = "${each.key}_migrator"
     FLYWAY_PASSWORD = random_password.db["${each.key}_migrator"].result
+  }
+
+  # 6.1.4 External Secrets(Merge)와 ArgoCD가 이 Secret에 메타데이터를 덧붙인다
+  #   annotations: reconcile.external-secrets.io/data-hash · argocd.argoproj.io/{tracking-id,sync-wave,sync-options}
+  #   labels:      reconcile.external-secrets.io/managed
+  # 이걸 지우려는 change가 plan마다 생기고, 지우면 ESO가 다음 주기에 다시 붙인다 → Terraform은 data만 관리한다
+  # (Terraform이 쓰는 annotation은 없고, label 3개는 그대로 관리한다)
+  lifecycle {
+    ignore_changes = [
+      metadata[0].annotations,
+      metadata[0].labels["reconcile.external-secrets.io/managed"],
+    ]
   }
 }
 

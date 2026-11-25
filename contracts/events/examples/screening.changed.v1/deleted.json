@@ -1,0 +1,15 @@
+{
+  "eventId": "8d9e0f1a-2b3c-4e4f-8a51-f8a9b0c1d2e3",
+  "type": "screening.changed",
+  "version": 1,
+  "occurredAt": "2026-11-24T10:05:00+09:00",
+  "producer": "catalog",
+  "traceId": "a4d2b3c5e7f94a1b8c6d0e2f3a4b5c6d",
+  "correlationId": null,
+  "payload": {
+    "screeningId": 5124,
+    "version": 3,
+    "deleted": true,
+    "changedAt": "2026-11-24T10:05:00+09:00"
+  }
+}

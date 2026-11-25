@@ -1,0 +1,16 @@
+{
+  "eventId": "4f5a6b7c-8d9e-4afb-8c0d-b4c5d6e7f8a9",
+  "type": "coupon.reserved",
+  "version": 1,
+  "occurredAt": "2026-11-27T14:05:02+09:00",
+  "producer": "coupon",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "correlationId": "5d0c7f1a-2b3e-4c5d-8e9f-0a1b2c3d4e5f",
+  "payload": {
+    "checkoutId": "5d0c7f1a-2b3e-4c5d-8e9f-0a1b2c3d4e5f",
+    "couponIssueId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+    "discountRate": 50,
+    "eventId": 3,
+    "bookingId": 9876
+  }
+}

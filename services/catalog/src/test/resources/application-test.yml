@@ -10,6 +10,9 @@ spring:
     hibernate.ddl-auto: validate
     properties.hibernate.jdbc.time_zone: UTC
 app:
+  # 주기 실행은 끈다 — 회차 fixture를 테스트마다 지우고 넣으므로. ScheduleExtenderTest가 extend()를 직접 부른다
+  schedule:
+    enabled: false
   services:
     # 통합 테스트가 @DynamicPropertySource로 가짜 booking 주소를 넣는다. 기본값은 바로 연결 거부되는 포트
     booking-url: http://127.0.0.1:1

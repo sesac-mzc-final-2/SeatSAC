@@ -7,6 +7,11 @@ import { configureHttpAuth } from "@/shared/api";
  * 보기 위한 것으로, 토큰은 목 서버가 "있는지"만 보는 자리 표시 값이다. 빌드에서는 플래그가 항상 꺼져 있어 배포본에서 켜질 길이 없다.
  */
 const DEV_ACCESS_TOKEN = "dev-session";
+/** `DEV_SESSION_GROUPS=ADMIN,VIP` — 가짜 세션의 Cognito 그룹 (관리자 메뉴·VIP 화면 확인용, vite.config `define`) */
+const DEV_GROUPS: readonly string[] = __DEV_SESSION_GROUPS__
+  .split(",")
+  .map((group) => group.trim())
+  .filter(Boolean);
 
 export function DevSessionProvider({ children }: { children: ReactNode }) {
   // 토큰 공급자는 자식이 첫 요청(GET /users/me)을 보내기 전에 꽂혀 있어야 한다(401 은 재시도하지 않는다).
@@ -19,7 +24,7 @@ export function DevSessionProvider({ children }: { children: ReactNode }) {
   const session = useMemo<Session>(
     () => ({
       status: "authenticated",
-      user: { id: "00000000-0000-4000-8000-000000000001", name: "개발 세션", email: "dev@localhost" },
+      user: { id: "00000000-0000-4000-8000-000000000001", name: "개발 세션", email: "dev@localhost", groups: DEV_GROUPS },
       error: null,
       returnTo: null,
       signIn: () => {},

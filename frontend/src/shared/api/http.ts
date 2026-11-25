@@ -74,15 +74,20 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** false면 Authorization 헤더를 붙이지 않는다 (catalog 조회 API) */
   auth?: boolean;
+  /**
+   * 경로 앞에 붙일 접두사. 기본 `VITE_API_BASE_URL`(`/api`, gateway). 관리자 API는 gateway가 아니라
+   * `/ops/**` 그대로라(ADR-119) `opsHttp`가 ""를 넘긴다
+   */
+  baseUrl?: string;
 }
 
-export function buildUrl(path: string, query?: Record<string, QueryValue>): string {
+export function buildUrl(path: string, query?: Record<string, QueryValue>, baseUrl: string = env.apiBaseUrl): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
   }
   const qs = params.toString();
-  return `${env.apiBaseUrl}${path}${qs ? `?${qs}` : ""}`;
+  return `${baseUrl}${path}${qs ? `?${qs}` : ""}`;
 }
 
 /** `Retry-After` 는 초(정수)만 받는다. HTTP 날짜 형식은 쓰지 않는다(계약 ai.openapi.yaml 429) */
@@ -106,7 +111,7 @@ async function parseErrorBody(response: Response): Promise<Partial<ErrorBody> | 
 
 /** `/api` 상대 경로로 호출하는 공통 클라이언트 (같은 출처, CORS 없음) */
 export async function http<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", query, body, headers = {}, signal, auth = true } = options;
+  const { method = "GET", query, body, headers = {}, signal, auth = true, baseUrl } = options;
 
   const send = async (token: string | null): Promise<Response> => {
     const requestHeaders: Record<string, string> = { Accept: "application/json", ...headers };
@@ -114,7 +119,7 @@ export async function http<T>(path: string, options: RequestOptions = {}): Promi
     if (token) requestHeaders.Authorization = `Bearer ${token}`;
     try {
       const sentAt = Date.now();
-      const response = await fetch(buildUrl(path, query), {
+      const response = await fetch(buildUrl(path, query, baseUrl), {
         method,
         headers: requestHeaders,
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -147,4 +152,13 @@ export async function http<T>(path: string, options: RequestOptions = {}): Promi
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+/**
+ * 관리자 API 클라이언트 (`contracts/openapi/ops.openapi.yaml`). CloudFront `/ops/*` → ALB → ops-api 로 가고 gateway·`/api`를
+ * 거치지 않는다 — gateway를 정지해도 관리자 화면은 동작해야 해서다(ADR-119). 경로는 계약 그대로 `/ops/...`.
+ * 토큰·401 갱신·오류 형식은 `http`와 같다(ops-api가 토큰을 직접 검증, ADMIN 그룹이 아니면 403 `FORBIDDEN`)
+ */
+export function opsHttp<T>(path: `/ops/${string}`, options: Omit<RequestOptions, "baseUrl" | "auth"> = {}): Promise<T> {
+  return http<T>(path, { ...options, auth: true, baseUrl: "" });
 }

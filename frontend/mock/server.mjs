@@ -9,6 +9,8 @@
 //
 // 재현용: MOCK_FAIL_PATH=/api/screenings (화면에서 503 오류 상태) · 직접 호출은 ?fail=503 · /api/movies/999 → 404
 //        예매 ID 9001 은 회차 정보 없음(screening null)
+// 관리자(ops.openapi.yaml): DEV_SESSION=1 DEV_SESSION_GROUPS=ADMIN npm run dev:mock → 헤더 「관리자」 → /admin
+//        MOCK_OPS=forbidden → /ops/** 403(ADMIN 아님) · MOCK_OPS=down → GET /ops/services 503
 // AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
 //        문맥 이어받기(3.4.22): 답마다 context, 영화 버튼의 continueFrom 이면 그 답의 날짜·극장·시각(○시 이후)으로 좁혀 답한다
@@ -346,7 +348,42 @@ function validatePreferences(body) {
 }
 
 const requiresAuth = (path) =>
-  path.startsWith("/api/users/") || path.startsWith("/api/bookings/") || path.startsWith("/api/ai/");
+  path.startsWith("/api/users/") || path.startsWith("/api/bookings/") || path.startsWith("/api/ai/") || path.startsWith("/ops/");
+
+// ---------- 관리자 API (ops.openapi.yaml, OPS-20) — gateway 가 아니라 /ops 그대로 ----------
+
+/** forbidden: 토큰은 있지만 ADMIN 그룹 아님(403) · down: Kubernetes API 를 못 읽음(503) · 그 밖: 정상 */
+const MOCK_OPS = process.env.MOCK_OPS ?? "on";
+
+function opsServices() {
+  const svc = (service, kind, desired, state, hpa) => ({ service, kind, desired, ready: desired, state, hpa, stopped: false });
+  return {
+    items: [
+      svc("gateway", "ROLLOUT", 2, 0, null),
+      svc("booking", "ROLLOUT", 2, 0, { min: 2, max: 4, current: 2, cpuPercent: 23 }),
+      svc("catalog", "DEPLOYMENT", 2, 1, { min: 2, max: 4, current: 2, cpuPercent: 41 }),
+      svc("user", "DEPLOYMENT", 2, 0, null),
+      svc("payment", "DEPLOYMENT", 2, null, null),
+      svc("coupon", "DEPLOYMENT", 2, 0, { min: 2, max: 4, current: 2, cpuPercent: 12 }),
+      { service: "ai", kind: "DEPLOYMENT", desired: 0, ready: 0, state: null, hpa: null, stopped: true },
+      svc("ops-api", "DEPLOYMENT", 1, 0, null),
+    ],
+    nodes: [
+      { name: "ip-10-0-11-23.ap-northeast-2.compute.internal", zone: "ap-northeast-2a", cpuPercent: 37, memoryPercent: 62, capacityType: "ON_DEMAND" },
+      { name: "ip-10-0-12-41.ap-northeast-2.compute.internal", zone: "ap-northeast-2c", cpuPercent: 29, memoryPercent: 55, capacityType: "ON_DEMAND" },
+    ],
+    asOf: nowKstIso(),
+  };
+}
+
+function handleOps(req, res, path) {
+  if (MOCK_OPS === "forbidden") return fail(res, 403, "FORBIDDEN", "ADMIN group required");
+  if (path === "/ops/services" && req.method === "GET") {
+    if (MOCK_OPS === "down") return fail(res, 503, "SERVICE_UNAVAILABLE", "kubernetes api unavailable");
+    return json(res, 200, opsServices());
+  }
+  return fail(res, 404, "NOT_FOUND", path);
+}
 
 // ---------- AI 챗봇 (ai.openapi.yaml, AI-01·AI-04) ----------
 
@@ -982,6 +1019,7 @@ createServer(async (req, res) => {
   }
 
   if (path.startsWith("/api/ai/")) return handleAi(req, res, path);
+  if (path.startsWith("/ops/")) return handleOps(req, res, path);
 
   if (path.startsWith("/api/mock-portone/") || /^\/api\/bookings\/7\d{3}(\/|$)/.test(path)) {
     if ((await handlePayBooking(req, res, path)) !== false) return;

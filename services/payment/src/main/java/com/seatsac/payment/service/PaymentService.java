@@ -83,8 +83,26 @@ public class PaymentService {
 
     /** CARD — 모의 판정까지 끝낸다(ADR-13). 테스트·분석 전용, 호출자 제한은 booking이 한다 */
     private PaymentResponse payMockCard(PaymentCreateRequest request) {
+        return chargeMock(request, Payment.last4Of(request.card().number()));
+    }
+
+    /**
+     * saga 청구(6.2.3, {@code payment.charge-requested}) — 명령에는 카드 끝 4자리만 온다(번호 전체는 큐·DLQ에 남기지 않는다).
+     * 판정은 동기 경로와 같은 코드다. 지연 카드는 이 스레드에서 기다린다(트랜잭션 밖)
+     */
+    public PaymentResponse chargeMockLast4(String paymentId, Long bookingId, Integer amount, String cardLast4) {
+        validateAmount(amount);
+        if (cardLast4 == null || !cardLast4.matches("^[0-9]{4}$")) {
+            throw PaymentErrorCode.INVALID_CARD.exception(
+                ErrorDetail.of("cardLast4", null, PaymentErrorCode.INVALID_CARD.name()));
+        }
+        PaymentCreateRequest request = new PaymentCreateRequest(paymentId, bookingId, amount, PaymentMethod.CARD,
+            null, null);
+        return chargeMock(request, cardLast4);
+    }
+
+    private PaymentResponse chargeMock(PaymentCreateRequest request, String cardLast4) {
         Instant now = clock.instant();
-        String cardLast4 = Payment.last4Of(request.card().number());
         StartResult started = start(request, cardLast4, now);
         if (!started.created()) {
             // 같은 결제 ID로 다시 왔다 — 저장된 상태를 그대로 돌려준다(PROCESSING이면 PROCESSING).
@@ -131,7 +149,7 @@ public class PaymentService {
             PortOneReconcileService.Outcome outcome = portOneReconcile.reconcileProcessing(payment);
             switch (outcome) {
                 case APPROVED -> countRequest(PaymentStatus.APPROVED);
-                case FAILED, MISMATCH -> countRequest(PaymentStatus.FAILED);
+                case FAILED, MISMATCH, RELEASED -> countRequest(PaymentStatus.FAILED);
                 case CANCELED -> countRequest(PaymentStatus.CANCELED);
                 case NOT_YET -> { /* 아직 모른다 — 지표는 생성 때 processing으로 셌다 */ }
             }
@@ -194,9 +212,12 @@ public class PaymentService {
         return started;
     }
 
-    /** 금액은 15,000의 배수여야 한다 — 범위는 DTO가 본다 (명세 4장) */
+    /**
+     * 금액 범위(1원 ~ 4석 원가). HTTP는 DTO가 먼저 보지만 saga 명령은 DTO 검증을 거치지 않아 여기서 한 번 더 본다.
+     * 11/24(D20): 쿠폰 할인 금액을 받으므로 15,000 배수 검사는 뺐다
+     */
     private static void validateAmount(Integer amount) {
-        if (amount % PaymentPolicy.SEAT_PRICE != 0) {
+        if (amount == null || amount < PaymentPolicy.MIN_AMOUNT || amount > PaymentPolicy.MAX_AMOUNT) {
             throw PaymentErrorCode.INVALID_AMOUNT.exception(
                 ErrorDetail.of("amount", amount, PaymentErrorCode.INVALID_AMOUNT.name()));
         }

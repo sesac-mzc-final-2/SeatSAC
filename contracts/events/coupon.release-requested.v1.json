@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seatsac.dev/events/coupon.release-requested.v1.json",
+  "title": "CouponReleaseRequested",
+  "description": "SQS cinema-staging-coupon-commands. booking(체크아웃 saga 오케스트레이터) → coupon. 메시지 속성 type·traceId·correlationId. 표준 큐라 순서가 바뀌거나 두 번 올 수 있다 — coupon은 processed_message(eventId)로 한 번만 처리하고, 결과는 coupon_reservation(PK checkout_id, 체크아웃 1건 = 1행)으로 도착 순서와 상관없이 같게 만든다(API 명세서 v1.5 22-4, ADR-116·117·118). 쿠폰 반환 — 보상(결제 거절·단계 시간 초과)·선점 만료·재결제 대기(PAYMENT_RETRYABLE) 때. booking은 예약 여부를 몰라도 보낸다(쿠폰 단계 시간 초과). 예약 행이 RESERVED면 쿠폰 RESERVED → ISSUED(이벤트가 끝났으면 EXPIRED), 예약 행 RELEASED. 예약 행이 없으면 RELEASED 행을 먼저 기록한다(쿠폰은 그대로) — 늦게 온 예약을 거절하려고. 이미 RELEASED면 무시, USED면 무시 + 경고 로그. 결과 메시지 없음(booking은 반환 결과를 기다리지 않는다).",
+  "type": "object",
+  "required": [
+    "eventId",
+    "type",
+    "version",
+    "occurredAt",
+    "producer",
+    "traceId",
+    "correlationId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "아웃박스 행마다 새 UUID. 재전송해도 같은 값(소비자 inbox processed_message가 중복 제거). 같은 명령을 다시 보낼 때(재시도)는 새 행·새 eventId"
+    },
+    "type": {
+      "type": "string",
+      "const": "coupon.release-requested"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "string",
+      "const": "booking"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Gateway X-Trace-Id (소문자 16진수 32자리). 요청 없는 작업(스윕·릴레이)은 새로 생성",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "체크아웃 saga ID(checkoutId). SQS 메시지 속성 correlationId와 같은 값"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "checkoutId",
+        "couponIssueId"
+      ],
+      "properties": {
+        "checkoutId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "= correlationId"
+        },
+        "couponIssueId": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "체크아웃 요청의 couponIssueId 그대로(booking은 해석하지 않는다). coupon이 발급한 값이면 uuid(coupon.openapi.yaml CouponIssue). coupon에 없는 값이면 NOT_OWNER로 거절"
+        },
+        "bookingId": {
+          "type": "integer",
+          "description": "예매 ID(로그·추적용)"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-extensible-enum": [
+            "PAYMENT_DECLINED",
+            "STEP_TIMEOUT",
+            "HOLD_EXPIRED",
+            "PAYMENT_RETRYABLE"
+          ],
+          "description": "반환 사유(로그·지표용, 처리는 사유와 상관없이 같다). 열린 집합 — 모르는 값도 그대로 처리"
+        }
+      }
+    }
+  }
+}

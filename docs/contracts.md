@@ -9,32 +9,34 @@
 
 ## 1. 파일
 
+> 🆕 11/24 담당 변경: coupon(#178)·user(#186)는 **김종식**. coupon saga 명령의 받는 쪽·결과의 보내는 쪽도 김종식이다 — 아래 표의 `events/coupon.*` 두 행(명령·결과)에 남은 「한채연」은 #181(같은 표의 바로 옆 행을 고침)이 머지된 뒤 고친다. 화면(쿠폰·관리자)은 한채연.
+
 | 파일 | 내용 | 담당 (CODEOWNERS) |
 | --- | --- | --- |
 | `openapi/catalog.openapi.yaml` | 외부 6개 (조회만 — 관리자 API는 11/14 삭제) | 한채연 |
 | `openapi/booking.openapi.yaml` | 외부 8개 (좌석 현황·SSE·선점·해제·결제 준비·결제·조회·취소) + 🆕 3개 (체크아웃 시작·조회·확인) | 남궁일 |
 | `openapi/payment.openapi.yaml` | 외부 1개 (포트원 웹훅 — 인증 없음, 서명 검증) | 남궁일 |
-| `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장). 🆕 `GET /users/me`에 `grade` | 한채연 |
-| 🆕 `openapi/coupon.openapi.yaml` | 외부 3개 (현재 이벤트·발급·내 쿠폰) | 한채연 |
+| `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장). 🆕 `GET /users/me`에 `grade` | ~~한채연~~ 🆕 김종식(11/24) |
+| 🆕 `openapi/coupon.openapi.yaml` | 외부 3개 (현재 이벤트·발급·내 쿠폰) | ~~한채연~~ 🆕 김종식(11/24) |
 | 🆕 `openapi/ops.openapi.yaml` | 외부 8개 (`/ops` — 서비스 상태·정지·가동, 리포트 날짜·생성·상태, AI 범위 밖 통계, 쿠폰 이벤트 생성) | 김종식 |
 | ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`). 🆕 6.4.7: 응답 `path`에 `RAG`, 필드 `sources`(근거 문서 `[{id, title}]`, 그 밖의 경로는 null) **추가만** — `CLARIFY`·`HOLD_*`를 넣을 때와 같은 방식, 6.0.1 계약 PR에 함께(⏳ `contract-check`로 확인) | 김서현 · 한채연 |
 | ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED) + CLARIFY(#140) + 좌석 잡기 3종(HOLD_CONFIRM·HOLD_RESULT·HOLD_GUIDE) + 문맥 이어받기 `chat-context-carry.json`(3.4.22) + 🆕 이용 안내 `chat-rag.json`(6.4.7). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 4개 (생성·조회·확인·취소) | 남궁일 |
-| 🆕 `openapi/internal/coupon.internal.openapi.yaml` | 내부 2개 (이벤트 생성·목록, 호출자 ops-api) | 한채연 |
+| 🆕 `openapi/internal/coupon.internal.openapi.yaml` | 내부 2개 (이벤트 생성·목록, 호출자 ops-api) | ~~한채연~~ 🆕 김종식(11/24) |
 | 🆕 `openapi/internal/ai.internal.openapi.yaml` | 내부 1개 (범위 밖 질문 통계, 호출자 ops-api) | 김서현 |
 | `events/seat-event.v1.json` | Valkey Pub/Sub → SSE | 남궁일 |
-| `events/booking.confirmed.v1.json` | SQS 예매 완료 알림. 🆕 SNS `booking-events`로도 발행(user 복제본), 선택 필드 `amount`·`discountAmount` 추가 | 남궁일 (소비 Lambda 김종식, user 한채연) |
+| `events/booking.confirmed.v1.json` | SQS 예매 완료 알림. 🆕 SNS `booking-events`로도 발행(user 복제본), 선택 필드 `amount`·`discountAmount` 추가 | 남궁일 (소비 Lambda 김종식, user ~~한채연~~ 🆕 김종식) |
 | 🆕 `events/booking.canceled.v1.json` | 예매 취소·만료·결제 실패(`reason`) | 남궁일 |
 | 🆕 `events/screening.changed.v1.json` · `movie.changed.v1.json` | catalog 변경(`version`, `deleted`) → ai·(booking) 복제본 | 한채연 |
 | 🆕 `events/coupon.{reservation-requested,use-requested,release-requested}.v1.json` | saga 명령 → coupon | 남궁일(보냄) · 한채연(받음) |
-| 🆕 `events/payment.{preparation-requested,charge-requested,verification-requested}.v1.json` | saga 명령 → payment | 남궁일 |
-| 🆕 `events/coupon.{reserved,reservation-rejected}.v1.json` · `payment.{prepared,preparation-failed,approved,declined,result-unknown}.v1.json` | saga 결과 → booking | 한채연·남궁일 |
+| 🆕 `events/payment.{preparation-requested,charge-requested,verification-requested}.v1.json` · 🆕 `payment.release-requested.v1.json` | saga 명령 → payment. `release-requested`는 선점 만료 때 「이 결제는 더 쓰이지 않는다」(환불은 payment가 맡음, #176). `charge-requested`(모의 카드)는 카드 끝 4자리(`cardLast4`)만 싣는다 — 아웃박스·큐·DLQ에 남기 때문 | 남궁일 |
+| 🆕 `events/coupon.{reserved,reservation-rejected}.v1.json` · `payment.{prepared,preparation-failed,approved,declined,result-unknown}.v1.json` | saga 결과 → booking. 🆕 `payment.declined.retryable`(포트원 FAILED 확인 — 같은 예매로 다시 결제 가능, 플래그 `APP_CHECKOUT_PAYMENT_RETRY_ENABLED`), `failureCode` `BOOKING_EXPIRED`(해제 명령을 받은 결제가 나중에 PAID → 환불 대상), `payment.result-unknown`은 실패가 아니라 재확인 신호(`reason` `NOT_YET`·`PORTONE_UNAVAILABLE`·`NOT_FOUND`) | 한채연·남궁일 (🆕 11/24 coupon은 김종식, #178) |
 | `schemas/error.v1.json` | 공통 오류 응답 | 전원 |
 | `*/examples/**` | 예시 메시지 = 서비스 테스트 fixture | 각 담당 |
 
-합계: 외부 22(⚠️AI ai 2개·포트원 웹훅 1개 포함) · 내부 9 · 이벤트 2. 🆕 11/23 이후 외부 **36**(booking 3·coupon 3·ops 8 추가) · 내부 **12**(coupon 2·ai 1) · 메시지 **18**(이벤트 4 + 명령 6 + 결과 7 + 좌석 이벤트 1).
+합계: 외부 22(⚠️AI ai 2개·포트원 웹훅 1개 포함) · 내부 9 · 이벤트 2. 🆕 11/23 이후 외부 **36**(booking 3·coupon 3·ops 8 추가) · 내부 **12**(coupon 2·ai 1) · 메시지 ~~**18**(이벤트 4 + 명령 6 + 결과 7 + 좌석 이벤트 1)~~ 🆕 **19**(이벤트 4 + 명령 **7** + 결과 7 + 좌석 이벤트 1 — 11/24 `payment.release-requested` 추가, #176).
 
 ## 2. API 목록
 
@@ -58,7 +60,7 @@
 | 없음(서명) | `POST /webhooks/portone` | PAY-05 | 포트원 웹훅. Standard Webhooks 서명, 본문 불신 → 단건 조회 재검증 |
 | USER | `POST /bookings/{bookingId}/cancel` | BKG-07 | |
 | 🆕 USER | `POST /bookings/{bookingId}/checkout` | BKG-10 | **체크아웃 saga**(ADR-116). `Idempotency-Key` 필수, `{method: TOSSPAY\|CARD, couponIssueId?}` → 202 `{checkoutId, state, pollAfterMs}`. 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 `false` → 404). 한 예매에 동기 결제와 섞으면 409 `PAYMENT_PATH_CONFLICT` |
-| 🆕 USER | `GET /bookings/{bookingId}/checkout` | BKG-10 | polling(1초, 최대 30초). `state` STARTED → COUPON_RESERVING → PAYMENT_PREPARING → READY_TO_PAY(포트원 결제창 값) → VERIFYING → CONFIRMED / COMPENSATING → FAILED / EXPIRED, 🆕 / COUPON_REJECTED(쿠폰만 거절 — 예매·좌석은 그대로, 최초 선점 5분 안에 다른 쿠폰이나 쿠폰 없이 `POST …/checkout`을 새 `Idempotency-Key`로 다시). CARD는 결제 준비 없이 CHARGING. `amount {original, discount, final}`, `failure {code, reason}`. 결제 결과 불명(`CHARGING`·`VERIFYING`)은 보상하지 않고 재확인, ~~선점 만료까지 모르면 EXPIRED~~ 🆕 선점 만료 뒤에는 예매 상태를 따라 닫힌다(기존 만료 처리가 유예 2분 뒤 payment 결과로 정함 — 결과 불명이면 대략 7~9분). 진행 중이면 `DELETE /bookings/{id}/hold`도 409 `CHECKOUT_IN_PROGRESS`, `GET /bookings/{id}`에 `checkout {checkoutId, state}` 추가 |
+| 🆕 USER | `GET /bookings/{bookingId}/checkout` | BKG-10 | polling(1초, 최대 30초). `state` STARTED → COUPON_RESERVING → PAYMENT_PREPARING → READY_TO_PAY(포트원 결제창 값) → VERIFYING → CONFIRMED / COMPENSATING → FAILED / EXPIRED, 🆕 / COUPON_REJECTED(쿠폰만 거절 — 예매·좌석은 그대로, 최초 선점 5분 안에 다른 쿠폰이나 쿠폰 없이 `POST …/checkout`을 새 `Idempotency-Key`로 다시). CARD는 결제 준비 없이 CHARGING. `amount {original, discount, final}`, `failure {code, reason}`. 결제 결과 불명(`CHARGING`·`VERIFYING`)은 보상하지 않고 재확인, ~~선점 만료까지 모르면 EXPIRED~~ ~~선점 만료 뒤에는 예매 상태를 따라 닫힌다(기존 만료 처리가 유예 2분 뒤 payment 결과로 정함 — 결과 불명이면 대략 7~9분)~~ 🆕 11/24(#176): **선점 5분에 예매를 바로 EXPIRED**(유예 2분·payment 조회 없음), saga도 EXPIRED + `refundNotice`(`WILL_REFUND_IF_PAID` 결제 여부 모름 · `REFUND_IN_PROGRESS` 만료 뒤 승인 확인 · null 결제 없음) — 환불은 payment가 맡는다(`payment.release-requested`). 🆕 PAYMENT_RETRYABLE(포트원 FAILED 확인 — 예매·좌석 유지, 새 `Idempotency-Key`로 다시 결제, 예매당 3회, 플래그 `APP_CHECKOUT_PAYMENT_RETRY_ENABLED` 기본 `false`). 응답 `attempt`·`retryable`. 진행 중이면 `DELETE /bookings/{id}/hold`도 409 `CHECKOUT_IN_PROGRESS`(COUPON_REJECTED·PAYMENT_RETRYABLE은 끝난 상태라 해제 허용), `GET /bookings/{id}`에 `checkout {checkoutId, state}` 추가(saga 예매는 payment를 조회하지 않는다) |
 | 🆕 USER | `POST /bookings/{bookingId}/checkout/confirm` | BKG-10 | 결제창이 닫힌 뒤 `{paymentId}` → 202. `READY_TO_PAY`가 아니면 409 `CHECKOUT_NOT_READY` |
 | 🆕 USER | `GET /coupons/events/current` | CPN-01 | **coupon**, `{eventId, title, discountRate, startsAt, endsAt, totalQuantity, remainingQuantity, eligibleGrade, state, myIssue}` — NORMAL 사용자도 200(화면이 「VIP 전용」 안내) |
 | 🆕 USER | `POST /coupons/events/{eventId}/claim` | CPN-02 | VIP만(`X-User-Grade`), 선착순, `Idempotency-Key` 필수 → 201. 403 `COUPON_NOT_ELIGIBLE`, 409 `COUPON_SOLD_OUT`·`COUPON_ALREADY_CLAIMED`·`COUPON_EVENT_NOT_OPEN` |
@@ -116,7 +118,7 @@
 | 15 | 🆕 비동기 결제 | 기존 `/payments`·`/pay`는 그대로 두고 **새 자원 `checkout`**(202 + polling)으로 추가. 상태·결과는 `GET /bookings/{id}/checkout` 한 곳 | 노션 ADR-116 (11/23) |
 | 16 | 🆕 메시지 envelope | 기존 envelope + `correlationId`(saga = `checkoutId`). 소비자는 모르는 필드를 무시, `processed_message`로 한 번만 | ADR-117 |
 | 17 | 🆕 VIP·관리자 | VIP = Cognito 그룹 → gateway `X-User-Grade`, 관리자 = Cognito `ADMIN` 그룹 → ops-api 직접 검증(`/api/admin/**`은 계속 없음) | ADR-118·119 |
-| 18 | 🆕 금액 | 쿠폰 할인은 booking이 결제 준비 전에 확정(`amount {original, discount, final}`), 포트원 결제창은 `final` | ADR-118 |
+| 18 | 🆕 금액 | 쿠폰 할인은 booking이 결제 준비 전에 확정(`amount {original, discount, final}`), 포트원 결제창은 `final`. 🆕 11/24: payment 내부 `amount`는 15,000 배수 검사를 빼고 1~60,000(#176), 0원은 없다 — 쿠폰 할인율 상한 99% | ADR-118 |
 
 ## 4. 바꾸는 방법
 

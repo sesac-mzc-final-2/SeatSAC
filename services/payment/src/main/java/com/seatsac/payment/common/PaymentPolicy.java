@@ -8,11 +8,14 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class PaymentPolicy {
 
-    /** 1석 15,000원. 금액은 이 값의 배수여야 한다 */
+    /** 1석 15,000원 */
     public static final int SEAT_PRICE = 15_000;
 
-    /** 1~4석 (Booking의 선점 상한과 같다) */
-    public static final int MIN_AMOUNT = SEAT_PRICE;
+    /**
+     * 금액 범위 — 1원 ~ 4석 원가. 11/24(D20): 쿠폰 할인 뒤 금액(예: 50% → 7,500원)을 받으므로 15,000 배수 검사를 뺐다.
+     * 상한은 할인이 금액을 늘리지 않으므로 4석 원가 그대로다(계약 {@code PaymentRequest.amount} 1~60,000)
+     */
+    public static final int MIN_AMOUNT = 1;
     public static final int MAX_AMOUNT = SEAT_PRICE * 4;
 
     /** 카드 끝 4자리로 결과를 정한다 (ADR-13) */

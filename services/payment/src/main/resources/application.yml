@@ -52,6 +52,26 @@ app:
     channel-key-tosspay: ${APP_PORTONE_CHANNEL_KEY_TOSSPAY:}
     pending-timeout: ${APP_PORTONE_PENDING_TIMEOUT:7m}    # 결제창 미완료 PROCESSING 정리 = 선점 300초 + 유예
 
+  # 6.2.3 saga 명령·결과 (ADR-117, 런타임 계약 3장). 큐 주소는 cinema-infra-endpoints → gitops payment-config
+  messaging:
+    # 기본 false — 큐·Pod Identity(6.1.3, gitops payment ServiceAccount) 전에 켜면 기동 때 큐를 못 찾아 실패한다
+    consumer-enabled: ${APP_MESSAGING_CONSUMER_ENABLED:false}
+    commands-url: ${APP_MESSAGING_COMMANDS_URL:}
+    replies-url: ${APP_MESSAGING_REPLIES_URL:}
+    # 리스너 동시 처리 수 — 비교 측정은 200(동기 Tomcat 스레드와 같게), 그 뒤 100·50 추가 측정(05 2-1)
+    max-concurrent: ${APP_MESSAGING_MAX_CONCURRENT:10}
+    # 한 번에 받는 수(SQS 상한 10). 동시 처리 수보다 클 수 없다
+    max-messages-per-poll: ${APP_MESSAGING_MAX_MESSAGES_PER_POLL:10}
+  outbox:
+    # booking과 같은 이름·뜻. booking-replies 큐 전에 켜면 결과가 10회 재시도 끝에 FAILED
+    relay-enabled: ${APP_OUTBOX_RELAY_ENABLED:false}
+    relay-interval: ${APP_OUTBOX_RELAY_INTERVAL:1s}
+
+# SQS: 자격 증명은 Pod Identity(액세스 키 없음, cinema-staging-payment-pod). 로컬은 ElasticMQ
+spring.cloud.aws:
+  region.static: ${AWS_REGION:ap-northeast-2}
+  sqs.enabled: true
+
 # 포트원 호출 서킷 — 응답을 못 받은 경우(PortOneUnavailableException)만 실패로 센다. 거절(4xx)·대조 필요는 가용성 문제가 아니다
 resilience4j:
   circuitbreaker:

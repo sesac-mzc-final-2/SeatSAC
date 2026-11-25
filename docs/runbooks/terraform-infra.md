@@ -432,7 +432,7 @@ aws cloudwatch describe-alarms --alarm-name-prefix cinema-staging- --query 'Metr
 
 ```bash
 # Valkey: TLS로 PING → PONG
-kubectl run valkey-check -n default --rm -it --restart=Never --image=valkey/valkey:8.2 -- \
+kubectl run valkey-check -n default --rm -it --restart=Never --image=valkey/valkey:8.1.10 -- \
   valkey-cli -h <valkey_primary_endpoint> --tls PING
 
 # MySQL: 네트워크·TLS 확인 (계정 없이 접속 시도 → Access denied면 연결 자체는 정상)
@@ -1808,6 +1808,13 @@ kubectl -n cinema-staging get secret booking-secrets -o json | jq -r '.data.APP_
 
 - 떠 있는 파드는 기동 때 값을 읽는다 → apply만으로는 반영되지 않는다. 3번 gitops PR로 ConfigMap이 바뀌면 새 파드가 새 값을 읽는다
 - 변수는 넣을 때·바꿀 때만 준다. 변수가 없으면 클러스터의 지금 값을 그대로 쓴다(백업 관리자가 값 없이 apply해도 덮이지 않음). 키 교체 = 포트원에서 새 키 발급 → 같은 명령 → payment Restart(ArgoCD)
+- **키 교체 절차** (6.1.4 External Secrets 뒤에도 같다):
+  1. 포트원 콘솔에서 새 API Secret(또는 웹훅 시크릿) 발급 — 옛 키는 아직 폐기하지 않는다
+  2. 위 명령(`read -s` → plan → apply → `unset`). 기대: **1 add · 1 change · 1 destroy** = `kubernetes_secret_v1.app["payment"]` data update + `aws_secretsmanager_secret_version.app["payment"]` replace(값이 바뀌면 새 버전으로 교체되는 게 정상 — destroy 1은 옛 버전). 값은 (sensitive)로만. 같은 apply가 K8s Secret과 Secrets Manager `cinema/staging/payment`를 함께 바꾼다 — 지금(ExternalSecret `Merge` 단계)은 ESO 주기(1시간)를 기다릴 필요가 없다. 다른 Secret에 metadata change가 보이면 8-F 증상 표
+  3. **payment 롤링 재시작** — ArgoCD에서 payment Application → Deployment `payment` → Restart. 앱은 env를 기동 때만 읽어 재시작 전까지 옛 키를 쓴다. 롤링(maxUnavailable 0)이라 결제가 끊기지 않는다
+  4. 확인: 새 파드 기동 시각 > apply 시각, 테스트 결제 1건(verify 200) · 웹훅 수신 200(`http_server_requests{uri="/webhooks/portone"}`). 401이면 웹훅 시크릿이 포트원 콘솔과 다르다
+  5. 포트원 콘솔에서 옛 키 폐기
+  - Secrets Manager·K8s Secret을 콘솔·CLI로 직접 바꾸지 않는다 — 다음 apply가 Terraform 값으로 되돌린다(정리 단계 8-F 3) 전까지 값의 주인은 Terraform)
 - `APP_PORTONE_ENABLED=true`인데 Secret이 비어 있으면 기동은 되고 verify·취소가 503 `PORTONE_UNAVAILABLE`, 웹훅은 전부 401 → 2번을 3번보다 먼저
 - CloudFront는 바꿀 것 없음(`/api` origin request policy가 모든 viewer 헤더 전달 → `webhook-*` 서명 헤더 통과, POST 허용). payment → `api.portone.io`는 NAT 경유(egress 막지 않음)
 - 모의 결제 키: k6 `deploy` 시나리오는 `run-in-cluster.sh`가 `booking-secrets`를 `secretKeyRef`로 넣는다(값을 꺼내지 않는다). 블루/그린 분석 Job은 지금 결제 경로가 없어 바꿀 것 없음 — 넣으려면 `SMOKE_PAY_SCREENING_ID`가 **미래 회차**여야 한다(시작 5분 전 마감 → 지나면 모든 booking 배포 abort)
@@ -2493,6 +2500,7 @@ done
 2. ExternalSecret(`creationPolicy: Merge` — Terraform이 만든 Secret에 같은 키를 같은 값으로 쓴다. 소유자는 아직 Terraform)
    → `kubectl -n cinema-staging get externalsecret` 전부 `SecretSynced`·`Ready=True`
 3. 파드는 재시작되지 않는다(값이 같다). 확인: 서비스 하나를 ArgoCD Restart해 기동·readiness 200
+4. ESO·ArgoCD가 대상 Secret에 메타데이터를 붙인다 — annotation `reconcile.external-secrets.io/data-hash`·`argocd.argoproj.io/{tracking-id,sync-wave,sync-options}`, label `reconcile.external-secrets.io/managed`. Terraform(`db_bootstrap.tf`의 `kubernetes_secret_v1.app`·`.migrator`)은 `lifecycle.ignore_changes`로 이것을 무시하고 data만 관리한다 → 전환 뒤 `staging-k8s` 두 번째 plan **No changes**
 
 **3) 정리 — 별도 PR 두 개** (2)를 며칠 지켜본 뒤)
 
@@ -2506,7 +2514,8 @@ done
 | ExternalSecret `SecretSyncedError` `ResourceNotFoundException` | Secrets Manager에 그 이름이 없음(1)의 staging-k8s apply 전·서비스 이름 오타) | `terraform output secrets_manager_names`와 `remoteRef.key` 비교 |
 | ExternalSecret `Merge` 인데 `secret … not found` | 대상 K8s Secret이 없음(Terraform이 아직 안 만든 서비스) | Terraform apply 먼저. 정리 단계 뒤라면 `Owner`로 |
 | 정리 1번 plan에 `kubernetes_secret_v1 … will be destroyed` | `removed` 블록 없이 리소스만 지움 | apply하지 않는다 — `removed`·`destroy = false` 확인 |
-| 값을 바꿨는데 파드가 옛 값 | 앱은 env를 기동 때만 읽는다 | ESO 반영(`kubectl get externalsecret`의 갱신 시각) 뒤 서비스 재시작 |
+| 값을 바꿨는데 파드가 옛 값 | 앱은 env를 기동 때만 읽는다 | ESO 반영(`kubectl get externalsecret`의 갱신 시각) 뒤 서비스 **롤링 재시작**(ArgoCD Restart). 포트원 키는 6-I 키 교체 절차 |
+| 전환(2) 뒤 `staging-k8s` plan에 `kubernetes_secret_v1.app`·`.migrator` 8개 metadata change(annotation·label `- … -> null`) | ESO·ArgoCD가 붙인 메타데이터를 Terraform이 지우려 함 — `ignore_changes`가 없는 옛 코드 | main 최신(`ignore_changes` 포함)으로 다시 plan. 지워도 data는 같아 해는 없지만 ESO가 다시 붙여 apply마다 반복된다 |
 
 - 값은 `staging-k8s` tfstate와 Secrets Manager 두 곳에 있다(둘 다 관리자만). 콘솔에서 값을 고치지 않는다 — 다음 apply가 되돌린다
 - Secrets Manager 비용: Secret 1개당 월 약 $0.4

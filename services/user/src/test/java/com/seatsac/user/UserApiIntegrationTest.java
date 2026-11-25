@@ -181,6 +181,7 @@ class UserApiIntegrationTest {
             .andExpect(jsonPath("$.email").value("hong@example.com"))
             .andExpect(jsonPath("$.name").value("홍길동"))
             .andExpect(jsonPath("$.role").value("USER"))
+            .andExpect(jsonPath("$.grade").value("NORMAL"))   // 등급 헤더 없음 → NORMAL
             .andExpect(jsonPath("$.createdAt").value("2026-11-16T12:00:00+09:00"));
 
         assertThat(cognitoCalls()).isEqualTo(1);
@@ -266,6 +267,34 @@ class UserApiIntegrationTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.name").value("새이름"));
         assertThat(jdbc.queryForObject("SELECT name FROM `user` WHERE user_id = ?", String.class, USER)).isEqualTo("새이름");
+    }
+
+    /** 6.3.1b — grade는 Gateway가 넣은 X-User-Grade 그대로(저장 안 함). 정확히 VIP만 VIP, 그 밖은 NORMAL */
+    @Test
+    void gradeComesFromGatewayHeaderAndIsNotStored() throws Exception {
+        mvc.perform(get("/users/me").with(WithCurrentUser.user()).header(HttpHeaders.AUTHORIZATION, BEARER)
+                .header("X-User-Grade", "VIP"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.grade").value("VIP"));
+
+        // 같은 사용자라도 다음 요청의 헤더를 따른다(그룹에서 빠지면 토큰 재발급 뒤 NORMAL)
+        mvc.perform(get("/users/me").with(WithCurrentUser.user()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.grade").value("NORMAL"));
+
+        // 모르는 값·대소문자가 다른 값은 NORMAL — 응답에는 NORMAL·VIP 두 값만
+        for (String unknown : new String[] {"GOLD", "vip", ""}) {
+            mvc.perform(get("/users/me").with(WithCurrentUser.user()).header("X-User-Grade", unknown))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.grade").value("NORMAL"));
+        }
+
+        // PATCH 응답도 같은 Profile이라 grade가 있다
+        mvc.perform(patch("/users/me").with(WithCurrentUser.user()).header("X-User-Grade", "VIP")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"브이아이피\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.grade").value("VIP"));
+        assertThat(cognitoCalls()).isEqualTo(1);
     }
 
     // --- USR-04 ---

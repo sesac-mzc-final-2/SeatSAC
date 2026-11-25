@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { discountOf, finalAmountOf, isUsableCoupon, myCouponsQuery } from "@/entities/coupon";
-import { formatWon, useRerenderAt } from "@/shared/lib";
+import { formatWon, serverNow, useRerenderAt } from "@/shared/lib";
 import { Icon } from "@/shared/ui";
 import styles from "./CouponSelect.module.css";
 
@@ -22,10 +22,15 @@ interface Props {
  */
 export function CouponSelect({ amount, value, onChange, disabled = false }: Props) {
   const coupons = useQuery(myCouponsQuery());
-  const usable = (coupons.data?.items ?? []).filter((coupon) => isUsableCoupon(coupon));
+  // 쓸 수 있는지 판단한 시각과 다시 그릴 시각을 같은 「지금」으로 — 따로 읽으면 그 사이에 만료된 쿠폰을 놓친다
+  const now = serverNow();
+  const usable = (coupons.data?.items ?? []).filter((coupon) => isUsableCoupon(coupon, now));
   const selected = usable.find((coupon) => coupon.couponIssueId === value) ?? null;
   // 가장 먼저 끝나는 쿠폰의 기한에 다시 그려, 지난 쿠폰을 목록·선택에서 뺀다
-  useRerenderAt(usable.length > 0 ? Math.min(...usable.map((coupon) => new Date(coupon.expiresAt).getTime())) : null);
+  useRerenderAt(
+    usable.length > 0 ? Math.min(...usable.map((coupon) => new Date(coupon.expiresAt).getTime())) : null,
+    now,
+  );
 
   // 고른 쿠폰을 더는 쓸 수 없으면(만료·다른 결제에 예약) 선택을 푼다. 내 쿠폰을 끝내 못 읽어 목록이 숨겨진 때도 —
   // 화면에 없는 쿠폰이 결제에 실려 가지 않게(읽는 중에는 그대로 둔다)

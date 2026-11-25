@@ -1,4 +1,4 @@
-import { dateOfIso, formatDateDots, timeOfIso, useRerenderAt } from "@/shared/lib";
+import { dateOfIso, formatDateDots, serverNow, timeOfIso, useRerenderAt } from "@/shared/lib";
 import { Badge } from "@/shared/ui";
 import { couponStateLabel, isUsableCoupon } from "../lib/coupon";
 import type { CouponIssue } from "../model/types";
@@ -7,8 +7,9 @@ import styles from "./CouponCard.module.css";
 /** 내 쿠폰 한 장 (CPN-03): 할인율 · 이벤트 제목 · 상태 · 사용 기한 */
 export function CouponCard({ coupon }: { coupon: CouponIssue }) {
   // 화면을 열어 둔 채 기한이 지나면 그 순간 「기간 만료」로 바꿔 그린다
-  useRerenderAt(coupon.state === "ISSUED" ? coupon.expiresAt : null);
-  const usable = isUsableCoupon(coupon);
+  const now = serverNow();
+  useRerenderAt(coupon.state === "ISSUED" ? coupon.expiresAt : null, now);
+  const usable = isUsableCoupon(coupon, now);
   return (
     <article className={styles.card} data-usable={usable || undefined}>
       <div className={styles.rate}>

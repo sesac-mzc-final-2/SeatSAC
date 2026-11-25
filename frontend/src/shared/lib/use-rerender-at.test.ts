@@ -42,4 +42,21 @@ describe("useRerenderAt", () => {
     expect(past()).toBe(1);
     expect(none()).toBe(1);
   });
+
+  it("판단한 시각을 넘기면, 그 판단과 effect 사이에 지난 시각도 한 번 더 그린다", () => {
+    const target = 1_000_000 + 10;
+    let renders = 0;
+    renderHook(() => {
+      renders += 1;
+      // 첫 렌더는 만료 전에 판단했고(1_000_000), effect 가 돌 때는 이미 지났다
+      const now = renders === 1 ? 1_000_000 : Date.now();
+      if (renders === 1) vi.setSystemTime(target + 20);
+      useRerenderAt(target, now);
+    });
+    expect(renders).toBe(1);
+    act(() => vi.advanceTimersByTime(100));
+    expect(renders).toBe(2); // 만료 뒤 시각으로 다시 그림 — 이제 멈춘다
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(renders).toBe(2);
+  });
 });

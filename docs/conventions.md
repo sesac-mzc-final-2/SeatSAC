@@ -218,7 +218,7 @@
 | ECR | `cinema/{service}` (frontend 없음) | `cinema/booking`, ⚠️AI `cinema/ai`, 🆕 `cinema/coupon`, `cinema/ops-api` |
 | 이미지 태그 | git SHA 7자리, 불변 | `cinema/booking:3f9a1c2` |
 | Pod Identity 역할 | `cinema-staging-{대상}-pod` | `cinema-staging-booking-pod`, `cinema-staging-loki-pod`(3.1.24), 🆕 `cinema-staging-{coupon,payment,user,catalog,ai,ops-api,external-secrets,karpenter}-pod` |
-| Lambda | `cinema-staging-{기능}` | `cinema-staging-notification`, `cinema-staging-cognito-presignup` |
+| Lambda | `cinema-staging-{기능}` | `cinema-staging-notification`, `cinema-staging-cognito-presignup`, 🆕 `cinema-staging-karpenter-sweep`(6.1.6 밤 정리) |
 | K8s 리소스 | `{service}`, Rollout 미리보기 Service `{service}-preview`, Flyway Job `{service}-flyway` | `booking-preview` |
 | 공통 라벨 | `app.kubernetes.io/name={service}`, `app.kubernetes.io/part-of=cinema` | — |
 | Service 포트 이름 | `http` (8080) | — |

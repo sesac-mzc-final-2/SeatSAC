@@ -16,6 +16,9 @@
 #   (aws eks wait는 최대 약 40분까지 기다리므로 쓰지 않는다 — Actions timeout 20분보다 길다)
 #   권한: 사람은 AWS_PROFILE=cinema-admin, CI는 cinema-gha-cluster-schedule
 #   Terraform은 desired_size 변경을 무시하므로 이 스크립트로 바꿔도 drift가 아니다 (3.1.2)
+#   6.1.6 Karpenter 노드(관리형 노드그룹이 아님)는 desired로 끄지 않는다 — 컨트롤러가 관리형 노드에 있어 같이 멈추므로,
+#     down(전체)은 끝에 밤 정리 Lambda(cinema-staging-karpenter-sweep)를 한 번 부른다. 권한이 없거나(CI 역할) 함수가 없으면
+#     경고만 남기고 15분마다 도는 예약 정리가 지운다. status는 Karpenter 노드 수도 보여 준다(조회 권한이 없으면 ?)
 # ------------------------------------------------------------------
 set -euo pipefail
 
@@ -195,7 +198,25 @@ if [ "$ACTION" = "up" ]; then
   done
 fi
 
-# 3) 결과
+# 3) 6.1.6 Karpenter 노드 — 전체 down이면 정리 Lambda를 바로 한 번 부른다(관리형 노드그룹이 모두 0일 때만 지운다)
+SWEEP_FUNCTION="${SWEEP_FUNCTION:-${CLUSTER%-eks}-karpenter-sweep}"
+if [ "$ACTION" = "down" ] && [ -z "$TARGET" ]; then
+  out=$(mktemp)
+  if aws lambda invoke --function-name "$SWEEP_FUNCTION" --cli-binary-format raw-in-base64-out \
+      --payload '{"source":"cluster-scale"}' "$out" >/dev/null 2>&1; then
+    echo "Karpenter 노드 정리: $(cat "$out")"
+  else
+    echo "::warning::$SWEEP_FUNCTION 을 부르지 못했다(권한 없음·함수 없음) — 15분마다 도는 예약 정리가 Karpenter 노드를 지운다"
+  fi
+  rm -f "$out"
+fi
+karpenter_nodes() {
+  aws ec2 describe-instances --filters "Name=tag:kubernetes.io/cluster/$CLUSTER,Values=owned" \
+    "Name=tag-key,Values=karpenter.sh/nodepool" "Name=instance-state-name,Values=pending,running" \
+    --query 'length(Reservations[].Instances[])' --output text 2>/dev/null || echo "?"
+}
+
+# 4) 결과
 summary "### $CLUSTER 노드그룹 ($ACTION, $(TZ=Asia/Seoul date '+%F %H:%M KST'))"
 summary ""
 summary "| 노드그룹 | desired | min | max | InService | 상태 |"
@@ -206,3 +227,7 @@ for ng in $SHOW_NGS; do
   read -r cur min max status < <(ng_field "$ng" '[nodegroup.scalingConfig.desiredSize,nodegroup.scalingConfig.minSize,nodegroup.scalingConfig.maxSize,nodegroup.status]')
   summary "| $ng | $cur | $min | $max | $(in_service "$ng") | $status |"
 done
+if [ -z "$TARGET" ]; then
+  summary ""
+  summary "Karpenter 노드(실행 중): $(karpenter_nodes) — 관리형 노드그룹이 모두 0이면 15분 안에 0이 된다"
+fi

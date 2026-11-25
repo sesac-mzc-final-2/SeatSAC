@@ -36,6 +36,7 @@
 | 🆕 ops-api | 롤링 | 1 (고정) | 100m / 256Mi | 384Mi | — | — | `cinema-staging-ops-api-pod`: Athena·Glue 조회, S3 `cinema-staging-reports-*` 읽기·쓰기 |
 
 - 🆕 11/23(ADR-115·117·122): **RDS 스키마 열은 이제 각자의 인스턴스**(`cinema-staging-{svc}-db`). gateway·catalog·booking·user·payment·coupon은 **replicas 최소 2** + `topologySpreadConstraints`(`topology.kubernetes.io/zone`, `whenUnsatisfiable: ScheduleAnyway`) — 두 AZ에 자리가 있으면 파드를 AZ마다 나눠 AZ 하나가 죽어도 남게 한다. **보장은 아니다**: `ScheduleAnyway`는 한 AZ에 자리가 없으면 같은 AZ에 둘 다 올린다(그때 그 AZ가 죽으면 다시 뜰 때까지 0개). 배포 뒤 `kubectl get pods -o wide`로 AZ가 나뉘었는지 확인하고, 강제(`DoNotSchedule`)는 AZ별 노드 용량이 확보되는 Karpenter(6.1.6) 뒤에 정한다 — `DoNotSchedule`은 자리가 없으면 파드가 Pending이라 블루/그린 preview가 멈춘다. booking HPA 2~4(자기 인스턴스라 블루/그린 순간 8 × 15 = 120 < 경보 130), gateway 2(블루/그린 중 4). 위 표의 replicas 열도 최소가 2로 바뀐다 — catalog 2~4, coupon 2~4, user 2(최대 2 그대로라 고정과 같다), payment 2(고정) — data-model 7-1의 연결 수 계산과 같은 값. Pod Identity 추가: booking(명령 발송·`booking-replies` 수신·SNS 발행), payment(`payment-commands` 수신·`booking-replies` 발송), user(`user-booking-events` 수신), catalog(SNS `catalog-events` 발행)
+- 🆕 노드(6.1.6, ADR-122): 관리형 ng-a·ng-c(t3.xlarge 각 1대)는 그대로이고, 모자라면 **Karpenter**가 t3.large·xlarge On-Demand 노드를 더한다(합계 `limits.cpu` 16, 라벨 `cinema/capacity=karpenter`, taint 없음 — ai는 계속 `ng-ai`만). 파드를 옮기는 정리(압축·만료·Drifted)는 하지 않고 빈 노드만 5분 뒤 지운다 → 블루/그린 preview·SSE가 Karpenter 때문에 쫓겨나지 않는다(런북 6-K)
 - JVM: `-XX:MaxRAMPercentage=75` (Dockerfile). limits cpu는 두지 않는다(스로틀로 p95 악화)
 - ⚠️AI ai는 `ng-ai` 노드에만 뜬다(`nodeSelector cinema/workload=ai` + toleration). 기존 5개 서비스는 taint 때문에 `ng-ai`에 올라가지 않는다. `ng-ai` desired 0이면 ai 파드는 Pending(정상) — 나머지 서비스·데모에 영향 없음
 - 두 서비스 동시 블루/그린 금지(노드 2대). 공통 모듈 급한 반영도 한 번에 한 서비스씩: catalog·user·payment → booking → gateway
@@ -277,7 +278,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] 🆕 NAT AZ별·Valkey 2개 복제본·자동 장애 조치 (6.1.2, ADR-122)
 - [ ] 🆕 SNS 2·SQS(구독 2~3·명령 2·결과 1)·DLQ·경보·Pod Identity (6.1.3, ADR-117)
 - [ ] 🆕 External Secrets·Secrets Manager `cinema/staging/*`·ExternalSecret (6.1.4, ADR-123)
-- [ ] 🆕 Karpenter(NodePool·EC2NodeClass·중단 알림 SQS)·`cluster-scale.sh` 연동 (6.1.6, ADR-122)
+- [ ] 🆕 Karpenter(NodePool·EC2NodeClass·중단 알림 SQS)·`cluster-scale.sh` 연동 (6.1.6, ADR-122 — `envs/staging/karpenter.tf`·`envs/staging-k8s/karpenter.tf`·gitops `platform/karpenter`·밤 정리 Lambda `cinema-staging-karpenter-sweep` — 코드 11/25 · **런북 6-K 확인 후 체크**). t3.large·xlarge On-Demand, Karpenter 노드 합계 `limits.cpu` 16, 빈 노드만 정리(`WhenEmpty`, 압축·만료·Drifted 교체 없음 — 시연·블루/그린 중 파드를 옮기지 않는다, 시연 중에는 budget 0 PR). 컨트롤러는 관리형 노드에만 → 밤에 관리형 노드그룹이 0대면 정리 Lambda가 15분마다 Karpenter 노드를 지운다
 - [ ] 🆕 ops-api·`/ops` CloudFront 동작·ALB 규칙·Role·서비스 Application `ignoreDifferences` (6.1.7, ADR-119)
 - [ ] 🆕 WAF·리포트 버킷·Glue·Athena·내보내기 CronJob (6.1.8·6.1.9, ADR-121·124)
 - [ ] 🆕 CloudWatch EKS audit 로그 끄기(하루 약 1.5GB) · Budgets 일 경보 $50

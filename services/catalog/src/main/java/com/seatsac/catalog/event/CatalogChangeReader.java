@@ -21,6 +21,10 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -59,6 +63,11 @@ public class CatalogChangeReader {
      * (null 필드도 반드시 있어야 한다 — 계약 then.required)이 함께 바뀌기 때문이다.
      */
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    private static final Logger log = LoggerFactory.getLogger(CatalogChangeReader.class);
+
+    /** 깨진 JSON 경고를 이미 남긴 (movieId:열) — 파드 수명 동안만 */
+    private final Set<String> brokenJsonLogged = ConcurrentHashMap.newKeySet();
 
     private final JdbcTemplate jdbc;
 
@@ -128,10 +137,11 @@ public class CatalogChangeReader {
         f.put("runtimeMinutes", nullableInt(rs, "runtime_minutes"));
         f.put("releaseDate", date(rs.getObject("release_date", LocalDate.class)));
         f.put("director", rs.getString("director"));
-        f.put("cast", stringList(rs.getString("cast_names")));
-        f.put("genres", stringList(rs.getString("genres")));
+        long movieId = rs.getLong("movie_id");
+        f.put("cast", stringList(movieId, "cast_names", rs.getString("cast_names")));
+        f.put("genres", stringList(movieId, "genres", rs.getString("genres")));
         f.put("synopsis", rs.getString("overview"));
-        return snapshot(rs.getLong("movie_id"), f);
+        return snapshot(movieId, f);
     }
 
     private Snapshot snapshot(long id, Map<String, Object> fields) {
@@ -146,14 +156,19 @@ public class CatalogChangeReader {
         }
     }
 
-    private List<String> stringList(String json) {
+    private List<String> stringList(long movieId, String column, String json) {
         if (json == null) {
             return null;
         }
         try {
             return JSON.readValue(json, STRING_LIST);
         } catch (JsonProcessingException e) {
-            // 시드 JSON 열이 깨졌으면 그 필드만 비운다 — 한 영화 때문에 스캔 전체가 멈추지 않게
+            // 시드 JSON 열이 깨졌으면 그 필드만 비운다 — 한 영화 때문에 스캔 전체가 멈추지 않게.
+            // 비운 값(null)이 그대로 나가므로 원인을 남긴다. 스캔이 1분마다 같은 행을 읽으니 (영화, 열)마다 한 번만
+            if (brokenJsonLogged.add(movieId + ":" + column)) {
+                log.warn("movie JSON 열을 읽지 못해 null로 보낸다 movieId={} column={} 원인={}", movieId, column,
+                    e.getOriginalMessage());
+            }
             return null;
         }
     }

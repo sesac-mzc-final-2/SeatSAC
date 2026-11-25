@@ -9,23 +9,25 @@
 
 ## 1. 파일
 
+> 🆕 11/24 담당 변경: coupon(#178)·user(#186)는 **김종식**. coupon saga 명령의 받는 쪽·결과의 보내는 쪽도 김종식이다 — 아래 표의 `events/coupon.*` 두 행(명령·결과)에 남은 「한채연」은 #181(같은 표의 바로 옆 행을 고침)이 머지된 뒤 고친다. 화면(쿠폰·관리자)은 한채연.
+
 | 파일 | 내용 | 담당 (CODEOWNERS) |
 | --- | --- | --- |
 | `openapi/catalog.openapi.yaml` | 외부 6개 (조회만 — 관리자 API는 11/14 삭제) | 한채연 |
 | `openapi/booking.openapi.yaml` | 외부 8개 (좌석 현황·SSE·선점·해제·결제 준비·결제·조회·취소) + 🆕 3개 (체크아웃 시작·조회·확인) | 남궁일 |
 | `openapi/payment.openapi.yaml` | 외부 1개 (포트원 웹훅 — 인증 없음, 서명 검증) | 남궁일 |
-| `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장). 🆕 `GET /users/me`에 `grade` | 한채연 |
-| 🆕 `openapi/coupon.openapi.yaml` | 외부 3개 (현재 이벤트·발급·내 쿠폰) | 한채연 |
+| `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장). 🆕 `GET /users/me`에 `grade` | ~~한채연~~ 🆕 김종식(11/24) |
+| 🆕 `openapi/coupon.openapi.yaml` | 외부 3개 (현재 이벤트·발급·내 쿠폰) | ~~한채연~~ 🆕 김종식(11/24) |
 | 🆕 `openapi/ops.openapi.yaml` | 외부 8개 (`/ops` — 서비스 상태·정지·가동, 리포트 날짜·생성·상태, AI 범위 밖 통계, 쿠폰 이벤트 생성) | 김종식 |
 | ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`). 🆕 6.4.7: 응답 `path`에 `RAG`, 필드 `sources`(근거 문서 `[{id, title}]`, 그 밖의 경로는 null) **추가만** — `CLARIFY`·`HOLD_*`를 넣을 때와 같은 방식, 6.0.1 계약 PR에 함께(⏳ `contract-check`로 확인) | 김서현 · 한채연 |
 | ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED) + CLARIFY(#140) + 좌석 잡기 3종(HOLD_CONFIRM·HOLD_RESULT·HOLD_GUIDE) + 문맥 이어받기 `chat-context-carry.json`(3.4.22) + 🆕 이용 안내 `chat-rag.json`(6.4.7). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 4개 (생성·조회·확인·취소) | 남궁일 |
-| 🆕 `openapi/internal/coupon.internal.openapi.yaml` | 내부 2개 (이벤트 생성·목록, 호출자 ops-api) | 한채연 |
+| 🆕 `openapi/internal/coupon.internal.openapi.yaml` | 내부 2개 (이벤트 생성·목록, 호출자 ops-api) | ~~한채연~~ 🆕 김종식(11/24) |
 | 🆕 `openapi/internal/ai.internal.openapi.yaml` | 내부 1개 (범위 밖 질문 통계, 호출자 ops-api) | 김서현 |
 | `events/seat-event.v1.json` | Valkey Pub/Sub → SSE | 남궁일 |
-| `events/booking.confirmed.v1.json` | SQS 예매 완료 알림. 🆕 SNS `booking-events`로도 발행(user 복제본), 선택 필드 `amount`·`discountAmount` 추가 | 남궁일 (소비 Lambda 김종식, user 한채연) |
+| `events/booking.confirmed.v1.json` | SQS 예매 완료 알림. 🆕 SNS `booking-events`로도 발행(user 복제본), 선택 필드 `amount`·`discountAmount` 추가 | 남궁일 (소비 Lambda 김종식, user ~~한채연~~ 🆕 김종식) |
 | 🆕 `events/booking.canceled.v1.json` | 예매 취소·만료·결제 실패(`reason`) | 남궁일 |
 | 🆕 `events/screening.changed.v1.json` · `movie.changed.v1.json` | catalog 변경(`version`, `deleted`) → ai·(booking) 복제본 | 한채연 |
 | 🆕 `events/coupon.{reservation-requested,use-requested,release-requested}.v1.json` | saga 명령 → coupon | 남궁일(보냄) · 한채연(받음) |

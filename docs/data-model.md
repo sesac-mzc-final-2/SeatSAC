@@ -34,7 +34,7 @@
 | `movie` | PK `movie_id`, UK (`source_provider`, `source_movie_code`) | 22편. TMDB 보충 컬럼(NULL 허용): `tmdb_id`, `genres`, `overview`, `release_date`, `runtime_minutes`, `poster_path`, `director`, `cast_names`, `meta_fetched_at` |
 | `screening` | PK `screening_id`, UK (`auditorium_id`, `business_date`, `play_sequence`), INDEX (`movie_id`, `business_date`) | `starts_at`·`ends_at` UTC, `layout_version` |
 
-### user_db (한채연)
+### user_db (~~한채연~~ 🆕 김종식, 11/24)
 
 | 테이블 | 키·제약 | 비고 |
 | --- | --- | --- |

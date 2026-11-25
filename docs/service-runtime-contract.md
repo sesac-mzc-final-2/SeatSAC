@@ -239,9 +239,9 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | ⚠️AI 19 | `contracts/openapi/ai.openapi.yaml` + 예시 | 김서현·한채연 (2.2.8) | 한채연 채팅 화면(3.3.7) | 11/6 | contract-check 통과 |
 
 | 🆕 20 | RDS 6개·`DB_HOST_{SVC}`·Secrets Manager·ESO | 김종식 (6.1.1·6.1.4) | 전원 (자기 인스턴스로 전환) | 11/23 오후 | 각 서비스 readiness 200 + Flyway Job 성공 |
-| 🆕 21 | SNS·SQS·DLQ·Pod Identity·`cinema-infra-endpoints` 메시징 키 | 김종식 (6.1.3) | 남궁일 6.2.x · 한채연 6.3.2·6.3.4 · 김서현 6.4.2 | 11/23 저녁 | 로컬 ElasticMQ 테스트 통과 → staging에서 명령 1건 왕복 |
+| 🆕 21 | SNS·SQS·DLQ·Pod Identity·`cinema-infra-endpoints` 메시징 키 | 김종식 (6.1.3) | 남궁일 6.2.x · 🆕 김종식 6.3.2(coupon, 11/24) · 한채연 6.3.4 · 김서현 6.4.2 | 11/23 저녁 | 로컬 ElasticMQ 테스트 통과 → staging에서 명령 1건 왕복 |
 | 🆕 22 | 계약 PR 6.0.1 (API 명세서 v1.5 21~26장 → `contracts/`) | 전원 | 구현 전원 | 11/23 오전 | `contract-check` 통과 |
-| 🆕 23 | coupon ECR·gitops `base/coupon`·Application·NetworkPolicy | 김종식 (6.1.5) | 한채연 coupon 배포 | 11/24 오전 | `kubectl -n argocd get application cinema-coupon` Healthy |
+| 🆕 23 | coupon ECR·gitops `base/coupon`·Application·NetworkPolicy | 김종식 (6.1.5) | ~~한채연~~ 🆕 김종식 coupon 배포(11/24) | 11/24 오전 | `kubectl -n argocd get application cinema-coupon` Healthy |
 | 🆕 24 | ops-api(`/ops`)·Role·`ignoreDifferences` | 김종식 (6.1.7) | 남궁일 6.2.6 · 한채연 6.3.5·6.3.7 | 11/24 | `GET /ops/services` 200(ADMIN 토큰), 403(일반 토큰) |
 | 🆕 25 | ai 통계 내부 API | 김서현 (6.4.4) | 김종식 ops-api 7번 | 11/24 | ops-api → ai 200 |
 | 🆕 26 | catalog `screening.changed`·`movie.changed` 발행 | 한채연 (6.3.4) | 김서현 6.4.2 | 11/24 | `ai-catalog-events` 큐에 메시지 |

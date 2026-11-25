@@ -16,11 +16,11 @@
 
 | 담당 | 영역 |
 | --- | --- |
-| 한채연 | gateway · catalog · user · 화면(메인·상영시간·로그인·마이페이지·결제) · 좌석 배치 시드 |
+| 한채연 | gateway · catalog · 화면(메인·상영시간·로그인·마이페이지·결제) · 좌석 배치 시드 · ~~user~~(🆕 11/24 김종식으로) |
 | 남궁일 | booking · payment · 좌석 화면 · 백업 관리자(`cinema-admin`) |
-| 김종식 | Infra · DevOps (Terraform · CI/CD · gitops · 관측 · Lambda) · ⚠️AI ai 인프라(ng-ai·ai Valkey·Secret·CI) |
+| 김종식 | Infra · DevOps (Terraform · CI/CD · gitops · 관측 · Lambda) · ⚠️AI ai 인프라(ng-ai·ai Valkey·Secret·CI) · 🆕 user(11/24, 한채연에서 — #186) |
 | ⚠️AI 김서현 | ai 서비스(Python FastAPI) · 스냅샷·NL2SQL·캐시·평가 세트 · AI 데모 · 🆕 `ai_db` 복제본·`unmet_demand`·통계 API · 이용 안내 RAG(6.4.7)·수요 → 백로그 워크플로우(6.4.8) |
-| 🆕 MSA (11/23~) | 남궁일: booking saga·payment 명령·화면(체크아웃) · 한채연: coupon·gateway(`X-User-Grade`·본문 제한)·catalog 이벤트·user 복제본·화면(쿠폰·관리자) · 김종식: RDS 6·NAT·SNS/SQS·ESO·Karpenter·WAF·리포트·**ops-api** |
+| 🆕 MSA (11/23~) | 남궁일: booking saga·payment 명령·화면(체크아웃) · 한채연: gateway(`X-User-Grade`·본문 제한)·catalog 이벤트·화면(쿠폰·관리자) · 김종식: RDS 6·NAT·SNS/SQS·ESO·Karpenter·WAF·리포트·**ops-api** · 🆕 11/24 **coupon**(서비스·계약, #178)·**user 복제본**(#186) — 한채연에서 |
 
 **절대 규칙**
 
@@ -282,23 +282,25 @@
 
 ### 1. 파일
 
+> 🆕 11/24 담당 변경: coupon(#178)·user(#186)는 **김종식**. coupon saga 명령의 받는 쪽·결과의 보내는 쪽도 김종식이다 — 아래 표의 `events/coupon.*` 두 행(명령·결과)에 남은 「한채연」은 #181(같은 표의 바로 옆 행을 고침)이 머지된 뒤 고친다. 화면(쿠폰·관리자)은 한채연.
+
 | 파일 | 내용 | 담당 (CODEOWNERS) |
 | --- | --- | --- |
 | `openapi/catalog.openapi.yaml` | 외부 6개 (조회만 — 관리자 API는 11/14 삭제) | 한채연 |
 | `openapi/booking.openapi.yaml` | 외부 8개 (좌석 현황·SSE·선점·해제·결제 준비·결제·조회·취소) + 🆕 3개 (체크아웃 시작·조회·확인) | 남궁일 |
 | `openapi/payment.openapi.yaml` | 외부 1개 (포트원 웹훅 — 인증 없음, 서명 검증) | 남궁일 |
-| `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장). 🆕 `GET /users/me`에 `grade` | 한채연 |
-| 🆕 `openapi/coupon.openapi.yaml` | 외부 3개 (현재 이벤트·발급·내 쿠폰) | 한채연 |
+| `openapi/user.openapi.yaml` | 외부 5개 (프로필 조회·수정, 예매 내역, 선호 조회·저장). 🆕 `GET /users/me`에 `grade` | ~~한채연~~ 🆕 김종식(11/24) |
+| 🆕 `openapi/coupon.openapi.yaml` | 외부 3개 (현재 이벤트·발급·내 쿠폰) | ~~한채연~~ 🆕 김종식(11/24) |
 | 🆕 `openapi/ops.openapi.yaml` | 외부 8개 (`/ops` — 서비스 상태·정지·가동, 리포트 날짜·생성·상태, AI 범위 밖 통계, 쿠폰 이벤트 생성) | 김종식 |
 | ⚠️AI `openapi/ai.openapi.yaml` | 외부 2개 (챗봇 질문 `POST /ai/chat`, 추천 질문 목록 `GET /ai/presets`). 🆕 6.4.7: 응답 `path`에 `RAG`, 필드 `sources`(근거 문서 `[{id, title}]`, 그 밖의 경로는 null) **추가만** — `CLARIFY`·`HOLD_*`를 넣을 때와 같은 방식, 6.0.1 계약 PR에 함께(⏳ `contract-check`로 확인) | 김서현 · 한채연 |
 | ⚠️AI `openapi/examples/ai/*.json` | 챗봇 응답 예시 5종(CACHE_SEMANTIC·PRESET·NL2SQL·MY_BOOKINGS·REJECTED) + CLARIFY(#140) + 좌석 잡기 3종(HOLD_CONFIRM·HOLD_RESULT·HOLD_GUIDE) + 문맥 이어받기 `chat-context-carry.json`(3.4.22) + 🆕 이용 안내 `chat-rag.json`(6.4.7). OpenAPI Example Object `{ summary, value }` — `value`가 fixture, YAML이 `$ref`로 참조해 Redocly가 스키마로 검증 | 김서현 |
 | `openapi/internal/catalog.internal.openapi.yaml` | 내부 3개 | 한채연 |
 | `openapi/internal/booking.internal.openapi.yaml` | 내부 2개 | 남궁일 |
 | `openapi/internal/payment.internal.openapi.yaml` | 내부 4개 (생성·조회·확인·취소) | 남궁일 |
-| 🆕 `openapi/internal/coupon.internal.openapi.yaml` | 내부 2개 (이벤트 생성·목록, 호출자 ops-api) | 한채연 |
+| 🆕 `openapi/internal/coupon.internal.openapi.yaml` | 내부 2개 (이벤트 생성·목록, 호출자 ops-api) | ~~한채연~~ 🆕 김종식(11/24) |
 | 🆕 `openapi/internal/ai.internal.openapi.yaml` | 내부 1개 (범위 밖 질문 통계, 호출자 ops-api) | 김서현 |
 | `events/seat-event.v1.json` | Valkey Pub/Sub → SSE | 남궁일 |
-| `events/booking.confirmed.v1.json` | SQS 예매 완료 알림. 🆕 SNS `booking-events`로도 발행(user 복제본), 선택 필드 `amount`·`discountAmount` 추가 | 남궁일 (소비 Lambda 김종식, user 한채연) |
+| `events/booking.confirmed.v1.json` | SQS 예매 완료 알림. 🆕 SNS `booking-events`로도 발행(user 복제본), 선택 필드 `amount`·`discountAmount` 추가 | 남궁일 (소비 Lambda 김종식, user ~~한채연~~ 🆕 김종식) |
 | 🆕 `events/booking.canceled.v1.json` | 예매 취소·만료·결제 실패(`reason`) | 남궁일 |
 | 🆕 `events/screening.changed.v1.json` · `movie.changed.v1.json` | catalog 변경(`version`, `deleted`) → ai·(booking) 복제본 | 한채연 |
 | 🆕 `events/coupon.{reservation-requested,use-requested,release-requested}.v1.json` | saga 명령 → coupon | 남궁일(보냄) · 한채연(받음) |
@@ -653,9 +655,9 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | ⚠️AI 19 | `contracts/openapi/ai.openapi.yaml` + 예시 | 김서현·한채연 (2.2.8) | 한채연 채팅 화면(3.3.7) | 11/6 | contract-check 통과 |
 
 | 🆕 20 | RDS 6개·`DB_HOST_{SVC}`·Secrets Manager·ESO | 김종식 (6.1.1·6.1.4) | 전원 (자기 인스턴스로 전환) | 11/23 오후 | 각 서비스 readiness 200 + Flyway Job 성공 |
-| 🆕 21 | SNS·SQS·DLQ·Pod Identity·`cinema-infra-endpoints` 메시징 키 | 김종식 (6.1.3) | 남궁일 6.2.x · 한채연 6.3.2·6.3.4 · 김서현 6.4.2 | 11/23 저녁 | 로컬 ElasticMQ 테스트 통과 → staging에서 명령 1건 왕복 |
+| 🆕 21 | SNS·SQS·DLQ·Pod Identity·`cinema-infra-endpoints` 메시징 키 | 김종식 (6.1.3) | 남궁일 6.2.x · 🆕 김종식 6.3.2(coupon, 11/24) · 한채연 6.3.4 · 김서현 6.4.2 | 11/23 저녁 | 로컬 ElasticMQ 테스트 통과 → staging에서 명령 1건 왕복 |
 | 🆕 22 | 계약 PR 6.0.1 (API 명세서 v1.5 21~26장 → `contracts/`) | 전원 | 구현 전원 | 11/23 오전 | `contract-check` 통과 |
-| 🆕 23 | coupon ECR·gitops `base/coupon`·Application·NetworkPolicy | 김종식 (6.1.5) | 한채연 coupon 배포 | 11/24 오전 | `kubectl -n argocd get application cinema-coupon` Healthy |
+| 🆕 23 | coupon ECR·gitops `base/coupon`·Application·NetworkPolicy | 김종식 (6.1.5) | ~~한채연~~ 🆕 김종식 coupon 배포(11/24) | 11/24 오전 | `kubectl -n argocd get application cinema-coupon` Healthy |
 | 🆕 24 | ops-api(`/ops`)·Role·`ignoreDifferences` | 김종식 (6.1.7) | 남궁일 6.2.6 · 한채연 6.3.5·6.3.7 | 11/24 | `GET /ops/services` 200(ADMIN 토큰), 403(일반 토큰) |
 | 🆕 25 | ai 통계 내부 API | 김서현 (6.4.4) | 김종식 ops-api 7번 | 11/24 | ops-api → ai 200 |
 | 🆕 26 | catalog `screening.changed`·`movie.changed` 발행 | 한채연 (6.3.4) | 김서현 6.4.2 | 11/24 | `ai-catalog-events` 큐에 메시지 |
@@ -816,7 +818,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `movie` | PK `movie_id`, UK (`source_provider`, `source_movie_code`) | 22편. TMDB 보충 컬럼(NULL 허용): `tmdb_id`, `genres`, `overview`, `release_date`, `runtime_minutes`, `poster_path`, `director`, `cast_names`, `meta_fetched_at` |
 | `screening` | PK `screening_id`, UK (`auditorium_id`, `business_date`, `play_sequence`), INDEX (`movie_id`, `business_date`) | `starts_at`·`ends_at` UTC, `layout_version` |
 
-#### user_db (한채연)
+#### user_db (~~한채연~~ 🆕 김종식, 11/24)
 
 | 테이블 | 키·제약 | 비고 |
 | --- | --- | --- |
@@ -1183,12 +1185,14 @@ SeatSAC-gitops/
 
 | 경로 | 담당 |
 | --- | --- |
-| `services/gateway·catalog·user/` | 한채연 |
+| `services/gateway·catalog/` | 한채연 (🆕 + 승인용 남궁일) |
+| 🆕 `services/user/` | 김종식 · 남궁일 (11/24 한채연에서, #186) |
 | `services/booking·payment/` | 남궁일 |
 | ⚠️AI `services/ai/`, `contracts/openapi/ai*` | 김서현 (계약은 + 한채연) |
-| 🆕 `services/coupon/`, `contracts/openapi/coupon*` | 한채연 (계약은 + 남궁일) |
-| 🆕 `services/ops-api/`, `contracts/openapi/ops*` | 김종식 (계약은 + 한채연) |
-| 🆕 `contracts/events/coupon.*`·`payment.*`·`screening.*`·`movie.*`·`booking.*` | 남궁일 · 한채연 (+ 소비 담당) |
+| 🆕 `services/coupon/`, `contracts/openapi/coupon*`·`openapi/internal/coupon*`·`events/coupon*` | 김종식 · 남궁일 (11/24 한채연에서, #178) |
+| 🆕 `contracts/openapi/user*` | 김종식 · 한채연 (11/24) |
+| 🆕 `services/ops-api/`, `contracts/openapi/ops*` | 김종식 (계약은 + 한채연 · 남궁일) |
+| 🆕 `contracts/events/payment.*`·`screening.*`·`movie.*`·`booking.*` | 아래 `contracts/` 규칙 (+ 소비 담당 리뷰) |
 | `frontend/` | 한채연 · 남궁일 |
 | `contracts/` | 한채연 · 남궁일 |
 | `contracts/tools/`, `contracts/redocly.yaml`, `build-logic/`, `gradle/`, `lambdas/`, `infra/`, `.github/`, `tests/k6/` | 김종식 |
@@ -1230,4 +1234,4 @@ SeatSAC-gitops/
 
 <노션 반영 필요> 03b 결정 칸에 "10/22 확정 + 레포 이름 SeatSAC·SeatSAC-gitops, `libs/` 유지(08 B안), contract-check 필수 검사, 브랜치 WBS ID 보완(ADR-48)", 최종 결정 21번 "공통 코드 복사" → "공유 모듈"
 
-<노션 반영 필요> 03b에 11/23 MSA 고도화 반영: `services/coupon`·`services/ops-api`, CODEOWNERS(coupon 한채연·ops-api 김종식), 11/23~27 머지 규칙(2장)
+<노션 반영 필요> 03b에 11/23 MSA 고도화 반영: `services/coupon`·`services/ops-api`, CODEOWNERS(~~coupon 한채연~~ 🆕 coupon·user 김종식(11/24)·ops-api 김종식), 11/23~27 머지 규칙(2장)

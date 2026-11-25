@@ -80,17 +80,43 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
     @Query("update Payment p set p.updatedAt = :now where p.paymentId = :paymentId")
     int touch(@Param("paymentId") String paymentId, @Param("now") Instant now);
 
-    /** 환불 미완료(ADR-112) — FAILED인데 돈이 잡혀 있고 환불 확인이 없는 PORTONE 행. 손댄 지 오래된 것부터 */
+    /**
+     * 환불 미완료(ADR-112) — FAILED인데 돈이 잡혀 있고 환불 확인이 없는 PORTONE 행. 처음에는 손댄 지 {@code threshold}가
+     * 지난 행, 한 번 미룬 뒤로는 {@code next_check_at}이 된 행(D18 백오프)
+     */
     @Query("""
         select p from Payment p
          where p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
            and p.status = com.seatsac.payment.enums.PaymentStatus.FAILED
            and p.pgTransactionId is not null
            and p.canceledAt is null
-           and p.updatedAt <= :threshold
-         order by p.updatedAt asc
+           and ((p.nextCheckAt is null and p.updatedAt <= :threshold) or p.nextCheckAt <= :now)
+         order by coalesce(p.nextCheckAt, p.updatedAt) asc
         """)
-    List<Payment> findRefundOwed(@Param("threshold") Instant threshold, Pageable pageable);
+    List<Payment> findRefundOwed(@Param("threshold") Instant threshold, @Param("now") Instant now, Pageable pageable);
+
+    /**
+     * 생성 뒤 {@code createdBefore}가 지나도 끝나지 않은 환불 미완료 — 경보용({@code payment_refund_unresolved_total}).
+     * 백오프로 스윕이 매번 다시 보지 않아도 「남아 있는 행 × 분」으로 센다
+     */
+    @Query("""
+        select p from Payment p
+         where p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
+           and p.status = com.seatsac.payment.enums.PaymentStatus.FAILED
+           and p.pgTransactionId is not null
+           and p.canceledAt is null
+           and p.createdAt <= :createdBefore
+         order by p.createdAt asc
+        """)
+    List<Payment> findRefundUnresolved(@Param("createdBefore") Instant createdBefore, Pageable pageable);
+
+    /** D18 — 이번에 포트원 확인을 끝내지 못했다. 다음 확인 시각을 미룬다(횟수 +1) */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Payment p set p.checkAttempt = p.checkAttempt + 1, p.nextCheckAt = :next, p.updatedAt = :now
+         where p.paymentId = :paymentId
+        """)
+    int deferCheck(@Param("paymentId") String paymentId, @Param("next") Instant next, @Param("now") Instant now);
 
     /**
      * 늦은 결제 다시 보기(ADR-112) — 최근 FAILED로 닫혔고 돈이 잡힌 흔적이 없는 PORTONE 행. 닫은 뒤 사용자가 결제를
@@ -151,4 +177,16 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
         """)
     List<String> findStaleProcessingIds(@Param("provider") PgProvider provider,
                                         @Param("threshold") Instant threshold, Pageable pageable);
+
+    /** 결제창 미완료 PORTONE 정리 — 생성 뒤 {@code threshold}가 지났고, 미룬 적이 있으면 {@code next_check_at}이 된 행(D18) */
+    @Query("""
+        select p.paymentId from Payment p
+         where p.status = com.seatsac.payment.enums.PaymentStatus.PROCESSING
+           and p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
+           and p.createdAt <= :threshold
+           and (p.nextCheckAt is null or p.nextCheckAt <= :now)
+         order by p.createdAt asc
+        """)
+    List<String> findAbandonedPortOneIds(@Param("threshold") Instant threshold, @Param("now") Instant now,
+                                         Pageable pageable);
 }

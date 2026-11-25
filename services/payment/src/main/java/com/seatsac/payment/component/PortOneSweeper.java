@@ -2,7 +2,6 @@ package com.seatsac.payment.component;
 
 import com.seatsac.payment.config.PortOneProperties;
 import com.seatsac.payment.entity.Payment;
-import com.seatsac.payment.enums.PgProvider;
 import com.seatsac.payment.service.PaymentStateService;
 import com.seatsac.payment.service.PortOneReconcileService;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -29,7 +28,9 @@ import org.springframework.stereotype.Component;
  *       찾는다 → PAID면 환불 미완료 표식 → 2번이 환불</li>
  * </ol>
  *
- * <p>포트원이 꺼져 있으면({@code enabled=false}) 돌지 않는다. 포트원 응답이 없으면 해당 건은 다음 주기로 미룬다.
+ * <p>포트원이 꺼져 있으면({@code enabled=false}) 돌지 않는다. 1·2번에서 포트원 확인을 끝내지 못한 행(응답 없음·취소 처리 중)은
+ * <b>행마다</b> 1 → 2 → 4 → 8 → 15분, 그 뒤로는 15분마다 다시 본다(D18, 설계 02 6-2 — {@code next_check_at}). 사용자가 기다리는
+ * 구간이 아니라 외부 API를 덜 두드린다. 포트원 장애 중 실제 호출은 서킷 {@code portone}이 막는다(그대로).
  */
 @Slf4j
 @Component
@@ -44,6 +45,8 @@ public class PortOneSweeper {
     /** 늦은 결제 다시 보기 — 닫힌 뒤 이 기간 동안, 이 간격으로 */
     static final Duration LATE_PAYMENT_WINDOW = Duration.ofMinutes(30);
     static final Duration LATE_PAYMENT_INTERVAL = Duration.ofMinutes(5);
+    /** D18 — 재확인 간격 상한. 1 → 2 → 4 → 8 → 15분(16분 대신), 그 뒤로 계속 15분 — 15분 미해결 환불 경보와 맞춘다 */
+    static final Duration RECHECK_MAX = Duration.ofMinutes(15);
 
     private final Clock clock;
     private final PortOneProperties props;
@@ -60,6 +63,7 @@ public class PortOneSweeper {
             return 0;
         }
         int handled = closeAbandoned() + settleRefunds();
+        countUnresolvedRefunds();
         Instant now = clock.instant();
         if (!now.isBefore(lastLatePaymentCheck.plus(LATE_PAYMENT_INTERVAL))) {
             lastLatePaymentCheck = now;
@@ -89,8 +93,9 @@ public class PortOneSweeper {
     }
 
     int closeAbandoned() {
-        Instant threshold = clock.instant().minus(props.pendingTimeout());
-        List<String> ids = paymentState.findStaleProcessingIds(PgProvider.PORTONE, threshold, PageRequest.ofSize(BATCH_SIZE));
+        Instant now = clock.instant();
+        Instant threshold = now.minus(props.pendingTimeout());
+        List<String> ids = paymentState.findAbandonedPortOneIds(threshold, now, PageRequest.ofSize(BATCH_SIZE));
         int handled = 0;
         for (String paymentId : ids) {
             Payment payment = paymentState.find(paymentId).orElse(null);
@@ -98,6 +103,11 @@ public class PortOneSweeper {
                 continue;
             }
             reconcile.closeAbandoned(payment);
+            // 아직 PROCESSING이면 포트원 응답이 없어 미룬 것이다 — 돈이 잡혔는지 모르니 닫지 않고, 다음 확인만 늦춘다
+            if (paymentState.find(paymentId).map(Payment::isProcessing).orElse(false)) {
+                defer(payment, now);
+                continue;
+            }
             handled++;
         }
         if (handled > 0) {
@@ -108,20 +118,48 @@ public class PortOneSweeper {
 
     int settleRefunds() {
         Instant now = clock.instant();
-        List<Payment> owed = paymentState.findRefundOwed(now.minus(REFUND_RETRY_AFTER), PageRequest.ofSize(BATCH_SIZE));
+        List<Payment> owed = paymentState.findRefundOwed(now.minus(REFUND_RETRY_AFTER), now,
+            PageRequest.ofSize(BATCH_SIZE));
         int settled = 0;
         for (Payment payment : owed) {
             if (reconcile.settleRefund(payment)) {
                 settled++;
-            } else if (Duration.between(payment.getCreatedAt(), now).compareTo(REFUND_UNRESOLVED_AFTER) > 0) {
-                meterRegistry.counter("payment_refund_unresolved_total").increment();
-                log.error("환불 미완료가 오래 남아 있다 — 포트원 콘솔과 대조 필요 paymentId={} bookingId={} failureCode={}",
-                    payment.getPaymentId(), payment.getBookingId(), payment.getFailureCode());
+            } else {
+                defer(payment, now);   // 응답 없음·취소 처리 중(REQUESTED)·거절 — 다음 확인을 늦춘다(D18)
             }
         }
         if (!owed.isEmpty()) {
             log.info("환불 미완료 처리 found={} settled={}", owed.size(), settled);
         }
         return settled;
+    }
+
+    /**
+     * 15분 넘게 끝나지 않은 환불 미완료를 <b>스윕마다</b> 센다 — 백오프로 그 행을 이번에 다시 보지 않아도 같다.
+     * 지표는 지금처럼 「남아 있는 행 × 분」이라 경보({@code increase(...[5m]) > 0})가 15분 간격 재시도 사이에 꺼지지 않는다
+     */
+    void countUnresolvedRefunds() {
+        Instant now = clock.instant();
+        for (Payment payment : paymentState.findRefundUnresolved(now.minus(REFUND_UNRESOLVED_AFTER),
+            PageRequest.ofSize(BATCH_SIZE))) {
+            meterRegistry.counter("payment_refund_unresolved_total").increment();
+            log.error("환불 미완료가 오래 남아 있다 — 포트원 콘솔과 대조 필요 paymentId={} bookingId={} failureCode={} 재확인={}회",
+                payment.getPaymentId(), payment.getBookingId(), payment.getFailureCode(), payment.getCheckAttempt());
+        }
+    }
+
+    /** D18 — n번째로 미루면 min(2^(n-1), 15)분 뒤 */
+    private void defer(Payment payment, Instant now) {
+        Duration delay = recheckDelay(payment.getCheckAttempt() + 1);
+        paymentState.deferCheck(payment.getPaymentId(), now.plus(delay), now);
+        log.info("포트원 확인을 미룬다 paymentId={} 재확인={}회 다음={}분 뒤", payment.getPaymentId(),
+            payment.getCheckAttempt() + 1, delay.toMinutes());
+    }
+
+    static Duration recheckDelay(int attempt) {
+        if (attempt >= 5) {
+            return RECHECK_MAX;   // 1·2·4·8 다음은 16이 아니라 15
+        }
+        return Duration.ofMinutes(1L << Math.max(0, attempt - 1));
     }
 }

@@ -100,8 +100,24 @@ public class PaymentStateService {
     }
 
     @Transactional(readOnly = true)
-    public List<Payment> findRefundOwed(Instant threshold, Pageable pageable) {
-        return paymentRepository.findRefundOwed(threshold, pageable);
+    public List<Payment> findRefundOwed(Instant threshold, Instant now, Pageable pageable) {
+        return paymentRepository.findRefundOwed(threshold, now, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Payment> findRefundUnresolved(Instant createdBefore, Pageable pageable) {
+        return paymentRepository.findRefundUnresolved(createdBefore, pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public List<String> findAbandonedPortOneIds(Instant threshold, Instant now, Pageable pageable) {
+        return paymentRepository.findAbandonedPortOneIds(threshold, now, pageable);
+    }
+
+    /** D18 — 포트원 확인을 끝내지 못한 행의 다음 확인 시각을 미룬다 */
+    @Transactional
+    public void deferCheck(String paymentId, Instant next, Instant now) {
+        paymentRepository.deferCheck(paymentId, next, now);
     }
 
     @Transactional(readOnly = true)

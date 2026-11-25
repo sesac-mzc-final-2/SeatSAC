@@ -13,6 +13,8 @@
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
 //        문맥 이어받기(3.4.22): 답마다 context, 영화 버튼의 continueFrom 이면 그 답의 날짜·극장·시각(○시 이후)으로 좁혀 답한다
 //          예: 「오늘 20시 이후 영화 알려줘」 → 답 아래 영화 버튼 → 오늘 · 20시 이후 · 그 영화만
+// 쿠폰(coupon.openapi.yaml, 6.3.6): MOCK_COUPON=open(기본, 진행 중) · upcoming(1분 뒤 시작 — 카운트다운) · soldout · off(404, 배너 없음)
+//        MOCK_GRADE=NORMAL 이면 /users/me grade NORMAL → 「VIP 전용」, 받기는 403 COUPON_NOT_ELIGIBLE (기본 VIP)
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -212,6 +214,7 @@ const DEV_USER = {
   name: "개발 세션",
   role: "USER",
   createdAt: "2026-10-28T09:00:00+09:00",
+  grade: process.env.MOCK_GRADE === "NORMAL" ? "NORMAL" : "VIP",
 };
 
 const SEAT_PRICE = 15000;
@@ -346,7 +349,100 @@ function validatePreferences(body) {
 }
 
 const requiresAuth = (path) =>
-  path.startsWith("/api/users/") || path.startsWith("/api/bookings/") || path.startsWith("/api/ai/");
+  path.startsWith("/api/users/") ||
+  path.startsWith("/api/bookings/") ||
+  path.startsWith("/api/ai/") ||
+  path.startsWith("/api/coupons/");
+
+// ---------- 쿠폰 (coupon.openapi.yaml, CPN-01~03) ----------
+
+const MOCK_COUPON = process.env.MOCK_COUPON ?? "open";
+/** 이벤트 시각은 목 서버를 띄운 때 기준 (open: 10분 전 시작·50분 뒤 끝 · upcoming: 1분 뒤 시작) */
+const couponEvent = (() => {
+  const now = Date.now();
+  const startsAt = MOCK_COUPON === "upcoming" ? now + 60_000 : now - 10 * 60_000;
+  const total = 100;
+  return {
+    eventId: 3,
+    title: "VIP 선착순 50% 할인",
+    discountRate: 50,
+    startsAt: kstIso(startsAt),
+    endsAt: kstIso(startsAt + 60 * 60_000),
+    totalQuantity: total,
+    remaining: MOCK_COUPON === "soldout" ? 0 : 37,
+    eligibleGrade: "VIP",
+  };
+})();
+/** 받은 쿠폰 (메모리) · 멱등 키 → 첫 응답 */
+const myCoupons = [];
+const couponIdem = new Map();
+
+function kstIso(ms) {
+  return new Date(ms + 9 * 3600_000).toISOString().replace("Z", KST).replace(/\.\d{3}/, "");
+}
+
+function couponState(nowMs = Date.now()) {
+  if (nowMs < Date.parse(couponEvent.startsAt)) return "UPCOMING";
+  if (nowMs < Date.parse(couponEvent.endsAt)) return "OPEN";
+  return "CLOSED";
+}
+
+function couponView(c) {
+  return Date.parse(c.expiresAt) <= Date.now() && c.state === "ISSUED" ? { ...c, state: "EXPIRED" } : c;
+}
+
+async function handleCoupons(req, res, path) {
+  if (path === "/api/coupons/me" && req.method === "GET") return json(res, 200, { items: myCoupons.map(couponView) });
+  if (MOCK_COUPON === "off") return fail(res, 404, "NOT_FOUND", "no coupon event");
+
+  if (path === "/api/coupons/events/current" && req.method === "GET") {
+    const state = couponState();
+    if (state === "CLOSED") return fail(res, 404, "NOT_FOUND", "no coupon event");
+    const mine = myCoupons.find((c) => c.eventId === couponEvent.eventId);
+    const { remaining, ...rest } = couponEvent;
+    return json(res, 200, {
+      ...rest,
+      remainingQuantity: Math.max(0, remaining),
+      state,
+      myIssue: mine ? { couponIssueId: mine.couponIssueId, state: couponView(mine).state } : null,
+    });
+  }
+
+  const m = /^\/api\/coupons\/events\/(\d+)\/claim$/.exec(path);
+  if (m && req.method === "POST") {
+    const key = req.headers["idempotency-key"];
+    if (!key) return fail(res, 400, "VALIDATION_FAILED", "Idempotency-Key required", [{ field: "Idempotency-Key" }]);
+    if (couponIdem.has(key)) {
+      const first = couponIdem.get(key);
+      return first.status === 201 ? json(res, 201, first.body) : fail(res, first.status, first.body.code, "replay", first.body.details);
+    }
+    const reply = (status, body) => {
+      couponIdem.set(key, { status, body });
+      return status === 201 ? json(res, 201, body) : fail(res, status, body.code, body.code, body.details);
+    };
+    if (Number(m[1]) !== couponEvent.eventId) return fail(res, 404, "NOT_FOUND", "no event");
+    if (DEV_USER.grade !== "VIP") return reply(403, { code: "COUPON_NOT_ELIGIBLE", details: [{ field: "grade", value: DEV_USER.grade }] });
+    const state = couponState();
+    if (state !== "OPEN") {
+      return reply(409, { code: "COUPON_EVENT_NOT_OPEN", details: [{ field: "eventId", value: String(couponEvent.eventId), reason: state }] });
+    }
+    const mine = myCoupons.find((c) => c.eventId === couponEvent.eventId);
+    if (mine) return reply(409, { code: "COUPON_ALREADY_CLAIMED", details: [{ field: "couponIssueId", value: mine.couponIssueId }] });
+    if (couponEvent.remaining <= 0) return reply(409, { code: "COUPON_SOLD_OUT", details: [] });
+    couponEvent.remaining -= 1;
+    const issue = {
+      couponIssueId: randomUUID(),
+      eventId: couponEvent.eventId,
+      title: couponEvent.title,
+      discountRate: couponEvent.discountRate,
+      state: "ISSUED",
+      expiresAt: couponEvent.endsAt,
+    };
+    myCoupons.unshift(issue);
+    return reply(201, issue);
+  }
+  return fail(res, 404, "NOT_FOUND", "no route");
+}
 
 // ---------- AI 챗봇 (ai.openapi.yaml, AI-01·AI-04) ----------
 
@@ -982,6 +1078,7 @@ createServer(async (req, res) => {
   }
 
   if (path.startsWith("/api/ai/")) return handleAi(req, res, path);
+  if (path.startsWith("/api/coupons/")) return handleCoupons(req, res, path);
 
   if (path.startsWith("/api/mock-portone/") || /^\/api\/bookings\/7\d{3}(\/|$)/.test(path)) {
     if ((await handlePayBooking(req, res, path)) !== false) return;

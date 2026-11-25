@@ -1,0 +1,138 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin-top: 22px;
+  padding: 20px 24px;
+  border: 1px solid #ff5a4e59;
+  border-radius: var(--radius);
+  background: linear-gradient(100deg, #ff5a4e1f 0%, #14161b 55%);
+}
+.banner[data-phase="CLOSED"] {
+  border-color: var(--color-border);
+  background: #14161b;
+}
+.rate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 72px;
+  color: var(--color-primary);
+}
+.rate strong {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+.rate span {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+.copy {
+  flex: 1;
+  min-width: 0;
+}
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.copy h2 {
+  margin: 6px 0 8px;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+.meta b {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.bar {
+  overflow: hidden;
+  max-width: 320px;
+  height: 4px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: #2a2d35;
+}
+.bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+  transition: width 0.4s ease;
+}
+.action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.done {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.link {
+  color: var(--color-muted);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.link:hover {
+  color: #fff;
+}
+.hint {
+  color: var(--color-dim);
+  font-size: 11px;
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 640px) {
+  .banner {
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 16px;
+  }
+  .rate {
+    min-width: 56px;
+  }
+  .rate strong {
+    font-size: 24px;
+  }
+  .action {
+    flex-basis: 100%;
+    align-items: stretch;
+  }
+}

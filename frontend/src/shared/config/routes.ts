@@ -33,6 +33,6 @@ export const routes = {
   bookingPay: (bookingId: number | string) => `/bookings/${bookingId}/pay`,
   credits: () => "/credits",
   callback: () => "/callback",
-  /** W8 마이페이지 (3.3.6). 탭은 `?tab=preferences` (기본은 예매 내역) */
-  myPage: (tab?: "preferences") => (tab ? `/me?tab=${tab}` : "/me"),
+  /** W8 마이페이지 (3.3.6). 탭은 `?tab=preferences`·`?tab=coupons`(6.3.6) (기본은 예매 내역) */
+  myPage: (tab?: "preferences" | "coupons") => (tab ? `/me?tab=${tab}` : "/me"),
 } as const;

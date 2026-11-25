@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { Icon } from "@/shared/ui";
+import { isVip } from "../lib/grade";
 import type { Profile } from "../model/types";
+import { VipBadge } from "./VipBadge";
 import styles from "./ProfileSummary.module.css";
 
 interface Props {
@@ -9,7 +11,7 @@ interface Props {
   aside?: ReactNode;
 }
 
-/** 프로필 영역 (W8): 이름 · 이메일 (역할은 표시하지 않는다 — 관리자 화면·기능이 없다) */
+/** 프로필 영역 (W8): 이름 · VIP 배지(VIP 일 때만) · 이메일 (역할은 표시하지 않는다 — 관리자 화면·기능이 없다) */
 export function ProfileSummary({ profile, aside }: Props) {
   const name = profile.name?.trim() || profile.email.split("@")[0];
   return (
@@ -19,7 +21,10 @@ export function ProfileSummary({ profile, aside }: Props) {
       </div>
       <div className={styles.identity}>
         <p className="micro">SeatSAC 회원</p>
-        <h2 className={styles.name}>{name}</h2>
+        <div className={styles.nameRow}>
+          <h2 className={styles.name}>{name}</h2>
+          {isVip(profile) && <VipBadge />}
+        </div>
         <p className={styles.email}>{profile.email}</p>
       </div>
       {aside && <div className={styles.meta}>{aside}</div>}

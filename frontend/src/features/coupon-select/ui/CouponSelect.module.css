@@ -1,0 +1,87 @@
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: #14161b;
+}
+.box:disabled {
+  opacity: 0.6;
+}
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  float: left;
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--t-color), background-color var(--t-color);
+}
+.option:hover {
+  background: var(--color-card-hover);
+}
+.option:has(input:checked) {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.box:disabled .option {
+  cursor: default;
+}
+.option input {
+  accent-color: var(--color-primary);
+  cursor: inherit;
+}
+.name {
+  flex: 1;
+  min-width: 0;
+}
+.rate {
+  margin-left: 6px;
+  color: var(--color-primary);
+  font-weight: 700;
+}
+.save {
+  color: var(--color-primary);
+  font-variant-numeric: tabular-nums;
+}
+.total {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+  font-size: 13px;
+}
+.total div {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-muted);
+}
+.total dd {
+  font-variant-numeric: tabular-nums;
+}
+.minus {
+  color: var(--color-primary);
+}
+.final {
+  color: var(--color-text) !important;
+  font-weight: 700;
+}

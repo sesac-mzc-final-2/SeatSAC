@@ -1,0 +1,46 @@
+.card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius);
+  background: #14161b;
+}
+.card[data-usable] {
+  border-color: #ff5a4e80;
+}
+.rate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 64px;
+  color: var(--color-dim);
+}
+.card[data-usable] .rate {
+  color: var(--color-primary);
+}
+.rate strong {
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+.rate span {
+  font-size: 11px;
+}
+.body {
+  flex: 1;
+  min-width: 0;
+}
+.title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.expires {
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 12px;
+}

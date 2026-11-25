@@ -8,10 +8,11 @@ import { routes } from "@/shared/config";
 import { useDocumentTitle } from "@/shared/lib";
 import { ErrorState, Icon, LoadingBlock, PageHeading, SegmentedTabs, type SegmentedTab } from "@/shared/ui";
 import { BookingHistory } from "@/widgets/booking-history";
+import { MyCoupons } from "@/widgets/my-coupons";
 import { PreferencesPanel } from "@/widgets/preferences-panel";
 import styles from "./MyPage.module.css";
 
-type Tab = "bookings" | "preferences";
+type Tab = "bookings" | "preferences" | "coupons";
 
 const TABS: ReadonlyArray<SegmentedTab<Tab>> = [
   {
@@ -32,6 +33,15 @@ const TABS: ReadonlyArray<SegmentedTab<Tab>> = [
       </>
     ),
   },
+  {
+    value: "coupons",
+    panelId: "my-panel-coupons",
+    label: (
+      <>
+        <Icon name="credit-card" /> 쿠폰
+      </>
+    ),
+  },
 ];
 
 /** 프로필 오류 문구 (GET /users/me) */
@@ -40,7 +50,7 @@ const PROFILE_MESSAGES: Record<string, string> = {
 };
 
 /**
- * W8 마이페이지 `/me` (3.3.6): 프로필 · 탭(예매 내역 USR-04 · 선호 설정 USR-05).
+ * W8 마이페이지 `/me` (3.3.6): 프로필 · 탭(예매 내역 USR-04 · 선호 설정 USR-05 · 쿠폰 CPN-03 6.3.6).
  * 탭은 `?tab=` 으로 주소에 남겨 새로고침·뒤로 가기에도 유지한다. 비로그인은 로그인 안내.
  * 선호 설정 패널은 한 번 연 뒤에는 탭을 옮겨도 숨기기만 한다(언마운트하면 저장하지 않은 편집이 사라진다).
  */
@@ -48,7 +58,8 @@ export function MyPage() {
   useDocumentTitle("마이페이지");
   const session = useSession();
   const [params, setParams] = useSearchParams();
-  const tab: Tab = params.get("tab") === "preferences" ? "preferences" : "bookings";
+  const tabParam = params.get("tab");
+  const tab: Tab = tabParam === "preferences" || tabParam === "coupons" ? tabParam : "bookings";
 
   const authenticated = session.status === "authenticated";
   const profile = useQuery({ ...myProfileQuery(), enabled: authenticated });
@@ -98,6 +109,11 @@ export function MyPage() {
         {tab === "bookings" && (
           <div id="my-panel-bookings" role="tabpanel" aria-labelledby="tab-bookings">
             <BookingHistory />
+          </div>
+        )}
+        {tab === "coupons" && (
+          <div id="my-panel-coupons" role="tabpanel" aria-labelledby="tab-coupons">
+            <MyCoupons />
           </div>
         )}
         {preferencesOpened && (

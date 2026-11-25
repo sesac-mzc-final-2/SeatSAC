@@ -14,6 +14,12 @@ export const routePatterns = {
   credits: "/credits",
   callback: "/callback",
   myPage: "/me",
+  /** 관리자 화면 (6.3.5). `/ops` 가 아니다 — CloudFront `/ops/*` 는 ops-api(API)로 간다 */
+  admin: "/admin",
+  adminServices: "/admin/services",
+  adminReports: "/admin/reports",
+  adminAiDemand: "/admin/ai-demand",
+  adminCoupons: "/admin/coupons",
 } as const;
 
 export const routes = {
@@ -35,4 +41,14 @@ export const routes = {
   callback: () => "/callback",
   /** W8 마이페이지 (3.3.6). 탭은 `?tab=preferences` (기본은 예매 내역) */
   myPage: (tab?: "preferences") => (tab ? `/me?tab=${tab}` : "/me"),
+  /** 관리자 대시보드 (토큰 `cognito:groups` ∋ ADMIN 일 때만 메뉴, 허용은 ops-api가 판단) */
+  admin: () => "/admin",
+  /** OPS-20·21 서비스 상태·정지/가동 (6.2.6) */
+  adminServices: () => "/admin/services",
+  /** OPS-22 오류 리포트 (6.3.7) */
+  adminReports: () => "/admin/reports",
+  /** OPS-23 AI 범위 밖 질문 (6.3.7) */
+  adminAiDemand: () => "/admin/ai-demand",
+  /** OPS-24 쿠폰 이벤트 생성 */
+  adminCoupons: () => "/admin/coupons",
 } as const;

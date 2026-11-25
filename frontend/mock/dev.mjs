@@ -14,7 +14,7 @@ const viteBin = join(dirname(createRequire(import.meta.url).resolve("vite/packag
 const mock = spawn(process.execPath, [join(here, "server.mjs")], { stdio: "inherit", env: { ...process.env, MOCK_PORT: port } });
 const vite = spawn(process.execPath, [viteBin], {
   stdio: "inherit",
-  env: { ...process.env, DEV_API_PROXY: `http://localhost:${port}` },
+  env: { ...process.env, DEV_API_PROXY: `http://localhost:${port}`, DEV_OPS_PROXY: `http://localhost:${port}` },
 });
 
 let stopping = false;

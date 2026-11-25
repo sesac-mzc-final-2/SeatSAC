@@ -144,7 +144,7 @@ const presets = {
 const authenticated: Session = {
   ...unavailableSession,
   status: "authenticated",
-  user: { id: "00000000-0000-4000-8000-000000000001", name: "한채연", email: null },
+  user: { id: "00000000-0000-4000-8000-000000000001", name: "한채연", email: null, groups: [] },
 };
 
 function renderDock(session: Session = authenticated) {

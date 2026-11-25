@@ -3,6 +3,11 @@ export interface SessionUser {
   id: string;
   name: string | null;
   email: string | null;
+  /**
+   * Access Token `cognito:groups` (`VIP`·`ADMIN`, conventions 9장). 화면 표시(관리자 메뉴)에만 쓴다 —
+   * 서명을 검증하지 않은 값이라 권한 판단은 서버(ops-api)가 한다. 그룹 변경은 토큰 재발급 뒤 반영
+   */
+  groups: readonly string[];
 }
 
 /**

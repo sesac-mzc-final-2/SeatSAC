@@ -73,7 +73,7 @@ const showtimes = (answer: string, rows: string[], ctx: ChatContext | null): Cha
 const authenticated: Session = {
   ...unavailableSession,
   status: "authenticated",
-  user: { id: "00000000-0000-4000-8000-000000000001", name: "한채연", email: null },
+  user: { id: "00000000-0000-4000-8000-000000000001", name: "한채연", email: null, groups: [] },
 };
 
 /** replies: 챗 요청 순서대로 돌려줄 응답(함수면 그때 만든다) */

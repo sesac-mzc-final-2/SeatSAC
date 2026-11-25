@@ -10,7 +10,7 @@ import { CouponEventBanner } from "./CouponEventBanner";
 const respond = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-const authed: Session = { ...unavailableSession, status: "authenticated", user: { id: "u1", name: "채연", email: "a@b.c" } };
+const authed: Session = { ...unavailableSession, status: "authenticated", user: { id: "u1", name: "채연", email: "a@b.c", groups: [] } };
 const profile = (grade: string) => ({ userId: "u1", email: "a@b.c", name: "채연", createdAt: "2026-10-28T09:00:00+09:00", grade });
 const event = (overrides: Record<string, unknown> = {}) => ({
   eventId: 3,

@@ -3,8 +3,11 @@ package com.seatsac.catalog.config;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-/** 상영 일정 이어 붙이기({@code ScheduleExtender})가 주기 실행을 쓴다 */
-@EnableScheduling
+/**
+ * 주기 작업 — 변경 찾기(1분)·outbox 릴레이(1초, 플래그)·상영 일정 이어 붙이기({@code ScheduleExtender}, 1시간).
+ * 각 작업은 자기 플래그로 빈을 만들지 않거나 건너뛸 수 있다
+ */
 @Configuration(proxyBeanMethods = false)
+@EnableScheduling
 public class SchedulingConfig {
 }

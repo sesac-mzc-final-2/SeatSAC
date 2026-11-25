@@ -19,6 +19,9 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-redis")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-mysql")
+    // 6.3.4a 변경 이벤트 발행 — SNS catalog-events(staging), 로컬은 ElasticMQ 큐 직접(booking·coupon과 같은 버전)
+    implementation("io.awspring.cloud:spring-cloud-aws-starter-sns:3.4.0")
+    implementation("io.awspring.cloud:spring-cloud-aws-starter-sqs:3.4.0")
     runtimeOnly("com.mysql:mysql-connector-j")
     testImplementation(project(":libs:common-test"))
 }

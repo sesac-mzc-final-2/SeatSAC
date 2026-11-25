@@ -9,10 +9,19 @@ spring:
     open-in-view: false
     hibernate.ddl-auto: validate
     properties.hibernate.jdbc.time_zone: UTC
+  cloud.aws:
+    sqs.enabled: false
+    sns.enabled: false
+    region.static: ap-northeast-2
+    credentials:
+      access-key: test
+      secret-key: test
 app:
   # 주기 실행은 끈다 — 회차 fixture를 테스트마다 지우고 넣으므로. ScheduleExtenderTest가 extend()를 직접 부른다
   schedule:
     enabled: false
+  # 변경 찾기 주기는 끈다 — 테스트가 scanOnce()를 직접 부른다. 릴레이는 기본(false) 그대로
+  catalog.change-scan.enabled: false
   services:
     # 통합 테스트가 @DynamicPropertySource로 가짜 booking 주소를 넣는다. 기본값은 바로 연결 거부되는 포트
     booking-url: http://127.0.0.1:1

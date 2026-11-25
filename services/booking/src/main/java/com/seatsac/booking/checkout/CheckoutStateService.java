@@ -64,7 +64,7 @@ public class CheckoutStateService {
         }
         return switch (reply.get()) {
             case CouponPort.Reserved reserved -> {
-                timings.step("coupon_reserved", now, now);   // 즉시 결정되는 어댑터 — 비동기 결과는 결과 소비자가 잰다
+                timings.step("coupon_reserved", saga.getCreatedAt(), now);   // saga 생성 기준(다른 단계와 같다). sqs 어댑터 결과는 결과 소비자가 같은 기준으로
                 yield startPayment(saga, booking, reserved.discount(), begin.cardLast4(), begin.replacingPaymentId(), now);
             }
             case CouponPort.Rejected rejected -> {

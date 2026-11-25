@@ -23,6 +23,7 @@ import com.seatsac.booking.repository.BookingRepository;
 import com.seatsac.booking.repository.BookingSeatRepository;
 import com.seatsac.booking.repository.OutboxMessageRepository;
 import com.seatsac.booking.service.BookingCancelService;
+import com.seatsac.booking.service.HoldExpiryService;
 import com.seatsac.booking.service.SeatHoldService;
 import com.seatsac.common.test.MySqlContainerSupport;
 import com.seatsac.common.test.ValkeyContainerSupport;
@@ -33,6 +34,11 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,6 +46,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
@@ -89,6 +96,12 @@ class BookingEventsFlowTest {
     ObjectMapper objectMapper;
     @Autowired
     MeterRegistry meterRegistry;
+    @Autowired
+    HoldExpiryService holdExpiryService;
+    @Autowired
+    CheckoutSweeper sweeper;
+    @Autowired
+    JdbcTemplate jdbc;
 
     @BeforeEach
     void setUp() {
@@ -166,6 +179,48 @@ class BookingEventsFlowTest {
         assertThat(body.at("/payload/reason").asText()).isEqualTo("PAYMENT_FAILED");
         assertMatchesContract(body);
         assertThat(outbox.findAll()).noneMatch(m -> m.getEventType() == OutboxEventType.BOOKING_CONFIRMED);
+    }
+
+    /** saga 만료 — 선점 만료로 예매가 EXPIRED가 되고 스윕이 saga를 닫으면 booking.canceled{EXPIRED}, 키 canceled:{checkoutId} */
+    @Test
+    void sagaExpiryWritesExpired() throws IOException {
+        Long bookingId = hold();
+        CheckoutAcceptedResponse accepted = startCard(bookingId);
+        // 시각은 UTC로 저장한다(JVM 시간대로 넣으면 9시간 밀린다)
+        jdbc.update("update booking set expires_at = utc_timestamp(3) - interval 1 second where booking_id = ?",
+            bookingId);
+
+        assertThat(holdExpiryService.expire(bookingId)).isEqualTo(HoldExpiryService.Outcome.EXPIRED);
+        sweeper.sweepOnce();
+
+        OutboxMessage canceled = only(OutboxEventType.BOOKING_CANCELED, OutboxDestination.BOOKING_EVENTS);
+        assertThat(canceled.getAggregateKey()).isEqualTo("canceled:" + accepted.checkoutId());
+        JsonNode body = objectMapper.readTree(canceled.getPayload());
+        assertThat(body.at("/payload/reason").asText()).isEqualTo("EXPIRED");
+        assertMatchesContract(body);
+    }
+
+    /** BKG-07 취소가 동시에 두 번 와도 이벤트 행은 하나 — 조건부 UPDATE가 1행인 쪽만 행을 넣는다 */
+    @Test
+    void concurrentCancelsWriteOneEvent() throws Exception {
+        Long bookingId = hold();
+        approve(startCard(bookingId), bookingId);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<?>> calls = IntStream.range(0, 2).<Future<?>>mapToObj(i -> pool.submit(() -> {
+                start.await();
+                return cancelService.cancel(USER, bookingId);
+            })).toList();
+            start.countDown();
+            for (Future<?> call : calls) {
+                call.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        only(OutboxEventType.BOOKING_CANCELED, OutboxDestination.BOOKING_EVENTS);
     }
 
     private Long hold() {

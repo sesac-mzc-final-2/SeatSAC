@@ -24,7 +24,12 @@ export function CouponSelect({ amount, value, onChange, disabled = false }: Prop
   const coupons = useQuery(myCouponsQuery());
   // 쓸 수 있는지 판단한 시각과 다시 그릴 시각을 같은 「지금」으로 — 따로 읽으면 그 사이에 만료된 쿠폰을 놓친다
   const now = serverNow();
-  const usable = (coupons.data?.items ?? []).filter((coupon) => isUsableCoupon(coupon, now));
+  const items = coupons.data?.items ?? [];
+  // 결제 진행 중(disabled)에는 고른 쿠폰을 상태와 상관없이 그대로 둔다 — 체크아웃이 예약하면 RESERVED 가 되는데,
+  // 그때 내 쿠폰을 다시 읽어도 선택이 풀리거나 목록이 사라지면 안 된다
+  const usable = items.filter(
+    (coupon) => isUsableCoupon(coupon, now) || (disabled && coupon.couponIssueId === value),
+  );
   const selected = usable.find((coupon) => coupon.couponIssueId === value) ?? null;
   // 가장 먼저 끝나는 쿠폰의 기한에 다시 그려, 지난 쿠폰을 목록·선택에서 뺀다
   useRerenderAt(
@@ -36,8 +41,8 @@ export function CouponSelect({ amount, value, onChange, disabled = false }: Prop
   // 화면에 없는 쿠폰이 결제에 실려 가지 않게(읽는 중에는 그대로 둔다)
   const settled = coupons.isSuccess || (coupons.isError && !coupons.isFetching);
   useEffect(() => {
-    if (value !== null && settled && selected === null) onChange(null);
-  }, [value, settled, selected, onChange]);
+    if (!disabled && value !== null && settled && selected === null) onChange(null);
+  }, [disabled, value, settled, selected, onChange]);
 
   /** 누르는 순간 다시 확인 — 마지막으로 그린 뒤 기한이 지났을 수 있다 */
   const pick = (coupon: (typeof usable)[number]) => onChange(isUsableCoupon(coupon) ? coupon.couponIssueId : null);

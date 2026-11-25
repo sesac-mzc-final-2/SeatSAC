@@ -38,7 +38,7 @@ const TABS: ReadonlyArray<SegmentedTab<Tab>> = [
     panelId: "my-panel-coupons",
     label: (
       <>
-        <Icon name="credit-card" /> 쿠폰
+        <Icon name="ticket" /> 쿠폰
       </>
     ),
   },

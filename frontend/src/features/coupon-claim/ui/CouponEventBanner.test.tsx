@@ -82,14 +82,32 @@ describe("CouponEventBanner (6.3.6)", () => {
     expect(await screen.findByText("쿠폰을 받았어요! 결제할 때 쓸 수 있어요.")).toBeInTheDocument();
   });
 
-  it("보여 줄 이벤트가 없으면(404) 그리지 않는다", async () => {
+  it("보여 줄 이벤트가 없으면(404) 그리지 않고, 등급(/users/me)도 읽지 않는다", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
       String(input) === "/api/users/me"
         ? respond(200, profile("VIP"))
         : respond(404, { code: "NOT_FOUND", message: "", traceId: "0".repeat(32), details: [] }),
     );
     const { container } = renderBanner();
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/coupons/events/current");
     expect(container.querySelector("section")).toBeNull();
+  });
+
+  it("등급을 읽는 중엔 중립 비활성, 등급을 못 읽으면(user 503) 열어 두고 claim 에 맡긴다", async () => {
+    let profileStatus = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) !== "/api/users/me") return respond(200, event());
+      if (profileStatus === 0) return new Promise<Response>(() => {}); // 끝나지 않는 조회
+      return respond(503, { code: "SERVICE_UNAVAILABLE", message: "", traceId: "0".repeat(32), details: [] });
+    });
+    const view = renderBanner();
+    expect(await screen.findByRole("button", { name: /확인 중/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "VIP 전용" })).not.toBeInTheDocument();
+    view.unmount();
+
+    profileStatus = 503;
+    renderBanner();
+    expect(await screen.findByRole("button", { name: /쿠폰 받기/ })).toBeEnabled();
   });
 });

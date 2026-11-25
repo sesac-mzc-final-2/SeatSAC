@@ -14,11 +14,20 @@ const finalAmount = () => screen.getByText("결제 예정 금액").nextElementSi
 const future = new Date(Date.now() + 3600_000).toISOString();
 const past = new Date(Date.now() - 1000).toISOString();
 
-function Harness({ onPick, initial = null }: { onPick: (id: string | null) => void; initial?: string | null }) {
+function Harness({
+  onPick,
+  initial = null,
+  disabled = false,
+}: {
+  onPick: (id: string | null) => void;
+  initial?: string | null;
+  disabled?: boolean;
+}) {
   const [value, setValue] = useState<string | null>(initial);
   return (
     <CouponSelect
       amount={45000}
+      disabled={disabled}
       value={value}
       onChange={(id) => {
         setValue(id);
@@ -28,11 +37,11 @@ function Harness({ onPick, initial = null }: { onPick: (id: string | null) => vo
   );
 }
 
-function renderSelect(onPick = vi.fn(), initial: string | null = null) {
+function renderSelect(onPick = vi.fn(), initial: string | null = null, disabled = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <Harness onPick={onPick} initial={initial} />
+      <Harness onPick={onPick} initial={initial} disabled={disabled} />
     </QueryClientProvider>,
   );
   return onPick;
@@ -83,5 +92,17 @@ describe("CouponSelect (6.3.6)", () => {
     );
     const onPick = renderSelect(vi.fn(), "a");
     await vi.waitFor(() => expect(onPick).toHaveBeenCalledWith(null));
+  });
+
+  it("결제 진행 중(disabled)이면 고른 쿠폰이 RESERVED 가 돼도 풀지 않고 보여 준다", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        items: [{ couponIssueId: "a", eventId: 3, title: "VIP 50%", discountRate: 50, state: "RESERVED", expiresAt: future }],
+      }),
+    );
+    const onPick = renderSelect(vi.fn(), "a", true);
+    expect(await screen.findByRole("radio", { name: /VIP 50%/ })).toBeChecked();
+    expect(finalAmount()).toBe("22,500원");
+    expect(onPick).not.toHaveBeenCalled();
   });
 });

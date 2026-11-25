@@ -15,6 +15,8 @@ export const currentCouponEventQuery = () =>
   queryOptions({
     queryKey: couponKeys.currentEvent(),
     queryFn: ({ signal }) => getCurrentCouponEvent(signal),
+    // 배너는 실패하면 조용히 숨긴다 — coupon 이 없거나 멈춰 있는 동안 30초마다 공통 503 토스트가 뜨지 않게
+    meta: { silentError: true },
     // 남은 수량이 계속 바뀐다 — 화면에 있는 동안 30초마다 새로 (표시용, 판정은 claim)
     refetchInterval: 30_000,
   });
@@ -23,4 +25,6 @@ export const myCouponsQuery = () =>
   queryOptions({
     queryKey: couponKeys.mine(),
     queryFn: ({ signal }) => listMyCoupons(signal),
+    // 결제 화면 쿠폰 선택은 못 읽으면 숨기고 쿠폰 없이 결제한다. 마이페이지 쿠폰 탭은 ErrorState 로 알린다
+    meta: { silentError: true },
   });

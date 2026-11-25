@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   couponCountdownTarget,
@@ -25,46 +25,75 @@ export function CouponEventBanner({ showMyCouponsLink = true }: { showMyCouponsL
   const session = useSession();
   const authenticated = session.status === "authenticated";
   const eventQuery = useQuery({ ...currentCouponEventQuery(), enabled: authenticated });
-  const profileQuery = useQuery({ ...myProfileQuery(), enabled: authenticated });
-
   const event = eventQuery.data;
+  // 등급은 이벤트가 있을 때만 읽는다(홈이 늘 /users/me 를 부르지 않게). 실패해도 토스트 없이 — 판정은 claim 이 한다
+  const profileQuery = useQuery({ ...myProfileQuery(), enabled: authenticated && !!event, meta: { silentError: true } });
+  const refetchEvent = eventQuery.refetch;
+  const onBoundary = useCallback(() => void refetchEvent(), [refetchEvent]);
+
   // 조회 실패(503 등)는 메인 화면을 막지 않게 조용히 숨긴다 — 이전에 받은 값(남은 수량·시각)이 남아 있어도 숨기고,
   // 30초 뒤 다시 읽어 성공하면 돌아온다
   if (!authenticated || !event || eventQuery.isError) return null;
   return (
     <Banner
       event={event}
-      vip={isVip(profileQuery.data)}
+      eligibility={
+        profileQuery.isPending
+          ? "checking"
+          : profileQuery.isError || isVip(profileQuery.data)
+            ? "eligible"
+            : "not-eligible"
+      }
       showMyCouponsLink={showMyCouponsLink}
-      onBoundary={() => void eventQuery.refetch()}
+      checkedAt={eventQuery.dataUpdatedAt}
+      onBoundary={onBoundary}
     />
   );
 }
 
+/**
+ * 받기 버튼을 열지: 등급을 읽는 중이면 중립 비활성(VIP 에게 「VIP 전용」이 깜박이지 않게), NORMAL 이면 「VIP 전용」.
+ * 등급을 못 읽었으면(user 503·토큰 거절) 열어 두고 claim 의 403 에 맡긴다 — VIP 가 못 받는 쪽으로 틀리지 않게
+ */
+type Eligibility = "checking" | "eligible" | "not-eligible";
+
+/** 경계 재조회 횟수·간격 — 화면 시계는 서버와 ±0.5초 어긋날 수 있어 아직 바뀌기 전 응답을 받을 수 있다 */
+const BOUNDARY_TRIES = 3;
+const BOUNDARY_RETRY_MS = 1500;
+
 interface BannerProps {
   event: CurrentCouponEvent;
-  vip: boolean;
+  eligibility: Eligibility;
+  /** 이벤트를 마지막으로 받은 시각 — 같은 값이 다시 와도(구조 공유로 같은 객체) 경계 재조회를 이어 가게 */
+  checkedAt: number;
   /** 마이페이지 쿠폰 탭 안에서는 「내 쿠폰 보기」 링크를 뺀다 */
   showMyCouponsLink: boolean;
   onBoundary: () => void;
 }
 
-function Banner({ event, vip, showMyCouponsLink, onBoundary }: BannerProps) {
+function Banner({ event, eligibility, checkedAt, showMyCouponsLink, onBoundary }: BannerProps) {
   const toast = useToast();
   const now = useTicker(1000);
   const phase = couponEventPhase(event, now);
   const target = couponCountdownTarget(event, phase);
   const secondsLeft = target ? Math.max(0, Math.ceil((new Date(target).getTime() - now) / 1000)) : 0;
 
-  // 화면 시계로 단계가 넘어가면 그 순간 한 번 서버 판단을 다시 받는다 (시작·종료)
-  const boundaryFor = useRef<string | null>(null);
+  // 화면 시계로 단계가 넘어가면 서버 판단을 다시 받는다(시작·종료). 받은 응답이 아직 이전 단계면 1.5초 뒤 다시, 최대 3번
+  const boundaryTries = useRef<{ key: string; count: number } | null>(null);
   useEffect(() => {
+    if (phase === event.state) return;
     const key = `${event.eventId}:${phase}`;
-    if (phase !== event.state && boundaryFor.current !== key) {
-      boundaryFor.current = key;
-      onBoundary();
-    }
-  }, [event.eventId, event.state, phase, onBoundary]);
+    const count = boundaryTries.current?.key === key ? boundaryTries.current.count : 0;
+    if (count >= BOUNDARY_TRIES) return;
+    const timer = window.setTimeout(
+      () => {
+        boundaryTries.current = { key, count: count + 1 };
+        onBoundary();
+      },
+      count === 0 ? 0 : BOUNDARY_RETRY_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [event.eventId, event.state, phase, checkedAt, onBoundary]);
 
   const { claim, pending } = useClaimCoupon((outcome) => {
     if (outcome.kind === "issued") {
@@ -126,7 +155,11 @@ function Banner({ event, vip, showMyCouponsLink, onBoundary }: BannerProps) {
               </Link>
             )}
           </>
-        ) : !vip ? (
+        ) : eligibility === "checking" ? (
+          <Button disabled>
+            <Icon name="loader" size={16} className={styles.spin} /> 확인 중
+          </Button>
+        ) : eligibility === "not-eligible" ? (
           <>
             <Button disabled>VIP 전용</Button>
             <span className={styles.hint}>VIP 회원만 받을 수 있어요</span>

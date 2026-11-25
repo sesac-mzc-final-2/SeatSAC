@@ -3,3 +3,10 @@ server:
 app:
   services:
     booking-url: http://localhost:8082
+# 로컬 메시징: ElasticMQ(9324). SNS가 없어 큐로 직접 보낸다(APP_MESSAGING_EVENTS_QUEUE_URL — 런타임 계약 3장 「로컬」)
+spring.cloud.aws:
+  region.static: ap-northeast-2
+  credentials:
+    access-key: local
+    secret-key: local
+  sqs.endpoint: http://localhost:9324

@@ -43,7 +43,7 @@ spring.flyway:
   password: ${SPRING_FLYWAY_PASSWORD:local}
 
 # 스케줄러: 선점 만료 스캔 2종 + 아웃박스 릴레이·정리 (지침 2장)
-spring.task.scheduling.pool.size: 5   # 만료 스캔 2 · 아웃박스 릴레이 · SSE 하트비트 · 체크아웃 스윕(6.2.2) — 작업마다 1스레드
+spring.task.scheduling.pool.size: 6   # 만료 스캔 2 · 아웃박스 릴레이 · SSE 하트비트 · 체크아웃 스윕(6.2.2) · inbox 정리(매일 15:00) — 작업마다 1스레드
 
 # 서비스 간 호출 주소·선점 설정 (service-runtime-contract 3장의 이름 그대로)
 app:

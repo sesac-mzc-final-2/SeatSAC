@@ -14,8 +14,8 @@ const finalAmount = () => screen.getByText("결제 예정 금액").nextElementSi
 const future = new Date(Date.now() + 3600_000).toISOString();
 const past = new Date(Date.now() - 1000).toISOString();
 
-function Harness({ onPick }: { onPick: (id: string | null) => void }) {
-  const [value, setValue] = useState<string | null>(null);
+function Harness({ onPick, initial = null }: { onPick: (id: string | null) => void; initial?: string | null }) {
+  const [value, setValue] = useState<string | null>(initial);
   return (
     <CouponSelect
       amount={45000}
@@ -28,11 +28,11 @@ function Harness({ onPick }: { onPick: (id: string | null) => void }) {
   );
 }
 
-function renderSelect(onPick = vi.fn()) {
+function renderSelect(onPick = vi.fn(), initial: string | null = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <Harness onPick={onPick} />
+      <Harness onPick={onPick} initial={initial} />
     </QueryClientProvider>,
   );
   return onPick;
@@ -72,5 +72,16 @@ describe("CouponSelect (6.3.6)", () => {
     renderSelect();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.queryByRole("group")).not.toBeInTheDocument();
+  });
+
+  it("내 쿠폰을 끝내 못 읽으면 고른 쿠폰을 푼다 (화면에 없는 쿠폰이 결제에 실려 가지 않게)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ code: "SERVICE_UNAVAILABLE", message: "", traceId: "0".repeat(32), details: [] }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const onPick = renderSelect(vi.fn(), "a");
+    await vi.waitFor(() => expect(onPick).toHaveBeenCalledWith(null));
   });
 });

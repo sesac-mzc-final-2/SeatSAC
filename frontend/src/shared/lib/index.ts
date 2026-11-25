@@ -15,3 +15,4 @@ export { hasHangul, joinNonEmpty } from "./text";
 export { formatWon } from "./number";
 export { newIdempotencyKey } from "./idempotency";
 export { serverNow, syncServerClock } from "./server-clock";
+export { useRerenderAt } from "./use-rerender-at";

@@ -14,6 +14,8 @@ describe("claimOutcomeOf", () => {
     expect(claimOutcomeOf(apiError(503, "SERVICE_UNAVAILABLE")).kind).toBe("retry");
     expect(claimOutcomeOf(new NetworkError(new TypeError("fetch failed"))).kind).toBe("retry");
     expect(claimOutcomeOf(apiError(409, "IDEMPOTENCY_IN_PROGRESS")).kind).toBe("retry");
+    // 201 을 받은 뒤 본문을 읽다 끊김 — 공통 클라이언트가 NetworkError 로 바꾸지 않고 던진다
+    expect(claimOutcomeOf(new TypeError("body stream interrupted")).kind).toBe("retry");
   });
 
   it("거절은 사유별 문구, 다음은 새 키", () => {

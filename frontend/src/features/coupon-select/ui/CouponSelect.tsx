@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { discountOf, finalAmountOf, isUsableCoupon, myCouponsQuery } from "@/entities/coupon";
-import { formatWon } from "@/shared/lib";
+import { formatWon, useRerenderAt } from "@/shared/lib";
 import { Icon } from "@/shared/ui";
 import styles from "./CouponSelect.module.css";
 
@@ -24,11 +24,18 @@ export function CouponSelect({ amount, value, onChange, disabled = false }: Prop
   const coupons = useQuery(myCouponsQuery());
   const usable = (coupons.data?.items ?? []).filter((coupon) => isUsableCoupon(coupon));
   const selected = usable.find((coupon) => coupon.couponIssueId === value) ?? null;
+  // 가장 먼저 끝나는 쿠폰의 기한에 다시 그려, 지난 쿠폰을 목록·선택에서 뺀다
+  useRerenderAt(usable.length > 0 ? Math.min(...usable.map((coupon) => new Date(coupon.expiresAt).getTime())) : null);
 
-  // 고른 쿠폰이 더는 쓸 수 없게 됐으면(만료·다른 결제에 예약) 선택을 푼다
+  // 고른 쿠폰을 더는 쓸 수 없으면(만료·다른 결제에 예약) 선택을 푼다. 내 쿠폰을 끝내 못 읽어 목록이 숨겨진 때도 —
+  // 화면에 없는 쿠폰이 결제에 실려 가지 않게(읽는 중에는 그대로 둔다)
+  const settled = coupons.isSuccess || (coupons.isError && !coupons.isFetching);
   useEffect(() => {
-    if (value !== null && coupons.isSuccess && selected === null) onChange(null);
-  }, [value, coupons.isSuccess, selected, onChange]);
+    if (value !== null && settled && selected === null) onChange(null);
+  }, [value, settled, selected, onChange]);
+
+  /** 누르는 순간 다시 확인 — 마지막으로 그린 뒤 기한이 지났을 수 있다 */
+  const pick = (coupon: (typeof usable)[number]) => onChange(isUsableCoupon(coupon) ? coupon.couponIssueId : null);
 
   if (usable.length === 0) return null;
 
@@ -49,7 +56,7 @@ export function CouponSelect({ amount, value, onChange, disabled = false }: Prop
             type="radio"
             name="coupon"
             checked={value === coupon.couponIssueId}
-            onChange={() => onChange(coupon.couponIssueId)}
+            onChange={() => pick(coupon)}
           />
           <span className={styles.name}>
             {coupon.title}

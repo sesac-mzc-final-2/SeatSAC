@@ -414,10 +414,12 @@ async function handleCoupons(req, res, path) {
     if (!key) return fail(res, 400, "VALIDATION_FAILED", "Idempotency-Key required", [{ field: "Idempotency-Key" }]);
     if (couponIdem.has(key)) {
       const first = couponIdem.get(key);
+      // 같은 키에 다른 이벤트면 재생하지 않는다 (계약 CPN-02)
+      if (first.eventId !== m[1]) return fail(res, 409, "IDEMPOTENCY_KEY_CONFLICT", "key reused for another event");
       return first.status === 201 ? json(res, 201, first.body) : fail(res, first.status, first.body.code, "replay", first.body.details);
     }
     const reply = (status, body) => {
-      couponIdem.set(key, { status, body });
+      couponIdem.set(key, { eventId: m[1], status, body });
       return status === 201 ? json(res, 201, body) : fail(res, status, body.code, body.code, body.details);
     };
     if (Number(m[1]) !== couponEvent.eventId) return fail(res, 404, "NOT_FOUND", "no event");

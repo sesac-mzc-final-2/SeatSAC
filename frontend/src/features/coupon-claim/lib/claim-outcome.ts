@@ -1,9 +1,9 @@
-import { ApiError, NetworkError, messageForError } from "@/shared/api";
+import { ApiError, messageForError } from "@/shared/api";
 
 /**
  * 받기 결과를 화면 행동으로 나눈다 (계약 CPN-02).
  * - `issued` 받음(201) — 이미 받은 경우(409 COUPON_ALREADY_CLAIMED)도 결과는 같아 여기에 둔다
- * - `retry` 결과를 모른다(503·연결 끊김·첫 요청 처리 중) — 발급이 이미 됐을 수 있어 <b>같은 Idempotency-Key</b>로 다시 보낸다
+ * - `retry` 결과를 모른다(503·연결 끊김·본문 수신 실패·첫 요청 처리 중) — 발급이 이미 됐을 수 있어 <b>같은 Idempotency-Key</b>로 다시 보낸다
  * - `rejected` 서버가 거절했다 — 다음 누름은 새 키
  */
 export type ClaimOutcome =
@@ -36,8 +36,9 @@ export function claimOutcomeOf(error: unknown): ClaimOutcome {
         return { kind: "rejected", message: messageForError(error) };
     }
   }
-  if (error instanceof NetworkError) return { kind: "retry", message: UNKNOWN_RESULT };
-  return { kind: "rejected", message: messageForError(error) };
+  // 서버의 오류 응답이 아닌 실패는 결과를 모른다 — 연결 끊김(NetworkError)뿐 아니라, 201 헤더를 받은 뒤
+  // 본문을 읽다 끊긴 경우(공통 클라이언트가 그대로 던진다)도 발급은 커밋됐을 수 있어 같은 키로 다시 보낸다
+  return { kind: "retry", message: UNKNOWN_RESULT };
 }
 
 const UNKNOWN_RESULT = "결과를 받지 못했어요. 다시 누르면 같은 요청으로 받았는지 확인해요.";

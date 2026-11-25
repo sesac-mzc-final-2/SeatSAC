@@ -28,8 +28,9 @@ export function CouponEventBanner({ showMyCouponsLink = true }: { showMyCouponsL
   const profileQuery = useQuery({ ...myProfileQuery(), enabled: authenticated });
 
   const event = eventQuery.data;
-  // 조회 실패(503 등)는 메인 화면을 막지 않게 조용히 숨긴다 — 30초 뒤 다시 읽는다
-  if (!authenticated || !event) return null;
+  // 조회 실패(503 등)는 메인 화면을 막지 않게 조용히 숨긴다 — 이전에 받은 값(남은 수량·시각)이 남아 있어도 숨기고,
+  // 30초 뒤 다시 읽어 성공하면 돌아온다
+  if (!authenticated || !event || eventQuery.isError) return null;
   return (
     <Banner
       event={event}
@@ -79,7 +80,7 @@ function Banner({ event, vip, showMyCouponsLink, onBoundary }: BannerProps) {
 
   return (
     <section className={styles.banner} aria-labelledby="coupon-event-title" data-phase={phase}>
-      <div className={styles.rate} aria-hidden="true">
+      <div className={styles.rate}>
         <strong>{event.discountRate}%</strong>
         <span>OFF</span>
       </div>

@@ -36,7 +36,8 @@ import org.springframework.test.web.servlet.MockMvc;
 @ImportAutoConfiguration(CommonWebAutoConfiguration.class)
 class CouponControllerTest {
 
-    private static final String KEY = "0b1c2d3e-4f5a-46b7-88c9-d0e1f2a3b4c5";
+    /** 멱등 키 — 실행마다 새 UUID(리터럴로 두면 gitleaks generic-api-key 오탐) */
+    private static final String KEY = java.util.UUID.randomUUID().toString();
     private static final String ISSUE_ID = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
 
     @Autowired

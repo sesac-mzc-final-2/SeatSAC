@@ -106,6 +106,23 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
         """)
     List<Payment> findRecentlyFailedWithoutTransaction(@Param("since") Instant since, Pageable pageable);
 
+    /**
+     * saga 해제(D16) — 이미 APPROVED인 PORTONE 결제를 booking이 놓았다(선점 만료). 승인을 쓰지 않기로 하고
+     * FAILED(BOOKING_EXPIRED)로 바꾼다. {@code pg_transaction_id}는 그대로라 환불 미완료가 되어 스윕이 환불한다. 한 번만
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Payment p
+           set p.status = com.seatsac.payment.enums.PaymentStatus.FAILED,
+               p.failureCode = com.seatsac.payment.enums.PaymentFailureCode.BOOKING_EXPIRED,
+               p.updatedAt = :now
+         where p.paymentId = :paymentId
+           and p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
+           and p.status = com.seatsac.payment.enums.PaymentStatus.APPROVED
+           and p.pgTransactionId is not null
+        """)
+    int releaseApprovedPortOne(@Param("paymentId") String paymentId, @Param("now") Instant now);
+
     /** PAY-03 — 승인된 결제만 취소한다. 이미 CANCELED면 0행이고 첫 취소 사유를 유지한다 */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""

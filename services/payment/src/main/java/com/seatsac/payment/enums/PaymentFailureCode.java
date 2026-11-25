@@ -21,5 +21,10 @@ public enum PaymentFailureCode {
      * PORTONE — 포트원에는 PAID인데 금액이 예매 금액과 다르다(브라우저 위변조 의심). 돈이 잡혔으므로
      * {@code pg_transaction_id}를 함께 기록하고 환불은 스윕이 끝까지 처리한다(환불 미완료 표식)
      */
-    AMOUNT_MISMATCH
+    AMOUNT_MISMATCH,
+    /**
+     * saga — booking이 선점 만료로 이 결제를 놓았다({@code payment.release-requested}). 그 뒤 포트원에서 PAID로 확인되면
+     * APPROVED 대신 이 코드로 FAILED + {@code pg_transaction_id}(환불 미완료) → 스윕이 환불한다(D16·D22)
+     */
+    BOOKING_EXPIRED
 }

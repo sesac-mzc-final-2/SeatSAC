@@ -736,7 +736,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |
 | 🆕 `APP_AI_DATA_SOURCE` | `snapshot` | `snapshot`(지금처럼 메모리 SQLite) · `db`(자기 인스턴스 `ai_db`, ADR-120). `db`로 바꾸기는 아래 세 줄이 준비된 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작). 되돌리기는 `snapshot` |
 | 🆕 `DB_HOST_AI` · `SQS_AI_CATALOG_EVENTS_URL` | `cinema-infra-endpoints`(Terraform, 6.1.1·6.1.3) | 이름 그대로 읽음. `APP_AI_DATA_SOURCE=db`일 때만 쓴다 |
-| 🆕 ⏳ ai DB 비밀번호 | Secret `ai-secrets`에 키 2개 — 제안 `APP_AI_DB_PASSWORD`(`ai_app`)·`APP_AI_QUERY_DB_PASSWORD`(`ai_query`) | **키 이름 미확정**(6.4.1에서 김서현 확정). 계정은 6.1.1 db-bootstrap이 만들고, Secret 전달은 6.1.4(External Secrets — `ai-secrets`는 지금 Terraform이 값을 다시 쓰지 않아 여기에 키를 더하지 않는다). 그 전에는 `db`로 켤 수 없다 |
+| 🆕 ai DB 비밀번호 | Secret `ai-secrets`에 키 2개 — `APP_AI_DB_PASSWORD`(`ai_app`)·`APP_AI_QUERY_DB_PASSWORD`(`ai_query`) | 키 이름 확정(11/24, 김서현 — #170 코멘트). 계정은 6.1.1 db-bootstrap이 만들고, Secret 전달은 6.1.4(External Secrets — `ai-secrets`는 지금 Terraform이 값을 다시 쓰지 않아 여기에 키를 더하지 않는다). 그 전에는 `db`로 켤 수 없다 |
 | 🆕 ⏳ `ai_db` 마이그레이션 | 제안: 다른 서비스와 같은 Flyway 훅 Job `ai-flyway`(`ai-migrator-secrets`, SQL은 이미지 `/app/db/migration`) | **방식 미확정**(6.4.1). `ai-migrator-secrets`는 6.1.1에서 만든다. 지금 gitops `base/ai`에는 Flyway Job이 없다 |
 | `ANTHROPIC_API_KEY` (Secret `ai-secrets`) | Terraform sensitive 변수 → K8s Secret | staging 키. 로컬은 개발 전용 키를 `.env`에 |
 

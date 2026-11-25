@@ -44,6 +44,7 @@
       "expiresAt": null,
       "confirmExpiresAt": "2026-11-17T19:42:00+09:00",
       "reason": "SCREENING_AMBIGUOUS"
-    }
+    },
+    "sources": null
   }
 }

@@ -79,7 +79,7 @@ public class CouponClaimService {
 
         String owner = begin.owner();
         try {
-            CouponIssueResponse issued = claimOnce(event, userId);
+            CouponIssueResponse issued = claimOnce(event, userId, idempotencyKey);
             idempotency.completeIssued(userId, idempotencyKey, eventId, owner, issued);
             return issued;
         } catch (BusinessException e) {
@@ -95,7 +95,7 @@ public class CouponClaimService {
         }
     }
 
-    private CouponIssueResponse claimOnce(CouponEvent event, String userId) {
+    private CouponIssueResponse claimOnce(CouponEvent event, String userId, String key) {
         Instant now = clock.instant();
         CouponEventState state = event.stateAt(now);
         if (state != CouponEventState.OPEN) {
@@ -105,7 +105,7 @@ public class CouponClaimService {
         }
         Optional<CouponIssue> mine = issues.findByEventIdAndUserId(event.getEventId(), userId);
         if (mine.isPresent()) {
-            throw alreadyClaimed(mine.get());
+            return sameKeyOrAlreadyClaimed(mine.get(), event, key, now);
         }
 
         long left;
@@ -117,16 +117,16 @@ public class CouponClaimService {
         }
         if (left < 0) {
             stock.giveBack(event.getEventId());
-            throw soldOutOrAlreadyClaimed(event, userId);
+            return soldOutOrAlreadyClaimed(event, userId, key, now);
         }
 
         Optional<CouponIssue> issued;
         try {
-            issued = claimTx.issue(event, userId, now);
+            issued = claimTx.issue(event, userId, key, now);
         } catch (DataIntegrityViolationException e) {
             stock.giveBack(event.getEventId());
             CouponIssue existing = issues.findByEventIdAndUserId(event.getEventId(), userId).orElseThrow(() -> e);
-            throw alreadyClaimed(existing);
+            return sameKeyOrAlreadyClaimed(existing, event, key, now);
         } catch (RuntimeException e) {
             // DB 발급 실패 — DECR은 성공했으니 되돌린다(DB가 총수량의 최종 방어선이라 되돌려도 넘겨 발급하지 않는다)
             stock.giveBack(event.getEventId());
@@ -134,20 +134,34 @@ public class CouponClaimService {
         }
         if (issued.isEmpty()) {
             stock.giveBack(event.getEventId());
-            throw soldOutOrAlreadyClaimed(event, userId);
+            return soldOutOrAlreadyClaimed(event, userId, key, now);
         }
         count("issued");
         log.info("쿠폰 발급 eventId={} couponIssueId={}", event.getEventId(), issued.get().getCouponIssueId());
         return CouponIssueResponse.of(issued.get(), event, now);
     }
 
-    private BusinessException soldOutOrAlreadyClaimed(CouponEvent event, String userId) {
+    /** 매진 분기 — 이 사용자가 이미 받았으면 ALREADY_CLAIMED(같은 키면 첫 201), 아니면 SOLD_OUT */
+    private CouponIssueResponse soldOutOrAlreadyClaimed(CouponEvent event, String userId, String key, Instant now) {
         Optional<CouponIssue> mine = issues.findByEventIdAndUserId(event.getEventId(), userId);
         if (mine.isPresent()) {
-            return alreadyClaimed(mine.get());
+            return sameKeyOrAlreadyClaimed(mine.get(), event, key, now);
         }
         count("sold_out");
-        return CouponErrorCode.COUPON_SOLD_OUT.exception();
+        throw CouponErrorCode.COUPON_SOLD_OUT.exception();
+    }
+
+    /**
+     * 이미 받은 쿠폰이 있다. 그 쿠폰을 발급한 요청과 같은 키면 첫 201을 다시 만든다 — 발급은 커밋됐는데 멱등 결과를
+     * 저장하지 못한 경우(Valkey 오류)에도 같은 키 재요청이 409로 바뀌지 않게. 다른 키면 409 ALREADY_CLAIMED
+     */
+    private CouponIssueResponse sameKeyOrAlreadyClaimed(CouponIssue issue, CouponEvent event, String key, Instant now) {
+        if (issue.issuedBy(key)) {
+            log.info("멱등 기록 없이 같은 키 재요청 — 발급 결과를 다시 준다 eventId={} couponIssueId={}", event.getEventId(),
+                issue.getCouponIssueId());
+            return CouponIssueResponse.of(issue, event, now);
+        }
+        throw alreadyClaimed(issue);
     }
 
     private BusinessException alreadyClaimed(CouponIssue issue) {

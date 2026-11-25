@@ -29,4 +29,14 @@ public class RedisConfig {
         script.setResultType(List.class);
         return script;
     }
+
+    /** 재고 되돌림 — 키가 있을 때만 INCR(없는 키를 1로 만들지 않는다). 반환 {1, 값} · {0} 키 없음 */
+    @Bean
+    @SuppressWarnings("rawtypes")
+    public RedisScript<List> stockIncrScript() {
+        DefaultRedisScript<List> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("redis/stock-incr.lua"));
+        script.setResultType(List.class);
+        return script;
+    }
 }

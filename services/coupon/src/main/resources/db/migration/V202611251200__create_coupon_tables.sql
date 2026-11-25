@@ -16,11 +16,20 @@ CREATE TABLE coupon_event (
   KEY idx_coupon_event_period (starts_at, ends_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- 이벤트 생성 직렬화용 보호 행(1행 고정). 생성이 이 행을 FOR UPDATE로 잠근 뒤 기간 겹침을 확인·저장한다 —
+-- 표가 비어 있어도 잠글 행이 있어야 동시 생성 두 건이 둘 다 「겹침 없음」을 보지 않는다
+CREATE TABLE coupon_event_lock (
+  lock_id TINYINT NOT NULL,
+  PRIMARY KEY (lock_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO coupon_event_lock (lock_id) VALUES (1);
+
 -- 받은 쿠폰. 1인 1매의 최종 방어선은 UK (event_id, user_id)
 CREATE TABLE coupon_issue (
   coupon_issue_id CHAR(36)    NOT NULL COMMENT 'coupon 발급 UUID — 체크아웃 couponIssueId',
   event_id        BIGINT      NOT NULL,
   user_id         CHAR(36)    NOT NULL COMMENT 'Cognito sub',
+  claim_key       CHAR(36)    NULL COMMENT '발급한 요청의 Idempotency-Key — 멱등 결과를 저장하지 못했을 때 같은 키 재요청에 201을 다시 주려고',
   state           VARCHAR(20) NOT NULL COMMENT 'ISSUED·RESERVED·USED·EXPIRED',
   expires_at      DATETIME(3) NOT NULL COMMENT '= 이벤트 종료 시각',
   issued_at       DATETIME(3) NOT NULL,

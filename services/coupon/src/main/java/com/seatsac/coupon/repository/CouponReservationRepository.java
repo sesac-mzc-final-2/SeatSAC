@@ -6,12 +6,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 public interface CouponReservationRepository extends JpaRepository<CouponReservation, String> {
 
     /** RESERVED → USED·RELEASED. 0행이면 이미 다른 상태 */
-    @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update CouponReservation r set r.state = :next, r.updatedAt = :now

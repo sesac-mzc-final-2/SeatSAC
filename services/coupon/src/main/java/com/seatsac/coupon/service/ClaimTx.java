@@ -26,10 +26,10 @@ public class ClaimTx {
      * @throws org.springframework.dao.DataIntegrityViolationException 이미 받음(UK) — 롤백됨
      */
     @Transactional
-    public Optional<CouponIssue> issue(CouponEvent event, String userId, Instant now) {
+    public Optional<CouponIssue> issue(CouponEvent event, String userId, String claimKey, Instant now) {
         if (events.incrementIssued(event.getEventId()) == 0) {
             return Optional.empty();
         }
-        return Optional.of(issues.saveAndFlush(CouponIssue.issue(event, userId, now)));
+        return Optional.of(issues.saveAndFlush(CouponIssue.issue(event, userId, claimKey, now)));
     }
 }

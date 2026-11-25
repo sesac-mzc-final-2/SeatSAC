@@ -9,7 +9,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 public interface CouponEventRepository extends JpaRepository<CouponEvent, Long> {
 
@@ -17,7 +16,6 @@ public interface CouponEventRepository extends JpaRepository<CouponEvent, Long> 
      * 총수량 상한 확인 + 발급 수 +1 을 한 문장으로(원자적). 0행이면 매진 — Valkey 재고 키가 틀려도 이 UPDATE가
      * {@code total_quantity}를 넘기지 않는다(coupon.openapi.yaml claim 「최종 방어선은 DB」)
      */
-    @Transactional
     @Modifying(flushAutomatically = true)
     @Query("""
         update CouponEvent e set e.issuedQuantity = e.issuedQuantity + 1
@@ -35,6 +33,13 @@ public interface CouponEventRepository extends JpaRepository<CouponEvent, Long> 
     default Optional<CouponEvent> findCurrent(Instant now) {
         return findNotEnded(now, Pageable.ofSize(1)).stream().findFirst();
     }
+
+    /**
+     * 이벤트 생성을 한 줄로 세운다 — 보호 행({@code coupon_event_lock} 1행)을 {@code FOR UPDATE}로 잠근다. 표가 비어 있어도
+     * 잠글 행이 있어야 「겹침 확인 → 저장」 사이에 다른 생성이 끼지 못한다. 트랜잭션 안에서만 부른다
+     */
+    @Query(value = "SELECT lock_id FROM coupon_event_lock WHERE lock_id = 1 FOR UPDATE", nativeQuery = true)
+    Integer lockForCreate();
 
     /** 기간이 겹치는, 아직 끝나지 않은 이벤트 수(EVENT_OVERLAP) */
     @Query("""

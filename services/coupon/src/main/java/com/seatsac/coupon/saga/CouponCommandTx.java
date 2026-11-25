@@ -83,7 +83,11 @@ public class CouponCommandTx {
             }
             return;
         }
-        reservations.moveFromReserved(row.getCheckoutId(), ReservationState.USED, now);
+        if (reservations.moveFromReserved(row.getCheckoutId(), ReservationState.USED, now) == 0) {
+            // 다른 경로(동시 반환·사용)가 먼저 옮겼다 — 쿠폰 행은 그쪽 결과를 따른다(남의 예약을 건드리지 않게)
+            log.info("사용 명령 — 예약 행이 이미 옮겨졌다, 무시 checkoutId={}", row.getCheckoutId());
+            return;
+        }
         if (issues.use(row.getCouponIssueId(), now) == 0) {
             log.warn("사용 명령 — 쿠폰이 RESERVED가 아니다 checkoutId={} couponIssueId={}", row.getCheckoutId(),
                 row.getCouponIssueId());
@@ -107,7 +111,10 @@ public class CouponCommandTx {
         }
         switch (row.getState()) {
             case RESERVED -> {
-                reservations.moveFromReserved(row.getCheckoutId(), ReservationState.RELEASED, now);
+                if (reservations.moveFromReserved(row.getCheckoutId(), ReservationState.RELEASED, now) == 0) {
+                    log.info("반환 명령 — 예약 행이 이미 옮겨졌다, 무시 checkoutId={}", row.getCheckoutId());
+                    return;
+                }
                 issues.release(row.getCouponIssueId(), now);
                 log.info("쿠폰 반환 checkoutId={} couponIssueId={} reason={}", row.getCheckoutId(),
                     row.getCouponIssueId(), command.text("reason"));

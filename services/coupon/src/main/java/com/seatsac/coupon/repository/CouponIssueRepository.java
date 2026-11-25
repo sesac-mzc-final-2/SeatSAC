@@ -10,7 +10,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 /** 쿠폰 상태 전이는 모두 현재 상태를 조건으로 건 UPDATE다 — 갱신 행이 0이면 다른 경로가 먼저 바꿨다 */
 public interface CouponIssueRepository extends JpaRepository<CouponIssue, String> {
@@ -22,7 +21,6 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, String
     long countByEventId(Long eventId);
 
     /** 예약: 본인·ISSUED·만료 전일 때만. 다른 체크아웃과 동시 예약이면 한쪽만 1 */
-    @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update CouponIssue c set c.state = com.seatsac.coupon.entity.CouponIssueState.RESERVED,
@@ -33,7 +31,6 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, String
     int reserve(@Param("id") String id, @Param("userId") String userId, @Param("now") Instant now);
 
     /** 사용: RESERVED → USED. 종료가 지났어도(예약 때 유효했고 결제가 끝났다) */
-    @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update CouponIssue c set c.state = com.seatsac.coupon.entity.CouponIssueState.USED,
@@ -43,7 +40,6 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, String
     int use(@Param("id") String id, @Param("now") Instant now);
 
     /** 반환: RESERVED → ISSUED(종료 전) 또는 EXPIRED(종료 뒤) */
-    @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update CouponIssue c
@@ -55,7 +51,6 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, String
     int release(@Param("id") String id, @Param("now") Instant now);
 
     /** 종료 스윕: ISSUED만 EXPIRED로. RESERVED는 booking이 사용·반환을 보낼 때까지 그대로(22-4 규칙) */
-    @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update CouponIssue c set c.state = com.seatsac.coupon.entity.CouponIssueState.EXPIRED, c.updatedAt = :now

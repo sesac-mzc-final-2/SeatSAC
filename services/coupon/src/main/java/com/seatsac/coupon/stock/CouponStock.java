@@ -29,6 +29,7 @@ public class CouponStock {
 
     private final StringRedisTemplate redis;
     private final RedisScript<List> stockDecrScript;
+    private final RedisScript<List> stockIncrScript;
     private final Clock clock;
 
     /** 이벤트를 만들 때 — 이미 있으면 그대로 둔다(NX) */
@@ -58,9 +59,15 @@ public class CouponStock {
         return value;
     }
 
-    /** {@link #take}가 성공한 뒤에만 부른다 — 결과가 음수였거나 DB 발급이 실패했을 때 */
+    /**
+     * {@link #take}가 성공한 뒤에만 부른다 — 결과가 음수였거나 DB 발급이 실패했을 때. 그 사이 키가 사라졌으면 되돌리지
+     * 않는다(없는 키를 1로 만들면 재고가 그 값에 굳는다 — 다음 take가 DB로 다시 만들게 둔다)
+     */
     public void giveBack(long eventId) {
-        redis.opsForValue().increment(RedisKeys.stock(eventId));
+        List<?> result = redis.execute(stockIncrScript, List.of(RedisKeys.stock(eventId)));
+        if (result == null || result.isEmpty() || ((Number) result.get(0)).longValue() == 0) {
+            log.warn("되돌릴 재고 키가 없다 — 다음 발급이 DB로 다시 만든다 eventId={}", eventId);
+        }
     }
 
     /** 표시용 남은 수량 — 키 값, 없으면 {@code total − 발급 수}. 음수는 0. Valkey 오류면 DB 값으로 답한다 */

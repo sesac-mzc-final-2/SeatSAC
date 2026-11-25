@@ -42,7 +42,11 @@ public class CouponEventService {
                 ErrorDetail.of("startsAt", request.startsAt().toString(), CouponErrorCode.STARTS_IN_PAST.name()));
         }
         Instant endsAt = startsAt.plus(Duration.ofMinutes(request.durationOrDefault()));
-        // 진행 중 이벤트 1개 전제(CPN-01·coupon_stock_remaining) — 끝나지 않은 다른 이벤트와 겹치면 거절
+        // 진행 중 이벤트 1개 전제(CPN-01·coupon_stock_remaining) — 끝나지 않은 다른 이벤트와 겹치면 거절.
+        // 동시 생성이 둘 다 「겹침 없음」을 보지 않게 보호 행을 잠근 뒤 확인·저장한다(커밋까지 잠금)
+        if (events.lockForCreate() == null) {
+            throw new IllegalStateException("coupon_event_lock 보호 행이 없다 — 마이그레이션 확인");
+        }
         if (events.existsOverlap(startsAt, endsAt, now)) {
             throw CouponErrorCode.EVENT_OVERLAP.exception(
                 ErrorDetail.of("startsAt", request.startsAt().toString(), CouponErrorCode.EVENT_OVERLAP.name()));

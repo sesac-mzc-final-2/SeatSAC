@@ -33,6 +33,11 @@ public class CouponIssue {
     @Column(name = "user_id", length = 36, nullable = false, updatable = false)
     private String userId;
 
+    /** 발급한 요청의 Idempotency-Key — 멱등 기록이 없어져도 같은 키 재요청을 첫 201로 알아본다 */
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "claim_key", length = 36, updatable = false)
+    private String claimKey;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "state", length = 20, nullable = false)
     private CouponIssueState state;
@@ -53,7 +58,12 @@ public class CouponIssue {
     private Instant updatedAt;
 
     public static CouponIssue issue(CouponEvent event, String userId, Instant now) {
+        return issue(event, userId, null, now);
+    }
+
+    public static CouponIssue issue(CouponEvent event, String userId, String claimKey, Instant now) {
         CouponIssue issue = new CouponIssue();
+        issue.claimKey = claimKey;
         issue.couponIssueId = UUID.randomUUID().toString();
         issue.eventId = event.getEventId();
         issue.userId = userId;
@@ -62,6 +72,11 @@ public class CouponIssue {
         issue.issuedAt = now;
         issue.updatedAt = now;
         return issue;
+    }
+
+    /** 이 쿠폰을 발급한 요청의 키인가 */
+    public boolean issuedBy(String key) {
+        return claimKey != null && claimKey.equals(key);
     }
 
     /** 응답용 상태 — 저장값이 ISSUED라도 종료가 지났으면 EXPIRED(종료 스윕 전이라도, CPN-03) */

@@ -27,6 +27,11 @@ public class CouponMessages {
     public static final String RESERVED = "coupon.reserved";
     public static final String RESERVATION_REJECTED = "coupon.reservation-rejected";
 
+    /** UUID 길이 — eventId·correlationId·checkoutId 저장 열이 CHAR(36) */
+    static final int ID_MAX = 36;
+    /** couponIssueId 저장 열 — coupon_reservation.coupon_issue_id VARCHAR(64) */
+    static final int COUPON_ISSUE_ID_MAX = 64;
+
     private final ObjectMapper objectMapper;
 
     public CouponMessages(ObjectMapper objectMapper) {
@@ -83,7 +88,12 @@ public class CouponMessages {
         if (eventId == null || type == null || payload == null || !payload.isObject()) {
             throw new MalformedCommandException("envelope 필수 값이 없다(eventId·type·payload)");
         }
-        return new Command(eventId, type, textOf(root, "traceId"), textOf(root, "correlationId"), payload);
+        String correlationId = textOf(root, "correlationId");
+        // processed_message.message_id·outbox correlation_id가 CHAR(36) — 넘으면 저장에서 실패해 재배달만 반복한다
+        if (eventId.length() > ID_MAX || (correlationId != null && correlationId.length() > ID_MAX)) {
+            throw new MalformedCommandException("eventId·correlationId가 " + ID_MAX + "자를 넘는다");
+        }
+        return new Command(eventId, type, textOf(root, "traceId"), correlationId, payload);
     }
 
     public Reply reserved(Command cause, String couponIssueId, int discountRate, Long couponEventId, Instant now) {

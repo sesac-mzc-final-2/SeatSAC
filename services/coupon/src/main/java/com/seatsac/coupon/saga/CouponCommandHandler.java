@@ -92,6 +92,10 @@ public class CouponCommandHandler {
         if (command.checkoutId() == null || command.couponIssueId() == null) {
             throw new MalformedCommandException("checkoutId·couponIssueId가 없다 type=" + command.type());
         }
+        if (command.checkoutId().length() > CouponMessages.ID_MAX
+            || command.couponIssueId().length() > CouponMessages.COUPON_ISSUE_ID_MAX) {
+            throw new MalformedCommandException("checkoutId·couponIssueId가 저장 열보다 길다 type=" + command.type());
+        }
         if (CouponMessages.RESERVATION_REQUESTED.equals(command.type())
             && (command.userId() == null || command.bookingId() == null)) {
             throw new MalformedCommandException("예약 명령에 userId·bookingId가 없다");

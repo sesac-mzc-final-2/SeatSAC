@@ -211,6 +211,12 @@ class CouponCommandFlowTest {
             {"eventId":"%s","type":"coupon.reservation-requested","payload":{"checkoutId":"%s","couponIssueId":"%s"}}
             """.formatted(UUID.randomUUID(), UUID.randomUUID(), coupon.getCouponIssueId())))
             .isInstanceOf(MalformedCommandException.class);
+        assertThatThrownBy(() -> handler.handle(command("coupon.use-requested", "x".repeat(37),
+            UUID.randomUUID().toString(), coupon.getCouponIssueId(), "")))
+            .isInstanceOf(MalformedCommandException.class);
+        assertThatThrownBy(() -> handler.handle(command("coupon.use-requested", UUID.randomUUID().toString(),
+            "c".repeat(37), coupon.getCouponIssueId(), "")))
+            .isInstanceOf(MalformedCommandException.class);
         assertThatThrownBy(() -> handler.handle(command("coupon.unknown", UUID.randomUUID().toString(),
             UUID.randomUUID().toString(), coupon.getCouponIssueId(), "")))
             .isInstanceOf(MalformedCommandException.class);

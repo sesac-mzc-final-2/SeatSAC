@@ -17,6 +17,7 @@ import com.seatsac.coupon.entity.CouponIssueState;
 import com.seatsac.coupon.repository.CouponEventRepository;
 import com.seatsac.coupon.repository.CouponIssueRepository;
 import com.seatsac.coupon.repository.CouponReservationRepository;
+import com.seatsac.coupon.stock.CouponStock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -36,6 +37,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * CPN-01~03 흐름(22-1·22-2) — MySQL·Valkey를 실제로 띄운다. 핵심은 「총수량을 넘겨 발급하지 않는다」와 「1인 1매」:
@@ -64,6 +66,10 @@ class CouponClaimFlowTest {
     CouponReservationRepository reservations;
     @Autowired
     StringRedisTemplate redis;
+    @Autowired
+    TransactionTemplate tx;
+    @Autowired
+    CouponStock stock;
 
     @BeforeEach
     void setUp() {
@@ -114,6 +120,65 @@ class CouponClaimFlowTest {
         assertThat(stockKey(eventId)).isEqualTo("2");   // 재생은 재고를 건드리지 않는다
         long other = eventService.create(request(OffsetDateTime.now(ZoneOffset.ofHours(9)).plusHours(2), 5)).eventId();
         assertError(() -> claims.claim(user, VIP, other, key), CouponErrorCode.IDEMPOTENCY_KEY_CONFLICT);
+    }
+
+    @Test
+    void lostIdempotencyRecordStillReplays201ForTheSameKey() {
+        long eventId = openEvent(3);
+        String user = user();
+        String key = key();
+        CouponIssueResponse first = claims.claim(user, VIP, eventId, key);
+        redis.delete(RedisKeys.idempotency(user, key));   // 발급은 커밋됐는데 멱등 결과 저장이 실패한 것과 같다
+
+        CouponIssueResponse again = claims.claim(user, VIP, eventId, key);
+
+        assertThat(again.couponIssueId()).isEqualTo(first.couponIssueId());
+        assertThat(stockKey(eventId)).isEqualTo("2");
+        assertError(() -> claims.claim(user, VIP, eventId, key()), CouponErrorCode.COUPON_ALREADY_CLAIMED);
+    }
+
+    @Test
+    void giveBackDoesNotCreateAMissingStockKey() {
+        long eventId = openEvent(3);
+        redis.delete(RedisKeys.stock(eventId));
+
+        stock.giveBack(eventId);
+
+        assertThat(stockKey(eventId)).isNull();   // 없는 키를 1로 만들지 않는다 — 다음 발급이 DB로 다시 만든다
+        claims.claim(user(), VIP, eventId, key());
+        assertThat(stockKey(eventId)).isEqualTo("2");
+    }
+
+    @Test
+    void concurrentOverlappingCreatesKeepOnlyOne() throws Exception {
+        OffsetDateTime startsAt = OffsetDateTime.now(ZoneOffset.ofHours(9)).plusHours(3);
+        ExecutorService pool = Executors.newFixedThreadPool(6);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Boolean>> results = new ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            int offset = i;
+            results.add(pool.submit(() -> {
+                start.await();
+                try {
+                    eventService.create(request(startsAt.plusMinutes(offset), 5));
+                    return true;
+                } catch (BusinessException e) {
+                    assertThat(e.code()).isEqualTo(CouponErrorCode.EVENT_OVERLAP);
+                    return false;
+                }
+            }));
+        }
+        start.countDown();
+        int created = 0;
+        for (Future<Boolean> result : results) {
+            if (result.get(30, TimeUnit.SECONDS)) {
+                created++;
+            }
+        }
+        pool.shutdown();
+
+        assertThat(created).isEqualTo(1);
+        assertThat(events.count()).isEqualTo(1);
     }
 
     @Test
@@ -244,7 +309,8 @@ class CouponClaimFlowTest {
             now.minus(Duration.ofHours(2)), now.minus(Duration.ofHours(1)), now.minus(Duration.ofHours(3))));
         CouponIssue issued = issues.saveAndFlush(CouponIssue.issue(ended, user(), now.minus(Duration.ofMinutes(90))));
         CouponIssue reserved = issues.saveAndFlush(CouponIssue.issue(ended, user(), now.minus(Duration.ofMinutes(90))));
-        issues.reserve(reserved.getCouponIssueId(), reserved.getUserId(), now.minus(Duration.ofMinutes(80)));
+        tx.executeWithoutResult(s -> issues.reserve(reserved.getCouponIssueId(), reserved.getUserId(),
+            now.minus(Duration.ofMinutes(80))));
 
         assertThat(sweeper.sweepOnce()).isEqualTo(1);
 

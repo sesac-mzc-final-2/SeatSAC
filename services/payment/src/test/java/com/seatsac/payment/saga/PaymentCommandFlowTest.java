@@ -79,6 +79,8 @@ class PaymentCommandFlowTest {
     ReplyPublisher publisher;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
     SagaResultWriter writer;
+    @Autowired
+    com.seatsac.payment.service.PortOneReconcileService reconcile;
 
     private long booking = 9_100L;
 
@@ -265,6 +267,107 @@ class PaymentCommandFlowTest {
         assertThat(payment.getFailureCode()).isEqualTo(PaymentFailureCode.BOOKING_EXPIRED);
         assertThat(payment.getPgTransactionId()).isNotNull();
         assertThat(onlyReply().at("/payload/failureCode").asText()).isEqualTo("BOOKING_EXPIRED");
+    }
+
+    // --- D7: payment가 스스로 닫은 saga 결제의 결과 이벤트 ---
+
+    /**
+     * 결제창에서 결제한 뒤 확인 요청 없이 떠났다 — 스윕(결제창 미완료 정리)이 PAID로 닫으면 payment.approved.
+     * 해제 명령이 사라진 채 만료 뒤 결제된 경우도 이 길이다 — 승인 이벤트가 booking에 닿아야 booking이 해제를 다시 보낸다(D31·D37)
+     */
+    @Test
+    void sweepClosingPaidSagaPaymentEmitsApproved() throws IOException {
+        Ids ids = new Ids();
+        handler.handle(prepare(ids, 15_000));
+        outbox.deleteAllInBatch();
+        PORTONE.payments.put(ids.payment, Remote.paid(15_000));
+
+        reconcile.closeAbandoned(payments.findById(ids.payment).orElseThrow());
+
+        assertThat(payments.findById(ids.payment)).get().extracting(Payment::getStatus)
+            .isEqualTo(PaymentStatus.APPROVED);
+        JsonNode reply = onlyReply();
+        assertThat(reply.get("type").asText()).isEqualTo("payment.approved");
+        assertThat(reply.get("correlationId").asText()).isEqualTo(ids.checkout);
+        assertThat(reply.at("/payload/amount").asInt()).isEqualTo(15_000);
+        assertMatchesContract(reply);
+    }
+
+    /** 웹훅으로 결제창 취소(FAILED)가 먼저 왔다 — 돈이 안 빠진 확정 실패라 retryable */
+    @Test
+    void webhookFailingSagaPaymentEmitsDeclined() throws IOException {
+        Ids ids = new Ids();
+        handler.handle(prepare(ids, 15_000));
+        outbox.deleteAllInBatch();
+        PORTONE.payments.put(ids.payment, Remote.failed("사용자가 결제를 취소했습니다"));
+
+        reconcile.reconcileForWebhook(payments.findById(ids.payment).orElseThrow());
+
+        JsonNode reply = onlyReply();
+        assertThat(reply.get("type").asText()).isEqualTo("payment.declined");
+        assertThat(reply.at("/payload/retryable").asBoolean()).isTrue();
+        assertMatchesContract(reply);
+    }
+
+    /** 해제된 결제를 스윕이 PAID로 확인 — 승인 대신 FAILED(BOOKING_EXPIRED) + declined(booking은 환불 안내만) */
+    @Test
+    void sweepFindingReleasedPaymentPaidEmitsBookingExpired() {
+        Ids ids = new Ids();
+        handler.handle(prepare(ids, 15_000));
+        handler.handle(release(ids));
+        outbox.deleteAllInBatch();
+        PORTONE.payments.put(ids.payment, Remote.paid(15_000));
+
+        reconcile.closeAbandoned(payments.findById(ids.payment).orElseThrow());
+
+        assertThat(payments.findById(ids.payment)).get().extracting(Payment::getFailureCode)
+            .isEqualTo(PaymentFailureCode.BOOKING_EXPIRED);
+        JsonNode reply = onlyReply();
+        assertThat(reply.get("type").asText()).isEqualTo("payment.declined");
+        assertThat(reply.at("/payload/failureCode").asText()).isEqualTo("BOOKING_EXPIRED");
+    }
+
+    /** 결제창 미완료(포트원 READY)로 닫힘 — declined(PROCESSING_TIMEOUT), 다시 결제할 대상은 아니다 */
+    @Test
+    void sweepTimingOutSagaPaymentEmitsDeclined() {
+        Ids ids = new Ids();
+        handler.handle(prepare(ids, 15_000));
+        outbox.deleteAllInBatch();
+        PORTONE.payments.put(ids.payment, Remote.ready());
+
+        reconcile.closeAbandoned(payments.findById(ids.payment).orElseThrow());
+
+        JsonNode reply = onlyReply();
+        assertThat(reply.at("/payload/failureCode").asText()).isEqualTo("PROCESSING_TIMEOUT");
+        assertThat(reply.at("/payload/retryable").asBoolean()).isFalse();
+    }
+
+    /** 동기 경로 결제(saga 표시 없음)는 스윕이 닫아도 결과 이벤트가 없다 — 지금과 같다 */
+    @Test
+    void syncPaymentClosedBySweepEmitsNothing() {
+        String paymentId = UUID.randomUUID().toString();
+        paymentService.pay(new PaymentCreateRequest(paymentId, booking, 15_000, PaymentMethod.TOSSPAY,
+            "SeatSAC 영화 예매 1석", null));
+        PORTONE.payments.put(paymentId, Remote.paid(15_000));
+
+        reconcile.closeAbandoned(payments.findById(paymentId).orElseThrow());
+
+        assertThat(payments.findById(paymentId)).get().extracting(Payment::getStatus)
+            .isEqualTo(PaymentStatus.APPROVED);
+        assertThat(outbox.count()).isZero();
+    }
+
+    /** 확인 명령의 verify가 닫은 결과는 명령 처리가 한 번만 보낸다(D7 이벤트를 또 내지 않는다) */
+    @Test
+    void verifyCommandClosingThePaymentRepliesOnce() {
+        Ids ids = new Ids();
+        handler.handle(prepare(ids, 15_000));
+        outbox.deleteAllInBatch();
+        PORTONE.payments.put(ids.payment, Remote.paid(15_000));
+
+        handler.handle(verification(ids, 1));
+
+        assertThat(onlyReply().get("type").asText()).isEqualTo("payment.approved");
     }
 
     /** 해제가 준비보다 먼저 왔다(순서 역전) — 늦은 준비는 결제를 만들지 않는다 */

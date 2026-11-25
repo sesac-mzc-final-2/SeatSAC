@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.seatsac.common.core.time.Times;
 import com.seatsac.common.core.trace.TraceIds;
+import com.seatsac.common.core.trace.TraceKeys;
 import com.seatsac.payment.dto.response.PaymentResponse;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.function.Consumer;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
 /**
@@ -113,8 +115,25 @@ public class SagaMessages {
         });
     }
 
+    /** D7 — 명령 없이 payment가 스스로 닫은 saga 결제의 승인(스윕·웹훅) */
+    public Reply approved(SagaPayment saga, int amount, Instant approvedAt, String pgTransactionId, Instant now) {
+        return reply(Ids.of(saga), APPROVED, now, p -> {
+            p.put("amount", amount);
+            p.put("approvedAt", Times.toApi(approvedAt == null ? now : approvedAt).toString());
+            p.put("pgTransactionId", pgTransactionId);
+        });
+    }
+
     public Reply declined(Command cause, String failureCode, boolean retryable, Instant now) {
         return reply(cause, DECLINED, now, p -> {
+            p.put("failureCode", failureCode);
+            p.put("retryable", retryable);
+        });
+    }
+
+    /** D7 — 명령 없이 payment가 스스로 닫은 saga 결제의 실패(스윕·웹훅·MOCK 기동 정리) */
+    public Reply declined(SagaPayment saga, String failureCode, boolean retryable, Instant now) {
+        return reply(Ids.of(saga), DECLINED, now, p -> {
             p.put("failureCode", failureCode);
             p.put("retryable", retryable);
         });
@@ -128,10 +147,29 @@ public class SagaMessages {
         });
     }
 
+    /** 결과 envelope을 만들 값 — 명령에서, 또는 명령 없는 D7이면 saga 표시 행에서 */
+    private record Ids(String checkoutId, String paymentId, Long bookingId, String traceId, String correlationId) {
+
+        static Ids of(Command cause) {
+            return new Ids(cause.checkoutId(), cause.paymentId(), cause.bookingId(), cause.traceId(),
+                cause.correlationId() != null ? cause.correlationId() : cause.checkoutId());
+        }
+
+        /** 스윕·웹훅에는 이어받을 traceId가 없다 — 지금 로그의 traceId(MDC), 없으면 새로 */
+        static Ids of(SagaPayment saga) {
+            return new Ids(saga.getCheckoutId(), saga.getPaymentId(), saga.getBookingId(),
+                MDC.get(TraceKeys.MDC_TRACE_ID), saga.getCheckoutId());
+        }
+    }
+
     private Reply reply(Command cause, String type, Instant now, Consumer<ObjectNode> body) {
+        return reply(Ids.of(cause), type, now, body);
+    }
+
+    private Reply reply(Ids ids, String type, Instant now, Consumer<ObjectNode> body) {
         String eventId = UUID.randomUUID().toString();
-        String traceId = TraceIds.isValid(cause.traceId()) ? cause.traceId() : TraceIds.newId();
-        String correlationId = cause.correlationId() != null ? cause.correlationId() : cause.checkoutId();
+        String traceId = TraceIds.isValid(ids.traceId()) ? ids.traceId() : TraceIds.newId();
+        String correlationId = ids.correlationId();
 
         ObjectNode root = objectMapper.createObjectNode();
         root.put("eventId", eventId);
@@ -142,9 +180,9 @@ public class SagaMessages {
         root.put("traceId", traceId);
         root.put("correlationId", correlationId);
         ObjectNode payload = root.putObject("payload");
-        payload.put("checkoutId", cause.checkoutId());
-        payload.put("paymentId", cause.paymentId());
-        payload.put("bookingId", cause.bookingId());
+        payload.put("checkoutId", ids.checkoutId());
+        payload.put("paymentId", ids.paymentId());
+        payload.put("bookingId", ids.bookingId());
         body.accept(payload);
         try {
             return new Reply(eventId, type, traceId, correlationId, objectMapper.writeValueAsString(root));

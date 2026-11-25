@@ -495,20 +495,26 @@ function reportDates() {
   return [0, 1, 2].map((n) => addDaysIso(today, -n));
 }
 
-function reportReady(date) {
-  const index = reportDates().indexOf(date);
+/** 날짜별 목 행 수 — 리포트 응답 `rowCount`와 CSV 행 수가 같다 */
+const reportRowCount = (date) => REPORT_ROWS[reportDates().indexOf(date)] ?? 5;
+
+function reportReady(date, doneAt = reportDoneAt.get(date) ?? Date.now()) {
   return {
     downloadUrl: `http://localhost:${PORT}/mock-download/errors-${date}.csv?signature=mock`,
-    rowCount: REPORT_ROWS[index] ?? 5,
-    generatedAt: toKstIso(new Date(reportDoneAt.get(date) ?? Date.now())),
+    rowCount: reportRowCount(date),
+    generatedAt: toKstIso(new Date(doneAt)),
   };
 }
 
 function reportCsv(res, date) {
   const header = "timestamp,service,level,errorCategory,status,path,traceId,message\n";
-  const row = `${date}T14:02:11+09:00,booking,ERROR,HTTP_UPSTREAM,503,/bookings/1/pay,0123456789abcdef0123456789abcdef,payment timeout\n`;
+  const rows = Array.from({ length: reportRowCount(date) }, (_, i) => {
+    const time = `${pad(9 + Math.floor(i / 60) % 15)}:${pad(i % 60)}:11`;
+    const traceId = createHash("sha256").update(`${date}:${i}`).digest("hex").slice(0, 32);
+    return `${date}T${time}+09:00,booking,ERROR,HTTP_UPSTREAM,503,/bookings/1/pay,${traceId},payment timeout\n`;
+  });
   res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="errors-${date}.csv"` });
-  res.end(header + row);
+  res.end(header + rows.join(""));
 }
 
 // OPS-23 AI 범위 밖 질문 통계 (ai 내부 API 결과 그대로)
@@ -570,8 +576,12 @@ function handleOps(req, res, path, q) {
     query.polls += 1;
     if (query.polls <= 2) return json(res, 200, { state: "RUNNING" });
     if (MOCK_OPS === "report-fail") return json(res, 200, { state: "FAILED" });
-    if (!reportDoneAt.has(query.date)) reportDoneAt.set(query.date, Date.now());
-    const { downloadUrl, rowCount, generatedAt } = reportReady(query.date);
+    // 쿼리마다 처음 끝난 시각을 두고, 그 시각으로 날짜 캐시(1시간)를 새로 연다. 같은 queryId 를 다시 봐도 시각은 그대로
+    if (query.doneAt === undefined) {
+      query.doneAt = Date.now();
+      reportDoneAt.set(query.date, query.doneAt);
+    }
+    const { downloadUrl, rowCount, generatedAt } = reportReady(query.date, query.doneAt);
     return json(res, 200, { state: "SUCCEEDED", downloadUrl, rowCount, generatedAt });
   }
   if (path === "/ops/ai/unmet-demand") {

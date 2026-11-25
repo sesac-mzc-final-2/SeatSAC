@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getErrorReport,
   isReportReady,
@@ -47,9 +47,12 @@ export function AdminReportsPage() {
   const date = selected ?? dates.data?.items[0] ?? null;
   const currentJob = job && job.date === date ? job : null;
 
+  // 요청 세대: 새 요청·날짜 변경마다 올린다. 늦게 온 이전 응답(A→B→A의 첫 A 포함)은 세대가 달라 버린다
+  const generation = useRef(0);
   const request = useMutation({
-    mutationFn: (target: string) => requestErrorReport(target),
-    onSuccess: (result, target) => {
+    mutationFn: ({ target }: { target: string; gen: number }) => requestErrorReport(target),
+    onSuccess: (result, { target, gen }) => {
+      if (gen !== generation.current) return;
       setJob(
         isReportReady(result)
           ? { kind: "ready", date: target, report: result, receivedAt: Date.now() }
@@ -139,8 +142,9 @@ export function AdminReportsPage() {
   }
 
   const start = () => {
+    generation.current += 1;
     setJob(null);
-    request.mutate(date);
+    request.mutate({ target: date, gen: generation.current });
   };
   const timedOut =
     currentJob?.kind === "running" &&
@@ -223,7 +227,9 @@ export function AdminReportsPage() {
             aria-label="리포트 날짜"
             value={date}
             onChange={(event) => {
+              generation.current += 1;
               setSelected(event.target.value);
+              setJob(null);
               request.reset();
             }}
           >

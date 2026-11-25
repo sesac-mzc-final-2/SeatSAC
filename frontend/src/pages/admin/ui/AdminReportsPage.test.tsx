@@ -59,6 +59,43 @@ describe("관리자 오류 리포트 (6.3.7, OPS-22)", () => {
     expect(screen.queryByRole("link", { name: "CSV 내려받기" })).not.toBeInTheDocument();
   });
 
+  it("날짜를 A→B→A 로 바꾸면 A 의 이전 결과를 다시 보이지 않고 처음 화면", async () => {
+    mockOps({
+      "/ops/reports/errors/dates": () => jsonResponse(200, DATES),
+      "/ops/reports/errors": () => jsonResponse(200, READY),
+    });
+    renderPanel(<AdminReportsPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "리포트 만들기" }));
+    expect(await screen.findByRole("link", { name: "CSV 내려받기" })).toBeInTheDocument();
+
+    const select = screen.getByRole("combobox", { name: "리포트 날짜" });
+    await userEvent.selectOptions(select, "2026-11-23");
+    await userEvent.selectOptions(select, "2026-11-24");
+    expect(screen.queryByRole("link", { name: "CSV 내려받기" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "리포트 만들기" })).toBeEnabled();
+  });
+
+  it("A 요청 중 B→A 로 바꾼 뒤 늦게 온 첫 A 응답은 버린다 (날짜가 같아도 세대가 다름)", async () => {
+    let resolveLate: (response: Response) => void = () => {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input) === "/ops/reports/errors/dates") return jsonResponse(200, DATES);
+      return new Promise<Response>((resolve) => {
+        resolveLate = resolve;
+      });
+    });
+    renderPanel(<AdminReportsPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "리포트 만들기" }));
+    const select = screen.getByRole("combobox", { name: "리포트 날짜" });
+    await userEvent.selectOptions(select, "2026-11-23");
+    await userEvent.selectOptions(select, "2026-11-24");
+    resolveLate(jsonResponse(200, READY));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByRole("link", { name: "CSV 내려받기" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "리포트 만들기" })).toBeEnabled();
+  });
+
   it("쿼리가 FAILED 면 실패 안내와 다시 만들기", async () => {
     mockOps({
       "/ops/reports/errors/dates": () => jsonResponse(200, DATES),

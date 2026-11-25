@@ -28,6 +28,16 @@ export function CouponEventBanner({ showMyCouponsLink = true }: { showMyCouponsL
   const event = eventQuery.data;
   // 등급은 이벤트가 있을 때만 읽는다(홈이 늘 /users/me 를 부르지 않게). 실패해도 토스트 없이 — 판정은 claim 이 한다
   const profileQuery = useQuery({ ...myProfileQuery(), enabled: authenticated && !!event, meta: { silentError: true } });
+  // 받기는 배너를 숨기는 분기보다 위에 둔다 — 결과를 모른 채(503) 재조회도 실패해 배너가 잠시 숨어도
+  // 재시도용 Idempotency-Key 가 사라지지 않고, 돌아온 뒤 같은 키로 다시 보낸다
+  const toast = useToast();
+  const { claim, pending } = useClaimCoupon((outcome) => {
+    if (outcome.kind === "issued") {
+      toast.show(outcome.already ? "이미 받은 쿠폰이에요. 결제할 때 쓸 수 있어요." : "쿠폰을 받았어요! 결제할 때 쓸 수 있어요.");
+    } else {
+      toast.show(outcome.message, { tone: "error" });
+    }
+  });
   const refetchEvent = eventQuery.refetch;
   const onBoundary = useCallback(() => void refetchEvent(), [refetchEvent]);
 
@@ -47,6 +57,8 @@ export function CouponEventBanner({ showMyCouponsLink = true }: { showMyCouponsL
       showMyCouponsLink={showMyCouponsLink}
       checkedAt={eventQuery.dataUpdatedAt}
       onBoundary={onBoundary}
+      onClaim={claim}
+      claiming={pending}
     />
   );
 }
@@ -69,10 +81,11 @@ interface BannerProps {
   /** 마이페이지 쿠폰 탭 안에서는 「내 쿠폰 보기」 링크를 뺀다 */
   showMyCouponsLink: boolean;
   onBoundary: () => void;
+  onClaim: (eventId: number) => void;
+  claiming: boolean;
 }
 
-function Banner({ event, eligibility, checkedAt, showMyCouponsLink, onBoundary }: BannerProps) {
-  const toast = useToast();
+function Banner({ event, eligibility, checkedAt, showMyCouponsLink, onBoundary, onClaim, claiming }: BannerProps) {
   const now = useTicker(1000);
   const phase = couponEventPhase(event, now);
   const target = couponCountdownTarget(event, phase);
@@ -95,13 +108,6 @@ function Banner({ event, eligibility, checkedAt, showMyCouponsLink, onBoundary }
     return () => window.clearTimeout(timer);
   }, [event.eventId, event.state, phase, checkedAt, onBoundary]);
 
-  const { claim, pending } = useClaimCoupon((outcome) => {
-    if (outcome.kind === "issued") {
-      toast.show(outcome.already ? "이미 받은 쿠폰이에요. 결제할 때 쓸 수 있어요." : "쿠폰을 받았어요! 결제할 때 쓸 수 있어요.");
-    } else {
-      toast.show(outcome.message, { tone: "error" });
-    }
-  });
 
   const claimed = event.myIssue !== null;
   const soldOut = event.remainingQuantity <= 0;
@@ -173,8 +179,8 @@ function Banner({ event, eligibility, checkedAt, showMyCouponsLink, onBoundary }
         ) : soldOut ? (
           <Button disabled>모두 소진됐어요</Button>
         ) : (
-          <Button variant="primary" onClick={() => claim(event.eventId)} disabled={pending}>
-            {pending ? (
+          <Button variant="primary" onClick={() => onClaim(event.eventId)} disabled={claiming}>
+            {claiming ? (
               <>
                 <Icon name="loader" size={16} className={styles.spin} /> 받는 중…
               </>

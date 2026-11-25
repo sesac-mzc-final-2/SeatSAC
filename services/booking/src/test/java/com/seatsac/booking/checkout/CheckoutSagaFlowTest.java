@@ -102,6 +102,8 @@ class CheckoutSagaFlowTest {
     @Autowired
     ProcessedMessageRepository inbox;
     @Autowired
+    org.springframework.transaction.support.TransactionTemplate transactions;
+    @Autowired
     StringRedisTemplate redis;
     @Autowired
     JdbcTemplate jdbc;
@@ -367,6 +369,28 @@ class CheckoutSagaFlowTest {
         org.mockito.Mockito.reset(resultTx);
         replies.handle(unknown);   // 재배달 — 이번에는 처리된다
         assertThat(inbox.count()).isEqualTo(1);
+    }
+
+    // --- inbox 정리(04 4장) ---
+
+    /** 받은 지 7일이 지난 결과 inbox 행만 지운다. 1,000건씩 나눠 지워도 끝까지(테스트 프로필은 빈이 없어 직접 만든다) */
+    @Test
+    void inboxCleanerDeletesOnlyRowsOlderThanSevenDays() {
+        Instant now = Instant.now();
+        java.util.List<ProcessedMessage> old = new java.util.ArrayList<>();
+        for (int i = 0; i < 1_001; i++) {   // 한 번(1,000건)으로 끝나지 않게
+            old.add(ProcessedMessage.of(java.util.UUID.randomUUID().toString(), "payment.approved",
+                now.minus(java.time.Duration.ofDays(8))));
+        }
+        inbox.saveAll(old);
+        String recent = java.util.UUID.randomUUID().toString();
+        inbox.save(ProcessedMessage.of(recent, "payment.approved", now.minus(java.time.Duration.ofDays(6))));
+        InboxCleaner cleaner = new InboxCleaner(inbox, transactions, java.time.Clock.systemUTC());
+
+        assertThat(cleaner.cleanOnce()).isEqualTo(1_001);
+
+        assertThat(inbox.findAll()).extracting(ProcessedMessage::getMessageId).containsExactly(recent);
+        assertThat(cleaner.cleanOnce()).isZero();
     }
 
     // --- 쿠폰(none 어댑터) · 재시도 ---

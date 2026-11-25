@@ -7,9 +7,11 @@ import com.seatsac.booking.component.PaymentClient.PaymentCancelReason;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
 import com.seatsac.booking.component.ScreeningCache;
 import com.seatsac.booking.component.SeatEventPublisher;
+import com.seatsac.booking.dto.event.BookingCanceledEvent;
 import com.seatsac.booking.dto.response.BookingCancelResponse;
 import com.seatsac.booking.dto.response.PaymentView;
 import com.seatsac.booking.entity.Booking;
+import com.seatsac.booking.entity.OutboxMessage;
 import com.seatsac.booking.enums.SeatEventType;
 import com.seatsac.common.core.error.ErrorDetail;
 import java.time.Clock;
@@ -50,6 +52,7 @@ public class BookingCancelService {
     private final PaymentClient paymentClient;
     private final SeatEventPublisher eventPublisher;
     private final ScreeningCache screeningCache;
+    private final BookingEvents bookingEvents;
 
     public BookingCancelResponse cancel(String userId, Long bookingId) {
         Instant now = clock.instant();
@@ -79,7 +82,10 @@ public class BookingCancelService {
         }
 
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(bookingId);
-        if (!bookingState.cancelConfirmed(bookingId, now)) {
+        // D29 — 확정 예매 취소도 booking.canceled{USER_CANCELED}(user 예매 내역 복제본). 동기·saga 공통, 취소와 같은 트랜잭션
+        OutboxMessage canceledEvent = bookingEvents.canceled(booking, BookingCanceledEvent.Reason.USER_CANCELED,
+            BookingEvents.CANCELED_KEY, BookingEvents.currentTraceId(), null, now).orElse(null);
+        if (!bookingState.cancelConfirmed(bookingId, canceledEvent, now)) {
             // 그 사이 다른 경로가 취소했다. 현재 상태가 정답이다
             return current(bookingId);
         }

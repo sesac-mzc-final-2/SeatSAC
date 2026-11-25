@@ -31,6 +31,7 @@ public class CheckoutStateService {
     private final CouponPort couponPort;
     private final BookingStateService bookingState;
     private final CheckoutProperties properties;
+    private final CheckoutTimings timings;
 
     /** 시작 입력 — 카드 끝 4자리는 CARD(모의)만 */
     /** @param replacingPaymentId 재결제(D25)면 지금 붙은(실패한) 결제 ID — 새 ID로 비교 후 교체한다. 처음이면 null */
@@ -62,8 +63,10 @@ public class CheckoutStateService {
             return CheckoutState.COUPON_RESERVING;
         }
         return switch (reply.get()) {
-            case CouponPort.Reserved reserved ->
-                startPayment(saga, booking, reserved.discount(), begin.cardLast4(), begin.replacingPaymentId(), now);
+            case CouponPort.Reserved reserved -> {
+                timings.step("coupon_reserved", now, now);   // 즉시 결정되는 어댑터 — 비동기 결과는 결과 소비자가 잰다
+                yield startPayment(saga, booking, reserved.discount(), begin.cardLast4(), begin.replacingPaymentId(), now);
+            }
             case CouponPort.Rejected rejected -> {
                 // 잡힌 게 없다 — 보상 없음. 예매·좌석·선점 시간 그대로(D14)
                 sagas.finish(saga.getCheckoutId(), EnumSet.of(CheckoutState.STARTED), CheckoutState.COUPON_REJECTED,

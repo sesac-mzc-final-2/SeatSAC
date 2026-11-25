@@ -12,6 +12,7 @@ spring:
   # 아직 SQS를 쓰지 않는다 (3.2.6). 자동 설정이 자격 증명을 찾지 않게 끈다
   cloud.aws:
     sqs.enabled: false
+    sns.enabled: false
     region.static: ap-northeast-2
     credentials:
       access-key: test

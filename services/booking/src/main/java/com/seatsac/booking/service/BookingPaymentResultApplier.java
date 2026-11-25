@@ -10,6 +10,7 @@ import com.seatsac.booking.component.SeatEventPublisher;
 import com.seatsac.booking.component.SeatHoldStrategy;
 import com.seatsac.booking.dto.event.BookingConfirmedEvent;
 import com.seatsac.booking.entity.Booking;
+import com.seatsac.booking.entity.OutboxMessage;
 import com.seatsac.booking.enums.SeatEventType;
 import com.seatsac.common.core.trace.TraceIds;
 import com.seatsac.common.core.trace.TraceKeys;
@@ -67,6 +68,7 @@ public class BookingPaymentResultApplier {
     private final SeatHoldStrategy seatHold;
     private final SeatEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
+    private final BookingEvents bookingEvents;
     private final Clock clock;
 
     public Applied applyApproved(Booking booking, PaymentResult payment) {
@@ -79,6 +81,14 @@ public class BookingPaymentResultApplier {
      *                     환불은 payment가 해제 명령으로 맡는다. 그때는 {@link Applied#REFUND_PENDING}(확정 안 됨)을 돌려준다
      */
     public Applied applyApproved(Booking booking, PaymentResult payment, boolean refundOnMiss) {
+        return applyApproved(booking, payment, refundOnMiss, BookingConfirmedEvent.Pricing.of(booking));
+    }
+
+    /**
+     * @param pricing {@code booking.confirmed}의 금액·할인액·correlationId(6.2.4) — 체크아웃 saga는 할인 뒤 최종 금액
+     */
+    public Applied applyApproved(Booking booking, PaymentResult payment, boolean refundOnMiss,
+                                 BookingConfirmedEvent.Pricing pricing) {
         String messageKey = BookingConfirmedEvent.newMessageKey();
         String traceId = traceId();
         // 느린 일(Catalog 조회·좌석 ID 읽기)을 먼저 끝낸다
@@ -90,9 +100,16 @@ public class BookingPaymentResultApplier {
         // 확정 조건(expiresAt > :now)이 통과해 「만료된 선점을 확정」하고 환불을 건너뛴다.
         // 이 한 시각을 만료 조건·confirmedAt·아웃박스 payload에 함께 쓴다
         Instant now = clock.instant();
-        String payload = payloadOf(messageKey, booking, screening, traceId, now);
+        String payload = payloadOf(messageKey, booking, screening, traceId, now, pricing);
+        // D28 — 같은 내용을 SNS booking-events로도(user 예매 내역 복제본). eventId는 행마다 새로(message_key UK)
+        OutboxMessage eventRow = null;
+        if (bookingEvents.enabled()) {
+            String eventKey = BookingConfirmedEvent.newMessageKey();
+            eventRow = bookingEvents.confirmed(eventKey, booking.getBookingId(),
+                payloadOf(eventKey, booking, screening, traceId, now, pricing), traceId, pricing.correlationId(), now);
+        }
 
-        if (!bookingState.confirmWithOutbox(booking.getBookingId(), messageKey, payload, traceId, now)) {
+        if (!bookingState.confirmWithOutbox(booking.getBookingId(), messageKey, payload, eventRow, traceId, now)) {
             // 0행인 이유가 두 가지다 — 만료됐거나, 그 사이 <b>다른 경로가 이미 확정</b>했거나.
             // 두 경로(BKG-10 응답·단건 조회 폴링)가 겹치면 후자가 생긴다. 그때 환불하면
             // 「확정된 예매 + 환불된 결제」가 되므로 현재 상태를 반드시 다시 읽는다
@@ -167,10 +184,10 @@ public class BookingPaymentResultApplier {
     }
 
     private String payloadOf(String messageKey, Booking booking, CatalogClient.Screening screening,
-                             String traceId, Instant now) {
+                             String traceId, Instant now, BookingConfirmedEvent.Pricing pricing) {
         try {
             return objectMapper.writeValueAsString(
-                BookingConfirmedEvent.of(messageKey, booking, screening, traceId, now));
+                BookingConfirmedEvent.of(messageKey, booking, screening, traceId, now, pricing));
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("알림 본문을 만들 수 없다", e);
         }

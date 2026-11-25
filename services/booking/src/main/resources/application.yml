@@ -82,11 +82,14 @@ app:
     replies-url: ${APP_MESSAGING_REPLIES_URL:}
     max-concurrent: ${APP_MESSAGING_MAX_CONCURRENT:10}
     max-messages-per-poll: ${APP_MESSAGING_MAX_MESSAGES_PER_POLL:10}
+    # 6.2.4 SNS booking-events(D28·D29). 비어 있으면 SNS 행을 만들지 않는다 — 토픽 전에 만들면 10회 재시도 끝에 FAILED
+    events-topic-arn: ${APP_MESSAGING_EVENTS_TOPIC_ARN:}
 
 # SQS: 자격 증명은 Pod Identity(액세스 키 없음). 로컬은 ElasticMQ
 spring.cloud.aws:
   region.static: ${AWS_REGION:ap-northeast-2}
   sqs.enabled: true
+  sns.enabled: true
 
 spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}

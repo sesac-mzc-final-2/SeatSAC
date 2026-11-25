@@ -149,6 +149,8 @@ class CheckoutSagaFlowTest {
         assertThat(bookings.findById(bookingId)).get().extracting(Booking::getStatus).isEqualTo(BookingStatus.CONFIRMED);
         assertThat(saga(accepted).getState()).isEqualTo(CheckoutState.CONFIRMED);
         assertThat(outbox.findAll()).anyMatch(m -> m.getDestination() == OutboxDestination.NOTIFICATION);
+        // 6.2.4 — 보낼 곳(SNS 토픽)이 설정되지 않으면 예매 이벤트 행을 만들지 않는다
+        assertThat(outbox.findAll()).noneMatch(m -> m.getDestination() == OutboxDestination.BOOKING_EVENTS);
         verifyNoInteractions(paymentClient);
     }
 

@@ -147,4 +147,20 @@ public class OutboxMessage {
         message.correlationId = correlationId;
         return message;
     }
+
+    /**
+     * 6.2.4 SNS {@code booking-events} 행(D28·D29) — {@code payload}는 envelope 전체.
+     *
+     * @param aggregateKey {@code booking.confirmed}는 {@code sns}(알림 큐 행 {@code ''}과 나눔), 취소는
+     *                     {@code canceled}(BKG-07)·{@code canceled:{checkoutId}}(saga 보상·만료)
+     */
+    public static OutboxMessage event(String messageKey, OutboxEventType eventType, Long bookingId,
+                                      String aggregateKey, String payload, String traceId, String correlationId,
+                                      Instant now) {
+        OutboxMessage message = pending(messageKey, eventType, bookingId, payload, traceId, now);
+        message.aggregateKey = Objects.requireNonNull(aggregateKey, "aggregateKey");
+        message.destination = OutboxDestination.BOOKING_EVENTS;
+        message.correlationId = correlationId;
+        return message;
+    }
 }

@@ -114,16 +114,20 @@ public class BookingStateService {
      * 그때는 아웃박스도 쓰지 않고 부르는 쪽이 결제를 취소(환불)한다.
      *
      * @param payload 알림 본문 JSON (Catalog 조회 실패 시 이름·시각이 null인 채로 들어온다)
+     * @param eventRow 6.2.4 SNS {@code booking-events} 행(D28 — 같은 내용, eventId만 다름). 보낼 곳이 없으면 null
      * @return 확정했으면 true
      */
     @Transactional
     public boolean confirmWithOutbox(Long bookingId, String messageKey, String payload,
-                                     String traceId, Instant now) {
+                                     OutboxMessage eventRow, String traceId, Instant now) {
         if (bookingRepository.confirmPending(bookingId, now) == 0) {
             return false;
         }
         outboxMessageRepository.save(OutboxMessage.pending(messageKey,
             OutboxEventType.BOOKING_CONFIRMED, bookingId, payload, traceId, now));
+        if (eventRow != null) {
+            outboxMessageRepository.save(eventRow);
+        }
         return true;
     }
 
@@ -147,10 +151,21 @@ public class BookingStateService {
      */
     @Transactional
     public boolean cancelConfirmed(Long bookingId, Instant now) {
+        return cancelConfirmed(bookingId, null, now);
+    }
+
+    /**
+     * @param eventRow 6.2.4 {@code booking.canceled{USER_CANCELED}} 행(D29) — 취소와 같은 트랜잭션. 보낼 곳이 없으면 null
+     */
+    @Transactional
+    public boolean cancelConfirmed(Long bookingId, OutboxMessage eventRow, Instant now) {
         if (bookingRepository.cancelConfirmed(bookingId, now) == 0) {
             return false;
         }
         bookingSeatRepository.deleteByBookingId(bookingId);
+        if (eventRow != null) {
+            outboxMessageRepository.save(eventRow);
+        }
         return true;
     }
 

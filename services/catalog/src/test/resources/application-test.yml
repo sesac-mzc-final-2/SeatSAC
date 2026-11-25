@@ -17,6 +17,9 @@ spring:
       access-key: test
       secret-key: test
 app:
+  # 주기 실행은 끈다 — 회차 fixture를 테스트마다 지우고 넣으므로. ScheduleExtenderTest가 extend()를 직접 부른다
+  schedule:
+    enabled: false
   # 변경 찾기 주기는 끈다 — 테스트가 scanOnce()를 직접 부른다. 릴레이는 기본(false) 그대로
   catalog.change-scan.enabled: false
   services:

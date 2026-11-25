@@ -102,7 +102,7 @@ class BookingSeatCountClientTest {
             new InternalRestClientFactory().create(bookingUrl, phaseTimeout, phaseTimeout),
             breakers, meters,
             new CatalogProperties(new CatalogProperties.Cache(Duration.ofMinutes(10)),
-                new CatalogProperties.Services(bookingUrl, BUDGET)));
+                new CatalogProperties.Services(bookingUrl, BUDGET), new CatalogProperties.Schedule(false, 7)));
     }
 
     @Test

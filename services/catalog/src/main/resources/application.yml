@@ -56,6 +56,11 @@ app:
   services:
     booking-url: ${APP_SERVICES_BOOKING_URL:http://booking:8080}
     booking-read-timeout: ${APP_SERVICES_BOOKING_READ_TIMEOUT:300ms}   # CAT-03 잔여 좌석 300ms 전체
+  # 상영 일정 이어 붙이기(ScheduleExtender) — 오늘(KST)부터 days일 안에 회차가 없는 날을 앞선 날 편성으로 채운다
+  schedule:
+    enabled: ${APP_SCHEDULE_ENABLED:true}
+    days: ${APP_SCHEDULE_DAYS:7}
+    interval: ${APP_SCHEDULE_INTERVAL:1h}
 
 # catalog → booking 서킷 (ADR-23: 실패율 50%, 10초 열림). 열려 있으면 remainingSeatsSource TOTAL
 resilience4j.circuitbreaker.instances.booking:

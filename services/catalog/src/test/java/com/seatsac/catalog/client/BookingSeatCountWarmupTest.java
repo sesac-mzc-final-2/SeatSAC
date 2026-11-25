@@ -84,7 +84,7 @@ class BookingSeatCountWarmupTest {
             new InternalRestClientFactory().create(bookingUrl, timeout, timeout),
             breakers, meters,
             new CatalogProperties(new CatalogProperties.Cache(Duration.ofMinutes(10)),
-                new CatalogProperties.Services(bookingUrl, timeout)));
+                new CatalogProperties.Services(bookingUrl, timeout), new CatalogProperties.Schedule(false, 7)));
     }
 
     @Test

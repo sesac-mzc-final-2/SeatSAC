@@ -137,6 +137,13 @@ variable "cognito_user_pool_name" {
   default     = "cinema-staging-users"
 }
 
+# ---- 🆕 coupon 서비스 (6.1.5, ADR-118) -----------------------------------
+variable "coupon_enabled" {
+  description = "gitops base/coupon 머지 + ECR cinema/coupon 이미지가 생긴 뒤 true → Application cinema-coupon (런북 8-G). Secret·DB_HOST_COUPON은 6.1.1에서 이미 생긴다"
+  type        = bool
+  default     = false
+}
+
 # ---- ⚠️AI ai 서비스 (3.1.18, ADR-85·86) ---------------------------------
 variable "ai_enabled" {
   description = "envs/staging에 ai Valkey·ECR cinema/ai가 생긴 뒤 true → Secret ai-secrets · cinema-infra-endpoints AI_* · Application cinema-ai (런북 6-G-1)"

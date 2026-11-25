@@ -29,3 +29,8 @@ cloudfront_distribution_id = "E316HLOWJ7VZO1" # global.tfvars frontend_distribut
 # ⬇ 6.1.1 서비스별 RDS(ADR-115): envs/staging apply로 cinema-staging-{svc}-db 6개가 available이 된 뒤 이 폴더 apply (런북 8-E)
 #   → 인스턴스별 db-bootstrap Job · DB_HOST_{SVC} · coupon Secret 2개 · ai-migrator-secrets
 service_db_services = ["booking", "payment", "user", "catalog", "coupon", "ai"]
+
+# ⬇ 6.1.5 coupon(ADR-118): gitops base/coupon 머지 → envs/staging apply(ECR cinema/coupon) → 저장소 변수 COUPON_BUILD_PUSH_ENABLED=true
+#   → build-push 수동(services=coupon)으로 이미지·태그 커밋 → 이 값을 true로 바꾸는 한 줄 PR → 이 폴더 apply (런북 8-G)
+#   → Application cinema-coupon. 그 전에 true면 이미지가 없어 ImagePullBackOff(Degraded)
+coupon_enabled = false

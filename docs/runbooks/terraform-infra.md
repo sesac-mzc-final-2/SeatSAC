@@ -1142,6 +1142,7 @@ booking 아웃박스 표 하나를 알림과 saga 명령이 같이 쓴다. **#18
 | booking | catalog · payment | 회차 확인 · 결제 |
 | user | booking · catalog | 예매 내역 · 회차 요약·극장 검증 |
 | payment | (없음) | 호출하는 쪽이 아니다 |
+| 🆕 gateway · ops-api(6.1.7) | coupon | `/api/coupons/**` · 관리자 이벤트 생성 `/internal/coupon-events` (6.1.5, 8-G). coupon은 호출하는 쪽이 아니다(saga 결과는 SQS) — `REQUIRE_COUPON=1`로 확인 |
 | 분석 Job `rollout-smoke` | booking · gateway (preview) | 3.1.6 |
 | 부하 테스트 Job `k6-loadtest` | gateway | 4.2.1 OPS-10 (6-H, 실행 중에만 있다) |
 | `monitoring` namespace | 전체 | Prometheus 수집 |
@@ -2429,16 +2430,51 @@ kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data}' | 
 - [ ] 두 번째 plan(staging·staging-k8s) No changes
 - [ ] 기존 서비스 readiness 그대로(아무것도 옮기지 않았다)
 
-**3) 전환 — 서비스 하나씩** (이 PR 범위 밖. 덤프·복원 Job은 아직 레포에 없다 — 옮기기 전에 따로 만든다)
+**3) 전환 — 서비스 하나씩** (6.1.5 — 도구 `infra/scripts/db-migrate.sh`. 시연·측정이 없는 시간, 스크럼 공유, 한 번에 한 서비스)
 
-1. 옮길 서비스의 쓰기를 멈춘다(gitops에서 replicas 0 또는 시연이 없는 시간) → 기존 인스턴스의 `{svc}_db`를 덤프해 새 인스턴스에 복원(클러스터 안 Job, `{svc}_migrator` 계정 — 두 인스턴스에 같은 비밀번호)
-2. gitops PR: `overlays/staging/{svc}`의 `SPRING_DATASOURCE_URL`을 `${DB_HOST}` → `${DB_HOST_{SVC}}`로, `base/{svc}/flyway-job.yaml`의 `configMapKeyRef` 키도 같이 바꾼다
-3. Flyway Job 성공 + readiness 200 + 행 수 대조 → 다음 서비스. 순서는 catalog·user·payment → booking(블루/그린, 한 번에 하나)
-- **catalog도 덤프·복원이 기본이다.** 시드를 다시 적재하는 방법(8-C, ID 고정)은 `movie`의 TMDB 보충 컬럼(장르·줄거리·감독·`poster_path` 등 — 마이그레이션 주석상 「별도 스크립트로 채운다」)까지 시드 적재가 채우는지 확인한 뒤에만 쓴다. 빠지면 영화 상세와 ai 스냅샷의 `genres`·`synopsis`가 빈다. 확인: 옮긴 뒤 `SELECT COUNT(*) FROM movie WHERE tmdb_id IS NOT NULL`이 기존 인스턴스와 같은지
-- 시드를 다시 적재한다면 **새 인스턴스로**: `lotte-seed/load`의 Job이 `DB_HOST`(기존 인스턴스)를 읽으면 `DB_HOST_CATALOG`로 바꾼 뒤 실행한다(안 바꾸면 기존 인스턴스에 다시 넣는다). catalog Flyway가 새 인스턴스에 먼저 적용돼야 한다
-- coupon·ai는 새 스키마라 옮길 데이터가 없다
-- **덤프는 파일로 남기지 않는다**: `user_db.user`에 이메일·이름이 있다. Job 안에서 덤프를 복원으로 바로 넘기고(파이프), PVC·ConfigMap·노트북에 덤프 파일을 두지 않는다. 다른 스키마도 같은 방식으로
-- 되돌리기: gitops PR을 revert하면 기존 인스턴스로 돌아간다. 그 사이 새 인스턴스에 쓰인 데이터는 기존 인스턴스에 없다 → 전환 직후 확인을 끝내고 다음으로 넘어간다
+순서: catalog · user · payment → booking(블루/그린 — 두 서비스 동시 블루/그린 금지). coupon·ai는 새 스키마라 옮길 데이터가 없다(coupon은 처음부터 `DB_HOST_COUPON`, 8-G).
+
+| 단계 | 할 일 | 확인 |
+| --- | --- | --- |
+| ① 행 수 미리 보기 | `infra/scripts/db-migrate.sh counts {svc}` (읽기만) | 원본 행 수가 보이고 대상은 `-`(테이블 없음) |
+| ② 쓰기 멈춤 | 그 서비스 파드를 0개로: **ops-api 「정지」**(6.1.7 — replicas 0, ArgoCD `ignoreDifferences`라 Git과 달라도 되돌리지 않는다). ops-api가 아직 없으면 사용자·시연이 없는 시간에 cinema-admin으로 ArgoCD Application `cinema-{svc}`의 자동 sync를 끄고(UI 「Disable Auto-Sync」) `kubectl -n cinema-staging scale deploy/{svc} --replicas=0`(booking은 `rollout`) — 시드 적재(8-C)와 같은 GitOps 예외로 이 절차만. catalog는 API가 조회뿐이라 멈추지 않아도 된다(`ALLOW_RUNNING=1`) | `kubectl -n cinema-staging get pods -l app.kubernetes.io/name={svc}` 없음 |
+| ③ 덤프 → 복원 | `infra/scripts/db-migrate.sh copy {svc}` | 마지막 줄 `PASS: {svc}_db 테이블 N개 · 행 수 일치` · `✅ copy {svc} 완료` |
+| ④ gitops 전환 PR | `overlays/staging/{svc}/kustomization.yaml`의 `SPRING_DATASOURCE_URL` `${DB_HOST}` → `${DB_HOST_{SVC}}`, `base/{svc}/flyway-job.yaml`의 `configMapKeyRef` `key: DB_HOST` → `DB_HOST_{SVC}` — **한 PR에서 같이**(따로 바꾸면 마이그레이션과 앱이 다른 인스턴스를 본다) | 머지 → Flyway Job 성공(옮긴 `flyway_schema_history`를 보고 새 V만 적용) |
+| ⑤ 가동 | ops-api 「가동」, 또는 ②에서 끈 자동 sync를 다시 켠다(ArgoCD가 Git의 replicas·HPA로 되돌린다) | readiness 200 · `db-migrate.sh counts {svc}`로 대상 행 수가 ③과 같거나 늘었는지(새 쓰기) |
+
+- 도구(`db-migrate.sh`): `cinema-staging`에 일회성 ConfigMap(`infra/scripts/db-migrate/copy.sh`)·Job을 만들고, 끝나면 지운다(실패하면 Job을 남겨 둔다 — 로그 확인 뒤 안내된 `kubectl delete`). Job은 `{svc}-migrator-secrets`·`cinema-infra-endpoints`(`DB_HOST`·`DB_HOST_{SVC}`)·`rds-ca-bundle`을 그대로 쓴다 → 비밀번호가 관리자 PC를 지나지 않는다. 계정은 `{svc}_migrator`(두 인스턴스에 같은 비밀번호·해당 스키마 ALL), TLS는 `VERIFY_IDENTITY`
+- **덤프는 파일로 남기지 않는다**: `mysqldump | mysql` 파이프(`--single-transaction --no-tablespaces --set-gtid-purged=OFF`). 계정 cnf도 메모리 emptyDir. `user_db.user`에 이메일·이름이 있다 — PVC·ConfigMap·노트북에 덤프를 두지 않는다
+- `copy`는 **대상 스키마가 비어 있을 때만** 돈다(테이블이 하나라도 있으면 멈춘다 — 이미 옮겼거나 ④를 먼저 머지해 Flyway가 새 인스턴스에 돈 경우). 행 수는 `information_schema` 추정치가 아니라 테이블마다 `COUNT(*)`
+- `copy` 전에 그 서비스의 Running 파드가 있으면 멈춘다(`ALLOW_RUNNING=1`로 건너뜀 — catalog만 권장)
+- **새 계정(ADR-125)처럼 기존 인스턴스에 데이터가 없으면** 덤프하지 않는다: catalog는 아래 시드 재적재, user·payment·booking은 ④만(빈 스키마에 Flyway가 처음부터 만든다)
+- 되돌리기: ④ PR을 revert하면 기존 인스턴스로 돌아간다. 그 사이 새 인스턴스에 쓰인 데이터는 기존 인스턴스에 없다 → ⑤ 확인을 끝내고 다음 서비스로
+
+**catalog 시드 재적재 (덤프 대신 쓸 때 · 새 계정일 때)** — 8-C와 같은 `lotte-seed/load/run.sh`를 **새 인스턴스**로. 시드는 비공개 `lotte-seed`에만 있다
+
+```bash
+export AWS_PROFILE=cinema-admin
+cd <lotte-seed 클론 경로>/load
+grep -n 'DB_HOST\|RDS_HOST' *.sh *.yaml      # 호스트를 어디서 받는지 먼저 본다 — cinema-infra-endpoints의 DB_HOST(기존)를 읽는 곳이 있으면 DB_HOST_CATALOG로 바꾼 뒤 실행
+export REPO=<SeatSAC 클론 경로>
+export RDS_HOST=$(aws rds describe-db-instances --db-instance-identifier cinema-staging-catalog-db \
+  --query 'DBInstances[0].Endpoint.Address' --output text)        # 8-C의 cinema-staging-mysql이 아니라 새 인스턴스
+bash run.sh
+```
+
+- 전제: 2)의 catalog Job PASS(새 인스턴스에 `catalog_db`·`catalog_migrator`) · 대상이 비어 있거나 같은 시드만 있음(run.sh는 다른 데이터가 있으면 멈춘다)
+- 확인 1: `verify.sql` 15개 항목(8-C와 같다)
+- 확인 2(TMDB 보충 컬럼 — 시드에 빠지면 영화 상세·ai 스냅샷의 `genres`·`synopsis`가 빈다): `infra/scripts/db-migrate.sh counts catalog` 마지막 줄 `movie.tmdb_id NOT NULL`이 원본(기존 인스턴스)과 대상에서 같아야 한다. 대상이 작으면 시드 재적재 대신 덤프·복원(③)을 쓴다(그때는 대상 `catalog_db`를 비운 뒤 — 관리자, 스크럼 공유). 새 계정이라 원본이 없으면 대상 값이 0보다 큰지만 본다(0이면 TMDB 보충 스크립트를 따로 돌린다 — lotte-seed)
+- 그 뒤 ④(catalog 전환 PR)
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| `db-migrate.sh` `DB_HOST_{SVC}가 없다` | 2)의 staging-k8s apply 전 | 2) 먼저 |
+| Job `FAIL: 대상 {svc}_db에 테이블 N개` | 이미 옮겼거나 ④를 먼저 머지해 Flyway가 새 인스턴스에 돌았다 | `counts`로 상태 확인. 다시 옮기려면 관리자가 대상 스키마를 비운 뒤(쓰기 멈춘 상태에서) |
+| Job `FAIL: 행 수가 다르다` | 덤프 중 쓰기가 있었다(② 안 함) · 복원이 중간에 끊김 | ② 확인 → 대상 비우기 → ③ 다시 |
+| Job `ERROR 1045` | `{svc}_migrator`가 새 인스턴스에 없다(2) Job 실패) · 비밀번호가 다르다 | 2) Job 로그 PASS 확인 |
+| Job `ERROR 2026 … certificate verify failed` | `rds-ca-bundle`이 인스턴스 인증서와 안 맞음 | staging-k8s apply로 `rds-ca-bundle` 갱신 |
+| `mysqldump: Couldn't execute 'FLUSH TABLES'` 등 권한 오류 | 옵션이 바뀐 스크립트 | `copy.sh`의 옵션(`--single-transaction --no-tablespaces --skip-lock-tables`)을 그대로 — 마스터 계정을 쓰지 않는다 |
+| 시간 초과(`WAIT` 900초) | 노드 0대(Job Pending)·큰 테이블 | `cluster-scale.sh up` · `WAIT=1800` |
 
 **4) 정리** — 네 서비스를 모두 옮기고 며칠 지켜본 뒤 별도 PR: `rds.tf`(기존 인스턴스)·`DB_HOST`·legacy Job 삭제. 그 전에는 지우지 않는다
 
@@ -2519,6 +2555,36 @@ done
 
 - 값은 `staging-k8s` tfstate와 Secrets Manager 두 곳에 있다(둘 다 관리자만). 콘솔에서 값을 고치지 않는다 — 다음 apply가 되돌린다
 - Secrets Manager 비용: Secret 1개당 월 약 $0.4
+
+
+---
+
+### 8-G. coupon 배포 (6.1.5, ADR-118)
+
+코드: `envs/staging/ecr.tf`(ECR `cinema/coupon`) · `envs/staging-k8s/argocd_apps.tf`·`variables.tf`·`staging-k8s.tfvars`(`coupon_enabled` → Application `cinema-coupon`) · gitops `base/coupon`·`overlays/staging/coupon` · `infra/scripts/np-check.sh`(`coupon`)
+
+이미 6.1.1·6.1.3·6.1.4에서 생긴 것: 인스턴스 `cinema-staging-coupon-db`·db-bootstrap Job·`coupon-secrets`·`coupon-migrator-secrets`·`DB_HOST_COUPON` · 큐 `coupon-commands`·`booking-replies`·Pod Identity `cinema-staging-coupon-pod`(ServiceAccount `coupon`) · Secrets Manager `cinema/staging/coupon`·`coupon-migrator`
+
+| 순서 | 할 일 | 확인 |
+| --- | --- | --- |
+| 1 | gitops PR `base/coupon`·`overlays/staging/coupon` 머지 — 이것만으로는 아무것도 뜨지 않는다(가리키는 Application이 아직 없다) | `gitops-validate` 통과 |
+| 2 | `envs/staging` apply — ECR `cinema/coupon`(+ 수명 주기·저장소 정책) | `aws ecr describe-repositories --repository-names cinema/coupon` |
+| 3 | 저장소 변수 `COUPON_BUILD_PUSH_ENABLED=true`(Settings → Variables) → `build-push` 수동 실행 `services=coupon`(main) | ECR에 태그 · gitops `overlays/staging/coupon/image-tag` 봇 커밋 |
+| 4 | `staging-k8s.tfvars` `coupon_enabled = true` 한 줄 PR → 머지 뒤 `envs/staging-k8s` apply | plan: `helm_release.argocd_apps` in-place 변경만(`cinema-coupon` 추가) |
+| 5 | sync 확인 | `kubectl -n argocd get application cinema-coupon` Synced·Healthy · `coupon-flyway` Job 완료 · 파드 2개(AZ가 나뉘었는지 `-o wide`) |
+| 6 | NetworkPolicy | `REQUIRE_COUPON=1 REQUIRE_GATEWAY=1 infra/scripts/np-check.sh` → gateway → coupon OPEN, 그 밖 → coupon BLOCKED |
+| 7 | 메시징 켜기(별도 gitops PR) | `coupon-config`의 `APP_MESSAGING_CONSUMER_ENABLED`·`APP_OUTBOX_RELAY_ENABLED` → `true`(coupon만 롤링 재시작). 그 뒤 booking 쿠폰 어댑터를 `sqs`로(남궁일) |
+
+- 6 전에 gateway 이미지에 `/api/coupons/**` 라우트가 있어야 한다(한채연, 런타임 계약 3장 gateway 추가 행). 라우트가 있고 coupon이 아직 없으면 503 `SERVICE_UNAVAILABLE`
+- 이벤트는 관리자 `POST /ops/coupons/events`(6.1.7 ops-api)로 만든다 — 그 전에는 coupon 내부 API를 쓸 사람 경로가 없다(`kubectl port-forward svc/coupon`은 관리자 확인용)
+- 지우기: `coupon_enabled = false` apply → Application이 지워지며 리소스도 지운다(finalizer). ECR은 `envs/staging`에서
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| `cinema-coupon` `ComparisonError … overlays/staging/coupon: no such file` | 1을 머지하기 전에 4 | gitops PR 머지 |
+| 파드 `ImagePullBackOff` | 3(이미지) 전에 4 | build-push 수동 실행 |
+| `coupon-flyway` `Access denied … coupon_migrator` | 인스턴스별 db-bootstrap(8-E 2) 전 | 8-E 2) |
+| 기동 실패 `Unable to load credentials` · SQS 오류 | 메시징을 켰는데 Pod Identity 연결이 없음 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace cinema-staging`에 `coupon` |
 
 
 ---

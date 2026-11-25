@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------
-# ArgoCD Application: root(App of Apps) + 서비스 5개 — Helm 차트 argocd-apps (3.1.5)
+# ArgoCD Application: root(App of Apps) + 서비스 5개(+ ai·coupon) — Helm 차트 argocd-apps (3.1.5)
 #   - root(cinema-root): gitops apps/staging → AppProject cinema · argo-rollouts · kube-prometheus-stack · cinema-common
 #   - 서비스(cinema-{gateway,catalog,booking,user,payment}): SeatSAC-gitops가 Public이라 ECR 레지스트리(계정 ID)를
 #     그 레포에 두지 않는다(ADR-74). gitops에는 이미지 이름 cinema/{svc}와 태그(overlays/staging/{svc}/image-tag)만 있고
@@ -10,6 +10,9 @@
 #   - ⚠️AI ai(cinema-ai)는 ai_enabled = true일 때만 (3.1.18, ADR-86). 다른 Application은 그대로다.
 #     ng-ai가 평소 0대라 파드는 Pending → Health는 처음 10분 Progressing, 그 뒤 Degraded(Deployment
 #     progressDeadlineSeconds 기본 600초 초과)가 정상. ng-ai를 켜고 파드가 뜨면 Healthy로 돌아온다
+#   - 🆕 coupon(cinema-coupon)은 coupon_enabled = true일 때만 (6.1.5, ADR-118). gitops base/coupon·overlays/staging/coupon이
+#     main에 있고, ECR cinema/coupon에 이미지가 올라간 뒤(build-push 수동, COUPON_BUILD_PUSH_ENABLED) 켠다 — 그 전에 켜면
+#     경로 없음(ComparisonError) 또는 ImagePullBackOff로 Degraded. 런북 8-G
 #   - 이미지 태그는 Terraform이 관리하지 않는다(build-push → gitops → ArgoCD). 태그가 바뀌어도 plan 변경 없음
 #   - finalizer: Application을 지우면 ArgoCD가 만든 리소스(gateway Ingress → ALB 포함)도 지운다
 #     삭제 순서는 런북 11장: 이 릴리스를 먼저 destroy(-target) → Application·ALB가 사라진 뒤 나머지
@@ -19,6 +22,7 @@ locals {
     var.cognito_enabled ? ["gateway"] : [],
     ["catalog", "booking", "user", "payment"],
     var.ai_enabled ? ["ai"] : [],
+    var.coupon_enabled ? ["coupon"] : [],
   ))
 
   # 플랫폼 CRD(Rollout·PodMonitor)·cinema-infra-endpoints보다 먼저 sync되면 실패 → 재시도로 맞춘다 (최대 약 20분)

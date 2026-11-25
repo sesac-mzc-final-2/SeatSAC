@@ -2,7 +2,7 @@ package com.seatsac.payment.component;
 
 import com.seatsac.payment.common.PaymentPolicy;
 import com.seatsac.payment.enums.PaymentFailureCode;
-import com.seatsac.payment.enums.PaymentStatus;
+import com.seatsac.payment.saga.SagaOutcomes;
 import com.seatsac.payment.enums.PgProvider;
 import com.seatsac.payment.service.PaymentStateService;
 import java.time.Clock;
@@ -36,6 +36,7 @@ public class StaleProcessingCloser {
 
     private final Clock clock;
     private final PaymentStateService paymentState;
+    private final SagaOutcomes sagaOutcomes;
 
     /**
      * 기동 때 {@link StaleProcessingStartupRunner}가 한 번 부른다. 테스트는 이 메서드를 직접 불러
@@ -61,8 +62,8 @@ public class StaleProcessingCloser {
             found += stale.size();
             for (String paymentId : stale) {
                 // 조건부 UPDATE라 다른 파드가 먼저 닫았으면 0행이다
-                if (paymentState.settle(paymentId, PaymentStatus.FAILED,
-                    PaymentFailureCode.PROCESSING_TIMEOUT, now)) {
+                // saga 결제(모의 청구 중 파드가 죽음)면 payment.declined도 같은 트랜잭션에(D7)
+                if (sagaOutcomes.fail(paymentId, PaymentFailureCode.PROCESSING_TIMEOUT, null, now, true)) {
                     closed++;
                 }
             }

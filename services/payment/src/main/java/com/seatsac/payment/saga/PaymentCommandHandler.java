@@ -45,10 +45,6 @@ public class PaymentCommandHandler {
     private static final Set<String> KNOWN_TYPES = Set.of(SagaMessages.PREPARATION_REQUESTED,
         SagaMessages.CHARGE_REQUESTED, SagaMessages.VERIFICATION_REQUESTED, SagaMessages.RELEASE_REQUESTED);
 
-    /** 같은 예매로 다시 결제할 수 있는 실패 — 포트원 FAILED(돈이 안 빠짐). MOCK 거절·금액 불일치·만료는 아니다(06) */
-    private static final Set<PaymentFailureCode> RETRYABLE = Set.of(
-        PaymentFailureCode.USER_CANCELED, PaymentFailureCode.PG_DECLINED);
-
     private final SagaMessages messages;
     private final SagaResultWriter writer;
     private final ProcessedMessageRepository inbox;
@@ -218,7 +214,7 @@ public class PaymentCommandHandler {
             case APPROVED -> messages.approved(command, response, now);
             case FAILED -> {
                 PaymentFailureCode code = response.failureCode();
-                boolean retryable = response.method() == PaymentMethod.TOSSPAY && RETRYABLE.contains(code);
+                boolean retryable = response.method() == PaymentMethod.TOSSPAY && SagaOutcomes.RETRYABLE.contains(code);
                 yield messages.declined(command, code == null ? "PG_DECLINED" : code.name(), retryable, now);
             }
             // 포트원에서 이미 취소된 결제(콘솔 취소 등) — 돈은 돌아갔다. 확정에 쓰지 않는다

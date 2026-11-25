@@ -4,12 +4,12 @@ import com.seatsac.payment.common.PaymentErrorCode;
 import com.seatsac.payment.entity.Payment;
 import com.seatsac.payment.enums.PaymentCancelReason;
 import com.seatsac.payment.enums.PaymentFailureCode;
-import com.seatsac.payment.enums.PaymentStatus;
 import com.seatsac.payment.portone.PortOneClient;
 import com.seatsac.payment.portone.PortOneClient.CancelOutcome;
 import com.seatsac.payment.portone.PortOneClient.PortOneRejectedException;
 import com.seatsac.payment.portone.PortOnePayment;
 import com.seatsac.payment.portone.PortOneUnavailableException;
+import com.seatsac.payment.saga.SagaOutcomes;
 import com.seatsac.payment.saga.SagaPaymentRepository;
 import java.time.Clock;
 import java.time.Instant;
@@ -37,6 +37,7 @@ public class PortOneReconcileService {
     private final PaymentStateService paymentState;
     private final PortOneClient portOne;
     private final SagaPaymentRepository sagaPayments;
+    private final SagaOutcomes sagaOutcomes;
 
     /** {@link #reconcileProcessing} 결과 */
     public enum Outcome {
@@ -60,7 +61,8 @@ public class PortOneReconcileService {
      * @throws PortOneUnavailableException 포트원 응답을 못 받음 — 행은 그대로, 부르는 쪽이 503·다음 주기
      */
     public Outcome reconcileProcessing(Payment payment) {
-        return reconcileProcessing(payment, true);
+        // verify — 동기 /pay와 saga 확인 명령. saga 결과는 명령 처리가 직접 보낸다(D7 이벤트를 또 내지 않는다)
+        return reconcileProcessing(payment, true, false);
     }
 
     /**
@@ -68,10 +70,13 @@ public class PortOneReconcileService {
      * 스윕이 보낸다(웹훅 재발송이 취소 요청을 여러 번 만들지 않게, 다른 팀 장애 기록).
      */
     public Outcome reconcileForWebhook(Payment payment) {
-        return reconcileProcessing(payment, false);
+        return reconcileProcessing(payment, false, true);
     }
 
-    private Outcome reconcileProcessing(Payment payment, boolean refundNow) {
+    /**
+     * @param notify saga 결제면 결과 이벤트를 낸다(D7) — payment가 스스로 닫는 웹훅·스윕만 true
+     */
+    private Outcome reconcileProcessing(Payment payment, boolean refundNow, boolean notify) {
         Optional<PortOnePayment> found = portOne.find(payment.getPaymentId());
         if (found.isEmpty()) {
             return Outcome.NOT_YET;   // 결제창을 열지 않았다(포트원에 결제 자체가 없음)
@@ -83,8 +88,8 @@ public class PortOneReconcileService {
         if (remote.isPaid()) {
             if (sagaPayments.isReleased(paymentId)) {
                 // booking이 선점 만료로 이 결제를 놓았다 — 예매에 쓰이지 않는 돈이다. 승인 대신 환불 대상으로 남긴다(D16·D22)
-                boolean changed = paymentState.settle(paymentId, PaymentStatus.FAILED, PaymentFailureCode.BOOKING_EXPIRED,
-                    remote.transactionId(), now);
+                boolean changed = sagaOutcomes.fail(paymentId, PaymentFailureCode.BOOKING_EXPIRED,
+                    remote.transactionId(), now, notify);
                 log.warn("놓은 saga 결제가 PAID — FAILED(BOOKING_EXPIRED), 환불 미완료로 둔다 paymentId={} bookingId={}",
                     paymentId, payment.getBookingId());
                 if (changed && refundNow) {
@@ -93,14 +98,15 @@ public class PortOneReconcileService {
                 return Outcome.RELEASED;
             }
             if (remote.matches(payment.getAmount(), CURRENCY)) {
-                paymentState.approve(paymentId, remote.transactionId(), remote.paidAtOr(now), now);
+                sagaOutcomes.approve(paymentId, payment.getAmount(), remote.transactionId(), remote.paidAtOr(now), now,
+                    notify);
                 log.info("포트원 결제 확인 → APPROVED paymentId={} bookingId={}", paymentId, payment.getBookingId());
                 return Outcome.APPROVED;
             }
             // 금액 위변조 의심. 돈은 잡혔으므로 「쓰지 않는다(FAILED)」와 「환불해야 한다(transactionId)」를 먼저 남기고
             // 그다음 환불을 시도한다 — 환불 응답이 끊겨도 스윕이 이어서 처리한다(다른 팀 장애 기록)
-            boolean changed = paymentState.settle(paymentId, PaymentStatus.FAILED, PaymentFailureCode.AMOUNT_MISMATCH,
-                remote.transactionId(), now);
+            boolean changed = sagaOutcomes.fail(paymentId, PaymentFailureCode.AMOUNT_MISMATCH,
+                remote.transactionId(), now, notify);
             log.warn("포트원 결제 금액 불일치 — FAILED(AMOUNT_MISMATCH), 환불 미완료로 둔다 paymentId={} bookingId={} 기대={} 실제={} {}",
                 paymentId, payment.getBookingId(), payment.getAmount(),
                 remote.amount() == null ? null : remote.amount().total(), remote.currency());
@@ -112,14 +118,13 @@ public class PortOneReconcileService {
         if (remote.isFailed()) {
             PaymentFailureCode code = remote.looksUserCancelled()
                 ? PaymentFailureCode.USER_CANCELED : PaymentFailureCode.PG_DECLINED;
-            paymentState.settle(paymentId, PaymentStatus.FAILED, code, null, now);
+            sagaOutcomes.fail(paymentId, code, null, now, notify);
             log.info("포트원 결제 실패 → FAILED({}) paymentId={} bookingId={}", code, paymentId, payment.getBookingId());
             return Outcome.FAILED;
         }
         if (remote.isCancelled()) {
             // 우리가 보기 전에 포트원에서 취소됐다(콘솔 취소 등). 승인 → 취소로 기록을 맞춘다
-            paymentState.approve(paymentId, remote.transactionId(), remote.paidAtOr(now), now);
-            paymentState.cancel(paymentId, PaymentCancelReason.STALE_PAYMENT, now);
+            sagaOutcomes.cancelledAtPortOne(paymentId, remote.transactionId(), remote.paidAtOr(now), now, notify);
             log.warn("포트원에서 이미 취소된 결제 → CANCELED paymentId={} bookingId={}", paymentId, payment.getBookingId());
             return Outcome.CANCELED;
         }
@@ -132,10 +137,9 @@ public class PortOneReconcileService {
      */
     public void closeAbandoned(Payment payment) {
         try {
-            Outcome outcome = reconcileProcessing(payment);
+            Outcome outcome = reconcileProcessing(payment, true, true);
             if (outcome == Outcome.NOT_YET) {
-                paymentState.settle(payment.getPaymentId(), PaymentStatus.FAILED, PaymentFailureCode.PROCESSING_TIMEOUT,
-                    null, clock.instant());
+                sagaOutcomes.fail(payment.getPaymentId(), PaymentFailureCode.PROCESSING_TIMEOUT, null, clock.instant(), true);
                 log.info("결제창 미완료 → FAILED(PROCESSING_TIMEOUT) paymentId={} bookingId={}",
                     payment.getPaymentId(), payment.getBookingId());
             }

@@ -3,6 +3,7 @@ CREATE DATABASE IF NOT EXISTS catalog_db CHARACTER SET utf8mb4 COLLATE utf8mb4_0
 CREATE DATABASE IF NOT EXISTS booking_db CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 CREATE DATABASE IF NOT EXISTS user_db    CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 CREATE DATABASE IF NOT EXISTS payment_db CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE DATABASE IF NOT EXISTS coupon_db  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE USER IF NOT EXISTS 'catalog_app'@'%' IDENTIFIED BY 'local';
 CREATE USER IF NOT EXISTS 'catalog_migrator'@'%' IDENTIFIED BY 'local';
@@ -12,6 +13,8 @@ CREATE USER IF NOT EXISTS 'user_app'@'%' IDENTIFIED BY 'local';
 CREATE USER IF NOT EXISTS 'user_migrator'@'%' IDENTIFIED BY 'local';
 CREATE USER IF NOT EXISTS 'payment_app'@'%' IDENTIFIED BY 'local';
 CREATE USER IF NOT EXISTS 'payment_migrator'@'%' IDENTIFIED BY 'local';
+CREATE USER IF NOT EXISTS 'coupon_app'@'%' IDENTIFIED BY 'local';
+CREATE USER IF NOT EXISTS 'coupon_migrator'@'%' IDENTIFIED BY 'local';
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON catalog_db.* TO 'catalog_app'@'%';
 GRANT ALL PRIVILEGES ON catalog_db.* TO 'catalog_migrator'@'%';
@@ -21,4 +24,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON user_db.* TO 'user_app'@'%';
 GRANT ALL PRIVILEGES ON user_db.* TO 'user_migrator'@'%';
 GRANT SELECT, INSERT, UPDATE, DELETE ON payment_db.* TO 'payment_app'@'%';
 GRANT ALL PRIVILEGES ON payment_db.* TO 'payment_migrator'@'%';
+GRANT SELECT, INSERT, UPDATE, DELETE ON coupon_db.* TO 'coupon_app'@'%';
+GRANT ALL PRIVILEGES ON coupon_db.* TO 'coupon_migrator'@'%';
 FLUSH PRIVILEGES;

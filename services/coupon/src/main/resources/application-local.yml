@@ -1,0 +1,17 @@
+server:
+  port: 8086
+app:
+  messaging:
+    consumer-enabled: true       # 로컬은 ElasticMQ가 있으니 켠다 (infra/compose elasticmq.conf에 같은 큐 이름)
+    commands-url: http://localhost:9324/queue/cinema-staging-coupon-commands
+    replies-url: http://localhost:9324/queue/cinema-staging-booking-replies
+  outbox:
+    relay-enabled: true
+
+# ElasticMQ (infra/compose). 자격 증명 값은 쓰이지 않지만 SDK가 요구한다
+spring.cloud.aws:
+  region.static: ap-northeast-2
+  credentials:
+    access-key: local
+    secret-key: local
+  sqs.endpoint: http://localhost:9324

@@ -3,3 +3,5 @@
 033f60b040cf9cedf4c89d17d996249e4111584a:services/payment/src/test/java/com/seatsac/payment/portone/WebhookSignatureVerifierTest.java:generic-api-key:15
 033f60b040cf9cedf4c89d17d996249e4111584a:services/payment/src/test/resources/application-test.yml:generic-api-key:24
 033f60b040cf9cedf4c89d17d996249e4111584a:services/payment/src/test/java/com/seatsac/payment/controller/PortOneWebhookControllerTest.java:generic-api-key:36
+# 6.3.2 coupon 컨트롤러 테스트의 멱등 키 UUID 리터럴(가짜 값) — 다음 커밋에서 실행 때 만드는 값으로 바꿨다 (#192)
+b15db970afdd5a1288be3a9b277c1566fa487a2e:services/coupon/src/test/java/com/seatsac/coupon/controller/CouponControllerTest.java:generic-api-key:39

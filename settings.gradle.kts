@@ -21,4 +21,5 @@ include(
     "services:booking",
     "services:user",
     "services:payment",
+    "services:coupon",
 )

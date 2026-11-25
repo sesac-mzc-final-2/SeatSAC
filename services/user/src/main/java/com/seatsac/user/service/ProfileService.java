@@ -43,14 +43,15 @@ public class ProfileService {
         this.clock = clock;
     }
 
-    public ProfileResponse getMyProfile(AuthUser user, String authorization) {
-        return ProfileResponse.of(ensureProfile(user.userId(), authorization), user.role());
+    /** @param grade 응답 등급(NORMAL·VIP) — 컨트롤러가 X-User-Grade에서 만든 값 */
+    public ProfileResponse getMyProfile(AuthUser user, String grade, String authorization) {
+        return ProfileResponse.of(ensureProfile(user.userId(), authorization), user.role(), grade);
     }
 
-    public ProfileResponse updateMyProfile(AuthUser user, String authorization, String name) {
+    public ProfileResponse updateMyProfile(AuthUser user, String grade, String authorization, String name) {
         ensureProfile(user.userId(), authorization);
         User renamed = store.rename(user.userId(), name.strip(), clock.instant());
-        return ProfileResponse.of(renamed, user.role());
+        return ProfileResponse.of(renamed, user.role(), grade);
     }
 
     /** 행이 있으면 그대로, 없으면 Cognito 값으로 만들어 돌려준다 */

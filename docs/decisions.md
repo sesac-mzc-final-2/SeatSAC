@@ -46,7 +46,7 @@
 | 38 · 54 | 계약 기준은 API 명세서 v1.1 + 2.2.4 v0.3 정리: 비페이징 목록 `{items}`, 오류 `details` 항상 배열, Cognito 조회 실패 503 `IDENTITY_UNAVAILABLE`, 내부 회차 API `seatIds` 삭제, `GET /internal/theaters` 신설 | `docs/contracts.md` |
 | 55 | 계약 강화(구현 전 일괄): `booking.confirmed` 필드 3개 필수, traceId `^[0-9a-f]{32}$`, 오류 traceId null 불가. 첫 계약 PR만 `contract-break-ok`, 라벨은 구현 시작 엔드포인트·M3 이후 금지 | |
 | 62 | Gateway 요청 수 제한 미도입(`rl:` 키·429 없음) | 🆕 ⏳ 재검토 중 — 124(WAF IP 요청 제한)로 대신할지 |
-| 24 | 결제는 예매당 1회, 실패하면 PAYMENT_FAILED + 좌석 해제 | 20 폐기 |
+| 24 | 결제는 예매당 1회, 실패하면 PAYMENT_FAILED + 좌석 해제 | 20 폐기. 🆕 11/24 보완(노션 ADR-24): **saga 경로만** 결제 시도는 여러 번이되 살아 있는 결제(PROCESSING·APPROVED)는 예매당 1건 — payment UK `uk_payment_booking_id` → `live_booking_id`, 다음 시도는 앞 결제가 포트원 FAILED로 확인된 뒤에만, 예매당 3회, 플래그 `APP_CHECKOUT_PAYMENT_RETRY_ENABLED`(기본 off). 동기 경로는 예매당 1회 그대로 |
 | 13 | 모의 결제: 거절도 200 + status, 카드 끝 0000 거절·1111 잔액 부족·9999 5초 지연 후 승인, `PROCESSING` | 롤백 지표에서 거절 제외. **112로 부분 대체** — 화면은 토스페이, 모의는 테스트·분석 전용 |
 | 112 | 결제는 **포트원(PortOne) V2 + 토스페이**(간편결제, `payMethod EASY_PAY`). 화면은 토스페이만. 두 단계: `POST /bookings/{id}/payments`(준비, paymentId 발급) → 결제창 → `POST /bookings/{id}/pay {method: TOSSPAY, paymentId}`(payment가 포트원 단건 조회로 PAID·금액 검증). 웹훅 `Transaction.Paid` 병행(본문 불신). 모의(`CARD`)는 테스트·분석 전용 — 헤더 `X-Payment-Mock-Key`가 맞을 때만(화면에는 없음). paymentId는 booking 발급 UUID 그대로. 결제창 미완료 정리: payment 7분, booking 만료+2분 | 11/13. 결제 경로 매트릭스 `docs/payment-paths.md`. 13 부분 대체·60 대체. 계약 PR #115는 `contract-break-ok`(55의 「M3 이후 금지」 예외 — 응답 enum 값 추가뿐이고 소비자인 화면·booking이 같은 기간에 함께 바뀐다). 일정은 #121(64 개정)로 동결 없음 |
 | 30 · 51 | 예매 완료 알림: booking만 SQS 발행(아웃박스 + 릴레이) → Lambda(로그), DLQ 3회. **OPS-08 일별 집계는 제외** | |
@@ -85,7 +85,7 @@
 | --- | --- | --- |
 | 114 | 범위: 기간 11/23~27(4명 — 11/23~25 구현, 11/26 통합 테스트·비교 측정, 11/27 통합 시연·리허설), 목표 = 서비스별 DB·비동기 saga·장애 격리·관리자 운영. 하루 비용 상한 $50, 못 끝내면 새 계정으로 이어서(125). 순서는 노션 「MSA 고도화 (WBS)」 「순서」 열 | 52 보완 |
 | 115 | **서비스별 RDS 인스턴스** `cinema-staging-{svc}-db` 6개(booking small·나머지 micro, ai 외 Multi-AZ), `DB_HOST_{SVC}`, 인스턴스별 db-bootstrap | 3·33·61 대체 |
-| 116 | 체크아웃 **오케스트레이션 saga**(booking이 오케스트레이터): 새 리소스 `/bookings/{id}/checkout`(202 + 폴링), 쿠폰 예약 → 결제 준비 → 확인 → 확정, 실패는 역순 보상, ~~단계 기한 30초~~ 🆕 단계 기한 10초(돈이 움직이기 전 단계만 — 결제 확인은 보상 없이 재확인, 선점 만료 뒤에는 예매 상태를 따름), 쿠폰 거절은 보상 없이 `COUPON_REJECTED`(예매·좌석 유지, 다시 시작 가능). 기존 `/payments`·`/pay`는 유지, 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 off)·화면 `VITE_CHECKOUT_MODE` | 동기 경로와 비교 시연 |
+| 116 | 체크아웃 **오케스트레이션 saga**(booking이 오케스트레이터): 새 리소스 `/bookings/{id}/checkout`(202 + 폴링), 쿠폰 예약 → 결제 준비 → 확인 → 확정, 실패는 역순 보상, ~~단계 기한 30초~~ 🆕 단계 기한 10초(돈이 움직이기 전 단계만 — 결제 확인은 보상 없이 재확인, 선점 만료 뒤에는 예매 상태를 따름 → 🆕 11/24 선점 5분에 바로 만료·환불은 payment(`payment.release-requested`)), 쿠폰 거절은 보상 없이 `COUPON_REJECTED`(예매·좌석 유지, 다시 시작 가능), 🆕 결제창 취소 뒤 재결제 `PAYMENT_RETRYABLE`(ADR-24 보완). 기존 `/payments`·`/pay`는 유지, 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 off)·~~화면 `VITE_CHECKOUT_MODE`~~ 🆕 화면은 체크아웃만 쓰고 동기 경로는 k6 비교 측정·테스트 전용(화면 선택 스위치 없음, 11/24) | 동기 경로와 비교 시연 |
 | 117 | 메시징 **SNS(이벤트) + SQS(명령·결과)**, 큐마다 DLQ 3회, 아웃박스 + inbox(`processed_message`), `correlationId` = checkoutId. 파드가 SQS 직접 소비, Lambda는 외부 작업만 | 22·23 보완, 30 유지 |
 | 118 | **coupon 서비스**(Java, `coupon_db`): VIP 선착순 쿠폰, 재고 Valkey DECR + DB 유일 제약, VIP는 Cognito 그룹 → gateway `X-User-Grade` | 37 보완 |
 | 119 | **ops-api**(Python, `/ops/*` CloudFront → ALB, gateway 우회): Cognito `ADMIN` 그룹만, 상태·정지/가동(replicas 0 ↔ 원래 값, ArgoCD `ignoreDifferences`)·리포트. 감사 로그 | 37 보완. GitOps 예외(replicas만) |

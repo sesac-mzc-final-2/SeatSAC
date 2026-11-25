@@ -142,7 +142,7 @@
 | traceId | ⚠️ 소문자 16진수 **32자리**(UUID 하이픈 제거). Gateway가 요청마다 생성, 응답 헤더에도. 요청 없는 작업(만료 스캔·릴레이)은 새로 생성 |
 | 시간 | DB `DATETIME(3)` **UTC**(RDS `time_zone=UTC`, 앱 `Clock.systemUTC()`, 상태 전이 조건에 `NOW()` 대신 앱이 구한 `:now`). API·메시지는 ISO-8601 `+09:00`. `business_date`·`date` 파라미터·화면은 Asia/Seoul |
 | ID | PK `BIGINT AUTO_INCREMENT`(Java `Long`, OpenAPI `int64`). ⚠️ 사용자 ID = Cognito `sub`(`CHAR(36)`, `String`). holdId·paymentId·eventId = UUID v4 `CHAR(36)` |
-| 금액 | 정수(원). 1석 15,000원, `amount = seatCount × 15000`. 🆕 쿠폰을 쓰면 `final = amount − floor(amount × discountRate / 100)`(결제 준비 전에 booking이 확정, ADR-118) |
+| 금액 | 정수(원). 1석 15,000원, `amount = seatCount × 15000`. 🆕 쿠폰을 쓰면 `final = amount − floor(amount × discountRate / 100)`(결제 준비 전에 booking이 확정, ADR-118). 🆕 11/24 할인율 상한 **99%** — 결제 금액 0원이 생기지 않게(#176 리뷰). 결제 금액은 15,000의 배수가 아닐 수 있다 |
 | 로그 | stdout JSON 한 줄: `timestamp`(+09:00), `level`, `service`, `traceId`, `userId`(있으면), `message`, `error`(있으면). 카드 번호·토큰·비밀번호 금지. 🆕 오류·보안 로그에는 `errorCategory`(`HTTP_UPSTREAM`·`TIMEOUT`·`AUTH`·`FORBIDDEN`·`SECURITY`·`VALIDATION`·`CONFLICT`·`INTERNAL`, ADR-121) — 일자별 리포트가 이 값으로 나눈다. `SECURITY`는 401·403·차단 경로(`/api/internal`·`actuator`)·위조 헤더·WAF 차단. 메시지 소비 로그는 `messageType`·`correlationId` |
 
 ### 공통 오류 코드
@@ -168,7 +168,7 @@
 | 409 | 🆕 `CHECKOUT_IN_PROGRESS`, `CHECKOUT_NOT_READY`, `PAYMENT_PATH_CONFLICT` | booking — 체크아웃 saga(ADR-116). 동기 결제와 체크아웃을 한 예매에 섞으면 `PAYMENT_PATH_CONFLICT` |
 | 403 | 🆕 `COUPON_NOT_ELIGIBLE` | coupon — VIP 아님 |
 | 409 | 🆕 `COUPON_EVENT_NOT_OPEN`(`reason` `UPCOMING`·`CLOSED`), `COUPON_SOLD_OUT`, `COUPON_ALREADY_CLAIMED` | coupon |
-| — | 🆕 `COUPON_NOT_USABLE`, `PAYMENT_DECLINED`, `STEP_TIMEOUT`, `HOLD_EXPIRED` | booking 체크아웃 응답의 `failure.code`(HTTP 오류가 아니라 200 응답 안의 값). `STEP_TIMEOUT`은 돈이 움직이기 전 단계만, 결제 결과 불명은 `HOLD_EXPIRED`(`reason` `PAYMENT_RESULT_UNKNOWN`). coupon 거절 `reason`은 `NOT_OWNER`·`NOT_ISSUED`·`EXPIRED`·`ALREADY_RELEASED`. 🆕 `COUPON_NOT_USABLE`은 `state` `COUPON_REJECTED`와 함께 온다 — 예매는 그대로라 화면은 남은 선점 시간 안에 쿠폰을 다시 고르거나 쿠폰 없이 결제하게 한다 |
+| — | 🆕 `COUPON_NOT_USABLE`, `PAYMENT_DECLINED`, `STEP_TIMEOUT`, `HOLD_EXPIRED` | booking 체크아웃 응답의 `failure.code`(HTTP 오류가 아니라 200 응답 안의 값). `STEP_TIMEOUT`은 돈이 움직이기 전 단계만, 결제 결과 불명은 `HOLD_EXPIRED`(`reason` `PAYMENT_RESULT_UNKNOWN`). coupon 거절 `reason`은 `NOT_OWNER`·`NOT_ISSUED`·`EXPIRED`·`ALREADY_RELEASED`. 🆕 `COUPON_NOT_USABLE`은 `state` `COUPON_REJECTED`와 함께 온다 — 예매는 그대로라 화면은 남은 선점 시간 안에 쿠폰을 다시 고르거나 쿠폰 없이 결제하게 한다. 🆕 11/24: `PAYMENT_DECLINED`가 `state` `PAYMENT_RETRYABLE`과 함께 오면(포트원 FAILED 확인, 플래그 `APP_CHECKOUT_PAYMENT_RETRY_ENABLED`) 예매·좌석이 그대로라 다시 결제할 수 있다. 다시 시작이 예매당 3회를 넘으면 `POST …/checkout`이 409 `BOOKING_STATE_CONFLICT`(`details[].reason` `RETRY_LIMIT`) |
 | 413 | 🆕 `PAYLOAD_TOO_LARGE` | gateway — 요청 본문 64KB 초과(ADR-124) |
 | 400 | 🆕 `SERVICE_NOT_STOPPABLE` | ops-api — 정지/가동 대상이 아님 |
 | 409 | 🆕 `ROLLOUT_IN_PROGRESS` | ops-api — booking·gateway 블루/그린 진행 중 |

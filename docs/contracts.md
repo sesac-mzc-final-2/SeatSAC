@@ -29,12 +29,12 @@
 | 🆕 `events/booking.canceled.v1.json` | 예매 취소·만료·결제 실패(`reason`) | 남궁일 |
 | 🆕 `events/screening.changed.v1.json` · `movie.changed.v1.json` | catalog 변경(`version`, `deleted`) → ai·(booking) 복제본 | 한채연 |
 | 🆕 `events/coupon.{reservation-requested,use-requested,release-requested}.v1.json` | saga 명령 → coupon | 남궁일(보냄) · 한채연(받음) |
-| 🆕 `events/payment.{preparation-requested,charge-requested,verification-requested}.v1.json` | saga 명령 → payment | 남궁일 |
-| 🆕 `events/coupon.{reserved,reservation-rejected}.v1.json` · `payment.{prepared,preparation-failed,approved,declined,result-unknown}.v1.json` | saga 결과 → booking | 한채연·남궁일 |
+| 🆕 `events/payment.{preparation-requested,charge-requested,verification-requested}.v1.json` · 🆕 `payment.release-requested.v1.json` | saga 명령 → payment. `release-requested`는 선점 만료 때 「이 결제는 더 쓰이지 않는다」(환불은 payment가 맡음, #176). `charge-requested`(모의 카드)는 카드 끝 4자리(`cardLast4`)만 싣는다 — 아웃박스·큐·DLQ에 남기 때문 | 남궁일 |
+| 🆕 `events/coupon.{reserved,reservation-rejected}.v1.json` · `payment.{prepared,preparation-failed,approved,declined,result-unknown}.v1.json` | saga 결과 → booking. 🆕 `payment.declined.retryable`(포트원 FAILED 확인 — 같은 예매로 다시 결제 가능, 플래그 `APP_CHECKOUT_PAYMENT_RETRY_ENABLED`), `failureCode` `BOOKING_EXPIRED`(해제 명령을 받은 결제가 나중에 PAID → 환불 대상), `payment.result-unknown`은 실패가 아니라 재확인 신호(`reason` `NOT_YET`·`PORTONE_UNAVAILABLE`·`NOT_FOUND`) | 한채연·남궁일 (🆕 11/24 coupon은 김종식, #178) |
 | `schemas/error.v1.json` | 공통 오류 응답 | 전원 |
 | `*/examples/**` | 예시 메시지 = 서비스 테스트 fixture | 각 담당 |
 
-합계: 외부 22(⚠️AI ai 2개·포트원 웹훅 1개 포함) · 내부 9 · 이벤트 2. 🆕 11/23 이후 외부 **36**(booking 3·coupon 3·ops 8 추가) · 내부 **12**(coupon 2·ai 1) · 메시지 **18**(이벤트 4 + 명령 6 + 결과 7 + 좌석 이벤트 1).
+합계: 외부 22(⚠️AI ai 2개·포트원 웹훅 1개 포함) · 내부 9 · 이벤트 2. 🆕 11/23 이후 외부 **36**(booking 3·coupon 3·ops 8 추가) · 내부 **12**(coupon 2·ai 1) · 메시지 ~~**18**(이벤트 4 + 명령 6 + 결과 7 + 좌석 이벤트 1)~~ 🆕 **19**(이벤트 4 + 명령 **7** + 결과 7 + 좌석 이벤트 1 — 11/24 `payment.release-requested` 추가, #176).
 
 ## 2. API 목록
 
@@ -58,7 +58,7 @@
 | 없음(서명) | `POST /webhooks/portone` | PAY-05 | 포트원 웹훅. Standard Webhooks 서명, 본문 불신 → 단건 조회 재검증 |
 | USER | `POST /bookings/{bookingId}/cancel` | BKG-07 | |
 | 🆕 USER | `POST /bookings/{bookingId}/checkout` | BKG-10 | **체크아웃 saga**(ADR-116). `Idempotency-Key` 필수, `{method: TOSSPAY\|CARD, couponIssueId?}` → 202 `{checkoutId, state, pollAfterMs}`. 플래그 `APP_CHECKOUT_SAGA_ENABLED`(기본 `false` → 404). 한 예매에 동기 결제와 섞으면 409 `PAYMENT_PATH_CONFLICT` |
-| 🆕 USER | `GET /bookings/{bookingId}/checkout` | BKG-10 | polling(1초, 최대 30초). `state` STARTED → COUPON_RESERVING → PAYMENT_PREPARING → READY_TO_PAY(포트원 결제창 값) → VERIFYING → CONFIRMED / COMPENSATING → FAILED / EXPIRED, 🆕 / COUPON_REJECTED(쿠폰만 거절 — 예매·좌석은 그대로, 최초 선점 5분 안에 다른 쿠폰이나 쿠폰 없이 `POST …/checkout`을 새 `Idempotency-Key`로 다시). CARD는 결제 준비 없이 CHARGING. `amount {original, discount, final}`, `failure {code, reason}`. 결제 결과 불명(`CHARGING`·`VERIFYING`)은 보상하지 않고 재확인, ~~선점 만료까지 모르면 EXPIRED~~ 🆕 선점 만료 뒤에는 예매 상태를 따라 닫힌다(기존 만료 처리가 유예 2분 뒤 payment 결과로 정함 — 결과 불명이면 대략 7~9분). 진행 중이면 `DELETE /bookings/{id}/hold`도 409 `CHECKOUT_IN_PROGRESS`, `GET /bookings/{id}`에 `checkout {checkoutId, state}` 추가 |
+| 🆕 USER | `GET /bookings/{bookingId}/checkout` | BKG-10 | polling(1초, 최대 30초). `state` STARTED → COUPON_RESERVING → PAYMENT_PREPARING → READY_TO_PAY(포트원 결제창 값) → VERIFYING → CONFIRMED / COMPENSATING → FAILED / EXPIRED, 🆕 / COUPON_REJECTED(쿠폰만 거절 — 예매·좌석은 그대로, 최초 선점 5분 안에 다른 쿠폰이나 쿠폰 없이 `POST …/checkout`을 새 `Idempotency-Key`로 다시). CARD는 결제 준비 없이 CHARGING. `amount {original, discount, final}`, `failure {code, reason}`. 결제 결과 불명(`CHARGING`·`VERIFYING`)은 보상하지 않고 재확인, ~~선점 만료까지 모르면 EXPIRED~~ ~~선점 만료 뒤에는 예매 상태를 따라 닫힌다(기존 만료 처리가 유예 2분 뒤 payment 결과로 정함 — 결과 불명이면 대략 7~9분)~~ 🆕 11/24(#176): **선점 5분에 예매를 바로 EXPIRED**(유예 2분·payment 조회 없음), saga도 EXPIRED + `refundNotice`(`WILL_REFUND_IF_PAID` 결제 여부 모름 · `REFUND_IN_PROGRESS` 만료 뒤 승인 확인 · null 결제 없음) — 환불은 payment가 맡는다(`payment.release-requested`). 🆕 PAYMENT_RETRYABLE(포트원 FAILED 확인 — 예매·좌석 유지, 새 `Idempotency-Key`로 다시 결제, 예매당 3회, 플래그 `APP_CHECKOUT_PAYMENT_RETRY_ENABLED` 기본 `false`). 응답 `attempt`·`retryable`. 진행 중이면 `DELETE /bookings/{id}/hold`도 409 `CHECKOUT_IN_PROGRESS`(COUPON_REJECTED·PAYMENT_RETRYABLE은 끝난 상태라 해제 허용), `GET /bookings/{id}`에 `checkout {checkoutId, state}` 추가(saga 예매는 payment를 조회하지 않는다) |
 | 🆕 USER | `POST /bookings/{bookingId}/checkout/confirm` | BKG-10 | 결제창이 닫힌 뒤 `{paymentId}` → 202. `READY_TO_PAY`가 아니면 409 `CHECKOUT_NOT_READY` |
 | 🆕 USER | `GET /coupons/events/current` | CPN-01 | **coupon**, `{eventId, title, discountRate, startsAt, endsAt, totalQuantity, remainingQuantity, eligibleGrade, state, myIssue}` — NORMAL 사용자도 200(화면이 「VIP 전용」 안내) |
 | 🆕 USER | `POST /coupons/events/{eventId}/claim` | CPN-02 | VIP만(`X-User-Grade`), 선착순, `Idempotency-Key` 필수 → 201. 403 `COUPON_NOT_ELIGIBLE`, 409 `COUPON_SOLD_OUT`·`COUPON_ALREADY_CLAIMED`·`COUPON_EVENT_NOT_OPEN` |
@@ -116,7 +116,7 @@
 | 15 | 🆕 비동기 결제 | 기존 `/payments`·`/pay`는 그대로 두고 **새 자원 `checkout`**(202 + polling)으로 추가. 상태·결과는 `GET /bookings/{id}/checkout` 한 곳 | 노션 ADR-116 (11/23) |
 | 16 | 🆕 메시지 envelope | 기존 envelope + `correlationId`(saga = `checkoutId`). 소비자는 모르는 필드를 무시, `processed_message`로 한 번만 | ADR-117 |
 | 17 | 🆕 VIP·관리자 | VIP = Cognito 그룹 → gateway `X-User-Grade`, 관리자 = Cognito `ADMIN` 그룹 → ops-api 직접 검증(`/api/admin/**`은 계속 없음) | ADR-118·119 |
-| 18 | 🆕 금액 | 쿠폰 할인은 booking이 결제 준비 전에 확정(`amount {original, discount, final}`), 포트원 결제창은 `final` | ADR-118 |
+| 18 | 🆕 금액 | 쿠폰 할인은 booking이 결제 준비 전에 확정(`amount {original, discount, final}`), 포트원 결제창은 `final`. 🆕 11/24: payment 내부 `amount`는 15,000 배수 검사를 빼고 1~60,000(#176), 0원은 없다 — 쿠폰 할인율 상한 99% | ADR-118 |
 
 ## 4. 바꾸는 방법
 

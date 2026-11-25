@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------
-# ArgoCD Application: root(App of Apps) + 서비스 5개 — Helm 차트 argocd-apps (3.1.5)
+# ArgoCD Application: root(App of Apps) + 서비스 5개 — Helm 차트 argocd-apps (3.1.5) · 🆕 ops-api(6.1.7, ops_api_enabled)
 #   - root(cinema-root): gitops apps/staging → AppProject cinema · argo-rollouts · kube-prometheus-stack · cinema-common
 #   - 서비스(cinema-{gateway,catalog,booking,user,payment}): SeatSAC-gitops가 Public이라 ECR 레지스트리(계정 ID)를
 #     그 레포에 두지 않는다(ADR-74). gitops에는 이미지 이름 cinema/{svc}와 태그(overlays/staging/{svc}/image-tag)만 있고
@@ -19,7 +19,21 @@ locals {
     var.cognito_enabled ? ["gateway"] : [],
     ["catalog", "booking", "user", "payment"],
     var.ai_enabled ? ["ai"] : [],
+    var.ops_api_enabled ? ["ops-api"] : [], # 🆕 6.1.7 (ADR-119)
   ))
+
+  # 🆕 6.1.7 ops-api 정지/가동(ADR-119): ops-api가 */scale로 바꾼 replicas는 Git과 다르다(의도된 GitOps 예외).
+  #   서비스 Application이 /spec/replicas를 비교하지 않고(Synced 유지) sync 때도 덮어쓰지 않게(RespectIgnoreDifferences)
+  #   - HPA가 있는 서비스는 Git에 replicas가 없어 원래 차이가 없다 — 고정 replicas(gateway·payment·ai 등)에 효과가 있다
+  #   - 부작용: Git의 replicas를 바꾸는 PR도 그 Deployment·Rollout에는 적용되지 않는다 → 런북 6-K-4(관리자 수동 sync)
+  argocd_ignore_replicas = [
+    { group = "apps", kind = "Deployment", jsonPointers = ["/spec/replicas"] },
+    { group = "argoproj.io", kind = "Rollout", jsonPointers = ["/spec/replicas"] },
+  ]
+  # ops-api가 정지 전 replicas를 적는 ConfigMap — data는 ops-api만 쓴다(Git에는 빈 data)
+  argocd_ignore_ops_state = [
+    { group = "", kind = "ConfigMap", name = "ops-api-state", jsonPointers = ["/data"] },
+  ]
 
   # 플랫폼 CRD(Rollout·PodMonitor)·cinema-infra-endpoints보다 먼저 sync되면 실패 → 재시도로 맞춘다 (최대 약 20분)
   argocd_sync_policy = {
@@ -72,7 +86,8 @@ locals {
         server    = "https://kubernetes.default.svc"
         namespace = var.app_namespace
       }
-      syncPolicy = local.argocd_sync_policy
+      ignoreDifferences = concat(local.argocd_ignore_replicas, s == "ops-api" ? local.argocd_ignore_ops_state : [])
+      syncPolicy        = merge(local.argocd_sync_policy, { syncOptions = ["RespectIgnoreDifferences=true"] })
     }
   }
 }

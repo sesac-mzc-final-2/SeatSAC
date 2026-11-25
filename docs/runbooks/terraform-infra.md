@@ -1888,6 +1888,82 @@ Grafana(6-F-2와 같은 접속) → Explore → 데이터소스 **Loki**:
 - 비용: S3 수 GB·요청 수 수준(월 1달러 미만). 노드 추가 없음
 - 알림 Lambda 로그는 CloudWatch에 있다 — Loki로 옮기지 않는다
 
+### 6-K. ops-api — 관리자 API `/ops` (6.1.7, ADR-119) — ⬜
+
+코드: SeatSAC `services/ops-api` · `envs/staging/ops_api.tf`(Pod Identity)·`ecr.tf`·`cloudfront.tf`(`/ops/*`) · `envs/staging-k8s/argocd_apps.tf`(`ops_api_enabled`, `ignoreDifferences`)·`infra_endpoints.tf`(`PROMETHEUS_URL`·`REPORTS_BUCKET`·`ATHENA_WORKGROUP`) · gitops `base/ops-api`·`overlays/staging/ops-api`·`base/ai/networkpolicy.yaml`(ops-api → ai) · gitops `base/gateway/ingress.yaml`(`/ops` 경로 — **따로 머지**)
+
+| 항목 | 값 |
+| --- | --- |
+| 외부 주소 | `https://{도메인}/ops/**` → CloudFront `/ops/*` → 같은 ALB의 `/ops` 규칙 → `ops-api:8080` (gateway를 거치지 않는다) |
+| 인증 | Cognito Access Token(issuer·`client_id`·`token_use=access`) + `cognito:groups` ∋ `ADMIN`. 그룹 지정 뒤에는 토큰을 새로 받아야 반영된다 |
+| Kubernetes 권한 | Role(`cinema-staging`): deployments·rollouts·hpa·pods get/list · `*/scale` get/patch · ConfigMap `ops-api-state` get/patch · ClusterRole: nodes get/list |
+| AWS 권한 | `cinema-staging-ops-api-pod`: Athena 작업 그룹 `cinema-staging-reports`·Glue `cinema_staging_reports`·S3 `cinema-staging-reports-{계정ID}`(이름 ARN — 리소스는 6.1.8·6.1.9) |
+| 상태 기록 | ConfigMap `ops-api-state`(gitops, data 빈 값) — 정지 전 replicas. ArgoCD는 `/data`를 비교하지 않는다 |
+
+**1) Terraform** (시연·측정이 없는 시간)
+
+```bash
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: add = ECR cinema/ops-api(+ 수명 주기·저장소 정책) · Pod Identity 역할·정책·연결
+#       change = CloudFront 배포(ordered_cache_behavior /ops/* 1개 추가). destroy 0
+terraform apply plan.out
+```
+
+**2) 첫 이미지** — 저장소 변수 `OPS_BUILD_PUSH_ENABLED=true` → Actions `build-push` 수동 실행(`services=ops-api`, main) → gitops `overlays/staging/ops-api/image-tag`가 그 태그로 바뀐다
+
+**3) gitops PR ①(base/ops-api) 머지 → staging-k8s**
+
+```bash
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -var ops_api_enabled=true -out=plan.out   # tfvars에도 ops_api_enabled = true
+# 기대: ConfigMap cinema-infra-endpoints(키 3개 추가) · helm_release.argocd_apps(cinema-ops-api 추가 + 서비스 Application에 ignoreDifferences·syncOptions)
+terraform apply plan.out
+kubectl -n argocd get application cinema-ops-api      # Synced · Healthy
+kubectl -n cinema-staging get pods -l app.kubernetes.io/name=ops-api
+```
+
+- 서비스 Application의 `ignoreDifferences`·`syncOptions` 추가는 파드를 재시작하지 않는다(Application 정의만 바뀜)
+
+**4) gitops PR ②(gateway Ingress `/ops`) 머지** — ops-api Service가 생긴 뒤에만. Service가 없는데 규칙이 먼저 들어가면 LB Controller가 gateway Ingress 전체를 조정하지 못한다(기존 규칙은 그대로지만 이후 변경이 막힌다)
+
+```bash
+kubectl -n cinema-staging describe ingress gateway | grep -A3 '/ops'     # ops-api:http
+aws elbv2 describe-rules --listener-arn <gateway ALB 443 리스너> --query 'Rules[].Conditions[].Values' --output text | tr '\t' '\n' | grep /ops
+```
+
+**확인** (화면 대신 curl — 토큰은 셸 기록에 남기지 않는다: `read -rs TOKEN`)
+
+```bash
+D=https://<도메인>
+curl -s -o /dev/null -w '%{http_code}\n' "$D/ops/services"                                   # 401 (TOKEN_REQUIRED)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $USER_TOKEN" "$D/ops/services"    # 403 (ADMIN 아님)
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/services" | jq '.items[] | {service, desired, ready, state}'   # 200
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/reports/errors/dates" | jq .code   # 6.1.8·6.1.9 전에는 "REPORT_UNAVAILABLE"
+```
+
+- [ ] ADMIN 토큰 200 · 일반 토큰 403 · 토큰 없음 401
+- [ ] `nodes[].cpuPercent`가 숫자(null이면 PromQL 라벨 확인 — 아래 표)
+- [ ] 시연 대상 하나 정지 → `GET /ops/services`의 `stopped: true` → 가동 → 원래 replicas. ArgoCD 그 앱이 **Synced** 그대로
+- [ ] `kubectl -n cinema-staging logs deploy/ops-api | grep '"ops audit"'` — 정지·가동 두 줄(userId·action·target·result)
+- [ ] `infra/scripts/np-check.sh` — ops-api → ai OPEN(ai 파드가 있을 때), ops-api → 그 밖 BLOCKED
+
+**4-1) Git의 replicas를 바꾸는 PR을 머지했을 때** (6-K-4) — `RespectIgnoreDifferences` 때문에 그 값이 적용되지 않는다(HPA가 있는 서비스는 Git에 replicas가 없어 해당 없음). 관리자가 ArgoCD 화면(관리자 계정)에서 그 Application → **Sync** → 옵션 「Respect Ignore Differences」를 끄고 그 Deployment·Rollout만 골라 한 번 sync한다. 정지해 둔 서비스가 있으면 그 전에 「가동」으로 되돌린다(sync가 Git 값으로 되살린다)
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| 모든 요청 503 `upstream cognito` `NOT_CONFIGURED` | `cinema-infra-endpoints`의 `COGNITO_*`가 비어 있음(`cognito_enabled = false`) | staging-k8s `cognito_enabled = true` 뒤 ops-api 재시작 |
+| 503 `JWKS_UNAVAILABLE` | NAT·Cognito 장애로 JWKS를 못 받음 | NAT 확인. 키는 1시간 캐시라 한 번 받은 뒤에는 잠깐의 장애에 견딘다 |
+| 403인데 ADMIN 그룹에 넣었다 | 토큰이 그룹 지정 전에 발급됨 | 로그아웃 → 다시 로그인 |
+| 정지 503 `STATE_CONFIGMAP_MISSING` | ConfigMap `ops-api-state`가 없음(ops-api Application sync 전) | `kubectl -n cinema-staging get cm ops-api-state` → ArgoCD cinema-ops-api sync |
+| 정지 503 `HTTP_403` | Role이 없거나 ServiceAccount 이름이 다름 | `kubectl auth can-i patch deployments/scale --as=system:serviceaccount:cinema-staging:ops-api -n cinema-staging` |
+| 정지 409 `ROLLOUT_IN_PROGRESS` | booking·gateway 블루/그린 중(또는 abort 뒤 revert 전) | 전환·revert가 끝난 뒤 |
+| 정지한 서비스가 몇 분 뒤 되살아남 | 그 Application이 `ignoreDifferences` 없이 sync됨(Terraform 3번 전) | 3번 apply 확인: `kubectl -n argocd get application cinema-<svc> -o jsonpath='{.spec.ignoreDifferences}'` |
+| `nodes[].cpuPercent` 모두 null | cAdvisor 지표에 `node` 라벨이 없음 | Prometheus에서 `container_cpu_usage_seconds_total{id="/"}` 라벨 확인 → `prom.py` 쿼리 조정 |
+| `/ops/*` 가 화면(index.html)으로 옴 | CloudFront `/ops/*` 동작이 없음(1번 전) 또는 무효화 전 | 1번 apply 확인 |
+
+---
+
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
 코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito는 `cognito.tf`(3.1.16, 7-6).

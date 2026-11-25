@@ -37,7 +37,7 @@ SeatSAC-gitops/
 ├── base/{service}/        Deployment 또는 Rollout, Service(+preview), HPA, NetworkPolicy, PodMonitor, Flyway 훅 Job(Sync wave -1)
 │                          ⚠️AI base/ai: Deployment(nodeSelector·toleration ng-ai)·Service·NetworkPolicy(gateway·monitoring → ai, 🆕 ops-api → ai 내부 통계)·PodMonitor (HPA 없음. Flyway는 🆕 `ai_db`를 쓰기 전까지 없음 — 런타임 계약 9-1)
 │                          🆕 base/coupon: Deployment·Service·HPA·NetworkPolicy(gateway·ops-api·monitoring → coupon — ops-api는 내부 이벤트 생성·목록)·PodMonitor·Flyway Job·ExternalSecret
-│                          🆕 base/ops-api: Deployment·Service·Ingress(IngressGroup `cinema`, `/ops`)·Role·RoleBinding·ServiceAccount·NetworkPolicy·PodMonitor
+│                          🆕 base/ops-api: Deployment·Service·ServiceAccount·rbac(Role·ClusterRole nodes)·ConfigMap ops-api-state·NetworkPolicy(ALB·monitoring → ops-api)·PodMonitor. ALB `/ops` 규칙은 base/gateway/ingress.yaml에 경로로(같은 ALB)
 │                          🆕 base/{svc}/externalsecret.yaml(sync wave -3) — Secret 매니페스트 대신
 ├── base/common/           앱 namespace 인바운드 기본 거부 + analysis
 ├── overlays/staging/{service}/  ConfigMap {service}-config(엔드포인트는 ${키}) + image-tag/(newTag만)

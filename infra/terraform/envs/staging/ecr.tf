@@ -9,7 +9,8 @@
 # ------------------------------------------------------------------
 
 locals {
-  ecr_services = toset(["gateway", "catalog", "booking", "user", "payment", "ai"]) # ⚠️AI ai: 3.1.18 (build-push는 AI_BUILD_PUSH_ENABLED 뒤)
+  # ⚠️AI ai: 3.1.18 (build-push는 AI_BUILD_PUSH_ENABLED 뒤) · 🆕 ops-api: 6.1.7 (build-push는 OPS_BUILD_PUSH_ENABLED 뒤)
+  ecr_services = toset(["gateway", "catalog", "booking", "user", "payment", "ai", "ops-api"])
 
   # 사람이 직접 올리는 것을 막을 push 계열 API
   ecr_push_actions = [

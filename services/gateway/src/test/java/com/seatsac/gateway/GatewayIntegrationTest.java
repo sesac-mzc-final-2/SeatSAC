@@ -226,6 +226,51 @@ class GatewayIntegrationTest {
         assertThat(adminGroupHeaders.get("x-user-role").asText()).isEqualTo("USER");
     }
 
+    // ---------- 6.3.1a 사용자 등급 X-User-Grade ----------
+
+    @Test
+    void 등급은_토큰_cognito_groups로_만든다_VIP만_VIP() {
+        assertThat(forwardedHeaders("/api/users/me", token(KEY, Map.of())).get("x-user-grade").asText())
+            .isEqualTo("NORMAL");
+        assertThat(forwardedHeaders("/api/users/me", token(KEY, Map.of("cognito:groups", List.of("VIP"))))
+            .get("x-user-grade").asText()).isEqualTo("VIP");
+        assertThat(forwardedHeaders("/api/users/me", token(KEY, Map.of("cognito:groups", List.of("ADMIN", "VIP"))))
+            .get("x-user-grade").asText()).isEqualTo("VIP");
+        // ADMIN 그룹은 Gateway에서 의미가 없다 — 등급은 NORMAL, 역할은 USER 그대로
+        JsonNode admin = forwardedHeaders("/api/users/me", token(KEY, Map.of("cognito:groups", List.of("ADMIN"))));
+        assertThat(admin.get("x-user-grade").asText()).isEqualTo("NORMAL");
+        assertThat(admin.get("x-user-role").asText()).isEqualTo("USER");
+    }
+
+    @Test
+    void 외부에서_보낸_등급은_인증된_요청에서도_토큰_값으로_덮어쓴다() {
+        JsonNode headers = client.get().uri("/api/users/me")
+            .header("X-User-Grade", "VIP")
+            .headers(h -> h.setBearerAuth(token(KEY, Map.of())))
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(JsonNode.class).returnResult().getResponseBody().get("headers");
+        assertThat(headers.get("x-user-grade").asText()).isEqualTo("NORMAL");
+    }
+
+    @Test
+    void 인증_없는_라우트에는_등급을_붙이지_않고_외부_값도_지운다() {
+        JsonNode publicHeaders = client.get().uri("/api/movies")
+            .header("X-User-Grade", "VIP")
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(JsonNode.class).returnResult().getResponseBody().get("headers");
+        assertThat(publicHeaders.has("x-user-grade")).isFalse();
+
+        JsonNode webhookHeaders = client.post().uri("/api/webhooks/portone")
+            .header("X-User-Grade", "VIP")
+            .bodyValue(WEBHOOK_BODY)
+            .exchange()
+            .expectStatus().isOk()
+            .expectBody(JsonNode.class).returnResult().getResponseBody().get("headers");
+        assertThat(webhookHeaders.has("x-user-grade")).isFalse();
+    }
+
     @Test
     void ID_토큰_다른_클라이언트_모르는_키_만료_토큰은_401() {
         Date past = Date.from(Instant.now().minusSeconds(600));

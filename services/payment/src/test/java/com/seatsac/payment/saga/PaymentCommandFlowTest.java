@@ -70,6 +70,8 @@ class PaymentCommandFlowTest {
     @Autowired
     ProcessedMessageRepository inbox;
     @Autowired
+    InboxCleaner inboxCleaner;
+    @Autowired
     SagaPaymentRepository sagaPayments;
     @Autowired
     CircuitBreakerRegistry circuitBreakers;
@@ -395,6 +397,27 @@ class PaymentCommandFlowTest {
         assertThat(payments.findById(ids.payment)).get().extracting(Payment::getStatus)
             .isEqualTo(PaymentStatus.CANCELED);
         assertThat(onlyReply().at("/payload/failureCode").asText()).isEqualTo("BOOKING_EXPIRED");
+    }
+
+    // --- inbox 정리(04 4장) ---
+
+    /** 받은 지 7일이 지난 inbox 행만 지운다. 1,000건씩 나눠 지워도 끝까지 */
+    @Test
+    void inboxCleanerDeletesOnlyRowsOlderThanSevenDays() {
+        java.time.Instant now = java.time.Instant.now();
+        List<ProcessedMessage> old = new ArrayList<>();
+        for (int i = 0; i < 1_001; i++) {   // 한 번(1,000건)으로 끝나지 않게
+            old.add(ProcessedMessage.of(UUID.randomUUID().toString(), "payment.charge-requested",
+                now.minus(java.time.Duration.ofDays(8))));
+        }
+        inbox.saveAll(old);
+        String recent = UUID.randomUUID().toString();
+        inbox.save(ProcessedMessage.of(recent, "payment.charge-requested", now.minus(java.time.Duration.ofDays(6))));
+
+        assertThat(inboxCleaner.cleanOnce()).isEqualTo(1_001);
+
+        assertThat(inbox.findAll()).extracting(ProcessedMessage::getMessageId).containsExactly(recent);
+        assertThat(inboxCleaner.cleanOnce()).isZero();
     }
 
     // --- 형식 · 유일 키 · 릴레이 ---

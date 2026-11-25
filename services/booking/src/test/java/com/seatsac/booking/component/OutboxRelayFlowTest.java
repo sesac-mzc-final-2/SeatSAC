@@ -123,7 +123,45 @@ class OutboxRelayFlowTest {
     }
 
     private double counter(String result) {
-        return meterRegistry.counter("booking_notification_publish_total", "result", result).count();
+        // 11/24 destination 라벨 추가(알림·saga 명령) — 같은 result의 모든 목적지 합
+        return meterRegistry.find("booking_notification_publish_total").tag("result", result).counters().stream()
+            .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
+    }
+
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @Test
+    @DisplayName("모르는 종류의 행(더 새 버전이 넣음)은 건너뛰고 아는 행은 그대로 보낸다 — 롤백 뒤에도 알림이 멈추지 않는다")
+    void unknownEventTypeIsSkippedWithoutBlockingOthers() {
+        OutboxMessage known = save(7001L, NOW);
+        OutboxMessage future = save(7002L, NOW);
+        jdbc.update("update outbox_message set event_type = 'COUPON_FUTURE_REQUESTED' where outbox_id = ?",
+            future.getOutboxId());
+
+        assertThat(relay.relayOnce()).isEqualTo(1);
+
+        assertThat(outboxRepository.findById(known.getOutboxId())).get()
+            .extracting(OutboxMessage::getStatus).isEqualTo(OutboxStatus.SENT);
+        assertThat(jdbc.queryForObject("select status from outbox_message where outbox_id = ?", String.class,
+            future.getOutboxId())).isEqualTo("PENDING");
+        then(publisher).should(times(1)).publish(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("모르는 종류의 행이 배치 크기(50)보다 많이 밀려 있어도 아는 행이 그 주기에 나간다 — 조회에서 거른다")
+    void unknownRowsBeyondBatchSizeDoNotStarveKnownOnes() {
+        for (long i = 0; i <= com.seatsac.booking.common.BookingPolicy.OUTBOX_RELAY_BATCH; i++) {   // 51건, 더 오래됨
+            OutboxMessage future = save(7100L + i, NOW.minus(Duration.ofHours(1)));
+            jdbc.update("update outbox_message set event_type = 'COUPON_FUTURE_REQUESTED' where outbox_id = ?",
+                future.getOutboxId());
+        }
+        OutboxMessage known = save(7200L, NOW);
+
+        assertThat(relay.relayOnce()).isEqualTo(1);
+
+        assertThat(outboxRepository.findById(known.getOutboxId())).get()
+            .extracting(OutboxMessage::getStatus).isEqualTo(OutboxStatus.SENT);
     }
 
     @Test

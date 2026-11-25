@@ -43,7 +43,7 @@ spring.flyway:
   password: ${SPRING_FLYWAY_PASSWORD:local}
 
 # 스케줄러: 선점 만료 스캔 2종 + 아웃박스 릴레이·정리 (지침 2장)
-spring.task.scheduling.pool.size: 3
+spring.task.scheduling.pool.size: 5   # 만료 스캔 2 · 아웃박스 릴레이 · SSE 하트비트 · 체크아웃 스윕(6.2.2) — 작업마다 1스레드
 
 # 서비스 간 호출 주소·선점 설정 (service-runtime-contract 3장의 이름 그대로)
 app:
@@ -69,6 +69,19 @@ app:
     # 꺼 두면 PENDING으로 쌓여 있다가 켜는 순간 흘러간다 (booking_outbox_pending으로 보인다)
     relay-enabled: ${APP_OUTBOX_RELAY_ENABLED:false}
     relay-interval: ${APP_OUTBOX_RELAY_INTERVAL:1s}
+  # 6.2.1 체크아웃 saga (ADR-116, 런타임 계약 3장). 기본 off — 체크아웃 API 404
+  checkout:
+    saga-enabled: ${APP_CHECKOUT_SAGA_ENABLED:false}
+    step-timeout: ${APP_CHECKOUT_STEP_TIMEOUT:10s}          # 쿠폰 예약·결제 준비(돈이 움직이기 전)만
+    payment-retry-enabled: ${APP_CHECKOUT_PAYMENT_RETRY_ENABLED:false}
+    coupon-adapter: ${APP_CHECKOUT_COUPON_ADAPTER:none}      # none = coupon 없이(쿠폰 요청은 거절)
+  # saga 명령·결과 큐 — cinema-infra-endpoints → gitops booking-config. 기본값 없음(빠지면 발송이 실패로 드러난다)
+  messaging:
+    consumer-enabled: ${APP_MESSAGING_CONSUMER_ENABLED:false}
+    payment-commands-url: ${APP_MESSAGING_PAYMENT_COMMANDS_URL:}
+    replies-url: ${APP_MESSAGING_REPLIES_URL:}
+    max-concurrent: ${APP_MESSAGING_MAX_CONCURRENT:10}
+    max-messages-per-poll: ${APP_MESSAGING_MAX_MESSAGES_PER_POLL:10}
 
 # SQS: 자격 증명은 Pod Identity(액세스 키 없음). 로컬은 ElasticMQ
 spring.cloud.aws:

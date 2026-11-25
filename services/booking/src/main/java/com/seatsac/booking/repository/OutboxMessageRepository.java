@@ -1,7 +1,11 @@
 package com.seatsac.booking.repository;
 
 import com.seatsac.booking.entity.OutboxMessage;
+import com.seatsac.booking.enums.OutboxDestination;
+import com.seatsac.booking.enums.OutboxEventType;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Pageable;
@@ -32,15 +36,30 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
      *
      * <p>오래 기다린 것부터 본다. 한 주기 처리량은 부르는 쪽이
      * {@link com.seatsac.booking.common.BookingPolicy#OUTBOX_RELAY_BATCH}로 묶는다.
+     *
+     * <p><b>이 버전이 아는 종류·목적지만</b> 집는다(#183 리뷰) — 더 새 버전이 넣은 행(롤백 뒤)을 집어 건너뛰기만 하면, 그런 행이
+     * 배치 크기 이상 쌓였을 때 매 주기 같은 행으로 배치가 차서 알림({@code booking.confirmed})이 읽히지 않는다.
+     */
+    default List<OutboxMessage> findDue(Instant now, Pageable pageable) {
+        return findDueOf(now, EnumSet.allOf(OutboxEventType.class), EnumSet.allOf(OutboxDestination.class), pageable);
+    }
+
+    /**
+     * {@link #findDue}의 조회. 열은 변환기로 enum 이름을 저장하므로 enum 목록 파라미터가 열 값(문자열)과 비교된다 —
+     * 모르는 값의 행은 결과에 들어오지 않는다
      */
     @Query("""
         select m from OutboxMessage m
          where m.status in (com.seatsac.booking.enums.OutboxStatus.PENDING,
                             com.seatsac.booking.enums.OutboxStatus.SENDING)
            and m.nextAttemptAt <= :now
+           and m.eventType in :types
+           and m.destination in :destinations
          order by m.nextAttemptAt asc, m.outboxId asc
         """)
-    List<OutboxMessage> findDue(@Param("now") Instant now, Pageable pageable);
+    List<OutboxMessage> findDueOf(@Param("now") Instant now, @Param("types") Collection<OutboxEventType> types,
+                                  @Param("destinations") Collection<OutboxDestination> destinations,
+                                  Pageable pageable);
 
     /**
      * 점유. 상태와 시각을 조건으로 걸어 <b>여러 파드가 같은 행을 집어도 한 곳만 1을 받는다</b>

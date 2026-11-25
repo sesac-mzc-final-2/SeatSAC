@@ -42,6 +42,7 @@ public class OutboxRelay {
 
     private final OutboxMessageRepository outboxRepository;
     private final NotificationPublisher publisher;
+    private final CommandPublisher commandPublisher;
     private final MeterRegistry meterRegistry;
     private final Clock clock;
 
@@ -123,6 +124,13 @@ public class OutboxRelay {
      * @return 보냈으면 true. 다른 파드가 먼저 집었거나 실패하면 false
      */
     private boolean relay(OutboxMessage message) {
+        if (message.getEventType() == null || message.getDestination() == null) {
+            // 이 버전이 모르는 종류(더 새 버전이 넣은 행 — 롤백 뒤). 보낼 곳을 모르니 손대지 않고 둔다.
+            // 다시 새 버전이 뜨면 그쪽이 보낸다. 점유하지 않으므로 재시도 횟수도 늘지 않는다(11/24 리뷰 4번)
+            log.warn("모르는 아웃박스 종류 — 건너뛴다 eventId={} bookingId={}", message.getMessageKey(),
+                message.getAggregateId());
+            return false;
+        }
         Long outboxId = message.getOutboxId();
         Instant claimedAt = clock.instant();
         Instant claimUntil = claimedAt.plus(BookingPolicy.OUTBOX_CLAIM_TIMEOUT);
@@ -136,8 +144,11 @@ public class OutboxRelay {
 
         int attempt = message.getAttemptCount() + 1;   // 점유가 올린 값(기대값+1) = 이번 시도의 토큰
         try {
-            publisher.publish(message.getEventType().messageType(), message.getTraceId(),
-                message.getPayload());
+            switch (message.getDestination()) {
+                case NOTIFICATION -> publisher.publish(message.getEventType().messageType(), message.getTraceId(),
+                    message.getPayload());
+                case PAYMENT_COMMANDS -> commandPublisher.publish(message);
+            }
         } catch (RuntimeException e) {
             recordFailure(message, attempt, e);
             return false;
@@ -147,7 +158,7 @@ public class OutboxRelay {
             // 내 점유가 만료되고 다른 파드가 이어받았다. 그쪽 상태를 덮어쓰지 않는다
             log.warn("보냈지만 점유가 이미 넘어갔다 — 중복 발행 가능 eventId={}", message.getMessageKey());
         }
-        count("sent");
+        count("sent", message);
         log.info("알림 발행 eventId={} type={} bookingId={} 시도={}", message.getMessageKey(),
             message.getEventType().messageType(), message.getAggregateId(), attempt);
         return true;
@@ -169,7 +180,7 @@ public class OutboxRelay {
             "점유 만료 — 재시도 한도 도달(전송 전에 파드가 멈췄을 수 있다)", now,
             BookingPolicy.OUTBOX_MAX_ATTEMPTS);
         if (closed > 0) {
-            count("failed");
+            count("failed", message);
             log.error("알림 발행 점유가 한도까지 만료됐다 — 더 보내지 않는다 eventId={} bookingId={} 시도={}",
                 message.getMessageKey(), message.getAggregateId(), message.getAttemptCount());
         }
@@ -185,7 +196,7 @@ public class OutboxRelay {
 
         if (attempt >= BookingPolicy.OUTBOX_MAX_ATTEMPTS) {
             outboxRepository.markFailed(message.getOutboxId(), attempt, reason, now);
-            count("failed");
+            count("failed", message);
             log.error("알림 발행 {}회 실패 — 더 보내지 않는다 eventId={} bookingId={} 원인={}",
                 attempt, message.getMessageKey(), message.getAggregateId(), reason);
             return;
@@ -193,7 +204,7 @@ public class OutboxRelay {
 
         Instant next = now.plus(backoff(attempt));
         outboxRepository.markRetry(message.getOutboxId(), attempt, next, reason, now);
-        count("retry");
+        count("retry", message);
         log.warn("알림 발행 실패 — {} 뒤 다시 보낸다 eventId={} 시도={} 원인={}",
             backoff(attempt), message.getMessageKey(), attempt, reason);
     }
@@ -214,7 +225,9 @@ public class OutboxRelay {
         return text.length() <= 500 ? text : text.substring(0, 500);
     }
 
-    private void count(String result) {
-        meterRegistry.counter("booking_notification_publish_total", "result", result).increment();
+    /** {@code destination} 라벨은 11/24 추가(런타임 계약 5장) — 알림·saga 명령을 나눠 본다 */
+    private void count(String result, OutboxMessage message) {
+        meterRegistry.counter("booking_notification_publish_total", "result", result,
+            "destination", message.getDestination().name()).increment();
     }
 }

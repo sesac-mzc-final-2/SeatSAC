@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Configuration;
 
 /** 선점 설정({@link SeatHoldProperties})·결제 설정({@link PaymentProperties})을 빈으로 올린다 */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({SeatHoldProperties.class, PaymentProperties.class})
+@EnableConfigurationProperties({SeatHoldProperties.class, PaymentProperties.class,
+    com.seatsac.booking.checkout.CheckoutProperties.class})
 public class SeatHoldConfig {
 }

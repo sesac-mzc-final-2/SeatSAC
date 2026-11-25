@@ -1,5 +1,7 @@
 package com.seatsac.booking.service;
 
+import com.seatsac.booking.checkout.CheckoutSagaRepository;
+
 import com.seatsac.booking.common.BookingErrorCode;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.component.PaymentClient;
@@ -65,6 +67,7 @@ public class BookingPaymentService {
     private final PaymentClient paymentClient;
     private final ScreeningCache screeningCache;
     private final PaymentProperties paymentProperties;
+    private final CheckoutSagaRepository checkoutSagas;
 
     /**
      * ① TOSSPAY 결제 준비. <b>예매 단위로 멱등</b>이다 — 이미 붙은 결제가 아직 결제창 대기(PROCESSING)면 같은 paymentId와
@@ -73,6 +76,7 @@ public class BookingPaymentService {
      * 이미 끝난 결제(승인·거절)나 모의 결제가 붙어 있으면 409 {@code PAYMENT_ALREADY_REQUESTED}.
      */
     public PaymentPrepareResponse prepare(String userId, Long bookingId, PaymentPrepareRequest request) {
+        rejectSagaBooking(bookingId);
         if (request.method() != PaymentMethod.TOSSPAY) {
             throw BookingErrorCode.INVALID_PAYMENT_METHOD.exception(ErrorDetail.of("method",
                 request.method().name(), BookingErrorCode.INVALID_PAYMENT_METHOD.name()));
@@ -113,6 +117,7 @@ public class BookingPaymentService {
     /** 거절도 200이고 {@code status}로 구분한다 */
     public BookingPaymentResponse pay(String userId, String mockKey, Long bookingId,
                                       BookingPayRequest request) {
+        rejectSagaBooking(bookingId);
         return switch (request.method()) {
             case CARD -> payWithMock(userId, mockKey, bookingId, request);
             case TOSSPAY -> completeTossPay(userId, bookingId, request.paymentId());
@@ -269,6 +274,17 @@ public class BookingPaymentService {
         return paymentClient.find(booking.getCurrentPaymentId())
             .orElseThrow(() -> BookingErrorCode.PAYMENT_RESULT_UNKNOWN.exception(
                 ErrorDetail.of("paymentId", booking.getCurrentPaymentId())));
+    }
+
+    /**
+     * 한 예매 한 경로(D26) — 체크아웃 saga 행이 하나라도 있는 예매는 동기 결제를 받지 않는다. 진행 중인 것만 보면
+     * 쿠폰 거절·재결제 대기로 끝난 saga 예매에 동기 결제가 붙어 두 경로가 섞인다
+     */
+    private void rejectSagaBooking(Long bookingId) {
+        if (checkoutSagas.existsByBookingId(bookingId)) {
+            throw BookingErrorCode.PAYMENT_PATH_CONFLICT.exception(ErrorDetail.of("bookingId", bookingId,
+                BookingErrorCode.PAYMENT_PATH_CONFLICT.name()));
+        }
     }
 
     private static BusinessException expiredRefunded(boolean refunded) {

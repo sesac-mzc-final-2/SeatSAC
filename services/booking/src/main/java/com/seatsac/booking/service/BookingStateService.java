@@ -100,6 +100,12 @@ public class BookingStateService {
         return bookingRepository.attachPayment(bookingId, paymentId, now) == 1;
     }
 
+    /** saga 재결제(D25) — 비교 후 교체. 0행이면 다른 요청이 먼저 바꿨거나 PENDING이 아니거나 만료됐다 */
+    @Transactional
+    public boolean replacePayment(Long bookingId, String oldPaymentId, String newPaymentId, Instant now) {
+        return bookingRepository.replacePayment(bookingId, oldPaymentId, newPaymentId, now) == 1;
+    }
+
     /**
      * BKG-06 확정 — <b>한 트랜잭션</b>에서 상태 전이와 아웃박스 INSERT를 함께 한다.
      * 확정만 커밋되고 알림 행이 없으면 알림이 영영 안 가고, 반대면 없는 예매의 알림이 간다.

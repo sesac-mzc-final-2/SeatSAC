@@ -4,7 +4,7 @@ info:
   version: "1.5"
   description: |
     API 명세서 v1.5 25장 (OPS-20~24 · 김종식, ADR-119·121). 관리자 대시보드가 부르는 API — 서비스 상태,
-    정지/가동, 오류 리포트, AI 범위 밖 질문 통계, 쿠폰 이벤트 생성.
+    정지/가동, 오류 리포트, AI 범위 밖 질문 통계, 쿠폰 이벤트 생성·목록.
     **gateway 라우트가 아니다**: `https://{도메인}/ops/**` → CloudFront 동작 `/ops/*`(CachingDisabled) → ALB 규칙 → `ops-api:8080`.
     gateway를 정지해도 관리자 화면이 동작해야 해서 따로 둔다. 그래서 `/api` 접두사·StripPrefix가 없고 경로를 `/ops/...` 그대로 적는다.
     `/api/admin/**`은 계속 없다.
@@ -22,7 +22,7 @@ tags:
   - { name: services, description: "서비스 상태 · 정지/가동 (OPS-20·21)" }
   - { name: reports, description: "일자별 오류 리포트 (OPS-22)" }
   - { name: ai, description: "AI 범위 밖 질문 통계 (OPS-23)" }
-  - { name: coupons, description: "쿠폰 이벤트 생성 (OPS-24)" }
+  - { name: coupons, description: "쿠폰 이벤트 생성·목록 (OPS-24)" }
 
 paths:
 
@@ -302,8 +302,9 @@ paths:
       description: |
         coupon 내부 API `POST /internal/coupon-events`(명세서 22-3, `coupon.internal.openapi.yaml`)로 그대로 넘기고 결과를 돌려준다.
         검증(시각·수량·할인율)과 Valkey 재고 키 생성은 coupon이 한다 — coupon의 400은 그대로 400으로 전달한다.
-        coupon을 부르지 못하면(연결 1초·응답 3초, 재시도 없음) 503. `Idempotency-Key`는 받지 않는다 — 503 뒤에는
-        이벤트가 만들어졌는지 관리자 화면 목록에서 확인하고 다시 보낸다.
+        coupon을 부르지 못하거나 coupon이 503이면 503(연결 1초·응답 3초, 재시도 없음). coupon의 503은 커밋 뒤 응답만 잃었을 수 있어
+        **생성 여부가 불확실**하다. `Idempotency-Key`는 받지 않는다 — 503 뒤에는 `GET /ops/coupons/events`로 만들어졌는지 확인하고 다시 보낸다
+        (이미 만들어졌는데 같은 기간으로 다시 보내면 coupon이 400 `EVENT_OVERLAP`으로 막는다).
       security: [ { bearerAuth: [] } ]
       requestBody:
         required: true
@@ -334,13 +335,56 @@ paths:
                     startsAt: "2026-11-27T14:00:00+09:00"
                     endsAt: "2026-11-27T15:00:00+09:00"
                     totalQuantity: 100
+                    issuedQuantity: 0
+                    remainingQuantity: 100
                     eligibleGrade: VIP
                     state: UPCOMING
+                    createdAt: "2026-11-27T13:40:00+09:00"
         "400": { $ref: "#/components/responses/ValidationFailed" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
+    get:
+      tags: [coupons]
+      operationId: listCouponEvents
+      summary: OPS-24 쿠폰 이벤트 목록 (생성 확인·진행 상황)
+      x-feature-id: OPS-24
+      description: |
+        coupon 내부 API `GET /internal/coupon-events`(`coupon.internal.openapi.yaml`)를 그대로 부르고 결과를 돌려준다 — `startsAt` 내림차순,
+        최근 50개까지(페이징 없음). `state`를 주면 그 상태만. `issuedQuantity`는 DB 발급 수(정확), `remainingQuantity`는 Valkey 재고 키 값(표시용).
+        생성 503 뒤 만들어졌는지 확인할 때도 쓴다. coupon을 부르지 못하면(연결 1초·응답 3초, 재시도 없음) 503. 조회라 감사 로그는 남기지 않는다.
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema: { type: string, enum: [UPCOMING, OPEN, CLOSED] }
+      responses:
+        "200":
+          description: OK. 없으면 items []
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CouponEventList" }
+              examples:
+                open:
+                  value:
+                    items:
+                      - eventId: 3
+                        title: VIP 선착순 50% 할인
+                        discountRate: 50
+                        startsAt: "2026-11-27T14:00:00+09:00"
+                        endsAt: "2026-11-27T15:00:00+09:00"
+                        totalQuantity: 100
+                        issuedQuantity: 64
+                        remainingQuantity: 36
+                        eligibleGrade: VIP
+                        state: OPEN
+                        createdAt: "2026-11-27T13:40:00+09:00"
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 components:
   securitySchemes:
     bearerAuth:
@@ -475,6 +519,7 @@ components:
         state: { type: string, enum: [RUNNING, SUCCEEDED, FAILED] }
         downloadUrl: { type: string, format: uri, description: "`SUCCEEDED`일 때만. S3 presigned URL(5분)" }
         rowCount: { type: integer, minimum: 0, description: "`SUCCEEDED`일 때만" }
+        generatedAt: { type: string, format: date-time, description: "`SUCCEEDED`일 때만. 쿼리가 끝난 시각(`+09:00`)" }
 
     UnmetDemandStats:
       type: object
@@ -508,20 +553,31 @@ components:
         title: { type: string, minLength: 1, maxLength: 100 }
         discountRate: { type: integer, minimum: 1, maximum: 99, description: "할인율(%). 상한 99 — 100이면 결제 금액이 0원이 되는데 체크아웃·payment 금액은 1원 이상이다(booking.openapi.yaml `amount.final`, #176)" }
         startsAt: { type: string, format: date-time, description: "시작 시각(`+09:00`)" }
-        durationMinutes: { type: integer, minimum: 1, default: 60, description: "진행 시간(분). 종료 = 시작 + 이 값" }
-        totalQuantity: { type: integer, minimum: 1, description: "선착순 수량" }
+        durationMinutes: { type: integer, minimum: 1, maximum: 1440, default: 60, description: "진행 시간(분). 종료 = 시작 + 이 값" }
+        totalQuantity: { type: integer, minimum: 1, maximum: 10000, description: "선착순 수량" }
         eligibleGrade: { type: string, enum: [VIP], default: VIP, description: "발급 대상 등급" }
 
     CouponEvent:
       type: object
-      description: coupon 내부 API 응답 그대로. `eventId`만 필수로 두고 나머지는 `coupon.internal.openapi.yaml`이 들어오면 맞춘다(필수 추가는 응답이라 하위 호환)
-      required: [eventId]
+      description: coupon 내부 API 응답 그대로(`coupon.internal.openapi.yaml` `CouponEvent`, #187)
+      required: [eventId, title, discountRate, startsAt, endsAt, totalQuantity, issuedQuantity, remainingQuantity, eligibleGrade, state, createdAt]
       properties:
         eventId: { type: integer, format: int64 }
         title: { type: string }
-        discountRate: { type: integer }
+        discountRate: { type: integer, minimum: 1, maximum: 99 }
         startsAt: { type: string, format: date-time }
         endsAt: { type: string, format: date-time }
-        totalQuantity: { type: integer }
-        eligibleGrade: { type: string }
+        totalQuantity: { type: integer, minimum: 1 }
+        issuedQuantity: { type: integer, minimum: 0, description: "DB 발급 수(coupon_issue 행 수)" }
+        remainingQuantity: { type: integer, minimum: 0, description: "Valkey 재고 키 값(표시용)" }
+        eligibleGrade: { type: string, x-extensible-enum: [VIP] }
         state: { type: string, enum: [UPCOMING, OPEN, CLOSED] }
+        createdAt: { type: string, format: date-time }
+
+    CouponEventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CouponEvent" }

@@ -39,8 +39,8 @@ export const routes = {
   bookingPay: (bookingId: number | string) => `/bookings/${bookingId}/pay`,
   credits: () => "/credits",
   callback: () => "/callback",
-  /** W8 마이페이지 (3.3.6). 탭은 `?tab=preferences` (기본은 예매 내역) */
-  myPage: (tab?: "preferences") => (tab ? `/me?tab=${tab}` : "/me"),
+  /** W8 마이페이지 (3.3.6). 탭은 `?tab=preferences`·`?tab=coupons`(6.3.6) (기본은 예매 내역) */
+  myPage: (tab?: "preferences" | "coupons") => (tab ? `/me?tab=${tab}` : "/me"),
   /** 관리자 대시보드 (토큰 `cognito:groups` ∋ ADMIN 일 때만 메뉴, 허용은 ops-api가 판단) */
   admin: () => "/admin",
   /** OPS-20·21 서비스 상태·정지/가동 (6.2.6) */

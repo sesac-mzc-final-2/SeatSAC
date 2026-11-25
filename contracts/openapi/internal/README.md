@@ -6,3 +6,4 @@
 | `catalog.internal.openapi.yaml` | GET /internal/screenings/{id} · POST /internal/screenings/summaries · GET /internal/theaters | booking · user · user |
 | `booking.internal.openapi.yaml` | GET /internal/bookings · GET /internal/screenings/seat-counts (300ms) | user · catalog |
 | `payment.internal.openapi.yaml` | POST /internal/payments · GET /internal/payments/{id} · POST /internal/payments/{id}/cancel | booking |
+| `coupon.internal.openapi.yaml` | POST /internal/coupon-events · GET /internal/coupon-events | ops-api · ops-api |

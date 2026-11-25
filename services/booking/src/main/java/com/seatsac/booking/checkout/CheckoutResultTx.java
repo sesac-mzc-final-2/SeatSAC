@@ -111,7 +111,10 @@ public class CheckoutResultTx {
     @Transactional
     public void releaseLate(String messageId, String messageType, CheckoutSaga saga, String paymentId, Instant now) {
         received(messageId, messageType, now);
-        commands.release(saga, paymentId, messageId, now);
+        // 계약상 payment.approved.paymentId는 필수다. 그래도 null이면 해제 명령을 만들지 않는다 — payment가 형식 오류로 지운다
+        if (paymentId != null) {
+            commands.release(saga, paymentId, messageId, now);
+        }
     }
 
     /** 스윕 재확인 — 처리권을 잡은 파드만 다음 확인 명령을 보낸다 */

@@ -149,6 +149,22 @@ class OutboxRelayFlowTest {
     }
 
     @Test
+    @DisplayName("모르는 종류의 행이 배치 크기(50)보다 많이 밀려 있어도 아는 행이 그 주기에 나간다 — 조회에서 거른다")
+    void unknownRowsBeyondBatchSizeDoNotStarveKnownOnes() {
+        for (long i = 0; i <= com.seatsac.booking.common.BookingPolicy.OUTBOX_RELAY_BATCH; i++) {   // 51건, 더 오래됨
+            OutboxMessage future = save(7100L + i, NOW.minus(Duration.ofHours(1)));
+            jdbc.update("update outbox_message set event_type = 'COUPON_FUTURE_REQUESTED' where outbox_id = ?",
+                future.getOutboxId());
+        }
+        OutboxMessage known = save(7200L, NOW);
+
+        assertThat(relay.relayOnce()).isEqualTo(1);
+
+        assertThat(outboxRepository.findById(known.getOutboxId())).get()
+            .extracting(OutboxMessage::getStatus).isEqualTo(OutboxStatus.SENT);
+    }
+
+    @Test
     @DisplayName("보낼 차례가 된 메시지를 보내고 SENT로 기록한다")
     void sendsDueMessage() throws Exception {
         OutboxMessage saved = save(1001L, NOW);

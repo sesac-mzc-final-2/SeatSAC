@@ -3,6 +3,11 @@ export type {
   BookingPayment,
   BookingStatus,
   CancelResult,
+  Checkout,
+  CheckoutAccepted,
+  CheckoutPortOne,
+  CheckoutRequest,
+  CheckoutState,
   FailureCode,
   HoldResult,
   PayRequest,
@@ -10,6 +15,7 @@ export type {
   PaymentMethod,
   PaymentPrepareResult,
   PaymentStatus,
+  RefundNotice,
   SeatEvent,
   SeatEventType,
   SeatSnapshot,
@@ -17,13 +23,16 @@ export type {
   TossPayRequest,
 } from "./model/types";
 export {
+  confirmCheckout,
   getBooking,
+  getCheckout,
   getSeatSnapshot,
   holdSeats,
   payBooking,
   preparePayment,
   releaseHold,
   seatStreamUrl,
+  startCheckout,
 } from "./api/booking-api";
 export { bookingKeys, bookingDetailQuery, seatSnapshotQuery } from "./api/booking-queries";
 export { parseSeatEvent, subscribeSeatEvents, type SeatStreamHandlers } from "./api/seat-stream";

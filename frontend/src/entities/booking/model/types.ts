@@ -84,6 +84,82 @@ export interface Booking {
   confirmedAt?: string | null;
   canceledAt?: string | null;
   payment?: BookingPayment | null;
+  /** 체크아웃 saga 경로 예매면 가장 최근 체크아웃(없으면 null·없음). 상세는 `GET /bookings/{id}/checkout` (6.2.5) */
+  checkout?: { checkoutId: string; state: CheckoutState } | null;
+}
+
+/**
+ * 체크아웃 saga 상태 (ADR-116, 계약 `CheckoutState`). 열린 집합 — 모르는 값은 「진행 중」으로 보고 `pollAfterMs`를 따른다.
+ * 진행 중: STARTED → COUPON_RESERVING → PAYMENT_PREPARING → READY_TO_PAY(결제창) → VERIFYING · CARD는 CHARGING.
+ * 끝: CONFIRMED · FAILED · EXPIRED · COUPON_REJECTED(쿠폰만 거절, 다시 시작) · PAYMENT_RETRYABLE(다시 결제)
+ */
+export type CheckoutState =
+  | "STARTED"
+  | "COUPON_RESERVING"
+  | "PAYMENT_PREPARING"
+  | "READY_TO_PAY"
+  | "CHARGING"
+  | "VERIFYING"
+  | "CONFIRMED"
+  | "COMPENSATING"
+  | "FAILED"
+  | "EXPIRED"
+  | "COUPON_REJECTED"
+  | "PAYMENT_RETRYABLE"
+  | (string & {});
+
+/** `POST /bookings/{id}/checkout` 본문 — 화면은 토스페이만. 쿠폰은 `GET /coupons/me`의 `couponIssueId` 그대로 */
+export interface CheckoutRequest {
+  method: "TOSSPAY";
+  couponIssueId?: string;
+}
+
+/** 체크아웃 시작·확인 요청의 202 응답 */
+export interface CheckoutAccepted {
+  checkoutId: string;
+  bookingId: number;
+  state: CheckoutState;
+  pollAfterMs: number;
+}
+
+/** 포트원 `requestPayment`에 그대로 넘기는 공개 값 — `READY_TO_PAY`일 때만 온다 */
+export interface CheckoutPortOne {
+  storeId: string;
+  channelKey: string;
+  paymentId: string;
+  orderName: string;
+  totalAmount: number;
+  currency: "KRW";
+  payMethod: "EASY_PAY";
+}
+
+/**
+ * 만료 때 환불 안내 (계약 `refundNotice`). null = 결제가 없었거나 안 된 것이 확인됨.
+ * 「환불 완료」는 없다 — booking은 환불이 끝났는지 모른다
+ */
+export type RefundNotice = "WILL_REFUND_IF_PAID" | "REFUND_IN_PROGRESS" | (string & {}) | null;
+
+/** `GET /bookings/{id}/checkout` — 가장 최근 체크아웃 (polling) */
+export interface Checkout {
+  checkoutId: string;
+  bookingId: number;
+  state: CheckoutState;
+  step: string;
+  method: string;
+  /** 이 예매의 몇 번째 체크아웃인지 (상한 3) */
+  attempt: number;
+  /** 끝난 상태에서 같은 예매로 다시 시작할 수 있는지 (COUPON_REJECTED·PAYMENT_RETRYABLE, 선점 유효) */
+  retryable: boolean;
+  /** 서버가 확정한 금액 — 포트원 결제창 금액은 `final` */
+  amount: { original: number; discount: number; final: number };
+  coupon: { couponIssueId: string; discount: { kind: string; value: number } | null; state: string } | null;
+  payment: { paymentId: string; portone: CheckoutPortOne | null } | null;
+  failure: { code: string; reason: string | null } | null;
+  refundNotice: RefundNotice;
+  expiresAt: string;
+  updatedAt: string;
+  /** 진행 중 1000, 끝난 상태 null */
+  pollAfterMs: number | null;
 }
 
 /** 토스페이 완료 확인 — 준비에서 받은 `paymentId`. 결과는 서버가 포트원에서 확인한다 */

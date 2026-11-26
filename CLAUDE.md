@@ -1205,7 +1205,7 @@ SeatSAC-gitops/
 | `contracts/tools/`, `contracts/redocly.yaml`, `build-logic/`, `gradle/`, `lambdas/`, `infra/`, `.github/`, `tests/k6/` | 김종식 |
 | `libs/` | 김종식 · 한채연 · 남궁일 |
 
-> ⏳ 임시(11/27~, 한채연 부재): `frontend/`·`contracts/`·`contracts/openapi/ai*`에 김종식, `contracts/openapi/user*`에 남궁일을 더했다 — 작성자가 남은 담당 한 명뿐인 PR(예: 남궁일의 `frontend/` PR)이 막히지 않게. 이 기간에 머지한 해당 경로 PR은 한채연이 복귀 뒤 사후 리뷰하고, 복귀하면 되돌리는 PR을 올린다
+> ⏳ 임시(11/27~, 한채연 부재): `frontend/`·`contracts/`·`contracts/openapi/ai*`에 김종식, `contracts/openapi/user*`에 남궁일을 더했다 — 작성자가 남은 담당 한 명뿐인 PR(예: 남궁일의 `frontend/` PR)이 막히지 않게. 이 기간에 머지한 해당 경로 PR은 한채연이 복귀 뒤 사후 리뷰하고, 복귀하면 되돌리는 PR을 올린다. 단 `contract-break-ok` 라벨 PR(깨지는 계약 변경, `contracts/README.md` 「설계 단계에서 일부러 바꿀 때」 — 영향받는 담당자 전원 승인)은 이 기간에도 예외 없이 한채연의 사전 승인을 받는다 — 임시 승인자로 대신하지 않고 복귀까지 머지하지 않는다
 
 ### 4. CI/CD 워크플로
 

@@ -123,6 +123,19 @@ def test_start_restores_remembered_value(client, cluster):
     )
 
 
+def test_start_is_202_even_if_clearing_the_memory_fails(client, cluster, caplog):
+    # 리뷰 Minor 2 — 가동은 됐는데 기록 지우기만 실패하면 503이 아니라 202(경고 로그).
+    # 남은 기록은 다음 정지 때 덮어쓴다
+    cluster.deployments["payment"]["spec"]["replicas"] = 3
+    client.post("/ops/services/payment/stop", headers=admin_headers())
+    cluster.fail_state_clear = True
+    caplog.set_level("WARNING", logger="seatsac_ops.workloads")
+    r = client.post("/ops/services/payment/start", headers=admin_headers())
+    assert r.status_code == 202 and r.json() == {"service": "payment", "desired": 3}
+    assert cluster.deployments["payment"]["spec"]["replicas"] == 3
+    assert any("정지 기록을 지우지 못했다" in x.getMessage() for x in caplog.records)
+
+
 def test_start_without_memory_uses_git_then_hpa_min(client, cluster):
     cluster.deployments["catalog"]["spec"]["replicas"] = 0
     assert (

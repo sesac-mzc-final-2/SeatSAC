@@ -25,7 +25,9 @@ locals {
   # 🆕 6.1.7 ops-api 정지/가동(ADR-119): ops-api가 */scale로 바꾼 replicas는 Git과 다르다(의도된 GitOps 예외).
   #   서비스 Application이 /spec/replicas를 비교하지 않고(Synced 유지) sync 때도 덮어쓰지 않게(RespectIgnoreDifferences)
   #   - HPA가 있는 서비스는 Git에 replicas가 없어 원래 차이가 없다 — 고정 replicas(gateway·payment·ai 등)에 효과가 있다
-  #   - 부작용: Git의 replicas를 바꾸는 PR도 그 Deployment·Rollout에는 적용되지 않는다 → 런북 6-L-4(관리자 수동 sync)
+  #   - 부작용: Git의 replicas를 바꾸는 PR도 그 Deployment·Rollout에는 적용되지 않는다 → 런북 6-L 4-1)(관리자 수동 sync)
+  #   - ops_api_enabled = true일 때만 붙인다(리뷰 M1) — 정지/가동이 없으면 replicas를 무시할 이유가 없고, 다른 일로
+  #     staging-k8s를 apply할 때 미리 붙어 replicas 변경 PR이 조용히 빠지는 것을 막는다
   argocd_ignore_replicas = [
     { group = "apps", kind = "Deployment", jsonPointers = ["/spec/replicas"] },
     { group = "argoproj.io", kind = "Rollout", jsonPointers = ["/spec/replicas"] },
@@ -86,8 +88,8 @@ locals {
         server    = "https://kubernetes.default.svc"
         namespace = var.app_namespace
       }
-      ignoreDifferences = concat(local.argocd_ignore_replicas, s == "ops-api" ? local.argocd_ignore_ops_state : [])
-      syncPolicy        = merge(local.argocd_sync_policy, { syncOptions = ["RespectIgnoreDifferences=true"] })
+      ignoreDifferences = var.ops_api_enabled ? concat(local.argocd_ignore_replicas, s == "ops-api" ? local.argocd_ignore_ops_state : []) : []
+      syncPolicy        = var.ops_api_enabled ? merge(local.argocd_sync_policy, { syncOptions = ["RespectIgnoreDifferences=true"] }) : local.argocd_sync_policy
     }
   }
 }

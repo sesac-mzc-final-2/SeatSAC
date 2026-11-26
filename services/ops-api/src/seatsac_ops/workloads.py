@@ -145,10 +145,17 @@ class WorkloadService:
             remembered = _int((await self._state_or_empty()).get(service), 0)
             target = remembered or git_replicas(workload) or await self._hpa_min(service) or 1
             await self._kube.scale(kind, service, target)
-            if remembered:
-                await self._kube.set_state(service, None)
         except KubeError as exc:
             raise upstream_unavailable("kubernetes", exc.reason) from exc
+        if remembered:
+            # 가동은 이미 됐다 — 기록을 못 지워도 실패로 돌려주지 않는다
+            # (남은 값은 다음 정지 때 덮어쓴다, 리뷰 Minor 2)
+            try:
+                await self._kube.set_state(service, None)
+            except KubeError as exc:
+                log.warning(
+                    "가동 뒤 정지 기록을 지우지 못했다 service=%s reason=%s", service, exc.reason
+                )
         return {"service": service, "desired": target}
 
     # --- 내부 ---------------------------------------------------------------

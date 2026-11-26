@@ -124,6 +124,7 @@ class FakeKube:
     state: dict[str, str] | None = field(default_factory=dict)  # None = ConfigMap 없음
     nodes: list[dict] = field(default_factory=list)
     fail: bool = False
+    fail_state_clear: bool = False  # 정지 기록 지우기(PATCH data: {svc: null})만 실패
     calls: list[tuple[str, str, Any]] = field(default_factory=list)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -139,6 +140,8 @@ class FakeKube:
             if self.state is None:
                 return httpx.Response(404, json={})
             if method == "PATCH":
+                if self.fail_state_clear and None in (body or {}).get("data", {}).values():
+                    return httpx.Response(500, json={})
                 for key, value in (body or {}).get("data", {}).items():
                     if value is None:
                         self.state.pop(key, None)

@@ -23,6 +23,11 @@ ADMIN = require_admin()
 STOP_ADMIN = require_admin("stop", "service")
 START_ADMIN = require_admin("start", "service")
 REPORT_ADMIN = require_admin("report")
+COUPON_ADMIN = require_admin("coupon_event_create", count=False)
+
+# 쿠폰 이벤트 생성 본문 상한 — gateway(64KB)를 거치지 않는 경로라 여기서 막는다.
+# 정상 본문은 수백 바이트
+MAX_COUPON_BODY = 16 * 1024
 
 
 def _workloads(request: Request) -> WorkloadService:
@@ -147,28 +152,31 @@ async def unmet_demand(
 # --- OPS-24 쿠폰 이벤트 ---------------------------------------------------------
 
 
+def _bad_body(user: AdminUser, reason: str) -> ApiError:
+    # 본문 검증 실패도 쓰기 시도라 감사 한 줄(denied)을 남긴다(계약: 모든 쓰기 조작은 감사 한 줄)
+    audit(
+        user.user_id, "coupon_event_create", None, "denied", code=ErrorCode.VALIDATION_FAILED.value
+    )
+    return ApiError(
+        400, ErrorCode.VALIDATION_FAILED, "Malformed body", [ErrorDetail(reason=reason)]
+    )
+
+
 @router.post("/coupons/events")
 async def create_coupon_event(
     request: Request,
-    user: AdminUser = Depends(ADMIN),
+    user: AdminUser = Depends(COUPON_ADMIN),
     upstream: UpstreamClient = Depends(_upstream),
 ) -> JSONResponse:
+    raw = await request.body()
+    if len(raw) > MAX_COUPON_BODY:
+        raise _bad_body(user, "BODY_TOO_LARGE")
     try:
-        body = json.loads(await request.body() or b"null")
+        body = json.loads(raw or b"null")
     except ValueError as exc:
-        raise ApiError(
-            400,
-            ErrorCode.VALIDATION_FAILED,
-            "Malformed body",
-            [ErrorDetail(reason="MALFORMED_BODY")],
-        ) from exc
+        raise _bad_body(user, "MALFORMED_BODY") from exc
     if not isinstance(body, dict):
-        raise ApiError(
-            400,
-            ErrorCode.VALIDATION_FAILED,
-            "Malformed body",
-            [ErrorDetail(reason="MALFORMED_BODY")],
-        )
+        raise _bad_body(user, "MALFORMED_BODY")
     try:
         response = await upstream.create_coupon_event(body, user.user_id)
     except ApiError as exc:

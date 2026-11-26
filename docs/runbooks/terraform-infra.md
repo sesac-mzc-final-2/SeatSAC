@@ -2028,6 +2028,8 @@ terraform apply plan.out
 
 **3) gitops PR ①(base/ops-api) 머지 → staging-k8s**
 
+**먼저**: 고정 replicas를 바꾸는 gitops PR(예: ADR-122 핵심 서비스 replicas 2 — `base/gateway/rollout.yaml`·`base/payment/deployment.yaml`)은 **이 apply보다 먼저** 머지하고 Synced를 확인한다. 이 apply부터 서비스 Application이 `/spec/replicas`를 비교하지 않아, 뒤에 머지한 replicas 변경은 클러스터에 반영되지 않은 채 Synced로 보인다(그때는 4-1의 수동 sync). `ignoreDifferences`·`syncOptions`는 `ops_api_enabled = true`일 때만 붙는다 — 다른 일로 staging-k8s를 apply해도 미리 붙지 않는다
+
 ```bash
 cd ../staging-k8s
 terraform plan -var-file=staging-k8s.tfvars -var ops_api_enabled=true -out=plan.out   # tfvars에도 ops_api_enabled = true

@@ -108,6 +108,28 @@ def test_coupon_validation_passthrough_and_malformed_body(client, upstream):
     assert r.status_code == 400
 
 
+def test_coupon_bad_body_is_audited_and_oversize_rejected(client, upstream, caplog):
+    # 리뷰 Minor 1·Nit — 본문 검증 실패도 감사 한 줄(denied),
+    # 16KB 넘는 본문은 coupon을 부르지 않고 400
+    caplog.set_level("INFO", logger="seatsac_ops.audit")
+    before = len(upstream.requests)
+    r = client.post(
+        "/ops/coupons/events",
+        content=b"{not json",
+        headers={**admin_headers(), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 400
+    audit = [x for x in caplog.records if x.getMessage() == "ops audit"][-1]
+    assert audit.fields["action"] == "coupon_event_create" and audit.fields["result"] == "denied"
+    r = client.post(
+        "/ops/coupons/events",
+        content=b'{"title": "' + b"x" * (16 * 1024) + b'"}',
+        headers={**admin_headers(), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 400 and r.json()["details"][0]["reason"] == "BODY_TOO_LARGE"
+    assert len(upstream.requests) == before
+
+
 def test_coupon_unavailable_is_503(client, upstream):
     upstream.responses[("coupon", "/internal/coupon-events")] = httpx.ConnectError("refused")
     r = client.post("/ops/coupons/events", json={"title": "t"}, headers=admin_headers())

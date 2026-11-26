@@ -94,11 +94,13 @@ def _bearer(request: Request) -> str | None:
 
 
 def require_admin(
-    action: str | None = None, target_param: str | None = None
+    action: str | None = None, target_param: str | None = None, *, count: bool = True
 ) -> Callable[[Request], Awaitable[AdminUser]]:
     """FastAPI 의존성.
 
-    action을 주면(정지·가동·리포트) 403도 감사 로그·ops_action_total{result=denied}에 남긴다.
+    action을 주면 403도 감사 로그에 남긴다(쓰기 조작 전부 — 정지·가동·리포트·쿠폰 이벤트 생성).
+    count=True면 ops_action_total{result=denied}도 센다 — 지표의 action 값은
+    stop·start·report뿐(런타임 계약 5장)이라 쿠폰 이벤트 생성은 count=False로 감사만 남긴다.
     """
 
     async def dependency(request: Request) -> AdminUser:
@@ -112,8 +114,9 @@ def require_admin(
         if not verifier.is_admin(claims):
             if action is not None:
                 target = request.path_params.get(target_param) if target_param else None
-                audit(user_id, action, target, "denied")
-                record_action(action, "denied")
+                audit(user_id, action, target[:32] if target else None, "denied")
+                if count:
+                    record_action(action, "denied")
             raise forbidden()
         return AdminUser(user_id=user_id)
 

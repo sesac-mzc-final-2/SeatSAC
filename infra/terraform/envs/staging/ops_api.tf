@@ -46,9 +46,20 @@ module "ops_api_pod_identity" {
       ]
     },
     {
-      sid       = "ListReportBucket"
-      actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
+      sid       = "ReportBucketLocation"
+      actions   = ["s3:GetBucketLocation"]
       resources = ["arn:aws:s3:::${local.reports_bucket_name}"]
+    },
+    {
+      # 목록은 리포트 원본(errors/)·Athena 결과(athena-results/) 아래만 — 버킷 전체 목록은 보지 않는다(리뷰 Minor 3)
+      sid       = "ListReportPrefixes"
+      actions   = ["s3:ListBucket"]
+      resources = ["arn:aws:s3:::${local.reports_bucket_name}"]
+      condition = [{
+        test     = "StringLike"
+        variable = "s3:prefix"
+        values   = ["errors/*", "athena-results/*"]
+      }]
     },
     {
       sid       = "ReadReports"

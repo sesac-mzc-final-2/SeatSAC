@@ -147,7 +147,9 @@ class ReportService:
                 await run_in_threadpool(athena.get_query_execution, QueryExecutionId=query_id)
             )["QueryExecution"]
         except ClientError as exc:
-            if _aws_code(exc) == "InvalidRequestException":
+            # 없는 ID는 InvalidRequest, 다른 작업 그룹의 ID는 IAM이 막아 AccessDenied
+            # — 둘 다 보여 주지 않는다(404)
+            if _aws_code(exc) in ("InvalidRequestException", "AccessDeniedException"):
                 raise not_found("queryId") from exc
             raise report_unavailable(_aws_code(exc)) from exc
         except BotoCoreError as exc:

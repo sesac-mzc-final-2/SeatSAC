@@ -78,6 +78,28 @@ def test_forbidden_stop_is_audited_and_counted(client, caplog):
     assert _denied() == before + 1
 
 
+def test_forbidden_coupon_create_is_audited_but_not_counted(client, caplog):
+    # 리뷰 Minor 1 — 쿠폰 이벤트 생성 403도 감사 한 줄.
+    # ops_action_total의 action 값(stop·start·report)은 늘리지 않는다
+    caplog.set_level("INFO", logger="seatsac_ops.audit")
+    _error(
+        client.post("/ops/coupons/events", json={"title": "t"}, headers=user_headers()),
+        403,
+        "FORBIDDEN",
+    )
+    record = next(r for r in caplog.records if r.getMessage() == "ops audit")
+    assert record.fields["action"] == "coupon_event_create" and record.fields["result"] == "denied"
+    labels = {"action": "coupon_event_create", "result": "denied"}
+    assert REGISTRY.get_sample_value("ops_action_total", labels) is None
+
+
+def test_forbidden_target_is_truncated(client, caplog):
+    caplog.set_level("INFO", logger="seatsac_ops.audit")
+    client.post("/ops/services/" + "x" * 100 + "/stop", headers=user_headers())
+    record = next(r for r in caplog.records if r.getMessage() == "ops audit")
+    assert len(record.fields["target"]) == 32
+
+
 def test_trace_id_kept_when_valid_and_replaced_when_not(client):
     good = "0123456789abcdef0123456789abcdef"
     r = client.get("/ops/services", headers={"X-Trace-Id": good})

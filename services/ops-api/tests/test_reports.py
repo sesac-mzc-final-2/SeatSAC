@@ -132,6 +132,9 @@ def test_failed_unknown_and_other_workgroup(client, aws):
     }
     athena_stub.add_client_error("get_query_execution", "InvalidRequestException")
     assert client.get("/ops/reports/errors/nope", headers=admin_headers()).status_code == 404
+    # 리뷰 Minor 4 — 다른 작업 그룹의 ID는 IAM이 막는다(AccessDenied) → 503이 아니라 404
+    athena_stub.add_client_error("get_query_execution", "AccessDeniedException")
+    assert client.get("/ops/reports/errors/q-other", headers=admin_headers()).status_code == 404
     athena_stub.add_response("get_query_execution", _succeeded("q-3", workgroup="primary"))
     assert client.get("/ops/reports/errors/q-3", headers=admin_headers()).status_code == 404
     assert client.get("/ops/reports/errors/bad$id", headers=admin_headers()).status_code == 404

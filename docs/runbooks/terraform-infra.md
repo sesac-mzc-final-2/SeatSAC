@@ -2612,7 +2612,7 @@ bash run.sh
 | ESO | namespace `external-secrets`, ServiceAccount `external-secrets`, Pod Identity `cinema-staging-external-secrets-pod`(읽기: `cinema/staging/*`의 GetSecretValue·DescribeSecret뿐) |
 | 저장소 연결 | ClusterSecretStore `aws-secrets-manager`(리전만 적는다 — ARN·계정 ID는 gitops에 두지 않는다. 자격 증명은 Pod Identity) |
 | ExternalSecret | 서비스마다 2개(app·migrator), sync wave **-3**(ConfigMap -2 · Flyway Job -1 · 앱 0보다 먼저), 1시간마다 다시 읽음 |
-| 대상 밖 | `ai-secrets`(ANTHROPIC_API_KEY) — Terraform K8s Secret 그대로. ai DB 비밀번호 키 이름이 정해질 때 함께 옮긴다 · `cinema-ops`의 `db-bootstrap-accounts*`(Job 입력) |
+| 대상 밖 | `ai-secrets`의 ANTHROPIC_API_KEY — Terraform K8s Secret 그대로(ai DB 비밀번호 두 키만 `cinema/staging/ai`로 옮긴다, 아래 「ai DB 비밀번호」) · `cinema-ops`의 `db-bootstrap-accounts*`(Job 입력) |
 
 **ai DB 비밀번호 (6.4.1)** — `ai-secrets`는 ai.tf가 값을 다시 쓰지 않아(ANTHROPIC_API_KEY) 다른 서비스처럼 K8s Secret을 출처로 삼지 않는다. db-bootstrap의 `random_password`를 Secrets Manager `cinema/staging/ai`(키 `APP_AI_DB_PASSWORD`·`APP_AI_QUERY_DB_PASSWORD`)에 넣고, gitops ExternalSecret `ai-secrets`(Merge)가 그 두 키만 더한다. Flyway 계정은 이미 있는 `cinema/staging/ai-migrator` → `ai-migrator-secrets`
 

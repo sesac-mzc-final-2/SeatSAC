@@ -1,6 +1,7 @@
 package com.seatsac.user.config;
 
 import com.seatsac.common.web.client.InternalRestClientFactory;
+import com.seatsac.user.history.BookingHistoryProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.ClientHttpRequestFactorySettings;
@@ -18,7 +19,7 @@ import org.springframework.web.client.RestClient;
  * </ul>
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(UserProperties.class)
+@EnableConfigurationProperties({UserProperties.class, BookingHistoryProperties.class})
 public class ClientConfig {
 
     @Bean

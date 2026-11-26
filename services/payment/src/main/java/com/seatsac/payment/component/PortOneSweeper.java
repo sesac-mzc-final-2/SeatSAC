@@ -151,7 +151,9 @@ public class PortOneSweeper {
     /** D18 — n번째로 미루면 min(2^(n-1), 15)분 뒤 */
     private void defer(Payment payment, Instant now) {
         Duration delay = recheckDelay(payment.getCheckAttempt() + 1);
-        paymentState.deferCheck(payment.getPaymentId(), now.plus(delay), now);
+        if (!paymentState.deferCheck(payment.getPaymentId(), payment.getCheckAttempt(), now.plus(delay), now)) {
+            return;   // 다른 파드가 먼저 미뤘다
+        }
         log.info("포트원 확인을 미룬다 paymentId={} 재확인={}회 다음={}분 뒤", payment.getPaymentId(),
             payment.getCheckAttempt() + 1, delay.toMinutes());
     }

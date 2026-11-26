@@ -114,10 +114,10 @@ public class PaymentStateService {
         return paymentRepository.findAbandonedPortOneIds(threshold, now, pageable);
     }
 
-    /** D18 — 포트원 확인을 끝내지 못한 행의 다음 확인 시각을 미룬다 */
+    /** D18 — 포트원 확인을 끝내지 못한 행의 다음 확인 시각을 미룬다. 읽은 횟수가 그대로일 때만(파드 둘이 겹쳐도 한 번) */
     @Transactional
-    public void deferCheck(String paymentId, Instant next, Instant now) {
-        paymentRepository.deferCheck(paymentId, next, now);
+    public boolean deferCheck(String paymentId, int expectedAttempt, Instant next, Instant now) {
+        return paymentRepository.deferCheck(paymentId, expectedAttempt, next, now) == 1;
     }
 
     @Transactional(readOnly = true)

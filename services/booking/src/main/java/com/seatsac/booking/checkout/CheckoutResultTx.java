@@ -8,6 +8,7 @@ import com.seatsac.booking.service.BookingEvents;
 import com.seatsac.booking.service.BookingRepositoryReader;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.EnumSet;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,7 +64,7 @@ public class CheckoutResultTx {
             return false;
         }
         if (saga.getCouponIssueId() != null) {
-            couponPort.use(saga.getCheckoutId(), saga.getBookingId(), saga.getCouponIssueId());
+            couponPort.use(saga, now);
         }
         timings.step("applied", saga.getCreatedAt(), now);
         timings.total(saga.getCreatedAt(), now);
@@ -84,7 +85,8 @@ public class CheckoutResultTx {
             return false;
         }
         if (saga.getCouponIssueId() != null) {
-            couponPort.release(saga.getCheckoutId(), saga.getBookingId(), saga.getCouponIssueId());
+            // 계약 coupon.release-requested.reason — 재결제 대기만 상태로, 나머지는 실패 코드 그대로(PAYMENT_DECLINED·STEP_TIMEOUT·HOLD_EXPIRED)
+            couponPort.release(saga, next == CheckoutState.PAYMENT_RETRYABLE ? "PAYMENT_RETRYABLE" : failureCode, now);
         }
         if (releasePayment && saga.getPaymentId() != null) {
             commands.release(saga, saga.getPaymentId(), "expire", now);
@@ -115,6 +117,21 @@ public class CheckoutResultTx {
         }
         bookingEvents.canceled(booking, reason, BookingEvents.CANCELED_KEY + ":" + saga.getCheckoutId(),
             BookingEvents.currentTraceId(), saga.getCheckoutId(), now).ifPresent(outbox::save);
+    }
+
+    /**
+     * 쿠폰 어댑터 {@code sqs}의 {@code coupon.reservation-rejected} — 잡힌 게 없어 보상 없이 COUPON_REJECTED(D14, 시작 때
+     * 즉시 거절과 같다). 반환 명령도 보내지 않는다(coupon은 거절을 이 체크아웃의 결과로 이미 남겼다)
+     */
+    @Transactional
+    public boolean couponRejected(String messageId, String messageType, CheckoutSaga saga, String reason, Instant now) {
+        received(messageId, messageType, now);
+        if (sagas.finish(saga.getCheckoutId(), EnumSet.of(CheckoutState.COUPON_RESERVING),
+            CheckoutState.COUPON_REJECTED, "coupon_rejected", "COUPON_NOT_USABLE", reason, null, now) == 0) {
+            return false;
+        }
+        timings.total(saga.getCreatedAt(), now);
+        return true;
     }
 
     /** 처리권을 잡는다(진행 중 → COMPENSATING). 1행인 쪽만 보상을 이어간다 */

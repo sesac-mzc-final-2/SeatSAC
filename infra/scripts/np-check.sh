@@ -17,7 +17,7 @@ set -uo pipefail
 
 NS="${NS:-cinema-staging}"
 TIMEOUT="${TIMEOUT:-3}"
-SERVICES="gateway catalog booking user payment ai coupon"   # ⚠️AI ai: ng-ai가 평소 0대라 파드가 없으면 건너뛴다 (3.1.20) · 🆕 coupon(6.1.5)
+SERVICES="gateway catalog booking user payment ai coupon ops-api"   # ⚠️AI ai: ng-ai가 평소 0대라 파드가 없으면 건너뛴다 (3.1.20) · 🆕 coupon(6.1.5) · 🆕 ops-api(6.1.7)는 배포 전이면 건너뛴다
 REQUIRED="catalog booking user payment"                 # 항상 있어야 하는 서비스
 [ "${REQUIRE_GATEWAY:-0}" = "1" ] && REQUIRED="gateway $REQUIRED"   # Cognito 전에는 gateway가 없어도 된다
 [ "${REQUIRE_AI:-0}" = "1" ] && REQUIRED="$REQUIRED ai"             # ng-ai를 켰을 때만 ai가 있어야 한다
@@ -33,6 +33,7 @@ allowed() {
     payment) echo "" ;;
     ai)      echo "" ;;                    # ⚠️AI ai는 클러스터 안 서비스를 부르지 않는다(공개 API는 CloudFront로 나간다)
     coupon)  echo "" ;;                    # 🆕 coupon은 다른 서비스를 HTTP로 부르지 않는다(saga 결과는 SQS)
+    ops-api) echo "ai coupon" ;;           # 🆕 6.1.7 내부 통계(ai)·쿠폰 이벤트(coupon)
   esac
 }
 

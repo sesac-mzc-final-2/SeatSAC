@@ -178,6 +178,12 @@ variable "ai_enabled" {
   default     = false
 }
 
+variable "ops_api_enabled" {
+  description = "6.1.7 ops-api ArgoCD Application(cinema-ops-api)을 만든다. ECR cinema/ops-api·gitops base/ops-api·overlays/staging/ops-api가 생긴 뒤 true (런북 6-L)"
+  type        = bool
+  default     = false
+}
+
 variable "ai_valkey_replication_group_id" {
   description = "ai Valkey 이름 (envs/staging ai_valkey.tf). 이름으로 조회해 AI_VALKEY_HOST를 채운다"
   type        = string

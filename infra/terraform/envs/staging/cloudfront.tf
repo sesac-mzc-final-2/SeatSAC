@@ -108,6 +108,9 @@ locals {
   : try(data.aws_lb.gateway[0].dns_name, ""))
 
   # 순서 = 우선순위. SSE 경로가 /api/* 보다 먼저 와야 한다
+  # 🆕 6.1.7 /ops/* → 같은 ALB(gateway Ingress의 /ops 규칙 → ops-api). gateway를 거치지 않는다(ADR-119) —
+  #   gateway를 정지해도 관리자 화면이 동작해야 해서. 캐시 없음·Authorization 포함 뷰어 헤더 전부(origin request policy api).
+  #   SPA(S3) 화면 경로는 /ops/* 를 쓰면 안 된다(이 동작이 가로챈다) — 관리자 화면은 다른 경로(예: /admin)
   api_behaviors = [
     {
       path_pattern    = "/api/screenings/*/seats/stream" # BKG-05 SSE: 캐시 없음 + 압축 끔(압축하면 이벤트가 버퍼링돼 몰려서 온다)
@@ -116,6 +119,11 @@ locals {
     },
     {
       path_pattern    = "/api/*"
+      allowed_methods = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+      compress        = true
+    },
+    {
+      path_pattern    = "/ops/*"
       allowed_methods = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
       compress        = true
     },
@@ -262,7 +270,7 @@ resource "aws_cloudfront_distribution" "frontend" {
     response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers.id
   }
 
-  # /api/screenings/*/seats/stream → ALB(압축 끔), /api/* → ALB. ALB가 아직 없으면 만들지 않는다
+  # /api/screenings/*/seats/stream → ALB(압축 끔), /api/* · /ops/* → ALB. ALB가 아직 없으면 만들지 않는다
   dynamic "ordered_cache_behavior" {
     for_each = local.api_origin_enabled ? local.api_behaviors : []
     content {

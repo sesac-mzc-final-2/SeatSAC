@@ -77,6 +77,11 @@ locals {
     SQS_NOTIFICATION_URL = "https://sqs.${var.region}.amazonaws.com/${local.account_id}/${var.notification_queue_name}"
     COGNITO_ISSUER_URI   = var.cognito_enabled ? "https://cognito-idp.${var.region}.amazonaws.com/${local.cognito_pool_id}" : ""
     COGNITO_CLIENT_ID    = local.cognito_client_id
+    # 🆕 6.1.7 ops-api(이름 그대로 읽는다). Prometheus는 클러스터 안 주소, 리포트 버킷·작업 그룹은 이름으로 정해진다
+    #   (envs/staging ops_api.tf와 같은 이름 — 리소스는 6.1.8·6.1.9가 만든다. 그 전에는 리포트 API가 503)
+    PROMETHEUS_URL   = "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
+    REPORTS_BUCKET   = "cinema-${var.env}-reports-${local.account_id}"
+    ATHENA_WORKGROUP = "cinema-${var.env}-reports"
     },
     # 6.1.1 서비스별 RDS 주소(ADR-115): DB_HOST_BOOKING … 옮기는 동안 DB_HOST(기존 인스턴스)도 남긴다
     { for svc in local.service_dbs : "DB_HOST_${upper(svc)}" => data.aws_db_instance.service[svc].address },

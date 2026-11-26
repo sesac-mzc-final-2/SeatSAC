@@ -115,10 +115,15 @@ jobs:
           # 라벨 순서에 의존하지 않는다 (application 라벨이 첫 번째가 아니어도 통과)
           curl -fsS localhost:18080/actuator/prometheus | grep -Eq 'http_server_requests_seconds_count\{[^}]*application="'"$SVC"'"' \
             || { echo "::error::/actuator/prometheus 에 http_server_requests_seconds{application=\"$SVC\"} 가 없다 (런타임 계약 5장)"; exit 1; }
-          # 인증 헤더 없는 요청 → 401 + 공통 오류 형식(error.v1.json): traceId 32자리 소문자 16진수, details 배열
-          body=$(curl -sS -o - -w '\n%{http_code}' localhost:18080/ai/presets)
+          # 인증 없는 요청 → 401 + 공통 오류 형식(error.v1.json): traceId 32자리 소문자 16진수, details 배열
+          #   ai: X-User-Id 없는 /ai/presets · ops-api: Bearer 토큰 없는 /ops/services
+          case "$SVC" in
+            ops-api) probe=/ops/services ;;
+            *) probe=/ai/presets ;;
+          esac
+          body=$(curl -sS -o - -w '\n%{http_code}' "localhost:18080$probe")
           code=${body##*$'\n'}; json=${body%$'\n'*}
-          [ "$code" = 401 ] || { echo "::error::X-User-Id 없이 /ai/presets 가 $code (401이어야 함)"; exit 1; }
+          [ "$code" = 401 ] || { echo "::error::인증 없이 $probe 가 $code (401이어야 함)"; exit 1; }
           jq -e '(.code|type=="string") and (.traceId|test("^[0-9a-f]{32}$")) and (.details|type=="array")' <<<"$json" >/dev/null \
             || { echo "::error::오류 응답이 error.v1.json 형식이 아니다: $json"; exit 1; }
           echo "기동·헬스·지표·오류 형식 확인 통과"
@@ -145,15 +150,17 @@ jobs:
             *) echo "::error::이미지 빌드·Trivy 실패 — image-build 로그 확인 (런북 13장)"; exit 1 ;;
           esac
 
-  # ---- 3.1.20 python 검사: services/ai/** 가 바뀐 PR만 ruff · pytest (ADR-82, docs/repo-workflow.md 4장) ----
-  # 필수 검사 이름은 "python". 변경이 없으면 건너뜀 = 성공 (frontend·contract-check와 같은 방식).
-  # Claude API는 테스트에서 목으로만 → 키·AWS 권한 없음. uv 버전은 services/ai/Dockerfile 의 ARG UV_VERSION 하나만 본다
+  # ---- 3.1.20 python 검사: services/{ai,ops-api}/** 가 바뀐 PR만 ruff · pytest (ADR-82·119, docs/repo-workflow.md 4장) ----
+  # 필수 검사 이름은 "python"(하나). 바뀐 Python 서비스를 이 job 안에서 차례로 검사한다 — 서비스마다 job을 나누면
+  # 필수 검사 이름이 「python (ai)」처럼 바뀌어 ruleset을 다시 맞춰야 한다. 변경이 없으면 건너뜀 = 성공.
+  # 외부 호출(Claude·Kubernetes·AWS)은 테스트에서 목으로만 → 키·AWS 권한 없음. uv 버전은 각 서비스 Dockerfile 의 ARG UV_VERSION
   python-changes:
     name: python 변경 감지
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
+      services: ${{ steps.diff.outputs.services }}
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -162,48 +169,56 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           files=$(git diff --no-renames --name-only -z "$BASE" HEAD | tr '\0' '\n')
-          if grep -qE '^services/ai/' <<<"$files"; then
-            echo "services/ai/ 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif grep -qxF '.github/workflows/pr-check.yml' <<<"$files" && [ -f services/ai/pyproject.toml ]; then
-            echo "워크플로 변경 → 검사"; echo "changed=true" >> "$GITHUB_OUTPUT"
+          picked=""
+          for svc in ai ops-api; do
+            [ -f "services/$svc/pyproject.toml" ] || continue   # 아직 없는 서비스는 건너뛴다
+            if grep -qE "^services/$svc/" <<<"$files" || grep -qxF '.github/workflows/pr-check.yml' <<<"$files"; then
+              picked="$picked $svc"
+            fi
+          done
+          picked=$(xargs <<<"$picked")
+          if [ -n "$picked" ]; then
+            echo "Python 서비스 검사: $picked"; echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "services/ai 변경 없음(또는 아직 없음) → 건너뜀"; echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Python 서비스 변경 없음 → 건너뜀"; echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "services=$picked" >> "$GITHUB_OUTPUT"
 
   python:
     # ruleset 필수 검사는 이 job. 변경 감지가 실패하면(skipped = 통과로 새지 않게) 여기서 실패시킨다
     needs: python-changes
     if: always() && (needs.python-changes.result != 'success' || needs.python-changes.outputs.changed == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: services/ai
+    timeout-minutes: 20
     env:
       UV_PYTHON: "3.12"
       UV_PYTHON_DOWNLOADS: never # setup-python 의 3.12만 쓴다 (Dockerfile python:3.12-slim 과 같은 마이너)
+      SERVICES: ${{ needs.python-changes.outputs.services }}
     steps:
       - name: 변경 감지 결과 확인
         if: needs.python-changes.result != 'success'
-        working-directory: .
         run: |
           echo "::error::python 변경 감지 실패 (result=${{ needs.python-changes.result }}) — python-changes 로그 확인"
           exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: uv 설치 (Dockerfile 과 같은 버전)
+      # 서비스마다: uv 설치(그 Dockerfile 과 같은 버전) → uv sync --locked(uv.lock 그대로) → ruff → pytest
+      - name: ruff · pytest (바뀐 Python 서비스마다)
         run: |
-          v=$(sed -n 's/^ARG UV_VERSION=//p' Dockerfile)
-          [ -n "$v" ] || { echo "::error::services/ai/Dockerfile 에 ARG UV_VERSION 이 없다"; exit 1; }
-          python -m pip install --disable-pip-version-check "uv==$v"
-          uv --version
-      - name: uv sync (uv.lock 그대로 — pyproject 와 안 맞으면 실패)
-        run: uv sync --locked
-      - name: ruff check
-        run: uv run --locked ruff check .
-      - name: pytest
-        run: uv run --locked pytest
+          for svc in $SERVICES; do
+            echo "::group::$svc"
+            cd "services/$svc"
+            v=$(sed -n 's/^ARG UV_VERSION=//p' Dockerfile)
+            [ -n "$v" ] || { echo "::error::services/$svc/Dockerfile 에 ARG UV_VERSION 이 없다"; exit 1; }
+            python -m pip install --disable-pip-version-check -q "uv==$v"
+            uv --version
+            uv sync --locked
+            uv run --locked ruff check .
+            uv run --locked pytest
+            cd "$GITHUB_WORKSPACE"
+            echo "::endgroup::"
+          done
 
   # ---- 3.3.5 frontend 검사: frontend/** 가 바뀐 PR만 (frontend-deploy 와 같은 node 24 · npm ci · npm run build) ----
   # node 는 24 (jsdom 30·vitest 가 22.22+ 를 요구, 로컬 개발도 24). 올릴 때 frontend-deploy 와 같이 올린다

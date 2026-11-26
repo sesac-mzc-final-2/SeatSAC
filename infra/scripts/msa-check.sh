@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ------------------------------------------------------------------
-# MSA 고도화 상태 점검 — 읽기만 한다 (6.5.1b 통합 테스트 · 6.5.2b 시연 · 6.1.10 AZ 장애 전후, 런북 terraform-infra 6-M·6-N)
+# MSA 고도화 상태 점검 — 읽기만 한다 (6.5.1b 통합 테스트 · 6.5.2b 시연 · 6.1.10 AZ 장애 전후, 런북 terraform-infra 6-N·6-O)
 #   사용: infra/scripts/msa-check.sh [all|apps|az|queues|data|stopped]
 #     apps    : ArgoCD Application Sync·Health
 #     az      : 앱 파드가 어느 AZ 노드에 있는지(서비스별 AZ 수). 한 AZ에만 있으면 ⚠

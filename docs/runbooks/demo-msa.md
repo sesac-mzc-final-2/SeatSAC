@@ -1,7 +1,7 @@
 # MSA 고도화 시연 런북 — 정지/가동 · AZ 장애 (WBS 6.5.2b)
 
 > 2026-11-27 · 김종식. 통합 시연 11/27(M11, ADR-114). 증명할 것: **서비스 하나(또는 AZ 하나)를 멈춰도 나머지가 동작한다**, 관리자 `/ops`에서 상태를 보고 멈추고 되살린다(ADR-119·122).
-> 절차의 근거·문제 해결은 `docs/runbooks/terraform-infra.md` 6-L(ops-api)·6-M(통합 테스트)·6-N(AZ 장애·비용 정리). 쿠폰 → 체크아웃 장면(6.5.2a)·관리자 리포트(6.5.2c)·AI(6.5.2d)는 각 담당 대본.
+> 절차의 근거·문제 해결은 `docs/runbooks/terraform-infra.md` 6-L(ops-api)·6-N(통합 테스트)·6-O(AZ 장애·비용 정리). 쿠폰 → 체크아웃 장면(6.5.2a)·관리자 리포트(6.5.2c)·AI(6.5.2d)는 각 담당 대본.
 
 ---
 
@@ -45,9 +45,9 @@ infra/scripts/msa-check.sh all; echo "exit=$?"   # exit=0 · 모두 Healthy · �
 
 ## 3. 장면 B — AZ 하나 장애 (약 5분)
 
-명령은 `terraform-infra.md` 6-N 그대로(전제·되돌리기·문제 해결도 거기). 여기에는 화면과 말만 둔다.
+명령은 `terraform-infra.md` 6-O 그대로(전제·되돌리기·문제 해결도 거기). 여기에는 화면과 말만 둔다.
 
-| 시간 | 화면 | 조작 (6-N) | 말 |
+| 시간 | 화면 | 조작 (6-O) | 말 |
 | --- | --- | --- | --- |
 | 0:00 | ④ | `msa-check.sh az` | 「서비스마다 파드 2개를 AZ a·c에 나눠 두었다(replicas 2 + topologySpread)」 |
 | 0:30 | ④ → ② | AZ a 노드 cordon·drain | 「AZ a 서버가 전부 꺼진 상황을 만든다」 |
@@ -56,7 +56,7 @@ infra/scripts/msa-check.sh all; echo "exit=$?"   # exit=0 · 모두 Healthy · �
 | 3:00 | ① · ③ | 1~2분 동안 선점·결제만 실패 가능, 조회·마이페이지는 정상 → 다시 정상 | 「DB가 넘어가는 동안 그 서비스만 잠깐 실패하고, 앱은 재시작 없이 다시 붙는다」 |
 | 4:30 | ④ | `msa-check.sh data` — booking-db 현재 AZ가 바뀜 · uncordon | 「되돌린다」 |
 
-- Valkey 장애 조치(6-N 3)는 좌석 선점 키가 있는 클러스터라 **실시간 좌석 장면과 같은 날이면 빼고** 말로만
+- Valkey 장애 조치(6-O 3)는 좌석 선점 키가 있는 클러스터라 **실시간 좌석 장면과 같은 날이면 빼고** 말로만
 - 녹화 시 터미널 글꼴을 키우고, 출력에 계정 ID·주소가 없는 명령만 쓴다(`msa-check.sh`는 이름만 찍는다). `aws rds reboot-db-instance`는 `--query 'DBInstance.DBInstanceStatus'`로 상태만 보이게 한다
 
 ## 4. 끝내기 (시연 직후)
@@ -69,7 +69,7 @@ infra/scripts/msa-check.sh all; echo "exit=$?"    # exit=0 · 정지 기록 없�
 - [ ] `/ops`에서 모든 서비스 Ready(정지 없음) · ArgoCD 모두 Synced·Healthy
 - [ ] DLQ 0(정지 동안 쌓인 명령·이벤트가 다 흘러갔다)
 - [ ] 노션 6.5.2b에 녹화 링크·소요·막힌 곳, `terraform-infra.md` 14장에 한 줄
-- [ ] 그날 마지막 시연이면 비용 정리(6-N-1)
+- [ ] 그날 마지막 시연이면 비용 정리(6-O-1)
 
 ## 5. 막힐 때
 

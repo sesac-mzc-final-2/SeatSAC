@@ -2088,7 +2088,7 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/reports/errors/dates" | 
 
 ---
 
-### 6-M. MSA 통합 테스트 — user 복제본 · coupon 명령 · DLQ 0 (6.5.1b, ADR-116·117) — ⬜
+### 6-N. MSA 통합 테스트 — user 복제본 · coupon 명령 · DLQ 0 (6.5.1b, ADR-116·117) — ⬜
 
 목표: 플래그를 **하나씩** 켜면서 메시지 경로가 끝까지 가고, 순서가 뒤집히거나 단계가 시간 초과돼도 데이터가 맞으며, 끝났을 때 **DLQ가 0**인지 본다. 결과는 14장 실행 기록과 노션 6.5.1b에 붙인다(`msa-check.sh` 출력은 계정 ID·주소가 없어 그대로 붙여도 된다).
 
@@ -2160,7 +2160,7 @@ infra/scripts/msa-check.sh all; echo "exit=$?"    # exit=0 (DLQ 0)
 - [ ] DLQ 5개 0 · ArgoCD 모두 Synced·Healthy · ops-api 정지 기록 없음
 - [ ] 노션 6.5.1b에 결과(위 체크·`msa-check.sh` 출력) · 14장 실행 기록 한 줄
 
-### 6-N. AZ 장애 시연 · 비용 정리 (6.1.10, ADR-122) — ⬜
+### 6-O. AZ 장애 시연 · 비용 정리 (6.1.10, ADR-122) — ⬜
 
 목표: **AZ a 하나가 없어진 것처럼** 만들고(노드 비우기 + RDS·Valkey 장애 조치) 사이트가 계속 동작하는 것을 보인다. 시연 대본(말·화면 순서)은 `docs/runbooks/demo-msa.md` 3장. 실행은 김종식(`cinema-admin`), 녹화가 필요하면 리허설 1회 뒤 본 시연.
 
@@ -2219,7 +2219,7 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 | 서비스 하나가 0개 | 그 서비스 파드가 모두 AZ a에 있었고 AZ c에 자리가 없음 → Pending | Karpenter가 노드를 더할 때까지(1~2분) 기다린다. 시연 전 「전제」 확인을 빼먹은 것 |
 | RDS 장애 조치 뒤 몇 분째 503 | 앱이 옛 IP로 연결을 붙잡음 | Hikari `maxLifetime` 안에 풀린다. 5분 넘으면 그 서비스만 ArgoCD 화면 Restart |
 
-#### 6-N-1. 비용 정리 (시연·발표 뒤, ADR-114 하루 $50)
+#### 6-O-1. 비용 정리 (시연·발표 뒤, ADR-114 하루 $50)
 
 | 순서 | 할 일 | 명령·확인 |
 | --- | --- | --- |
@@ -3208,5 +3208,5 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 6-D 블루/그린 — 6-D-0 분석 회차 ID · 6-D-2 정상 배포 · 6-D-3 실패 버전 시연 | | | |
 | ⬜ | 김종식 | 6-B SQS·Lambda (3.1.8·3.1.9) · 7 Cognito · 7-4 CloudFront `/api` | | | |
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
-| ⬜ | 김종식 | 6-M MSA 통합 테스트 (6.5.1b) — user 복제본(#220·gitops #61·#63) · coupon 시간 초과 · DLQ 0 | | | |
-| ⬜ | 김종식 | 6-N AZ 장애 시연 (6.1.10 · 6.5.2b, gitops #62 뒤) · 6-N-1 비용 정리 | | | |
+| ⬜ | 김종식 | 6-N MSA 통합 테스트 (6.5.1b) — user 복제본(#220·gitops #61·#63) · coupon 시간 초과 · DLQ 0 | | | |
+| ⬜ | 김종식 | 6-O AZ 장애 시연 (6.1.10 · 6.5.2b, gitops #62 뒤) · 6-O-1 비용 정리 | | | |

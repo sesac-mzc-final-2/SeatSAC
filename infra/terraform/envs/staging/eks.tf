@@ -36,8 +36,9 @@ module "eks" {
   authentication_mode                      = "API"
   enable_cluster_creator_admin_permissions = false
 
-  # 컨트롤 플레인 로그: 감사·인증만, 7일 (비용)
-  enabled_log_types                      = ["audit", "authenticator"]
+  # 컨트롤 플레인 로그: 인증만, 7일 (비용). 6.1.10: audit 끔 — 하루 약 1.5GB(런타임 계약 8장 「EKS audit 로그 끄기」).
+  #   누가 무엇을 바꿨는지는 ArgoCD(GitOps)·ops-api 감사 로그(`ops audit`)·CloudTrail(AWS API)로 본다. 사고 조사 때만 다시 켠다
+  enabled_log_types                      = ["authenticator"]
   cloudwatch_log_group_retention_in_days = 7
 
   # 파드 권한은 Pod Identity만 → 클러스터 IAM OIDC 공급자(IRSA)를 만들지 않는다

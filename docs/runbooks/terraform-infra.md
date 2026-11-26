@@ -1364,7 +1364,7 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
      ```
    - `cinema-ai` Health: ng-ai가 0대면 파드가 Pending이라 **10분 뒤 Degraded가 정상**이다(Deployment `progressDeadlineSeconds` 기본 600초 초과 → `ProgressDeadlineExceeded`). ng-ai를 켜고 파드가 Ready가 되면 Healthy로 돌아온다. ng-ai를 켠 상태에서 Degraded면 진짜 문제(이미지·Secret·readiness) — 6-G-2로 확인
    - **평소 이 폴더의 plan·apply에는 키가 필요 없다**(`ai.tf` `ignore_changes = [data]` — 처음 만들 때만 요구). 백업 관리자도 키 없이 다른 변경을 할 수 있다
-   - **키 교체**(유출·만료·Public 전환 전 폐기): 키는 어디에도 보관·전달하지 않는다. 팀 Anthropic 계정에서 새 키 발급 → 아래 → ArgoCD에서 `cinema-ai` Restart → 이전 키 폐기
+   - **키 교체**(유출·만료·Public 전환 전 폐기): 키는 어디에도 보관·전달하지 않는다. 팀 Anthropic 계정에서 새 키 발급 → 아래(🆕 6.4.1 뒤에는 ESO 재동기화·DB 두 키 확인까지) → ArgoCD에서 `cinema-ai` Restart → 이전 키 폐기
      ```bash
      read -s TF_VAR_anthropic_api_key && export TF_VAR_anthropic_api_key
      echo "키 길이: ${#TF_VAR_anthropic_api_key}"                          # 0이면 다시 read. 값은 출력하지 않는다
@@ -1374,6 +1374,13 @@ kubectl -n monitoring get pod -l app.kubernetes.io/name=grafana \
        || echo "키가 비었거나 apply가 취소·실패했다 — Secret 상태를 아래로 확인"    # 기대: ai-secrets 1 replace만
      kubectl -n cinema-staging get secret ai-secrets -o jsonpath='{.data.ANTHROPIC_API_KEY}' | base64 -d | wc -c   # 0보다 큰 숫자 (0이면 다시 교체)
      unset TF_VAR_anthropic_api_key
+     # 🆕 6.4.1(gitops base/ai/externalsecret.yaml) 뒤: -replace는 ai-secrets를 ANTHROPIC_API_KEY만으로 다시 만든다.
+     #   ESO(Merge)가 DB 두 키를 다시 더하기 전에 Restart하면 파드 env에 DB 비밀번호가 빠지고, 나중에 Secret이 돌아와도 실행 중 파드는 모른다
+     #   → 바로 다시 동기화하고, 세 키가 모두 있고 비어 있지 않은 것을 본 뒤에만 Restart한다
+     kubectl -n cinema-staging annotate externalsecret ai-secrets force-sync="$(date +%s)" --overwrite
+     kubectl -n cinema-staging get secret ai-secrets -o json | jq -r '.data | to_entries[] | "\(.key) \(.value | @base64d | length)"'
+     #   기대: ANTHROPIC_API_KEY (0보다 큼) · APP_AI_DB_PASSWORD 32 · APP_AI_QUERY_DB_PASSWORD 32
+     #   DB 두 키가 없거나 0이면 몇 초 뒤 다시 본다. 계속 없으면 kubectl -n cinema-staging describe externalsecret ai-secrets — Restart하지 않는다
      ```
 4. Budgets 금액 재확인(ng-ai 평일 낮 약 $25~30 + ai Valkey 약 $12). Claude API는 Anthropic 콘솔 월 지출 한도 **$90**(AWS Budgets 밖, 11/13 $20 → $90)
 
@@ -2692,7 +2699,26 @@ bash run.sh
 | ESO | namespace `external-secrets`, ServiceAccount `external-secrets`, Pod Identity `cinema-staging-external-secrets-pod`(읽기: `cinema/staging/*`의 GetSecretValue·DescribeSecret뿐) |
 | 저장소 연결 | ClusterSecretStore `aws-secrets-manager`(리전만 적는다 — ARN·계정 ID는 gitops에 두지 않는다. 자격 증명은 Pod Identity) |
 | ExternalSecret | 서비스마다 2개(app·migrator), sync wave **-3**(ConfigMap -2 · Flyway Job -1 · 앱 0보다 먼저), 1시간마다 다시 읽음 |
-| 대상 밖 | `ai-secrets`(ANTHROPIC_API_KEY) — Terraform K8s Secret 그대로. ai DB 비밀번호 키 이름이 정해질 때 함께 옮긴다 · `cinema-ops`의 `db-bootstrap-accounts*`(Job 입력) |
+| 대상 밖 | `ai-secrets`의 ANTHROPIC_API_KEY — Terraform K8s Secret 그대로(ai DB 비밀번호 두 키만 `cinema/staging/ai`로 옮긴다, 아래 「ai DB 비밀번호」) · `cinema-ops`의 `db-bootstrap-accounts*`(Job 입력) |
+
+**ai DB 비밀번호 (6.4.1)** — `ai-secrets`는 ai.tf가 값을 다시 쓰지 않아(ANTHROPIC_API_KEY) 다른 서비스처럼 K8s Secret을 출처로 삼지 않는다. db-bootstrap의 `random_password`를 Secrets Manager `cinema/staging/ai`(키 `APP_AI_DB_PASSWORD`·`APP_AI_QUERY_DB_PASSWORD`)에 넣고, gitops ExternalSecret `ai-secrets`(Merge)가 그 두 키만 더한다. Flyway 계정은 이미 있는 `cinema/staging/ai-migrator` → `ai-migrator-secrets`
+
+```bash
+cd infra/terraform/envs/staging-k8s
+# plan 파일(-out)은 비밀번호를 평문으로 담으므로 만들지 않는다 — 대화형 apply로 계획을 보고 yes (6-G-1과 같다)
+terraform apply -var-file=staging-k8s.tfvars
+#   기대: aws_secretsmanager_secret.ai_db[0] · secret_version.ai_db[0] add 2, kubernetes_secret_v1.ai[0] 변경 없음. secret_string은 (sensitive)
+# gitops(base/ai/externalsecret.yaml) 머지 뒤 — 키 이름·길이만 본다
+kubectl -n cinema-staging get externalsecret ai-secrets ai-migrator-secrets     # SecretSynced · Ready True
+kubectl -n cinema-staging get secret ai-secrets -o json | jq -r '.data | to_entries[] | "\(.key) \(.value | @base64d | length)"'
+#   ANTHROPIC_API_KEY(그대로) · APP_AI_DB_PASSWORD 32 · APP_AI_QUERY_DB_PASSWORD 32
+terraform plan -var-file=staging-k8s.tfvars    # 두 번째 plan: No changes (ai-secrets에 ESO·ArgoCD 메타데이터 변경이 보이면 ai.tf ignore_changes 확인)
+```
+
+- ai Flyway Job(`ai-flyway`, gitops `base/ai/flyway-job.yaml`)은 **ai 이미지에 `/app/db/migration`이 들어간 뒤**(#211 머지 → build-push)에만 머지한다. 그 전 이미지면 initContainer 복사가 실패해 `cinema-ai` sync가 멈춘다
+- 수요 저장·통계는 `APP_AI_UNMET_DEMAND_ENABLED`(기본 `false`)를 gitops `overlays/staging/ai`에서 켤 때 동작한다. 위 Secret·Flyway·RDS CA가 먼저다
+- `ai-secrets`는 아래 3) 정리에서 **Owner로 바꾸지 않는다**(Merge 그대로) — ANTHROPIC_API_KEY는 Terraform(ai.tf)에 남아 Secrets Manager에 없다. Owner면 ESO가 Secret을 `cinema/staging/ai`의 두 키로 다시 써 API 키가 사라진다. `ai-migrator-secrets`는 다른 서비스와 같이 정리 대상
+- Anthropic 키 교체(6-G-1)의 `-replace`는 ai-secrets를 API 키만으로 다시 만든다 → ESO `force-sync`로 DB 두 키가 돌아온 것을 본 뒤에 `cinema-ai` Restart(6-G-1 명령)
 
 **순서: 확장 → 전환 → 정리.** 단계마다 서비스가 읽는 값은 같다(같은 `random_password`). 한 단계씩 확인하고 넘어간다.
 
@@ -2733,7 +2759,7 @@ done
 **3) 정리 — 별도 PR 두 개** (2)를 며칠 지켜본 뒤)
 
 1. SeatSAC: `db_bootstrap.tf`의 `kubernetes_secret_v1.app`·`.migrator`를 **state에서만** 뺀다 — `removed { from = … lifecycle { destroy = false } }`(Secret을 지우지 않는다). Secrets Manager 값의 출처를 `random_password`·`local.app_secret_extra`로 옮긴다. plan에 Secret `destroy`가 보이면 apply하지 않는다
-2. gitops: ExternalSecret `creationPolicy: Merge` → `Owner`(빈 클러스터에서 ESO가 Secret을 처음부터 만든다)
+2. gitops: ExternalSecret `creationPolicy: Merge` → `Owner`(빈 클러스터에서 ESO가 Secret을 처음부터 만든다). **`ai-secrets`는 제외 — Merge 그대로**(ANTHROPIC_API_KEY가 Terraform ai.tf에 남는다, 위 「ai DB 비밀번호」). ai는 `ai-migrator-secrets`만 바꾼다. 1번의 `removed`도 `db_bootstrap.tf` 것만 — `ai.tf`의 `kubernetes_secret_v1.ai`는 그대로 둔다
 - 이 뒤로 비밀번호 교체(8-D)는 `terraform apply -replace=random_password.db[…]` → Secrets Manager 갱신 + db-bootstrap `ALTER USER` → ESO가 다음 주기(최대 1시간, 바로 하려면 ExternalSecret에 `force-sync` 주석)로 K8s Secret 갱신 → 서비스 재시작
 
 | 증상 | 원인 | 해결 |

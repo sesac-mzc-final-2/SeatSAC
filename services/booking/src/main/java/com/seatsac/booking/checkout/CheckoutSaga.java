@@ -57,6 +57,10 @@ public class CheckoutSaga {
     @Column(name = "coupon_issue_id", length = 64, updatable = false)
     private String couponIssueId;
 
+    /** 모의 카드(CARD)만 — 쿠폰 예약 결과가 온 뒤 청구 명령에 넣는다. 끝 4자리만 */
+    @Column(name = "card_last4", length = 4, updatable = false)
+    private String cardLast4;
+
     @Column(name = "discount_kind", length = 10)
     private String discountKind;
 
@@ -109,7 +113,8 @@ public class CheckoutSaga {
 
     /** 시작 행(STARTED). 금액은 원가로 시작하고 쿠폰이 예약되면 조건부 UPDATE로 바꾼다 */
     static CheckoutSaga started(String checkoutId, Long bookingId, String userId, PaymentMethod method, int attempt,
-                                String couponIssueId, int originalAmount, String traceId, Instant now) {
+                                String couponIssueId, String cardLast4, int originalAmount, String traceId,
+                                Instant now) {
         CheckoutSaga saga = new CheckoutSaga();
         saga.checkoutId = Objects.requireNonNull(checkoutId, "checkoutId");
         saga.bookingId = Objects.requireNonNull(bookingId, "bookingId");
@@ -119,6 +124,7 @@ public class CheckoutSaga {
         saga.step = "accepted";
         saga.attempt = attempt;
         saga.couponIssueId = couponIssueId;
+        saga.cardLast4 = cardLast4;
         saga.originalAmount = originalAmount;
         saga.discountAmount = 0;
         saga.finalAmount = originalAmount;

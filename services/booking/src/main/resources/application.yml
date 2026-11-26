@@ -74,11 +74,12 @@ app:
     saga-enabled: ${APP_CHECKOUT_SAGA_ENABLED:false}
     step-timeout: ${APP_CHECKOUT_STEP_TIMEOUT:10s}          # 쿠폰 예약·결제 준비(돈이 움직이기 전)만
     payment-retry-enabled: ${APP_CHECKOUT_PAYMENT_RETRY_ENABLED:false}
-    coupon-adapter: ${APP_CHECKOUT_COUPON_ADAPTER:none}      # none = coupon 없이(쿠폰 요청은 거절)
+    coupon-adapter: ${APP_CHECKOUT_COUPON_ADAPTER:none}      # none = coupon 없이(쿠폰 요청은 거절) · sqs = coupon-commands 큐
   # saga 명령·결과 큐 — cinema-infra-endpoints → gitops booking-config. 기본값 없음(빠지면 발송이 실패로 드러난다)
   messaging:
     consumer-enabled: ${APP_MESSAGING_CONSUMER_ENABLED:false}
     payment-commands-url: ${APP_MESSAGING_PAYMENT_COMMANDS_URL:}
+    coupon-commands-url: ${APP_MESSAGING_COUPON_COMMANDS_URL:}   # 쿠폰 어댑터 sqs일 때만
     replies-url: ${APP_MESSAGING_REPLIES_URL:}
     max-concurrent: ${APP_MESSAGING_MAX_CONCURRENT:10}
     max-messages-per-poll: ${APP_MESSAGING_MAX_MESSAGES_PER_POLL:10}

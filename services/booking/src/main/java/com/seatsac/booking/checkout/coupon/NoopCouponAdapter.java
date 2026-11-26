@@ -1,5 +1,7 @@
 package com.seatsac.booking.checkout.coupon;
 
+import com.seatsac.booking.checkout.CheckoutSaga;
+import java.time.Instant;
 import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -13,18 +15,17 @@ import org.springframework.stereotype.Component;
 public class NoopCouponAdapter implements CouponPort {
 
     @Override
-    public Optional<CouponReply> reserve(String checkoutId, Long bookingId, String userId, String couponIssueId,
-                                         int originalAmount) {
-        return Optional.of(new Rejected(checkoutId, "COUPON_DISABLED"));
+    public Optional<CouponReply> reserve(CheckoutSaga saga, Instant now) {
+        return Optional.of(new Rejected(saga.getCheckoutId(), "COUPON_DISABLED"));
     }
 
     @Override
-    public void use(String checkoutId, Long bookingId, String couponIssueId) {
+    public void use(CheckoutSaga saga, Instant now) {
         // coupon 없음
     }
 
     @Override
-    public void release(String checkoutId, Long bookingId, String couponIssueId) {
+    public void release(CheckoutSaga saga, String reason, Instant now) {
         // coupon 없음
     }
 }

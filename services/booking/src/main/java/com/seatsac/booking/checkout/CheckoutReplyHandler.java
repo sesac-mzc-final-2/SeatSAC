@@ -3,6 +3,9 @@ package com.seatsac.booking.checkout;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.seatsac.booking.checkout.coupon.CouponPort;
+import com.seatsac.booking.checkout.coupon.CouponPort.CouponReply;
+import com.seatsac.booking.checkout.coupon.CouponReplyTranslator;
 import com.seatsac.booking.component.PaymentClient.PaymentResult;
 import com.seatsac.booking.dto.event.BookingConfirmedEvent;
 import com.seatsac.booking.entity.Booking;
@@ -10,6 +13,7 @@ import com.seatsac.booking.enums.BookingStatus;
 import com.seatsac.booking.service.BookingPaymentResultApplier;
 import com.seatsac.booking.service.BookingPaymentResultApplier.Applied;
 import com.seatsac.booking.service.BookingRepositoryReader;
+import com.seatsac.common.core.error.BusinessException;
 import com.seatsac.common.core.trace.TraceIds;
 import com.seatsac.common.core.trace.TraceKeys;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -30,7 +34,8 @@ import org.springframework.stereotype.Service;
  *
  * <p>순서(D27): ① inbox 조회 → ② 예매 반영은 기존 메서드(동기 경로와 같은 {@link BookingPaymentResultApplier}, 자기 트랜잭션)
  * → ③ {@link CheckoutResultTx} 한 트랜잭션(inbox + saga 조건부 전이 + 명령). 늦은 결과·중복은 조건부 전이가 0행이라 무시된다.
- * 모르는 {@code type}(coupon 결과는 어댑터가 {@code sqs}일 때)은 로그 후 받은 것으로 친다(DLQ로 보내지 않음, 설계 04 5장).
+ * coupon 결과 2종(어댑터 {@code sqs}, 계약 {@code coupon.*.v1.json} #187)은 {@link CouponReplyTranslator}가 번역한다.
+ * 모르는 {@code type}은 로그 후 받은 것으로 친다(DLQ로 보내지 않음, 설계 04 5장).
  */
 @Slf4j
 @Service
@@ -48,6 +53,7 @@ public class CheckoutReplyHandler {
     private final ProcessedMessageRepository inbox;
     private final CheckoutSagaRepository sagas;
     private final CheckoutResultTx tx;
+    private final CheckoutStateService stateService;
     private final BookingRepositoryReader bookingReader;
     private final BookingPaymentResultApplier resultApplier;
     private final CheckoutProperties properties;
@@ -113,9 +119,40 @@ public class CheckoutReplyHandler {
             case "payment.approved" -> onApproved(eventId, type, payload, saga);
             case "payment.declined" -> onDeclined(eventId, type, payload, saga, now);
             case "payment.result-unknown" -> onUnknown(eventId, type, payload, saga, now);
+            case CouponReplyTranslator.RESERVED, CouponReplyTranslator.REJECTED ->
+                onCoupon(eventId, type, payload, saga, now);
             default -> {
                 log.warn("모르는 결과 type — 무시한다 type={} checkoutId={}", type, saga.getCheckoutId());
                 tx.ignore(eventId, type, now);
+            }
+        }
+    }
+
+    /** 쿠폰 예약 결과 — 기다리던 상태(COUPON_RESERVING)일 때만. 늦은 결과는 받기만 한다(시간 초과 보상이 이미 반환을 보냈다) */
+    private void onCoupon(String eventId, String type, JsonNode payload, CheckoutSaga saga, Instant now) {
+        CouponReply reply = CouponReplyTranslator.translate(type, saga.getCheckoutId(), payload)
+            .orElseThrow(() -> new MalformedReplyException("coupon.reserved에 쓸 수 있는 discountRate(1~99)가 없다"));
+        if (saga.getState() != CheckoutState.COUPON_RESERVING) {
+            log.info("쿠폰 결과가 늦었다 — 무시 checkoutId={} state={} type={}", saga.getCheckoutId(), saga.getState(), type);
+            tx.ignore(eventId, type, now);
+            return;
+        }
+        switch (reply) {
+            case CouponPort.Reserved reserved -> {
+                try {
+                    stateService.couponReserved(eventId, type, saga, booking(saga), reserved.discount(), now);
+                } catch (SagaMovedOnException | BusinessException e) {
+                    // saga가 그 사이 넘어갔거나 예매에 결제를 붙일 수 없다(만료·다른 경로) — 스윕이 닫고 쿠폰 반환을 보낸다
+                    log.warn("쿠폰 예약 뒤 결제로 넘어가지 못했다 — 스윕에 맡긴다 checkoutId={} 이유={}", saga.getCheckoutId(),
+                        e.getMessage());
+                    tx.ignore(eventId, type, now);
+                }
+            }
+            case CouponPort.Rejected rejected -> {
+                if (tx.couponRejected(eventId, type, saga, rejected.reason(), now)) {
+                    count("coupon_rejected");
+                    log.info("쿠폰 거절 checkoutId={} reason={}", saga.getCheckoutId(), rejected.reason());
+                }
             }
         }
     }

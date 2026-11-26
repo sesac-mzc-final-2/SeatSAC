@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.seatsac.booking.common.BookingPolicy;
 import com.seatsac.booking.entity.OutboxMessage;
+import com.seatsac.booking.enums.OutboxDestination;
 import com.seatsac.booking.enums.OutboxEventType;
 import com.seatsac.booking.repository.OutboxMessageRepository;
 import com.seatsac.common.core.time.Times;
@@ -68,6 +69,18 @@ public class CheckoutCommands {
 
     private void save(CheckoutSaga saga, OutboxEventType type, String aggregateKey, String paymentId, Instant now,
                       Consumer<ObjectNode> fields) {
+        save(OutboxDestination.PAYMENT_COMMANDS, saga, type, aggregateKey, now, p -> {
+            p.put("paymentId", paymentId);
+            fields.accept(p);
+        });
+    }
+
+    /**
+     * 명령 행 하나 — envelope(계약 공통 필드 + {@code correlationId} = checkoutId)와 {@code payload.checkoutId}·{@code bookingId}는
+     * 여기서, 나머지 payload는 {@code fields}가 채운다. 쿠폰 어댑터({@code sqs})도 이것으로 보낸다
+     */
+    public void save(OutboxDestination destination, CheckoutSaga saga, OutboxEventType type, String aggregateKey,
+                     Instant now, Consumer<ObjectNode> fields) {
         String eventId = UUID.randomUUID().toString();
         ObjectNode root = objectMapper.createObjectNode();
         root.put("eventId", eventId);
@@ -79,7 +92,6 @@ public class CheckoutCommands {
         root.put("correlationId", saga.getCheckoutId());
         ObjectNode payload = root.putObject("payload");
         payload.put("checkoutId", saga.getCheckoutId());
-        payload.put("paymentId", paymentId);
         payload.put("bookingId", saga.getBookingId());
         fields.accept(payload);
         String json;
@@ -88,7 +100,7 @@ public class CheckoutCommands {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("명령 메시지를 만들지 못했다", e);
         }
-        outbox.save(OutboxMessage.command(eventId, type, saga.getBookingId(), aggregateKey, json, saga.getTraceId(),
-            saga.getCheckoutId(), now));
+        outbox.save(OutboxMessage.command(destination, eventId, type, saga.getBookingId(), aggregateKey, json,
+            saga.getTraceId(), saga.getCheckoutId(), now));
     }
 }

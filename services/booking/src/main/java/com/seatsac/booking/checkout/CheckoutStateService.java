@@ -32,6 +32,7 @@ public class CheckoutStateService {
     private final BookingStateService bookingState;
     private final CheckoutProperties properties;
     private final CheckoutTimings timings;
+    private final ProcessedMessageRepository inbox;
 
     /** 시작 입력 — 카드 끝 4자리는 CARD(모의)만 */
     /** @param replacingPaymentId 재결제(D25)면 지금 붙은(실패한) 결제 ID — 새 ID로 비교 후 교체한다. 처음이면 null */
@@ -49,14 +50,13 @@ public class CheckoutStateService {
     public CheckoutState begin(Begin begin, Instant now) {
         Booking booking = begin.booking();
         CheckoutSaga saga = sagas.saveAndFlush(CheckoutSaga.started(begin.checkoutId(), booking.getBookingId(),
-            begin.userId(), begin.method(), begin.attempt(), begin.couponIssueId(), booking.getAmount(),
+            begin.userId(), begin.method(), begin.attempt(), begin.couponIssueId(), begin.cardLast4(), booking.getAmount(),
             begin.traceId(), now));
 
         if (begin.couponIssueId() == null) {
-            return startPayment(saga, booking, Discount.NONE, begin.cardLast4(), begin.replacingPaymentId(), now);
+            return startPayment(saga, booking, Discount.NONE, begin.replacingPaymentId(), now);
         }
-        Optional<CouponReply> reply = couponPort.reserve(saga.getCheckoutId(), booking.getBookingId(),
-            begin.userId(), begin.couponIssueId(), booking.getAmount());
+        Optional<CouponReply> reply = couponPort.reserve(saga, now);
         if (reply.isEmpty()) {
             sagas.advance(saga.getCheckoutId(), EnumSet.of(CheckoutState.STARTED), CheckoutState.COUPON_RESERVING,
                 "coupon_requested", now.plus(properties.stepTimeout()), now);
@@ -65,7 +65,7 @@ public class CheckoutStateService {
         return switch (reply.get()) {
             case CouponPort.Reserved reserved -> {
                 timings.step("coupon_reserved", saga.getCreatedAt(), now);   // saga 생성 기준(다른 단계와 같다). sqs 어댑터 결과는 결과 소비자가 같은 기준으로
-                yield startPayment(saga, booking, reserved.discount(), begin.cardLast4(), begin.replacingPaymentId(), now);
+                yield startPayment(saga, booking, reserved.discount(), begin.replacingPaymentId(), now);
             }
             case CouponPort.Rejected rejected -> {
                 // 잡힌 게 없다 — 보상 없음. 예매·좌석·선점 시간 그대로(D14)
@@ -79,9 +79,10 @@ public class CheckoutStateService {
     /**
      * 결제 명령을 처음 보내는 순간에 paymentId를 붙인다(D14 — 쿠폰 단계에서 붙이면 만료가 유예만큼 밀린다).
      * 붙이지 못하면(동기 경로가 그 사이 붙였다) 트랜잭션 전체를 되돌린다 → 409 {@code PAYMENT_PATH_CONFLICT}.
+     * saga가 이미 다른 상태로 넘어갔으면(쿠폰 결과가 시간 초과 보상보다 늦음) {@link SagaMovedOnException} — 역시 전체를 되돌린다.
      */
-    CheckoutState startPayment(CheckoutSaga saga, Booking booking, Discount discount, String cardLast4,
-                               String replacingPaymentId, Instant now) {
+    CheckoutState startPayment(CheckoutSaga saga, Booking booking, Discount discount, String replacingPaymentId,
+                               Instant now) {
         int original = saga.getOriginalAmount();
         int discountAmount = discount.apply(original);
         int finalAmount = original - discountAmount;
@@ -102,15 +103,31 @@ public class CheckoutStateService {
         Instant deadline = now.plus(card ? CheckoutProperties.VERIFY_INTERVAL : properties.stepTimeout());
         String kind = discount.kind() == Discount.Kind.NONE ? null : discount.kind().name();
         Integer value = discount.kind() == Discount.Kind.NONE ? null : discount.value();
-        sagas.startPayment(saga.getCheckoutId(), EnumSet.of(CheckoutState.STARTED, CheckoutState.COUPON_RESERVING),
+        if (sagas.startPayment(saga.getCheckoutId(), EnumSet.of(CheckoutState.STARTED, CheckoutState.COUPON_RESERVING),
             next, card ? "charge_requested" : "payment_requested", deadline, paymentId, kind, value, discountAmount,
-            finalAmount, now);
+            finalAmount, now) == 0) {
+            throw new SagaMovedOnException(saga.getCheckoutId());
+        }
         if (card) {
-            commands.charge(saga, paymentId, finalAmount, cardLast4, now);
+            commands.charge(saga, paymentId, finalAmount, saga.getCardLast4(), now);
         } else {
             commands.preparation(saga, paymentId, finalAmount, booking.getSeatCount(), now);
         }
         return next;
+    }
+
+    /**
+     * 쿠폰 어댑터 {@code sqs}의 {@code coupon.reserved}(설계 03 3-2) — 할인을 확정하고 결제 명령으로 넘어간다. 시작 때와 같은
+     * {@link #startPayment}. 재결제(D25)면 예매에 지금 붙은(실패한) 결제를 교체한다 — 시작 때 확인한 그 결제다.
+     * inbox도 같은 트랜잭션에. 예매에 결제를 붙이지 못하거나({@code PAYMENT_PATH_CONFLICT}) saga가 이미 넘어갔으면
+     * ({@link SagaMovedOnException}) 예외로 전부 되돌린다 — 부르는 쪽이 inbox만 남긴다(스윕이 시간 초과·만료로 닫고 쿠폰 반환을 보낸다)
+     */
+    @Transactional
+    public void couponReserved(String messageId, String messageType, CheckoutSaga saga, Booking booking,
+                               Discount discount, Instant now) {
+        inbox.saveAndFlush(ProcessedMessage.of(messageId, messageType, now));
+        startPayment(saga, booking, discount, booking.getCurrentPaymentId(), now);
+        timings.step("coupon_reserved", saga.getCreatedAt(), now);   // saga 생성 기준(시작 때 즉시 결과와 같다)
     }
 
     /** 설계 01 5-3 — READY_TO_PAY → VERIFYING + 첫 확인 명령. 0행이면 409 {@code CHECKOUT_NOT_READY} */

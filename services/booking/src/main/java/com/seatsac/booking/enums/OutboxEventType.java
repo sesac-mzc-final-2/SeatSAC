@@ -9,7 +9,11 @@ public enum OutboxEventType {
     PAYMENT_PREPARATION_REQUESTED("payment.preparation-requested"),
     PAYMENT_CHARGE_REQUESTED("payment.charge-requested"),
     PAYMENT_VERIFICATION_REQUESTED("payment.verification-requested"),
-    PAYMENT_RELEASE_REQUESTED("payment.release-requested");
+    PAYMENT_RELEASE_REQUESTED("payment.release-requested"),
+    /** saga 쿠폰 명령 — {@code APP_CHECKOUT_COUPON_ADAPTER=sqs}일 때만(계약 contracts/events/coupon.*-requested.v1.json, #187) */
+    COUPON_RESERVATION_REQUESTED("coupon.reservation-requested"),
+    COUPON_USE_REQUESTED("coupon.use-requested"),
+    COUPON_RELEASE_REQUESTED("coupon.release-requested");
 
     private final String messageType;
 

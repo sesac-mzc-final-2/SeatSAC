@@ -1888,6 +1888,117 @@ Grafana(6-F-2와 같은 접속) → Explore → 데이터소스 **Loki**:
 - 비용: S3 수 GB·요청 수 수준(월 1달러 미만). 노드 추가 없음
 - 알림 Lambda 로그는 CloudWatch에 있다 — Loki로 옮기지 않는다
 
+### 6-K. Karpenter — 노드 자동 추가 (6.1.6, ADR-122) — ⬜
+
+코드: `envs/staging/karpenter.tf`(컨트롤러 Pod Identity·노드 역할·Access Entry·중단 알림 큐·밤 정리 Lambda) · `envs/staging/network.tf`·`eks.tf`(태그 `karpenter.sh/discovery`) · `envs/staging-k8s/karpenter.tf`(컨트롤러 Helm) · `lambdas/karpenter-sweep` · `infra/scripts/cluster-scale.sh` · gitops `platform/karpenter`(NodePool·EC2NodeClass)
+
+| 항목 | 값 |
+| --- | --- |
+| 하는 일 | 관리형 노드 2대(ng-a·ng-c, t3.xlarge)로 모자랄 때만 t3.large·t3.xlarge On-Demand 노드를 더한다(Pending 파드가 생길 때). 관리형 노드그룹은 그대로 둔다 — 컨트롤러·ArgoCD·시스템 파드가 거기 있다 |
+| 컨트롤러 | namespace `karpenter`, 2개(관리형 노드 2대에 하나씩), Pod Identity `cinema-staging-karpenter-pod`. **관리형 노드에만 뜬다**(차트 기본 affinity) |
+| 노드 | 역할 `cinema-staging-karpenter-node`, app 서브넷·노드 보안그룹(태그로 찾음) → RDS·Valkey·ALB → 8080 규칙 그대로. 라벨 `cinema/capacity=karpenter`, taint 없음(ai 파드는 `cinema/workload=ai` 라벨이 없어 오지 않는다) |
+| 상한 | `limits.cpu: "16"`(Karpenter 노드 합계 — t3.xlarge 4대 또는 t3.large 8대). 다 써도 하루 15시간 약 $12.5 → 하루 $50 상한(ADR-114) 안. 닿으면 파드는 Pending |
+| 파드를 옮기지 않음 | `WhenEmpty`(빈 노드만 지움, 압축 없음) · `expireAfter: Never` · Drifted 0 → 블루/그린·SSE·시연 중 파드를 다른 노드로 쫓아내지 않는다 |
+| 밤 끄기 | NodePool은 건드리지 않는다. 관리형 노드그룹이 0대 → 컨트롤러 멈춤 → 정리 Lambda `cinema-staging-karpenter-sweep`가 **15분마다, 관리형 노드그룹 desired가 모두 0일 때만** Karpenter 인스턴스(태그 `kubernetes.io/cluster/cinema-staging-eks=owned` + `karpenter.sh/nodepool`)를 지운다. 아침에 컨트롤러가 다시 뜨면 인스턴스가 없어진 NodeClaim을 스스로 정리한다 |
+| 중단 알림 | SQS `cinema-staging-karpenter` + EventBridge 규칙(`cinema-karpenter*`) — 예정 유지보수·상태 변경 때 컨트롤러가 노드를 먼저 비운다 |
+
+**1) staging — 권한·큐·정리 Lambda** (시연·측정이 없는 시간)
+
+```bash
+cd infra/terraform/envs/staging
+terraform init -backend-config=backend.hcl       # karpenter 서브모듈 추가 → 한 번
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: add = module.karpenter(IAM 역할 2·정책·Pod Identity 연결·Access Entry·인스턴스 프로필 없음·SQS·큐 정책·EventBridge 규칙·대상)
+#       + 정리 Lambda(역할·정책·로그 그룹·함수) + 일정 1·스케줄러 역할 정책 1
+#       change = app 서브넷 2·노드 보안그룹 태그(karpenter.sh/discovery) — in-place. 노드그룹·EKS 교체가 보이면 멈춘다
+terraform apply plan.out
+terraform output karpenter_queue_name karpenter_node_role_name
+```
+
+**2) staging-k8s — 컨트롤러 Helm** (노드 켜짐)
+
+```bash
+helm show chart oci://public.ecr.aws/karpenter/karpenter --version "$(grep karpenter_chart_version ../staging-k8s/staging-k8s.tfvars | cut -d'"' -f2)" | head -3   # 버전 확인 (1.36 → 1.13 이상)
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out     # 기대: helm_release.karpenter add 1, 그 밖 변경 없음
+terraform apply plan.out
+kubectl -n karpenter get pods -o wide          # 2개 Running, NODE가 ng-a·ng-c(관리형) 노드
+kubectl get crd | grep karpenter               # nodepools·nodeclaims·ec2nodeclasses
+kubectl -n karpenter logs deploy/karpenter | grep -i -E "error|interruption" | head   # 큐·권한 오류 없음
+```
+
+**3) gitops — NodePool·EC2NodeClass** (SeatSAC-gitops PR 머지, 2) 뒤)
+
+```bash
+kubectl get ec2nodeclass default -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'; echo   # True (서브넷·SG·AMI·역할을 찾음)
+kubectl get ec2nodeclass default -o jsonpath='{.status.subnets[*].zone}'; echo                         # ap-northeast-2a ap-northeast-2c
+kubectl get nodepool default                    # READY True
+kubectl get nodeclaim                           # 평소 비어 있다(관리형 노드로 충분할 때)
+```
+
+확인 — 노드가 실제로 더해지는지(시연·측정이 없는 시간):
+
+```bash
+# 관리형 노드 하나를 내려 자리를 모자라게 만든다(클러스터를 직접 고치지 않는다 — 노드그룹 desired만, cinema-admin)
+infra/scripts/cluster-scale.sh down ng-c
+kubectl -n cinema-staging get pods --field-selector=status.phase=Pending      # ng-c에서 쫓겨난 파드
+kubectl get nodeclaim -w                                                         # 1~2분 안에 Launched → Registered → Initialized
+kubectl get nodes -L cinema/capacity,topology.kubernetes.io/zone               # karpenter 노드가 보인다(AZ c 파드 몫)
+infra/scripts/cluster-scale.sh up ng-c                                          # 되돌린다 → 비게 된 Karpenter 노드는 5분 뒤 지워진다
+```
+
+- 빈 노드는 5분 뒤 지워진다(`consolidateAfter: 5m`). 부하 테스트(6-H)·HPA로 늘린 파드가 줄어들면 확인할 수 있다
+- 2장의 topologySpread `DoNotSchedule` 전환은 아직 하지 않는다(런타임 계약 2장 「Karpenter 뒤에 정한다」). 정하기 전 확인: 서비스를 replicas 2로 둔 채 `kubectl get pods -o wide`로 두 AZ에 나뉘는지, 한 AZ에 자리가 없을 때 Karpenter가 그 AZ에 노드를 만드는지(`kubectl get nodeclaim -o wide`의 ZONE) — 둘 다 되면 `DoNotSchedule`로 바꿔도 preview가 Pending으로 멈추지 않는다
+
+**4) 밤 끄기 확인** (처음 한 번)
+
+```bash
+aws lambda invoke --function-name cinema-staging-karpenter-sweep --cli-binary-format raw-in-base64-out \
+  --payload '{"dryRun": true}' /dev/stdout       # 낮: {"action": "skip", "reason": "MANAGED_NODES_ON", ...}
+infra/scripts/cluster-scale.sh down              # 관리형 노드그룹 0 → 끝에 정리 Lambda를 한 번 부른다
+infra/scripts/cluster-scale.sh status            # 「Karpenter 노드(실행 중): 0」 (방금 지웠거나 15분 안)
+aws logs tail /aws/lambda/cinema-staging-karpenter-sweep --since 30m   # "Karpenter 노드를 지웠다" 또는 NO_KARPENTER_NODES
+```
+
+- EventBridge 23:07 끄기 → 늦어도 23:22 정리. 관리형 노드가 내려가는 몇 분 사이에 컨트롤러가 쫓겨난 파드 때문에 노드를 하나 더 만들 수 있다 — 다음 정리(15분)가 지운다
+- 데모 주간 24시간 가동·`cluster_keep_on`이면 관리형 노드그룹이 켜져 있어 정리가 아무것도 하지 않는다(`skip`)
+- CI 백업 끄기(cluster-schedule)는 역할에 `lambda:InvokeFunction`이 없어 경고만 남긴다 → 예약 정리가 지운다(정상)
+
+**5) 시연 중 disruption 0**
+
+평소에도 파드를 옮기지 않는다(빈 노드만 지움). 시연 중에는 빈 노드 정리까지 멈춘다 — gitops PR 한 줄, 시연 1시간 전 머지 → 시연 뒤 revert:
+
+```yaml
+# platform/karpenter/nodepool.yaml  disruption.budgets 첫 줄
+      - nodes: "0"                    # 시연 중 (원래 "1")
+```
+
+```bash
+kubectl get nodepool default -o jsonpath='{.spec.disruption.budgets[0].nodes}'; echo   # 0
+```
+
+- 블루/그린 전환 순간(preview가 active 수까지 늘어남)에 모자라면 Karpenter가 노드를 **더하기만** 한다. 전환 뒤 빈 노드는 5분 뒤 지워진다(scaleDownDelay 60초보다 길다)
+- 막는 것은 Karpenter의 자발적 정리뿐이다. AWS 예정 유지보수·인스턴스 장애는 막지 못한다(중단 알림으로 먼저 비운다)
+
+**6) 되돌리기** (순서 중요 — 컨트롤러를 먼저 지우면 NodeClaim finalizer가 남는다)
+
+1. gitops: `apps/staging/kustomization.yaml`에서 `../../platform/karpenter` 줄을 빼는 PR → root 앱이 NodePool·EC2NodeClass를 지우고 **컨트롤러가 Karpenter 노드를 비운 뒤 지운다** → `kubectl get nodeclaim` 비었는지
+2. staging-k8s `karpenter_enabled = false` apply(Helm 제거) → staging `karpenter_enabled = false` apply(권한·큐·정리 Lambda 제거, 태그는 남는다 — 해 없음)
+- 파드는 관리형 노드 2대로 돌아간다. 모자라면 Pending → 관리형 노드그룹 max 2 안에서 `cluster-scale.sh up 2`
+
+**7) 차트 올리기**
+
+helm은 `crds/`를 처음 설치 때만 넣는다 → 메이저·마이너를 올릴 때는 CRD를 먼저: `helm show crds oci://public.ecr.aws/karpenter/karpenter --version <새 버전> | kubectl apply --server-side -f -`(관리자, GitOps 예외 — Terraform 밖 CRD) → `karpenter_chart_version` 변경 apply
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| EC2NodeClass Ready False `SubnetsNotFound`·`SecurityGroupsNotFound` | 1) staging apply 전(태그 없음) | 1) 먼저 |
+| NodeClaim `Launched` 뒤 노드가 안 붙음(Registered 없음) | Access Entry 없음·노드 역할 이름이 EC2NodeClass `role`과 다름 | `terraform output karpenter_node_role_name`과 gitops `role` 비교 |
+| 컨트롤러 로그 `AccessDenied` (`sqs:ReceiveMessage`·`ec2:CreateFleet`) | Pod Identity 연결 전·ServiceAccount 이름이 `karpenter`가 아님 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace karpenter` |
+| 파드 Pending인데 노드를 안 만듦, 로그 `exceeded limits` | `limits.cpu: "16"`에 닿음 | 의도된 상한. 늘리려면 nodepool.yaml PR(비용 재계산) |
+| 아침에 컨트롤러 Pending | 관리형 노드가 아직 없음 | `cluster-scale.sh up` 뒤 정상 |
+| 밤인데 Karpenter 노드가 남음 | 정리 Lambda 일정 DISABLED·함수 오류 | `aws logs tail /aws/lambda/cinema-staging-karpenter-sweep`, 급하면 4)의 invoke(dryRun 없이) |
+
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
 코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito는 `cognito.tf`(3.1.16, 7-6).

@@ -49,3 +49,6 @@ cognito_group_members = {
   VIP   = []
   ADMIN = []
 }
+
+# 6.1.6 Karpenter(ADR-122): 컨트롤러 권한·노드 역할·중단 알림 큐·밤 정리 Lambda. 다음은 envs/staging-k8s karpenter_enabled → gitops platform/karpenter (런북 6-K)
+karpenter_enabled = true

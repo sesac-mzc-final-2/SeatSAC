@@ -42,6 +42,7 @@ module "vpc" {
   }
   private_subnet_tags = {
     "kubernetes.io/role/internal-elb" = "1"
+    "karpenter.sh/discovery"          = "${var.name}-eks" # 6.1.6 Karpenter 노드가 뜰 서브넷(app 서브넷만) — karpenter.tf
   }
 
   public_subnet_names   = ["${var.name}-public-a", "${var.name}-public-c"]

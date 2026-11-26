@@ -66,6 +66,33 @@ variable "lbc_replicas" {
   default     = 1
 }
 
+# ---- 6.1.6 Karpenter (karpenter.tf) ---------------------------------------
+variable "karpenter_enabled" {
+  description = "envs/staging karpenter_enabled apply(권한·노드 역할·큐) 뒤 true → Karpenter 컨트롤러 Helm 설치 (런북 6-K-2)"
+  type        = bool
+  default     = false
+}
+
+variable "karpenter_chart_version" {
+  description = <<-EOT
+    karpenter Helm 차트 버전(고정, OCI). Kubernetes 1.36은 1.13 이상. apply 전에 실제로 있는 버전인지 확인한다:
+      helm show chart oci://public.ecr.aws/karpenter/karpenter --version <버전>
+  EOT
+  type        = string
+  default     = "1.15.3"
+
+  validation {
+    condition     = can(regex("^1\\.(1[3-9]|[2-9][0-9])\\.[0-9]+$", var.karpenter_chart_version))
+    error_message = "karpenter_chart_version은 1.13 이상(Kubernetes 1.36 호환) 차트 버전(예: 1.15.3)."
+  }
+}
+
+variable "karpenter_replicas" {
+  description = "Karpenter 컨트롤러 수. 관리형 노드 2대(AZ a·c)에 하나씩 — AZ 하나가 죽어도 노드를 새로 만들 수 있게"
+  type        = number
+  default     = 2
+}
+
 # ---- 3.1.12 DB 스키마·계정 ----------------------------------------------
 variable "rds_identifier" {
   description = "envs/staging RDS 식별자 (3.1.3). 엔드포인트·마스터 Secret ARN을 이 이름으로 조회한다"

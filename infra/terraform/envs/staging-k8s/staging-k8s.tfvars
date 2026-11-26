@@ -29,3 +29,8 @@ cloudfront_distribution_id = "E316HLOWJ7VZO1" # global.tfvars frontend_distribut
 # ⬇ 6.1.1 서비스별 RDS(ADR-115): envs/staging apply로 cinema-staging-{svc}-db 6개가 available이 된 뒤 이 폴더 apply (런북 8-E)
 #   → 인스턴스별 db-bootstrap Job · DB_HOST_{SVC} · coupon Secret 2개 · ai-migrator-secrets
 service_db_services = ["booking", "payment", "user", "catalog", "coupon", "ai"]
+
+# ⬇ 6.1.6 Karpenter(ADR-122): envs/staging apply(karpenter_enabled — 권한·노드 역할·큐) 뒤 이 폴더 apply → 컨트롤러 Helm (런북 6-K-2)
+#   그다음 gitops platform/karpenter(NodePool·EC2NodeClass) PR 머지. 차트 버전은 apply 전 helm show chart로 확인
+karpenter_enabled       = true
+karpenter_chart_version = "1.15.3"

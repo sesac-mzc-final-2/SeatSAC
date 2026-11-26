@@ -3,7 +3,7 @@
 #   - 권한·노드 역할·중단 알림 큐는 envs/staging/karpenter.tf(먼저 apply). 여기서는 같은 이름의 ServiceAccount로 설치만
 #   - Terraform으로 설치하는 이유: 차트가 OCI(public.ecr.aws)라 ArgoCD에 OCI 저장소 등록이 따로 필요하고,
 #     settings(clusterName·interruptionQueue)가 Terraform 값이다. NodePool·EC2NodeClass(CRD를 쓰는 쪽)는 gitops platform/karpenter
-#   - CRD는 차트 crds/에 있어 **처음 설치 때만** 들어간다(helm은 crds/를 올리지 않는다). 차트를 올릴 때는 런북 6-K-7 순서
+#   - CRD는 차트 crds/에 있어 **처음 설치 때만** 들어간다(helm은 crds/를 올리지 않는다). 차트를 올릴 때는 런북 6-K 7) 순서
 #   - 컨트롤러는 관리형 노드(ng-a·ng-c)에만 뜬다 — 차트 기본 affinity(karpenter.sh/nodepool DoesNotExist): 자기가 만든 노드를
 #     스스로 지우다 멈추지 않게. 그래서 밤에 관리형 노드그룹이 0대면 컨트롤러도 멈춘다 → 남은 노드는 envs/staging 정리 Lambda가 지운다
 #   - 버전: Kubernetes 1.36은 Karpenter ≥ 1.13 (공식 호환표). 1.15.3 = 2026-11-20 릴리스 — apply 전 helm show chart로 다시 확인

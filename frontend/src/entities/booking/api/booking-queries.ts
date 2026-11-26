@@ -1,9 +1,10 @@
 import { queryOptions } from "@tanstack/react-query";
-import { getBooking, getSeatSnapshot } from "./booking-api";
+import { getBooking, getCheckout, getSeatSnapshot } from "./booking-api";
 
 export const bookingKeys = {
   all: ["bookings"] as const,
   detail: (bookingId: number) => [...bookingKeys.all, "detail", bookingId] as const,
+  checkout: (bookingId: number) => [...bookingKeys.all, "checkout", bookingId] as const,
   seats: (screeningId: number) => ["seat-snapshot", screeningId] as const,
 };
 
@@ -27,5 +28,16 @@ export const bookingDetailQuery = (bookingId: number) =>
   queryOptions({
     queryKey: bookingKeys.detail(bookingId),
     queryFn: ({ signal }) => getBooking(bookingId, signal),
+    staleTime: 0,
+  });
+
+/**
+ * 가장 최근 체크아웃(`GET /bookings/{id}/checkout`) — 결과 화면이 확정 금액(`amount.final`, 쿠폰 할인 뒤)을 보여 줄 때만 쓴다.
+ * 진행 중 polling은 결제 흐름(`checkout-flow`)이 직접 한다
+ */
+export const checkoutQuery = (bookingId: number) =>
+  queryOptions({
+    queryKey: bookingKeys.checkout(bookingId),
+    queryFn: () => getCheckout(bookingId),
     staleTime: 0,
   });

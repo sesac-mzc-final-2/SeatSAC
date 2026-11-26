@@ -2,6 +2,9 @@ import { buildUrl, http } from "@/shared/api";
 import type {
   Booking,
   CancelResult,
+  Checkout,
+  CheckoutAccepted,
+  CheckoutRequest,
   HoldResult,
   PaymentPrepareResult,
   PayRequest,
@@ -61,6 +64,31 @@ export const payBooking = (
   http<PayResult>(`/bookings/${bookingId}/pay`, {
     method: "POST",
     body,
+    headers: { "Idempotency-Key": idempotencyKey },
+    signal,
+  });
+
+/**
+ * 체크아웃 시작 (비동기 결제 saga, 6.2.5·ADR-116) → 202. 요청마다 새 `Idempotency-Key` — 쿠폰 거절·재결제 뒤 다시 시작할 때도 새 키다.
+ * 플래그 `APP_CHECKOUT_SAGA_ENABLED=false`면 404 — 화면은 동기 결제로 대신하지 않고 결제 서비스 문제로 안내한다(D19)
+ */
+export const startCheckout = (bookingId: number, body: CheckoutRequest, idempotencyKey: string, signal?: AbortSignal) =>
+  http<CheckoutAccepted>(`/bookings/${bookingId}/checkout`, {
+    method: "POST",
+    body,
+    headers: { "Idempotency-Key": idempotencyKey },
+    signal,
+  });
+
+/** 체크아웃 상태 (polling) — payment·coupon을 부르지 않는 가벼운 조회다 */
+export const getCheckout = (bookingId: number, signal?: AbortSignal) =>
+  http<Checkout>(`/bookings/${bookingId}/checkout`, { signal });
+
+/** 결제창이 닫힌 뒤(성공·취소 모두) 결제 확인 요청 → 202. 결과는 payment가 포트원에서 확인하고 polling으로 본다 */
+export const confirmCheckout = (bookingId: number, paymentId: string, idempotencyKey: string, signal?: AbortSignal) =>
+  http<CheckoutAccepted>(`/bookings/${bookingId}/checkout/confirm`, {
+    method: "POST",
+    body: { paymentId },
     headers: { "Idempotency-Key": idempotencyKey },
     signal,
   });

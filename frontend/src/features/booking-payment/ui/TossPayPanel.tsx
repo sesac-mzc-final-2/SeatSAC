@@ -7,6 +7,8 @@ interface Props {
   onPay: () => void;
   /** 결제 진행 중 (버튼을 잠근다 — 예매당 1회라 두 번 눌리면 안 된다) */
   pending: boolean;
+  /** 결제를 더 시도할 수 없을 때(재시도 한도) 결제 버튼만 잠근다 */
+  payDisabled?: boolean;
   /** 「선점 취소하고 돌아가기」 */
   onCancel: () => void;
   cancelling: boolean;
@@ -19,7 +21,7 @@ const STEPS = [
 ] as const;
 
 /** W5 결제 — 포트원 토스페이(간편결제). 카드 정보는 이 화면에서 받지 않는다 (ADR-112) */
-export function TossPayPanel({ amount, onPay, pending, onCancel, cancelling }: Props) {
+export function TossPayPanel({ amount, onPay, pending, payDisabled = false, onCancel, cancelling }: Props) {
   const locked = pending || cancelling;
 
   return (
@@ -57,7 +59,7 @@ export function TossPayPanel({ amount, onPay, pending, onCancel, cancelling }: P
         </div>
       </div>
 
-      <Button variant="primary" block disabled={locked} onClick={onPay}>
+      <Button variant="primary" block disabled={locked || payDisabled} onClick={onPay}>
         {pending ? (
           <>
             <Icon name="loader" size={17} className={styles.spin} />

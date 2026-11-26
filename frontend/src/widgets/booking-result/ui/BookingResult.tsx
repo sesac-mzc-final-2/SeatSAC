@@ -18,14 +18,16 @@ interface Props {
   homeHref: string;
   /** 결과를 못 받았을 때 예매 상태를 다시 조회한다 (`GET /bookings/{id}`) */
   onRecheck: () => void;
+  /** 체크아웃 확정 금액(쿠폰 할인 뒤) — 있으면 요약 카드가 할인을 나눠 보인다 */
+  pricing?: { original: number; discount: number; final: number } | null;
 }
 
 /**
  * W6 결제 결과 (시안). 4가지로 갈린다 — 완료 · 실패 · 시간 초과 · (결과를 못 받은) 확인 필요.
  * 실패에 「다시 결제」 버튼을 두지 않는다 — 예매당 결제는 1회이고 좌석도 이미 풀렸다(ADR-24).
  */
-export function BookingResult({ booking, screening, movie, outcome, seatSelectHref, myPageHref, homeHref, onRecheck }: Props) {
-  const summary = <BookingSummaryCard booking={booking} screening={screening} movie={movie} />;
+export function BookingResult({ booking, screening, movie, outcome, seatSelectHref, myPageHref, homeHref, onRecheck, pricing = null }: Props) {
+  const summary = <BookingSummaryCard booking={booking} screening={screening} movie={movie} pricing={pricing} />;
   const home = (
     <ButtonLink to={homeHref} variant="ghost" className={styles.textLink}>
       상영중 영화로 돌아가기
@@ -112,7 +114,12 @@ export function BookingResult({ booking, screening, movie, outcome, seatSelectHr
           icon="x"
           eyebrow="다시 선택할 수 있어요"
           title="결제에 실패했습니다"
-          description={failureMessage(booking.payment?.failureCode)}
+          description={
+            // 체크아웃 경로는 예매 조회에 결제 정보가 없다(booking이 payment를 부르지 않음) — 방금 받은 결과의 사유를 먼저 쓴다
+            outcome?.kind === "declined"
+              ? (outcome.message ?? failureMessage(outcome.failureCode ?? booking.payment?.failureCode))
+              : failureMessage(booking.payment?.failureCode)
+          }
           summary={summary}
           actions={
             <>
@@ -123,27 +130,38 @@ export function BookingResult({ booking, screening, movie, outcome, seatSelectHr
         />
       );
 
-    case "EXPIRED":
+    case "EXPIRED": {
+      // 체크아웃 경로는 만료 때 결제 여부를 서버가 아직 모를 수 있다(refundNotice) — 「환불 완료」는 말하지 않는다
+      const notice = outcome?.kind === "expired" ? outcome.refundNotice : null;
       return (
         <ResultLayout
           tone="fail"
           icon="clock"
           eyebrow="선점 시간이 만료됐어요"
           title="선점 시간이 지나 예매가 취소됐어요"
-          description={
-            outcome?.kind === "expired" && outcome.refunded
-              ? "결제된 금액은 자동으로 환불 처리했어요. 테스트 결제라 실제로 돈이 빠져나가지 않아요."
-              : "좌석 선택 후 5분이 지나 자동으로 취소됐어요. 좌석을 다시 골라 주세요."
-          }
+          description={expiredDescription(outcome, notice)}
           summary={summary}
           actions={
             <>
-              {reselect}
+              {notice ? (
+                <>
+                  <ButtonLink to={myPageHref} variant="primary" block>
+                    예매 내역 보기
+                    <Icon name="arrow-right" size={16} />
+                  </ButtonLink>
+                  <ButtonLink to={seatSelectHref} variant="secondary" block>
+                    다시 예매하기
+                  </ButtonLink>
+                </>
+              ) : (
+                reselect
+              )}
               {home}
             </>
           }
         />
       );
+    }
 
     case "CANCELED":
       return (
@@ -166,6 +184,15 @@ export function BookingResult({ booking, screening, movie, outcome, seatSelectHr
     case "PENDING":
       return null; // 결제 화면(W5)이 보여 준다
   }
+}
+
+function expiredDescription(outcome: PayOutcome | null, notice: string | null | undefined): string {
+  if (notice === "REFUND_IN_PROGRESS") return "결제가 확인돼 환불을 진행 중입니다. 테스트 결제라 실제로 돈이 빠져나가지 않아요.";
+  if (notice === "WILL_REFUND_IF_PAID") return "결제가 확인되면 환불을 진행하겠습니다. 결제하지 않았다면 따로 할 일은 없어요.";
+  if (outcome?.kind === "expired" && outcome.refunded) {
+    return "결제된 금액은 자동으로 환불 처리했어요. 테스트 결제라 실제로 돈이 빠져나가지 않아요.";
+  }
+  return "좌석 선택 후 5분이 지나 자동으로 취소됐어요. 좌석을 다시 골라 주세요.";
 }
 
 /** 결제 요청·결과 확인 중 (시안의 「확인 중」 결과 화면) */

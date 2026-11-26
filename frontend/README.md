@@ -34,6 +34,8 @@ npm run build               # tsc -b && vite build → dist/
 메뉴는 Access Token `cognito:groups` 에 `ADMIN` 이 있을 때만 보이고(표시용 — 허용은 ops-api 가 토큰을 검증해 정한다), 403 이면 권한 안내.
 `DEV_SESSION_GROUPS` 도 `__DEV_SESSION_GROUPS__` define 이라 빌드에서는 항상 비어 있다. 목 재현: `MOCK_OPS=forbidden`(403)·`MOCK_OPS=down`(503)·`MOCK_OPS=empty`(리포트 날짜·AI 통계 없음)·`MOCK_OPS=report-fail`(리포트 쿼리 FAILED). 오류 리포트(6.3.7)는 날짜마다 첫 요청이 202 → 상태 2번 RUNNING 뒤 SUCCEEDED, 1시간 안 같은 날짜는 200(캐시)이고 CSV 는 목 서버가 준다.
 
+결제(6.2.5 체크아웃 saga): `/bookings/7001/pay`처럼 7001~7999 번호로 들어가면 결제 화면이 `POST …/checkout` → 1초 polling → 가짜 결제창 → `…/checkout/confirm` 순서로 간다. 결제창에서 고른 결과가 그대로 나온다(승인 → 완료, 취소·실패 → 같은 화면에서 다시 결제, 그냥 닫기 → 30초 뒤 「결과 확인 중」). 쿠폰 ID가 `reject`로 시작하면 쿠폰 거절. `MOCK_CHECKOUT=off`면 체크아웃이 404(플래그 off)라 결제 화면이 「결제 서비스에 문제가 있어요」를 보여 준다 — 화면은 동기 결제(`/payments`·`/pay`)를 부르지 않는다(동기는 k6·테스트 전용).
+
 결제 화면(BKG-10, 토스페이 — ADR-112): `DEV_SESSION=1 npm run dev:mock` 뒤 `/bookings/7001/pay`(7001~7999)로 들어가면 그 번호의
 PENDING 예매(선점 5분, J7·J8)가 처음 조회 때 생긴다. 다시 보려면 번호를 바꾼다. 결제 버튼은 개발용 가짜 토스페이 창을 띄우고
 결제하기·PG 거절·사용자 취소·창만 닫기(서버도 결과 모름 → 503) 중 고른 결과로 완료 확인(`/pay`)이 답한다. 가짜 창은 상점 ID가

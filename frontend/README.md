@@ -14,6 +14,7 @@ npm ci
 npm run dev                 # http://localhost:5173, /api → localhost:8080 (gateway 가 떠 있어야 한다)
 npm run dev:mock            # 백엔드 없이: 목 catalog·user 서버(8089) + Vite(/api → 8089) 한 번에
 DEV_SESSION=1 npm run dev:mock   # + 가짜 로그인(개발 서버 전용) → 마이페이지(/me)·예매 흐름까지 Cognito 없이
+DEV_SESSION=1 DEV_SESSION_GROUPS=ADMIN npm run dev:mock   # + 가짜 세션에 ADMIN 그룹 → 헤더 「관리자」 → /admin (목 /ops)
 npm run mock                # 목 서버만 (DEV_API_PROXY=http://localhost:8089 npm run dev 와 함께)
 npm run check               # typecheck + eslint + FSD 검사(steiger) + vitest
 npm run build               # tsc -b && vite build → dist/
@@ -27,6 +28,11 @@ npm run build               # tsc -b && vite build → dist/
 `MOCK_FAIL_PATH=/api/screenings npm run dev:mock` 처럼 띄우면 그 경로가 항상 503(`MOCK_FAIL_STATUS` 로 500 도 가능)을 돌려줘
 상영시간표의 오류 블록·문의 코드·공통 토스트를 볼 수 있다. API 를 직접 부를 때는 `?fail=503` 을 붙여도 된다. 빌드에는 포함되지 않는다.
 503 은 gateway 처럼 `details[{field: service, value: 라우트 ID}]` 를 담아 화면이 멈춘 서비스를 안내한다(5.1.5) — `/api/screenings` 는 catalog, `/api/users/me` 는 user.
+
+관리자 대시보드(6.3.5, ADR-119): 화면 경로는 `/admin/*`, API 는 gateway 가 아니라 `/ops/**` 그대로다(`opsHttp`, CloudFront `/ops/*` → ops-api).
+개발 서버는 `/ops` 를 `DEV_OPS_PROXY`(기본 `http://localhost:8087` ops-api, `dev:mock` 은 목 서버)로 보낸다.
+메뉴는 Access Token `cognito:groups` 에 `ADMIN` 이 있을 때만 보이고(표시용 — 허용은 ops-api 가 토큰을 검증해 정한다), 403 이면 권한 안내.
+`DEV_SESSION_GROUPS` 도 `__DEV_SESSION_GROUPS__` define 이라 빌드에서는 항상 비어 있다. 목 재현: `MOCK_OPS=forbidden`(403)·`MOCK_OPS=down`(503)·`MOCK_OPS=empty`(리포트 날짜·AI 통계 없음)·`MOCK_OPS=report-fail`(리포트 쿼리 FAILED). 오류 리포트(6.3.7)는 날짜마다 첫 요청이 202 → 상태 2번 RUNNING 뒤 SUCCEEDED, 1시간 안 같은 날짜는 200(캐시)이고 CSV 는 목 서버가 준다.
 
 결제 화면(BKG-10, 토스페이 — ADR-112): `DEV_SESSION=1 npm run dev:mock` 뒤 `/bookings/7001/pay`(7001~7999)로 들어가면 그 번호의
 PENDING 예매(선점 5분, J7·J8)가 처음 조회 때 생긴다. 다시 보려면 번호를 바꾼다. 결제 버튼은 개발용 가짜 토스페이 창을 띄우고

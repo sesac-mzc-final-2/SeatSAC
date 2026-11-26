@@ -24,7 +24,8 @@ import reactor.core.publisher.Mono;
  * GW-03 요청 로깅·추적 ID. 가장 먼저 실행되는 필터(보안 필터보다 앞)라 401·403·404도 같은 traceId로 남는다.
  * <ul>
  *   <li>요청마다 X-Trace-Id(소문자 16진수 32자리)를 새로 만든다. 외부에서 온 값은 덮어쓴다</li>
- *   <li>외부에서 온 X-User-* 헤더는 모두 지운다(GW-02). 값은 인증 후 UserHeaderFilter가 다시 넣는다</li>
+ *   <li>외부에서 온 X-User-* 헤더는 모두 지운다(GW-02). 값은 인증 후 UserHeaderFilter가 다시 넣는다.
+ *       지웠으면 {@link SecurityEventLog} {@code FORGED_HEADER}(헤더 이름만)</li>
  *   <li>응답 헤더에도 X-Trace-Id를 넣는다</li>
  *   <li>응답이 끝나면 접근 로그 한 줄(JSON): method, path, status, latencyMs, clientIp + MDC traceId·userId</li>
  * </ul>
@@ -44,9 +45,9 @@ public class TraceWebFilter implements WebFilter, Ordered {
         long startNanos = System.nanoTime();
         String traceId = TraceIds.newId();
 
+        List<String> userHeaders = new ArrayList<>();
         ServerHttpRequest request = exchange.getRequest().mutate()
             .headers(h -> {
-                List<String> userHeaders = new ArrayList<>();
                 for (String name : h.keySet()) {
                     if (name.toLowerCase(Locale.ROOT).startsWith(USER_HEADER_PREFIX)) {
                         userHeaders.add(name);
@@ -58,6 +59,11 @@ public class TraceWebFilter implements WebFilter, Ordered {
             .build();
         ServerWebExchange traced = exchange.mutate().request(request).build();
         traced.getAttributes().put(TRACE_ID_ATTR, traceId);
+        if (!userHeaders.isEmpty()) {
+            // 화면·CloudFront는 X-User-*를 보내지 않는다 — 들어왔다면 위조 시도. 지운 뒤 요청은 그대로 진행한다
+            SecurityEventLog.record(traced, null, "FORGED_HEADER",
+                String.join(",", userHeaders.stream().map(n -> n.toLowerCase(Locale.ROOT)).sorted().toList()));
+        }
 
         traced.getResponse().getHeaders().set(Headers.TRACE_ID, traceId);
         traced.getResponse().beforeCommit(() -> {

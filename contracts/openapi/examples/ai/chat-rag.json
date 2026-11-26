@@ -1,0 +1,35 @@
+{
+  "summary": "RAG — 사이트 이용 안내 질문(Claude가 search_guide를 골랐고, 찾은 안내 조각만 근거로 답함). 표·SQL 없음, 캐시에 저장하지 않음. 플래그 APP_AI_RAG_ENABLED가 켜졌을 때만",
+  "value": {
+    "sessionId": "0b9f1c3e-6d0a-4b7e-9a51-1f2e3d4c5b6a",
+    "answer": "좌석을 고르면 5분 동안 내 좌석으로 잡혀 있어요. 그 안에 결제를 마치지 않으면 자동으로 풀립니다.",
+    "path": "RAG",
+    "columns": null,
+    "rows": null,
+    "screeningIds": null,
+    "rowCount": 0,
+    "truncated": false,
+    "sql": null,
+    "presetId": null,
+    "context": null,
+    "asOf": "2026-11-25T14:10:00+09:00",
+    "llm": {
+      "calls": 2,
+      "inputTokens": 640,
+      "outputTokens": 96,
+      "cacheReadTokens": 7620,
+      "cacheWriteTokens": 0
+    },
+    "latencyMs": 2380,
+    "rejection": null,
+    "choices": null,
+    "cache": null,
+    "seatHold": null,
+    "sources": [
+      {
+        "id": "seat-hold-time",
+        "title": "좌석 선점 시간"
+      }
+    ]
+  }
+}

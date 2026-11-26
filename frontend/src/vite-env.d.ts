@@ -14,3 +14,5 @@ interface ImportMeta {
 
 /** vite.config.ts `define` — 개발 서버에서만 값이 있고 빌드에서는 "" (DEV_SESSION) */
 declare const __DEV_SESSION__: string;
+/** vite.config.ts `define` — 가짜 세션의 Cognito 그룹(쉼표 구분). 개발 서버에서만 값이 있고 빌드에서는 "" (DEV_SESSION_GROUPS) */
+declare const __DEV_SESSION_GROUPS__: string;

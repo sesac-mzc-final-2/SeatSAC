@@ -1,5 +1,6 @@
 export {
   http,
+  opsHttp,
   buildUrl,
   configureHttpAuth,
   ApiError,

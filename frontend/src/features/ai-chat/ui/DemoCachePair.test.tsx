@@ -31,7 +31,7 @@ const withoutCache = (value: object): ChatResponse => {
 const authenticated: Session = {
   ...unavailableSession,
   status: "authenticated",
-  user: { id: "00000000-0000-4000-8000-000000000001", name: "한채연", email: null },
+  user: { id: "00000000-0000-4000-8000-000000000001", name: "한채연", email: null, groups: [] },
 };
 
 /** 챗 응답을 순서대로 돌려준다 */

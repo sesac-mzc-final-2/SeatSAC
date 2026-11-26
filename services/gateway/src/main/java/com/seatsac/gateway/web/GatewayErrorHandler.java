@@ -2,6 +2,7 @@ package com.seatsac.gateway.web;
 
 import com.seatsac.common.core.error.CommonResponseCode;
 import com.seatsac.common.core.error.ErrorDetail;
+import com.seatsac.gateway.web.RequestBodyLimitWebFilter.PayloadTooLargeException;
 import java.net.ConnectException;
 import java.net.UnknownHostException;
 import java.util.List;
@@ -24,6 +25,7 @@ import reactor.netty.http.client.PrematureCloseException;
 /**
  * 라우팅 중 생긴 예외를 공통 오류 형식으로 바꾼다. Boot 기본 핸들러(@Order(-1))보다 먼저 실행한다.
  * <ul>
+ *   <li>chunked 본문이 한도 초과({@link RequestBodyLimitWebFilter}) → 413 PAYLOAD_TOO_LARGE</li>
  *   <li>라우트 없음 404 → NOT_FOUND</li>
  *   <li>하위 서비스 연결 실패·응답 시간 초과·연결 끊김 → 503 SERVICE_UNAVAILABLE (GW-01 「서비스 응답 없음은 503」)</li>
  *   <li>그 밖의 4xx는 상태를 유지, 나머지는 500 INTERNAL_ERROR</li>
@@ -48,6 +50,11 @@ public class GatewayErrorHandler implements ErrorWebExceptionHandler {
             return Mono.error(ex); // SSE 스트림 도중 끊김 등: 이미 보낸 응답은 바꿀 수 없다
         }
 
+        PayloadTooLargeException tooLarge = payloadTooLarge(ex);
+        if (tooLarge != null) {
+            return RequestBodyLimitWebFilter.reject(exchange, errorWriter, tooLarge.maxBytes());
+        }
+
         String upstreamReason = upstreamFailure(ex);
         if (upstreamReason != null) {
             String routeId = routeId(exchange);
@@ -69,6 +76,19 @@ public class GatewayErrorHandler implements ErrorWebExceptionHandler {
 
         withTrace(exchange, () -> log.error("gateway error path={}", exchange.getRequest().getPath(), ex));
         return errorWriter.write(exchange, CommonResponseCode.INTERNAL_ERROR, "서버 오류입니다.", List.of());
+    }
+
+    /** chunked 본문이 한도를 넘어 전송을 끊은 경우 (하위 서비스 연결 오류로 감싸져 올 수 있다) */
+    static PayloadTooLargeException payloadTooLarge(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof PayloadTooLargeException e) {
+                return e;
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return null;
     }
 
     /** 하위 서비스 문제면 사유(details[].reason), 아니면 null */

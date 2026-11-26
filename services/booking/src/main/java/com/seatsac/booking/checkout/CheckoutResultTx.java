@@ -1,6 +1,11 @@
 package com.seatsac.booking.checkout;
 
 import com.seatsac.booking.checkout.coupon.CouponPort;
+import com.seatsac.booking.dto.event.BookingCanceledEvent;
+import com.seatsac.booking.entity.Booking;
+import com.seatsac.booking.repository.OutboxMessageRepository;
+import com.seatsac.booking.service.BookingEvents;
+import com.seatsac.booking.service.BookingRepositoryReader;
 import java.time.Instant;
 import java.util.Collection;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +26,10 @@ public class CheckoutResultTx {
     private final CheckoutSagaRepository sagas;
     private final CheckoutCommands commands;
     private final CouponPort couponPort;
+    private final BookingRepositoryReader bookingReader;
+    private final BookingEvents bookingEvents;
+    private final OutboxMessageRepository outbox;
+    private final CheckoutTimings timings;
 
     private void received(String messageId, String messageType, Instant now) {
         if (messageId != null) {
@@ -38,7 +47,11 @@ public class CheckoutResultTx {
     public boolean readyToPay(String messageId, String messageType, CheckoutSaga saga, String checkoutJson,
                               Instant deadline, Instant now) {
         received(messageId, messageType, now);
-        return sagas.readyToPay(saga.getCheckoutId(), checkoutJson, deadline, now) == 1;
+        if (sagas.readyToPay(saga.getCheckoutId(), checkoutJson, deadline, now) != 1) {
+            return false;
+        }
+        timings.step("payment_prepared", saga.getCreatedAt(), now);
+        return true;
     }
 
     /** 확정 — 쿠폰 사용 명령을 함께 */
@@ -52,6 +65,8 @@ public class CheckoutResultTx {
         if (saga.getCouponIssueId() != null) {
             couponPort.use(saga.getCheckoutId(), saga.getBookingId(), saga.getCouponIssueId());
         }
+        timings.step("applied", saga.getCreatedAt(), now);
+        timings.total(saga.getCreatedAt(), now);
         return true;
     }
 
@@ -74,7 +89,32 @@ public class CheckoutResultTx {
         if (releasePayment && saga.getPaymentId() != null) {
             commands.release(saga, saga.getPaymentId(), "expire", now);
         }
+        if (next == CheckoutState.FAILED || next == CheckoutState.EXPIRED) {
+            canceledEvent(saga, now);
+        }
+        timings.total(saga.getCreatedAt(), now);
         return true;
+    }
+
+    /**
+     * saga 보상·만료로 예매가 닫혔으면 {@code booking.canceled{PAYMENT_FAILED | EXPIRED}}(설계 01 7장 4번). 사유는 예매 상태에서 —
+     * 예매가 아직 PENDING이면(재결제 대기 등) 보내지 않는다. 키 {@code canceled:{checkoutId}}라 확정 취소(D29)와 겹치지 않는다
+     */
+    private void canceledEvent(CheckoutSaga saga, Instant now) {
+        Booking booking = bookingReader.findById(saga.getBookingId()).orElse(null);
+        if (booking == null) {
+            return;
+        }
+        BookingCanceledEvent.Reason reason = switch (booking.getStatus()) {
+            case PAYMENT_FAILED -> BookingCanceledEvent.Reason.PAYMENT_FAILED;
+            case EXPIRED -> BookingCanceledEvent.Reason.EXPIRED;
+            default -> null;
+        };
+        if (reason == null) {
+            return;
+        }
+        bookingEvents.canceled(booking, reason, BookingEvents.CANCELED_KEY + ":" + saga.getCheckoutId(),
+            BookingEvents.currentTraceId(), saga.getCheckoutId(), now).ifPresent(outbox::save);
     }
 
     /** 처리권을 잡는다(진행 중 → COMPENSATING). 1행인 쪽만 보상을 이어간다 */

@@ -54,7 +54,7 @@ describe("MyPage (W8)", () => {
       {
         ...unavailableSession,
         status: "authenticated",
-        user: { id: profile.userId, name: "한채연", email: profile.email },
+        user: { id: profile.userId, name: "한채연", email: profile.email, groups: [] },
       },
       "/me?tab=preferences",
     );

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetServerClock, serverNow } from "@/shared/lib/server-clock";
-import { ApiError, NetworkError, buildUrl, configureHttpAuth, http } from "./http";
+import { ApiError, NetworkError, buildUrl, configureHttpAuth, http, opsHttp } from "./http";
 
 const jsonResponse = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -15,6 +15,25 @@ describe("http", () => {
     expect(buildUrl("/screenings", { date: "2026-11-16", theaterId: 4, movieId: undefined, x: "" })).toBe(
       "/api/screenings?date=2026-11-16&theaterId=4",
     );
+  });
+
+  it("opsHttp는 /api 없이 /ops 경로 그대로, 토큰을 붙여 보낸다 (gateway 아님, ADR-119)", async () => {
+    configureHttpAuth({ getAccessToken: () => "admin-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, { items: [] }));
+    await opsHttp("/ops/services", { query: { from: "2026-11-24" } });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/ops/services?from=2026-11-24");
+    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer admin-token");
+  });
+
+  it("opsHttp 403은 ApiError FORBIDDEN (ADMIN 그룹 아님)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(403, { code: "FORBIDDEN", message: "x", traceId: "0123456789abcdef0123456789abcdef", details: [] }),
+    );
+    const error = await opsHttp("/ops/services").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(403);
+    expect((error as ApiError).code).toBe("FORBIDDEN");
   });
 
   it("오류 응답(error.v1)을 ApiError로 바꾼다", async () => {

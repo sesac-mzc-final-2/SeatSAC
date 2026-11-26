@@ -3,6 +3,7 @@ package com.seatsac.gateway.security;
 import com.seatsac.common.core.error.CommonResponseCode;
 import com.seatsac.common.core.error.ErrorDetail;
 import com.seatsac.gateway.web.ErrorResponseWriter;
+import com.seatsac.gateway.web.SecurityEventLog;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -29,7 +30,8 @@ import reactor.core.publisher.Mono;
  *                   관리자 역할은 없다 — /api/admin/** 는 라우트가 없어 토큰이 있어도 404
  * 인증 없음          /actuator/health/**(ALB·kubelet), /actuator/prometheus(클러스터 안 수집. 외부는 CloudFront가 /api/*만 ALB로 보냄)
  * </pre>
- * 오류는 공통 형식으로 401 UNAUTHORIZED, 403 FORBIDDEN.
+ * 오류는 공통 형식으로 401 UNAUTHORIZED, 403 FORBIDDEN. 둘 다 {@link SecurityEventLog} 한 줄(토큰 원문 없음).
+ * 쿠폰 {@code /api/coupons/**}(6.3.3)도 로그인 경로 — VIP 판정은 coupon이 X-User-Grade로 한다.
  */
 @Configuration
 public class SecurityConfig {
@@ -76,6 +78,7 @@ public class SecurityConfig {
             || exchange.getRequest().getHeaders().containsKey(HttpHeaders.AUTHORIZATION);
         exchange.getResponse().getHeaders().set(HttpHeaders.WWW_AUTHENTICATE,
             tokenRejected ? "Bearer error=\"invalid_token\"" : "Bearer");
+        SecurityEventLog.record(exchange, 401, tokenRejected ? "INVALID_TOKEN" : "TOKEN_REQUIRED");
         return tokenRejected
             ? writer.write(exchange, CommonResponseCode.UNAUTHORIZED, "토큰이 유효하지 않거나 만료되었습니다.",
                 List.of(ErrorDetail.of("Authorization", null, "INVALID_TOKEN")))
@@ -85,6 +88,7 @@ public class SecurityConfig {
 
     private static Mono<Void> forbidden(ErrorResponseWriter writer, ServerWebExchange exchange) {
         // 역할로 막는 경로는 없다(관리자 없음). 남겨 두는 것은 Security 가 거부했을 때도 공통 오류 형식을 지키기 위해서다
+        SecurityEventLog.record(exchange, 403, "FORBIDDEN");
         return writer.write(exchange, CommonResponseCode.FORBIDDEN, "권한이 없습니다.", List.of());
     }
 }

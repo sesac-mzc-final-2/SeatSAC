@@ -147,6 +147,11 @@ module "eks" {
     }
   }
 
+  # 6.1.6 Karpenter 노드가 같은 노드 보안그룹을 쓰게(EC2NodeClass securityGroupSelectorTerms) — karpenter.tf
+  node_security_group_tags = {
+    "karpenter.sh/discovery" = "${var.name}-eks"
+  }
+
   tags = {
     Name = "${var.name}-eks"
   }

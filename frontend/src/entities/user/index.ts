@@ -1,5 +1,6 @@
 export type {
   Profile,
+  UserGrade,
   MyBooking,
   MyBookingScreening,
   MyBookingStatus,
@@ -28,3 +29,5 @@ export { TIME_SLOTS, timeSlotLabel, timeSlotOfHour } from "./lib/time-slot";
 export { BookingStatusBadge } from "./ui/BookingStatusBadge";
 export { MyBookingCard } from "./ui/MyBookingCard";
 export { ProfileSummary } from "./ui/ProfileSummary";
+export { isVip } from "./lib/grade";
+export { VipBadge } from "./ui/VipBadge";

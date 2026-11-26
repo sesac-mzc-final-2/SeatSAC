@@ -40,6 +40,9 @@ public class InboxCleaner {
         MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.newId());
         try {
             cleanOnce();
+        } catch (RuntimeException e) {
+            // 파드 여럿이 같은 시각에 지우다 드물게 잠금 충돌(DELETE … LIMIT 데드락)로 실패할 수 있다 — 그날은 건너뛰고 다음 실행에서 이어서(#191 리뷰)
+            log.warn("명령 inbox 정리 실패 — 다음 실행에서 이어서 지운다: {}", e.toString());
         } finally {
             MDC.remove(TraceKeys.MDC_TRACE_ID);
         }

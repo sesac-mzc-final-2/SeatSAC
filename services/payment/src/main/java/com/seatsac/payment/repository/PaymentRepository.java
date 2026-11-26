@@ -21,7 +21,8 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
 
     /**
      * 4단계 — 판정 결과 반영. PROCESSING일 때만. PORTONE은 {@code pgTransactionId}(돈이 잡힌 증거)를 함께 적는다 —
-     * FAILED(AMOUNT_MISMATCH)인데 transactionId가 있으면 환불 미완료 표식이다(ADR-112)
+     * FAILED(AMOUNT_MISMATCH)인데 transactionId가 있으면 환불 미완료 표식이다(ADR-112).
+     * 재확인 백오프(D18)는 처음부터 — PROCESSING에서 미룬 횟수가 환불 재시도 간격으로 이어지지 않게(#190 리뷰)
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -30,6 +31,8 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
                p.failureCode = :failureCode,
                p.pgTransactionId = :pgTransactionId,
                p.approvedAt = :approvedAt,
+               p.checkAttempt = 0,
+               p.nextCheckAt = null,
                p.updatedAt = :now
          where p.paymentId = :paymentId
            and p.status = com.seatsac.payment.enums.PaymentStatus.PROCESSING
@@ -43,12 +46,14 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
 
     /**
      * 늦은 결제 — 이미 FAILED·CANCELED로 끝낸 행에 포트원 PAID가 왔다(웹훅·스윕). 돈이 잡혔다는 증거만 남겨
-     * 환불 미완료로 만든다. 한 번만(transactionId가 비어 있을 때만)
+     * 환불 미완료로 만든다. 한 번만(transactionId가 비어 있을 때만). 재확인 백오프는 처음부터(환불은 새 일이다)
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update Payment p
            set p.pgTransactionId = :pgTransactionId,
+               p.checkAttempt = 0,
+               p.nextCheckAt = null,
                p.updatedAt = :now
          where p.paymentId = :paymentId
            and p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE
@@ -110,13 +115,18 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
         """)
     List<Payment> findRefundUnresolved(@Param("createdBefore") Instant createdBefore, Pageable pageable);
 
-    /** D18 — 이번에 포트원 확인을 끝내지 못했다. 다음 확인 시각을 미룬다(횟수 +1) */
+    /**
+     * D18 — 이번에 포트원 확인을 끝내지 못했다. 다음 확인 시각을 미룬다(횟수 +1). 읽은 횟수({@code expected})를 조건으로 건다 —
+     * 파드 둘이 같은 주기에 같은 행을 미뤄도 한 번만 오른다(#190 리뷰). 0행이면 다른 파드가 먼저 미뤘거나 상태가 바뀌었다
+     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
-        update Payment p set p.checkAttempt = p.checkAttempt + 1, p.nextCheckAt = :next, p.updatedAt = :now
+        update Payment p set p.checkAttempt = :expected + 1, p.nextCheckAt = :next, p.updatedAt = :now
          where p.paymentId = :paymentId
+           and p.checkAttempt = :expected
         """)
-    int deferCheck(@Param("paymentId") String paymentId, @Param("next") Instant next, @Param("now") Instant now);
+    int deferCheck(@Param("paymentId") String paymentId, @Param("expected") int expected,
+                   @Param("next") Instant next, @Param("now") Instant now);
 
     /**
      * 늦은 결제 다시 보기(ADR-112) — 최근 FAILED로 닫혔고 돈이 잡힌 흔적이 없는 PORTONE 행. 닫은 뒤 사용자가 결제를
@@ -134,13 +144,16 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
 
     /**
      * saga 해제(D16) — 이미 APPROVED인 PORTONE 결제를 booking이 놓았다(선점 만료). 승인을 쓰지 않기로 하고
-     * FAILED(BOOKING_EXPIRED)로 바꾼다. {@code pg_transaction_id}는 그대로라 환불 미완료가 되어 스윕이 환불한다. 한 번만
+     * FAILED(BOOKING_EXPIRED)로 바꾼다. {@code pg_transaction_id}는 그대로라 환불 미완료가 되어 스윕이 환불한다. 한 번만.
+     * 재확인 백오프는 처음부터
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
         update Payment p
            set p.status = com.seatsac.payment.enums.PaymentStatus.FAILED,
                p.failureCode = com.seatsac.payment.enums.PaymentFailureCode.BOOKING_EXPIRED,
+               p.checkAttempt = 0,
+               p.nextCheckAt = null,
                p.updatedAt = :now
          where p.paymentId = :paymentId
            and p.pgProvider = com.seatsac.payment.enums.PgProvider.PORTONE

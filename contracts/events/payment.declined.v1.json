@@ -78,9 +78,10 @@
             "USER_CANCELED",
             "AMOUNT_MISMATCH",
             "PROCESSING_TIMEOUT",
-            "BOOKING_EXPIRED"
+            "BOOKING_EXPIRED",
+            "CANCELED"
           ],
-          "description": "열린 집합(기존 FailureCode + PROCESSING_TIMEOUT·BOOKING_EXPIRED)"
+          "description": "열린 집합(기존 FailureCode + PROCESSING_TIMEOUT·BOOKING_EXPIRED·CANCELED). CANCELED = 포트원에서 이미 취소된 saga 결제(돈이 돌아갔다 — 확정에 쓰지 않는다)"
         },
         "retryable": {
           "type": "boolean",

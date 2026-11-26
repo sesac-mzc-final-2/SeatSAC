@@ -83,6 +83,10 @@ class PaymentCommandFlowTest {
     SagaResultWriter writer;
     @Autowired
     com.seatsac.payment.service.PortOneReconcileService reconcile;
+    @Autowired
+    com.seatsac.payment.component.StaleProcessingCloser staleCloser;
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     private long booking = 9_100L;
 
@@ -342,6 +346,47 @@ class PaymentCommandFlowTest {
         JsonNode reply = onlyReply();
         assertThat(reply.at("/payload/failureCode").asText()).isEqualTo("PROCESSING_TIMEOUT");
         assertThat(reply.at("/payload/retryable").asBoolean()).isFalse();
+    }
+
+    /** 포트원에서 이미 취소된 saga 결제(콘솔 취소 등) — 돈이 돌아갔으니 declined(CANCELED), 확정에 쓰지 않는다(#189 리뷰) */
+    @Test
+    void sweepFindingCancelledSagaPaymentEmitsDeclinedCanceled() throws IOException {
+        Ids ids = new Ids();
+        handler.handle(prepare(ids, 15_000));
+        outbox.deleteAllInBatch();
+        PORTONE.payments.put(ids.payment, Remote.cancelled(15_000));
+
+        reconcile.closeAbandoned(payments.findById(ids.payment).orElseThrow());
+
+        assertThat(payments.findById(ids.payment)).get().extracting(Payment::getStatus)
+            .isEqualTo(PaymentStatus.CANCELED);
+        JsonNode reply = onlyReply();
+        assertThat(reply.get("type").asText()).isEqualTo("payment.declined");
+        assertThat(reply.at("/payload/failureCode").asText()).isEqualTo("CANCELED");
+        assertThat(reply.at("/payload/retryable").asBoolean()).isFalse();
+        assertMatchesContract(reply);
+    }
+
+    /** 모의 청구 중 파드가 죽어 PROCESSING으로 남은 saga 결제 — 기동 정리가 닫으며 declined(PROCESSING_TIMEOUT)(D7, #189 리뷰) */
+    @Test
+    void staleProcessingCloserEmitsDeclinedForSagaMockPayment() throws IOException {
+        Ids ids = new Ids();
+        handler.handle(charge(ids, 15_000, "1112"));
+        outbox.deleteAllInBatch();
+        // 판정 전에 죽은 상태로 되돌린다(생성 5분 전 — 30초 기준을 넘김). DB는 UTC
+        jdbc.update("update payment set status = 'PROCESSING', approved_at = null, "
+            + "created_at = utc_timestamp(3) - interval 5 minute where payment_id = ?", ids.payment);
+
+        assertThat(staleCloser.closeStale()).isEqualTo(1);
+
+        assertThat(payments.findById(ids.payment)).get().extracting(Payment::getFailureCode)
+            .isEqualTo(PaymentFailureCode.PROCESSING_TIMEOUT);
+        JsonNode reply = onlyReply();
+        assertThat(reply.get("type").asText()).isEqualTo("payment.declined");
+        assertThat(reply.get("correlationId").asText()).isEqualTo(ids.checkout);
+        assertThat(reply.at("/payload/failureCode").asText()).isEqualTo("PROCESSING_TIMEOUT");
+        assertThat(reply.at("/payload/retryable").asBoolean()).isFalse();
+        assertMatchesContract(reply);
     }
 
     /** 동기 경로 결제(saga 표시 없음)는 스윕이 닫아도 결과 이벤트가 없다 — 지금과 같다 */

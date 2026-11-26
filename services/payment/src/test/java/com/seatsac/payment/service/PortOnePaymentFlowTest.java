@@ -441,9 +441,16 @@ class PortOnePaymentFlowTest {
 
         PORTONE.getStatus = 0;
         PORTONE.payments.put(id, Remote.paid(30_000));
-        paymentState.deferCheck(id, Instant.now().minusSeconds(1), Instant.now());   // 다음 확인 시각이 됐다
+        // 다른 파드가 이미 미룬 뒤라면(읽은 횟수가 달라졌다) 두 번 오르지 않는다(#190 리뷰)
+        assertThat(paymentState.deferCheck(id, 0, Instant.now().minusSeconds(1), Instant.now())).isFalse();
+        assertThat(paymentRepository.findById(id).orElseThrow().getCheckAttempt()).isEqualTo(1);
+        assertThat(paymentState.deferCheck(id, 1, Instant.now().minusSeconds(1), Instant.now())).isTrue();   // 다음 확인 시각이 됐다
         sweeper.sweep();
-        assertThat(paymentRepository.findById(id).orElseThrow().getStatus()).isEqualTo(PaymentStatus.APPROVED);
+        Payment settled = paymentRepository.findById(id).orElseThrow();
+        assertThat(settled.getStatus()).isEqualTo(PaymentStatus.APPROVED);
+        // 상태가 바뀌면 재확인 백오프는 처음부터 — 미룬 횟수가 다음 일(환불 재시도)로 이어지지 않는다(#190 리뷰)
+        assertThat(settled.getCheckAttempt()).isZero();
+        assertThat(settled.getNextCheckAt()).isNull();
     }
 
     /** 환불이 끝나지 않으면 행마다 미루되, 15분 넘은 미완료 경보는 미룬 동안에도 스윕마다 센다(「행 × 분」 그대로) */

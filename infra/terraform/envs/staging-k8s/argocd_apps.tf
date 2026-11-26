@@ -93,7 +93,8 @@ locals {
         namespace = var.app_namespace
       }
       ignoreDifferences = var.ops_api_enabled ? concat(local.argocd_ignore_replicas, s == "ops-api" ? local.argocd_ignore_ops_state : []) : []
-      syncPolicy        = var.ops_api_enabled ? merge(local.argocd_sync_policy, { syncOptions = ["RespectIgnoreDifferences=true"] }) : local.argocd_sync_policy
+      # 조건식 두 갈래의 객체 모양이 같아야 한다(속성이 다르면 "Inconsistent conditional result types") → 목록만 조건으로
+      syncPolicy = merge(local.argocd_sync_policy, { syncOptions = var.ops_api_enabled ? ["RespectIgnoreDifferences=true"] : [] })
     }
   }
 }

@@ -699,7 +699,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] 🆕 Karpenter(NodePool·EC2NodeClass·중단 알림 SQS)·`cluster-scale.sh` 연동 (6.1.6, ADR-122 — `envs/staging/karpenter.tf`·`envs/staging-k8s/karpenter.tf`·gitops `platform/karpenter`·밤 정리 Lambda `cinema-staging-karpenter-sweep` — 코드 11/25 · **런북 6-K 확인 후 체크**). t3.large·xlarge On-Demand, Karpenter 노드 합계 `limits.cpu` 16, 빈 노드만 정리(`WhenEmpty`, 압축·만료·Drifted 교체 없음 — 시연·블루/그린 중 파드를 옮기지 않는다, 시연 중에는 budget 0 PR). 컨트롤러는 관리형 노드에만 → 밤에 관리형 노드그룹이 0대면 정리 Lambda가 15분마다 Karpenter 노드를 지운다
 - [ ] 🆕 ops-api·`/ops` CloudFront 동작·ALB 규칙·Role·서비스 Application `ignoreDifferences` (6.1.7, ADR-119)
 - [ ] 🆕 WAF·리포트 버킷·Glue·Athena·내보내기 CronJob (6.1.8·6.1.9, ADR-121·124)
-- [ ] 🆕 CloudWatch EKS audit 로그 끄기(하루 약 1.5GB) · Budgets 일 경보 $50
+- [ ] 🆕 CloudWatch EKS audit 로그 끄기(하루 약 1.5GB — 코드 11/27 `eks.tf` `enabled_log_types = ["authenticator"]`, **시연 뒤 apply 후 체크**) · Budgets 일 경보 $50
 
 ### 9. ⚠️AI ai 서비스 (Python, ADR-82~87)
 

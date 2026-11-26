@@ -209,7 +209,7 @@ terraform plan -var-file=staging.tfvars   # No changes
 | 노드그룹 | `ng-a`(app 서브넷 a) · `ng-c`(app 서브넷 c), t3.xlarge On-Demand(11/14 t3.large에서 변경, `node_instance_type`. `ng-ai`는 `ai_node_instance_type` t3.large로 따로 — 4-7), AL2023, min 0 · max 2 · desired 1. 실제 이름은 접두사 + 랜덤(출력 `eks_node_group_names`) |
 | 애드온 | vpc-cni(`enableNetworkPolicy=true`) · eks-pod-identity-agent · kube-proxy · coredns · metrics-server. **EBS CSI 없음**(PV 안 씀 — Prometheus도 emptyDir, 밤에 노드 0대라 보존 의미 없음) |
 | 접근 | `cinema-admin` → ClusterAdmin(cluster) / `cinema-developer` → View(namespace `cinema-staging`·`monitoring`) + 그룹 `cinema-developers`(port-forward Role) |
-| 로그 | 컨트롤 플레인 audit·authenticator, CloudWatch 7일 |
+| 로그 | 컨트롤 플레인 authenticator, CloudWatch 7일 (audit은 6.1.10에서 끔 — 하루 약 1.5GB. 사고 조사 때만 `eks.tf` `enabled_log_types`에 다시 넣는다) |
 | ALB | LB Controller가 gateway Ingress를 보고 만든다(3.1.5). 노드 SG에 ALB SG → 8080 허용 |
 
 ### 4-1. envs/staging (AWS 리소스)

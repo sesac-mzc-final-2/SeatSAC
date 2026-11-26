@@ -1992,6 +1992,7 @@ helm은 `crds/`를 처음 설치 때만 넣는다 → 메이저·마이너를 �
 
 | 증상 | 원인 | 해결 |
 | --- | --- | --- |
+| apply가 `creating IAM Policy (cinema-staging-karpenter-pod) … LimitExceeded: Cannot exceed quota for PolicySize: 6144` | 모듈의 컨트롤러 정책 문서가 관리형 정책 상한(6,144자)을 넘는다(11/26) | `envs/staging/karpenter.tf`의 `enable_inline_policy = true`(역할 인라인 정책, 상한 10,240자)로 고쳤다. 같은 오류가 다시 나면 그 줄이 있는지 확인. 실패한 apply로 역할만 먼저 생겼어도 다시 apply하면 인라인 정책이 붙는다 |
 | EC2NodeClass Ready False `SubnetsNotFound`·`SecurityGroupsNotFound` | 1) staging apply 전(태그 없음) | 1) 먼저 |
 | NodeClaim `Launched` 뒤 노드가 안 붙음(Registered 없음) | Access Entry 없음·노드 역할 이름이 EC2NodeClass `role`과 다름 | `terraform output karpenter_node_role_name`과 gitops `role` 비교 |
 | 컨트롤러 로그 `AccessDenied` (`sqs:ReceiveMessage`·`ec2:CreateFleet`) | Pod Identity 연결 전·ServiceAccount 이름이 `karpenter`가 아님 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace karpenter` |

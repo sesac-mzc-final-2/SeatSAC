@@ -70,7 +70,7 @@ export const payBooking = (
 
 /**
  * 체크아웃 시작 (비동기 결제 saga, 6.2.5·ADR-116) → 202. 요청마다 새 `Idempotency-Key` — 쿠폰 거절·재결제 뒤 다시 시작할 때도 새 키다.
- * 플래그 `APP_CHECKOUT_SAGA_ENABLED=false`면 404 (화면은 기존 동기 결제로 대신한다)
+ * 플래그 `APP_CHECKOUT_SAGA_ENABLED=false`면 404 — 화면은 동기 결제로 대신하지 않고 결제 서비스 문제로 안내한다(D19)
  */
 export const startCheckout = (bookingId: number, body: CheckoutRequest, idempotencyKey: string, signal?: AbortSignal) =>
   http<CheckoutAccepted>(`/bookings/${bookingId}/checkout`, {

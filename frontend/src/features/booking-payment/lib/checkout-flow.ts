@@ -24,7 +24,9 @@ export type CheckoutStage = "starting" | "progress" | "window" | "confirming";
  * 화면은 동기 결제(`/payments`·`/pay`)를 부르지 않는다 — 동기 경로는 k6·테스트 전용이다(D19).
  */
 export type CheckoutOutcome =
-  | PayOutcome
+  | Exclude<PayOutcome, { kind: "error" }>
+  /** `retryable: false` = 같은 예매로 다시 눌러도 같은 오류(재시도 한도·예매 마감·예매 상태 충돌) — 결제 버튼을 잠근다 */
+  | { kind: "error"; message: string; retryable?: boolean }
   | { kind: "again"; state: "COUPON_REJECTED" | "PAYMENT_RETRYABLE"; message: string; retryable: boolean };
 
 /** 체크아웃 경로가 없을 때(플래그 off → 404)·결제 서비스가 응답하지 않을 때 문구 */
@@ -41,6 +43,11 @@ export interface CheckoutFlowDeps {
   now: () => number;
   newKey: () => string;
   onStage?: (stage: CheckoutStage) => void;
+  /**
+   * 화면을 떠나면(unmount) 끊는다 — polling을 멈추고, 결제창을 열기 직전에 한 번 더 본다(#206 리뷰 Minor 3).
+   * 끊기면 결과는 `unknown`(돌아오면 「결과 다시 확인」·새로고침 이어 보기가 서버 상태로 그린다)
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -100,6 +107,7 @@ async function followCheckout(
   let deadline = deps.now() + CHECKOUT_POLL_LIMIT_MS;
 
   for (;;) {
+    if (deps.signal?.aborted) return { kind: "unknown" };
     let checkout: Checkout | null = null;
     try {
       checkout = await deps.get(bookingId);
@@ -117,6 +125,8 @@ async function followCheckout(
 
       const portone = checkout.payment?.portone ?? null;
       if (checkout.state === "READY_TO_PAY" && portone && state.openedPaymentId !== portone.paymentId) {
+        // 사용자가 이미 떠났다 — 다른 화면 위에 결제창을 띄우지 않는다
+        if (deps.signal?.aborted) return { kind: "unknown" };
         state.openedPaymentId = portone.paymentId;
         deps.onStage?.("window");
         const result = await openWindow(checkout, portone, deps);
@@ -216,14 +226,15 @@ function startFailure(error: unknown): CheckoutOutcome | null {
     case "PAYMENT_PATH_CONFLICT":
       // 이 예매에는 동기 결제가 이미 붙어 있다 — 결과는 예매 조회로 확인한다(새 결제를 시작하지 않는다)
       return { kind: "unknown" };
+    // 아래 셋은 같은 예매로 다시 눌러도 같은 409다 — retryable: false로 결제 버튼을 잠근다(#206 리뷰 Minor 1)
     case "SCREENING_STARTED":
-      return { kind: "error", message: "예매가 마감된 회차예요(상영 시작 5분 전부터). 다른 회차를 골라 주세요." };
+      return { kind: "error", message: "예매가 마감된 회차예요(상영 시작 5분 전부터). 다른 회차를 골라 주세요.", retryable: false };
     case "BOOKING_STATE_CONFLICT":
       if (error.details.some((d) => d.reason === "HOLD_EXPIRED")) return { kind: "expired", refunded: false };
       if (error.details.some((d) => d.reason === "RETRY_LIMIT")) {
-        return { kind: "error", message: "결제는 예매마다 3번까지 시도할 수 있어요. 좌석을 다시 골라 주세요." };
+        return { kind: "error", message: "결제는 예매마다 3번까지 시도할 수 있어요. 좌석을 다시 골라 주세요.", retryable: false };
       }
-      return { kind: "error", message: "예매 상태가 바뀌어 결제를 진행할 수 없습니다." };
+      return { kind: "error", message: "예매 상태가 바뀌어 결제를 진행할 수 없습니다.", retryable: false };
     case "IDEMPOTENCY_IN_PROGRESS":
       return null; // 같은 요청을 서버가 처리 중 — 체크아웃이 생기면 polling이 이어 간다
     default:

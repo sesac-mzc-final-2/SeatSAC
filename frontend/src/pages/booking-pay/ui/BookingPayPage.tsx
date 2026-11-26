@@ -81,7 +81,8 @@ function Pay() {
     void queryClient.invalidateQueries({ queryKey: couponKeys.all });
     if (result.kind === "again" || result.kind === "error") {
       // 결제 화면에 남아 다시 결제한다(돈은 움직이지 않았다) — 문구는 화면 안에, 오류는 토스트로도
-      setNotice({ message: result.message, retryable: result.kind === "error" || result.retryable });
+      // 오류는 기본적으로 다시 누를 수 있다 — 재시도 한도·마감처럼 같은 오류가 반복되는 것만 버튼을 잠근다(retryable: false)
+      setNotice({ message: result.message, retryable: result.kind === "error" ? result.retryable !== false : result.retryable });
       if (result.kind === "error") toast.show(result.message, { tone: "error" });
       if (result.kind === "again" && result.state === "COUPON_REJECTED") setCouponIssueId(null);
       void bookingQuery.refetch();

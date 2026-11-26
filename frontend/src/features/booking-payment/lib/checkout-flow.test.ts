@@ -143,7 +143,25 @@ describe("startCheckoutFlow", () => {
     const limit = deps({
       start: vi.fn().mockRejectedValue(apiError(409, "BOOKING_STATE_CONFLICT", [{ field: "attempt", value: 3, reason: "RETRY_LIMIT" }])),
     });
-    expect(await startCheckoutFlow(1042, null, limit)).toMatchObject({ kind: "error", message: expect.stringContaining("3번") });
+    // 다시 눌러도 같은 409라 결제 버튼을 잠근다(#206 리뷰 Minor 1)
+    expect(await startCheckoutFlow(1042, null, limit)).toMatchObject({
+      kind: "error",
+      message: expect.stringContaining("3번"),
+      retryable: false,
+    });
+  });
+
+  it("다시 눌러도 같은 오류(예매 마감·예매 상태 충돌)는 retryable: false, 다시 눌러도 되는 오류(5xx)는 표시 없음", async () => {
+    const started = deps({ start: vi.fn().mockRejectedValue(apiError(400, "SCREENING_STARTED")) });
+    expect(await startCheckoutFlow(1042, null, started)).toMatchObject({ kind: "error", retryable: false });
+
+    const conflict = deps({ start: vi.fn().mockRejectedValue(apiError(409, "BOOKING_STATE_CONFLICT")) });
+    expect(await startCheckoutFlow(1042, null, conflict)).toMatchObject({ kind: "error", retryable: false });
+
+    const unavailable = deps({ start: vi.fn().mockRejectedValue(apiError(503, "SERVICE_UNAVAILABLE")) });
+    const outcome = await startCheckoutFlow(1042, null, unavailable);
+    expect(outcome).toMatchObject({ kind: "error" });
+    expect(outcome).not.toHaveProperty("retryable", false);
   });
 
   it("동기 결제가 이미 붙은 예매(409 PAYMENT_PATH_CONFLICT)는 새 결제 없이 결과 확인으로", async () => {
@@ -228,6 +246,37 @@ describe("startCheckoutFlow", () => {
     await startCheckoutFlow(1042, null, d);
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(confirm.mock.calls[0][2]).toBe(confirm.mock.calls[1][2]);
+  });
+});
+
+describe("화면을 떠나면(signal) — #206 리뷰 Minor 3", () => {
+  it("polling 중에 떠나면 멈추고, 그 뒤 READY_TO_PAY가 돼도 결제창을 열지 않는다", async () => {
+    const leave = new AbortController();
+    const d = deps({
+      signal: leave.signal,
+      get: sequence(checkout(), ready),
+      // 첫 기다림 동안 사용자가 다른 화면으로 갔다
+      wait: vi.fn(async () => leave.abort()),
+    });
+
+    expect(await startCheckoutFlow(1042, null, d)).toEqual({ kind: "unknown" });
+    expect(d.get).toHaveBeenCalledTimes(1);
+    expect(d.open).not.toHaveBeenCalled();
+    expect(d.confirm).not.toHaveBeenCalled();
+  });
+
+  it("결제창을 열기 직전에 떠났으면(조회 응답을 기다리는 사이) 결제창을 열지 않는다", async () => {
+    const leave = new AbortController();
+    const d = deps({
+      signal: leave.signal,
+      get: vi.fn(async () => {
+        leave.abort();
+        return ready;
+      }),
+    });
+
+    expect(await startCheckoutFlow(1042, null, d)).toEqual({ kind: "unknown" });
+    expect(d.open).not.toHaveBeenCalled();
   });
 });
 

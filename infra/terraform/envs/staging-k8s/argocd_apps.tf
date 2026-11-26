@@ -92,9 +92,10 @@ locals {
         server    = "https://kubernetes.default.svc"
         namespace = var.app_namespace
       }
-      ignoreDifferences = var.ops_api_enabled ? concat(local.argocd_ignore_replicas, s == "ops-api" ? local.argocd_ignore_ops_state : []) : []
-      # 조건식 두 갈래의 객체 모양이 같아야 한다(속성이 다르면 "Inconsistent conditional result types") → 목록만 조건으로
-      syncPolicy = merge(local.argocd_sync_policy, { syncOptions = var.ops_api_enabled ? ["RespectIgnoreDifferences=true"] : [] })
+      # 조건식(A ? B : C)은 두 갈래 타입이 같아야 한다 — 객체 목록은 길이·모양이 달라 "Inconsistent conditional result types".
+      #   그래서 ignoreDifferences는 for … if로 거르고(조건식 없음), syncPolicy는 문자열 목록만 조건으로 둔다
+      ignoreDifferences = [for x in concat(local.argocd_ignore_replicas, [for y in local.argocd_ignore_ops_state : y if s == "ops-api"]) : x if var.ops_api_enabled]
+      syncPolicy        = merge(local.argocd_sync_policy, { syncOptions = var.ops_api_enabled ? ["RespectIgnoreDifferences=true"] : [] })
     }
   }
 }

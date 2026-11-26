@@ -141,9 +141,17 @@ public class OutboxMessage {
     public static OutboxMessage command(String messageKey, OutboxEventType eventType, Long bookingId,
                                         String aggregateKey, String payload, String traceId, String correlationId,
                                         Instant now) {
+        return command(OutboxDestination.PAYMENT_COMMANDS, messageKey, eventType, bookingId, aggregateKey, payload,
+            traceId, correlationId, now);
+    }
+
+    /** saga 명령 행 — 보낼 큐를 고른다(쿠폰 명령은 {@link OutboxDestination#COUPON_COMMANDS}) */
+    public static OutboxMessage command(OutboxDestination destination, String messageKey, OutboxEventType eventType,
+                                        Long bookingId, String aggregateKey, String payload, String traceId,
+                                        String correlationId, Instant now) {
         OutboxMessage message = pending(messageKey, eventType, bookingId, payload, traceId, now);
         message.aggregateKey = Objects.requireNonNull(aggregateKey, "aggregateKey");
-        message.destination = OutboxDestination.PAYMENT_COMMANDS;
+        message.destination = Objects.requireNonNull(destination, "destination");
         message.correlationId = correlationId;
         return message;
     }

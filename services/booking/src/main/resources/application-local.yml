@@ -15,6 +15,7 @@ app:
   messaging:
     consumer-enabled: true
     payment-commands-url: http://localhost:9324/queue/cinema-staging-payment-commands
+    coupon-commands-url: http://localhost:9324/queue/cinema-staging-coupon-commands
     replies-url: http://localhost:9324/queue/cinema-staging-booking-replies
     # 로컬은 SNS가 없다 — user 구독 큐로 바로 보낸다(런타임 계약 3장)
     events-local-queue-url: http://localhost:9324/queue/cinema-staging-user-booking-events

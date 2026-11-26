@@ -35,6 +35,7 @@
       "expiresAt": null,
       "confirmExpiresAt": null,
       "reason": "SEAT_UNAVAILABLE"
-    }
+    },
+    "sources": null
   }
 }

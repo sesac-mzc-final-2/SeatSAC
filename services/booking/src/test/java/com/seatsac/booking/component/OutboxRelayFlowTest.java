@@ -103,6 +103,8 @@ class OutboxRelayFlowTest {
 
     @MockitoBean
     NotificationPublisher publisher;
+    @MockitoBean
+    BookingEventPublisher bookingEventPublisher;
 
     private MutableClock testClock() {
         return (MutableClock) clock;
@@ -162,6 +164,19 @@ class OutboxRelayFlowTest {
 
         assertThat(outboxRepository.findById(known.getOutboxId())).get()
             .extracting(OutboxMessage::getStatus).isEqualTo(OutboxStatus.SENT);
+    }
+
+    @Test
+    @DisplayName("6.2.4 SNS booking-events 행은 예매 이벤트 발송으로 간다(알림 큐로 보내지 않는다)")
+    void bookingEventsRowGoesToBookingEventPublisher() {
+        OutboxMessage row = outboxRepository.save(OutboxMessage.event(java.util.UUID.randomUUID().toString(),
+            com.seatsac.booking.enums.OutboxEventType.BOOKING_CANCELED, 7300L, "canceled", "{\"x\":1}", null, null, NOW));
+
+        assertThat(relay.relayOnce()).isEqualTo(1);
+
+        then(bookingEventPublisher).should(times(1)).publish(org.mockito.ArgumentMatchers.argThat(
+            m -> m.getOutboxId().equals(row.getOutboxId())));
+        then(publisher).should(times(0)).publish(anyString(), anyString(), anyString());
     }
 
     @Test

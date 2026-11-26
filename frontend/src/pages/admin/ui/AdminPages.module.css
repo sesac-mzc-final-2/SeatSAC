@@ -1,0 +1,167 @@
+.headRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.title {
+  font-size: 18px;
+  font-weight: 700;
+}
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 20px 0 24px;
+}
+.stat {
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #15171d;
+}
+.statValue {
+  margin-top: 6px;
+  font-size: 22px;
+  font-weight: 700;
+}
+@media (max-width: 620px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* 오류 리포트·AI 범위 밖 질문 (6.3.7) */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 20px;
+}
+.selectWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.select {
+  min-width: 200px;
+  padding: 11px 36px 11px 14px;
+  appearance: none;
+  font-size: 13px;
+}
+.select option {
+  background: var(--color-card);
+}
+.selectChevron {
+  position: absolute;
+  right: 12px;
+  pointer-events: none;
+  color: var(--color-muted);
+}
+.result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #15171d;
+}
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 700;
+  cursor: pointer;
+}
+.download:hover {
+  background: var(--color-primary-hover);
+}
+.footnote {
+  margin-top: 16px;
+}
+.summary {
+  margin-bottom: 14px;
+}
+.subTitle {
+  margin: 28px 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.barRow {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) 90px;
+  align-items: center;
+  gap: 12px;
+}
+.barLabel {
+  font-size: 13px;
+  color: var(--color-muted-strong);
+}
+.barTrack {
+  height: 14px;
+  border-radius: 7px;
+  background: var(--color-card-hover);
+  overflow: hidden;
+}
+.barFill {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: 7px;
+  background: var(--color-primary);
+}
+.barValue {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.topList {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border);
+}
+.topItem {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+}
+.topRank {
+  color: var(--color-dim);
+  font-variant-numeric: tabular-nums;
+}
+.topReason {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.topCount {
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 620px) {
+  .barRow {
+    grid-template-columns: 90px minmax(0, 1fr) 72px;
+  }
+}

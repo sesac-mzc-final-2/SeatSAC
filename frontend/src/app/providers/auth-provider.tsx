@@ -10,6 +10,7 @@ import {
 } from "@/entities/session";
 import { configureHttpAuth } from "@/shared/api";
 import { env, isCognitoConfigured, isDevSessionEnabled, routes } from "@/shared/config";
+import { cognitoGroupsOf, decodeJwtPayload } from "@/shared/lib";
 import { DevSessionProvider } from "./dev-session";
 import { revokeRefreshToken } from "./revoke-refresh-token";
 
@@ -81,6 +82,8 @@ function toSessionUser(user: User): SessionUser {
     id: profile.sub,
     name: profile.name ?? (typeof username === "string" ? username : null),
     email: profile.email ?? null,
+    // ops-api가 보는 것과 같은 Access Token 의 그룹 (ID Token 에도 같은 값이 있다). 표시용 — 허용은 ops-api 가 정한다
+    groups: cognitoGroupsOf(decodeJwtPayload(user.access_token)),
   };
 }
 

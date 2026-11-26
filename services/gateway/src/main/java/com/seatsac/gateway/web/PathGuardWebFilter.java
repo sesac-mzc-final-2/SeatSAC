@@ -19,7 +19,8 @@ import reactor.core.publisher.Mono;
  *   <li>디코딩한 경로에 . · .. 세그먼트, 역슬래시, 세미콜론(경로 파라미터), 이중 인코딩이 있으면 400.
  *       예: /api/movies/%2e%2e/internal/x 를 하위 Tomcat이 /internal/x 로 정규화하는 것을 막는다</li>
  * </ul>
- * 보안 필터보다 먼저 실행해 토큰이 있어도 같은 결과가 나오게 한다.
+ * 보안 필터보다 먼저 실행해 토큰이 있어도 같은 결과가 나오게 한다. 막을 때마다 {@link SecurityEventLog} 한 줄
+ * (404 {@code BLOCKED_PATH}·400 {@code INVALID_PATH}).
  */
 @Component
 public class PathGuardWebFilter implements WebFilter, Ordered {
@@ -43,6 +44,7 @@ public class PathGuardWebFilter implements WebFilter, Ordered {
             return invalidPath(exchange, rawPath);
         }
         if (isBlocked(decoded)) {
+            SecurityEventLog.record(exchange, 404, "BLOCKED_PATH");
             return errorWriter.write(exchange, CommonResponseCode.NOT_FOUND, "요청한 경로가 없습니다.", List.of());
         }
         return chain.filter(exchange);
@@ -73,6 +75,7 @@ public class PathGuardWebFilter implements WebFilter, Ordered {
     }
 
     private Mono<Void> invalidPath(ServerWebExchange exchange, String rawPath) {
+        SecurityEventLog.record(exchange, 400, "INVALID_PATH");
         return errorWriter.write(exchange, CommonResponseCode.VALIDATION_FAILED, "허용되지 않는 경로 형식입니다.",
             List.of(ErrorDetail.of("path", rawPath, "INVALID_PATH")));
     }

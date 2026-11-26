@@ -8,9 +8,13 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -73,6 +77,24 @@ public class CatalogCache {
             redis.delete(key);
         } catch (RuntimeException e) {
             log.warn("cache evict failed key={} cause={}: {}", key, e.getClass().getSimpleName(), e.getMessage());
+        }
+    }
+
+    /**
+     * {@code prefix}로 시작하는 키를 모두 지운다(SCAN — KEYS로 Valkey를 막지 않는다). 상영 일정을 이어 붙인 날짜의
+     * 회차 목록처럼 키 뒤쪽(극장·영화)이 여러 개일 때 쓴다. 실패해도 TTL이 지나면 맞춰진다
+     */
+    public void evictByPrefix(String prefix) {
+        try {
+            List<String> keys = new ArrayList<>();
+            try (Cursor<String> cursor = redis.scan(ScanOptions.scanOptions().match(prefix + "*").count(500).build())) {
+                cursor.forEachRemaining(keys::add);
+            }
+            if (!keys.isEmpty()) {
+                redis.delete(keys);
+            }
+        } catch (RuntimeException e) {
+            log.warn("cache evict failed prefix={} cause={}: {}", prefix, e.getClass().getSimpleName(), e.getMessage());
         }
     }
 

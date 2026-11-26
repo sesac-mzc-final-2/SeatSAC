@@ -43,7 +43,7 @@ spring.flyway:
   password: ${SPRING_FLYWAY_PASSWORD:local}
 
 # 스케줄러: 선점 만료 스캔 2종 + 아웃박스 릴레이·정리 (지침 2장)
-spring.task.scheduling.pool.size: 5   # 만료 스캔 2 · 아웃박스 릴레이 · SSE 하트비트 · 체크아웃 스윕(6.2.2) — 작업마다 1스레드
+spring.task.scheduling.pool.size: 6   # 만료 스캔 2 · 아웃박스 릴레이 · SSE 하트비트 · 체크아웃 스윕(6.2.2) · inbox 정리(매일 15:00) — 작업마다 1스레드
 
 # 서비스 간 호출 주소·선점 설정 (service-runtime-contract 3장의 이름 그대로)
 app:
@@ -82,11 +82,14 @@ app:
     replies-url: ${APP_MESSAGING_REPLIES_URL:}
     max-concurrent: ${APP_MESSAGING_MAX_CONCURRENT:10}
     max-messages-per-poll: ${APP_MESSAGING_MAX_MESSAGES_PER_POLL:10}
+    # 6.2.4 SNS booking-events(D28·D29). 비어 있으면 SNS 행을 만들지 않는다 — 토픽 전에 만들면 10회 재시도 끝에 FAILED
+    events-topic-arn: ${APP_MESSAGING_EVENTS_TOPIC_ARN:}
 
 # SQS: 자격 증명은 Pod Identity(액세스 키 없음). 로컬은 ElasticMQ
 spring.cloud.aws:
   region.static: ${AWS_REGION:ap-northeast-2}
   sqs.enabled: true
+  sns.enabled: true
 
 spring.data.redis:
   host: ${SPRING_DATA_REDIS_HOST:localhost}

@@ -1,0 +1,9 @@
+.wrap > section:first-child {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+.list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}

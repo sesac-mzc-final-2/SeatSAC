@@ -19,8 +19,10 @@ locals {
 }
 
 module "karpenter" {
-  source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "~> 21.0" # eks 모듈(eks.tf)과 같은 메이저
+  source = "terraform-aws-modules/eks/aws//modules/karpenter"
+  # eks 모듈(eks.tf)과 같은 메이저. 21.8.0 이상 — 아래 enable_inline_policy가 21.8.0에 생겼다(21.7 이하는 Unsupported argument).
+  # 모듈 버전은 .terraform.lock.hcl에 고정되지 않아, 예전에 init한 폴더는 terraform init -upgrade로 받아야 한다
+  version = ">= 21.8.0, < 22.0.0"
 
   create       = var.karpenter_enabled
   cluster_name = module.eks.cluster_name

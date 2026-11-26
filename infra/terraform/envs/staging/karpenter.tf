@@ -19,17 +19,22 @@ locals {
 }
 
 module "karpenter" {
-  source  = "terraform-aws-modules/eks/aws//modules/karpenter"
-  version = "~> 21.0" # eks 모듈(eks.tf)과 같은 메이저
+  source = "terraform-aws-modules/eks/aws//modules/karpenter"
+  # eks 모듈(eks.tf)과 같은 메이저. 21.8.0 이상 — 아래 enable_inline_policy가 21.8.0에 생겼다(21.7 이하는 Unsupported argument).
+  # 모듈 버전은 .terraform.lock.hcl에 고정되지 않아, 예전에 init한 폴더는 terraform init -upgrade로 받아야 한다
+  version = ">= 21.8.0, < 22.0.0"
 
   create       = var.karpenter_enabled
   cluster_name = module.eks.cluster_name
 
   # 컨트롤러 — Pod Identity만(IRSA 안 씀, eks.tf enable_irsa = false)
-  iam_role_name                   = "${var.name}-karpenter-pod" # cinema-staging-karpenter-pod
-  iam_role_use_name_prefix        = false
-  iam_policy_name                 = "${var.name}-karpenter-pod"
-  iam_policy_use_name_prefix      = false
+  iam_role_name              = "${var.name}-karpenter-pod" # cinema-staging-karpenter-pod
+  iam_role_use_name_prefix   = false
+  iam_policy_name            = "${var.name}-karpenter-pod"
+  iam_policy_use_name_prefix = false
+  # 컨트롤러 정책 문서가 관리형 정책 상한(6,144자)을 넘어 CreatePolicy가 LimitExceeded로 실패한다(11/26 apply).
+  # 역할 인라인 정책(상한 10,240자)으로 만든다 — 모듈이 이 오류를 위해 둔 옵션. 권한 내용은 같고 정책 ARN만 없다
+  enable_inline_policy            = true
   create_pod_identity_association = true
   namespace                       = "karpenter" # envs/staging-k8s/karpenter.tf와 같은 값
   service_account                 = "karpenter"

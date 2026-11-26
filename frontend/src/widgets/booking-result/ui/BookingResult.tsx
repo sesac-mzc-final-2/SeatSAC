@@ -18,14 +18,16 @@ interface Props {
   homeHref: string;
   /** 결과를 못 받았을 때 예매 상태를 다시 조회한다 (`GET /bookings/{id}`) */
   onRecheck: () => void;
+  /** 체크아웃 확정 금액(쿠폰 할인 뒤) — 있으면 요약 카드가 할인을 나눠 보인다 */
+  pricing?: { original: number; discount: number; final: number } | null;
 }
 
 /**
  * W6 결제 결과 (시안). 4가지로 갈린다 — 완료 · 실패 · 시간 초과 · (결과를 못 받은) 확인 필요.
  * 실패에 「다시 결제」 버튼을 두지 않는다 — 예매당 결제는 1회이고 좌석도 이미 풀렸다(ADR-24).
  */
-export function BookingResult({ booking, screening, movie, outcome, seatSelectHref, myPageHref, homeHref, onRecheck }: Props) {
-  const summary = <BookingSummaryCard booking={booking} screening={screening} movie={movie} />;
+export function BookingResult({ booking, screening, movie, outcome, seatSelectHref, myPageHref, homeHref, onRecheck, pricing = null }: Props) {
+  const summary = <BookingSummaryCard booking={booking} screening={screening} movie={movie} pricing={pricing} />;
   const home = (
     <ButtonLink to={homeHref} variant="ghost" className={styles.textLink}>
       상영중 영화로 돌아가기

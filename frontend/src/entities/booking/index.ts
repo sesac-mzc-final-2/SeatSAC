@@ -34,7 +34,7 @@ export {
   seatStreamUrl,
   startCheckout,
 } from "./api/booking-api";
-export { bookingKeys, bookingDetailQuery, seatSnapshotQuery } from "./api/booking-queries";
+export { bookingKeys, bookingDetailQuery, checkoutQuery, seatSnapshotQuery } from "./api/booking-queries";
 export { parseSeatEvent, subscribeSeatEvents, type SeatStreamHandlers } from "./api/seat-stream";
 export {
   applyBufferedEvents,

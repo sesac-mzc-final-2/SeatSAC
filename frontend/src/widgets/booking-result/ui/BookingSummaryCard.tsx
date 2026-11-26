@@ -10,10 +10,16 @@ interface Props {
   screening: Screening | null;
   /** 포스터용 (없으면 제목 카드) */
   movie: MovieDetail | null;
+  /**
+   * 쿠폰 할인 금액 나눔 — 결제 화면은 고른 쿠폰의 예상값, 결과 화면은 체크아웃 확정값(`amount`).
+   * 할인이 있을 때만 「상품 금액 · 쿠폰 할인 · 결제 금액」(쿠폰 선택 상자와 같은 이름)으로 나눠 보인다(#206 리뷰 — 결제 금액이 두 개로 보이지 않게)
+   */
+  pricing?: { original: number; discount: number; final: number } | null;
 }
 
 /** W5·W6 「예매 정보」 카드 (시안) — 영화·극장·관람 일시·좌석·금액 */
-export function BookingSummaryCard({ booking, screening, movie }: Props) {
+export function BookingSummaryCard({ booking, screening, movie, pricing = null }: Props) {
+  const discounted = pricing !== null && pricing.discount > 0;
   return (
     <section className={`panel ${styles.card}`} aria-label="예매 정보">
       <h2>예매 정보</h2>
@@ -65,11 +71,29 @@ export function BookingSummaryCard({ booking, screening, movie }: Props) {
           </div>
         )}
       </dl>
+      {discounted && (
+        <dl className={styles.breakdown}>
+          <div>
+            <dt>상품 금액</dt>
+            <dd>{formatAmount(pricing.original)}</dd>
+          </div>
+          <div>
+            <dt>쿠폰 할인</dt>
+            <dd>−{formatAmount(pricing.discount)}</dd>
+          </div>
+        </dl>
+      )}
       <div className={styles.amount}>
-        {/* 결제 실패·만료·취소에 「결제 금액」이라 쓰면 청구된 것처럼 읽힌다 */}
-        <span>{booking.status === "CONFIRMED" || booking.status === "PENDING" ? "총 결제 금액" : "예매 금액"}</span>
-        <strong>{formatAmount(booking.amount)}</strong>
+        {/* 결제 실패·만료·취소에 「결제 금액」이라 쓰면 청구된 것처럼 읽힌다. 결제 전 쿠폰 금액은 서버가 체크아웃에서 확정한다 */}
+        <span>{amountLabel(booking.status, discounted)}</span>
+        <strong>{formatAmount(discounted ? pricing.final : booking.amount)}</strong>
       </div>
     </section>
   );
+}
+
+function amountLabel(status: Booking["status"], discounted: boolean): string {
+  if (status === "CONFIRMED") return "총 결제 금액";
+  if (status === "PENDING") return discounted ? "결제 예정 금액" : "총 결제 금액";
+  return "예매 금액";
 }

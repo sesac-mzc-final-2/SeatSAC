@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router";
-import { bookingDetailQuery } from "@/entities/booking";
-import { couponKeys, finalAmountOf, myCouponsQuery } from "@/entities/coupon";
+import { bookingDetailQuery, checkoutQuery } from "@/entities/booking";
+import { couponKeys, discountOf, myCouponsQuery } from "@/entities/coupon";
 import { movieDetailQuery } from "@/entities/movie";
 import { screeningDetailQuery } from "@/entities/screening";
 import { BookingSteps } from "@/features/booking-steps";
@@ -76,6 +76,10 @@ function Pay() {
   const coupons = useQuery(myCouponsQuery());
   const selectedCoupon = coupons.data?.items.find((coupon) => coupon.couponIssueId === couponIssueId) ?? null;
 
+  // 끝난 체크아웃 예매의 확정 금액(쿠폰 할인 뒤) — 결과 화면 요약 카드가 원가를 「총 결제 금액」으로 보이지 않게(#206 리뷰)
+  const checkoutDone = booking !== null && booking.status === "CONFIRMED" && Boolean(booking.checkout);
+  const finalCheckout = useQuery({ ...checkoutQuery(bookingId), enabled: checkoutDone });
+
   const onCheckoutSettled = (result: CheckoutOutcome) => {
     // 쿠폰 상태가 바뀌었을 수 있다(예약·사용·반환) — 내 쿠폰 목록을 다시 읽는다
     void queryClient.invalidateQueries({ queryKey: couponKeys.all });
@@ -84,6 +88,10 @@ function Pay() {
       // 오류는 기본적으로 다시 누를 수 있다 — 재시도 한도·마감처럼 같은 오류가 반복되는 것만 버튼을 잠근다(retryable: false)
       setNotice({ message: result.message, retryable: result.kind === "error" ? result.retryable !== false : result.retryable });
       if (result.kind === "error") toast.show(result.message, { tone: "error" });
+      // 결제창 취소 뒤 쿠폰 반환은 비동기라 잠시 「쓸 수 없음」으로 보여 목록에서 빠질 수 있다(#206 리뷰 보충)
+      if (result.kind === "again" && result.state === "PAYMENT_RETRYABLE" && couponIssueId !== null) {
+        setNotice({ message: `${result.message} 쿠폰은 돌려받는 데 잠시 걸려요 — 목록에 없으면 잠시 뒤 다시 고르거나 쿠폰 없이 결제해 주세요.`, retryable: result.retryable });
+      }
       if (result.kind === "again" && result.state === "COUPON_REJECTED") setCouponIssueId(null);
       void bookingQuery.refetch();
       return;
@@ -191,6 +199,7 @@ function Pay() {
           seatSelectHref={seatSelectHref}
           myPageHref={routes.myPage()}
           homeHref={routes.home()}
+          pricing={checkoutDone ? (finalCheckout.data?.amount ?? null) : null}
           onRecheck={() => {
             // 체크아웃 예매는 체크아웃을 다시 이어서 본다(결과가 나오면 예매도 다시 읽는다)
             if (booking.checkout && booking.status === "PENDING") resumeCheckout();
@@ -200,7 +209,9 @@ function Pay() {
       );
     }
 
-    const payAmount = selectedCoupon ? finalAmountOf(booking.amount, selectedCoupon.discountRate) : booking.amount;
+    // 고른 쿠폰의 예상 할인 — 결제 패널·요약 카드가 같은 금액을 보인다(확정 금액은 서버가 체크아웃에서 정한다)
+    const discount = selectedCoupon ? discountOf(booking.amount, selectedCoupon.discountRate) : 0;
+    const payAmount = booking.amount - discount;
 
     return (
       <>
@@ -227,7 +238,12 @@ function Pay() {
             />
           </div>
           <div className={styles.summary}>
-            <BookingSummaryCard booking={booking} screening={screening} movie={movie} />
+            <BookingSummaryCard
+              booking={booking}
+              screening={screening}
+              movie={movie}
+              pricing={{ original: booking.amount, discount, final: payAmount }}
+            />
           </div>
         </div>
       </>

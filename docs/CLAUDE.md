@@ -1205,6 +1205,8 @@ SeatSAC-gitops/
 | `contracts/tools/`, `contracts/redocly.yaml`, `build-logic/`, `gradle/`, `lambdas/`, `infra/`, `.github/`, `tests/k6/` | 김종식 |
 | `libs/` | 김종식 · 한채연 · 남궁일 |
 
+> ⏳ 임시(11/27~, 한채연 부재): `frontend/`·`contracts/`·`contracts/openapi/ai*`에 김종식, `contracts/openapi/user*`에 남궁일을 더했다 — 작성자가 남은 담당 한 명뿐인 PR(예: 남궁일의 `frontend/` PR)이 막히지 않게. 이 기간에 머지한 해당 경로 PR은 한채연이 복귀 뒤 사후 리뷰하고, 복귀하면 되돌리는 PR을 올린다
+
 ### 4. CI/CD 워크플로
 
 | 워크플로 | 트리거 | 하는 일 |

@@ -23,6 +23,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  *       sync와 같은 503 {@code BOOKING_UNAVAILABLE}이고 기록하지 않아 다음 조회가 다시 채운다</li>
  *   <li>채우는 값은 CONFIRMED와 「확정된 뒤 취소된」 CANCELED만 — 이벤트로 받는 것과 같은 범위. 같은 upsert 규칙이라 채우는 동안
  *       이벤트가 와도 CANCELED가 이긴다</li>
+ *   <li>금액: booking 내부 API의 {@code amount}는 <b>원가</b>, {@code booking.confirmed}는 쿠폰 뒤 <b>최종 금액</b>이다 — 채우기는
+ *       이미 있는 금액을 덮지 않는다({@link BookingHistoryStore.Source#FILL}). 이벤트 없이 채우기로만 들어온 쿠폰 예매는 원가로 보인다
+ *       (내부 API에 할인 정보가 없다)</li>
  *   <li>정렬은 {@code confirmed_at} 내림차순, 응답 페이징 모양은 sync와 같다</li>
  * </ul>
  */
@@ -37,15 +40,13 @@ public class BookingHistoryCopy {
     private final BookingClient bookingClient;
     private final BookingHistoryStore store;
     private final TransactionTemplate tx;
-    private final BookingHistoryProperties properties;
     private final Clock clock;
 
     public BookingHistoryCopy(BookingClient bookingClient, BookingHistoryStore store, TransactionTemplate tx,
-                              BookingHistoryProperties properties, Clock clock) {
+                              Clock clock) {
         this.bookingClient = bookingClient;
         this.store = store;
         this.tx = tx;
-        this.properties = properties;
         this.clock = clock;
     }
 
@@ -60,6 +61,8 @@ public class BookingHistoryCopy {
     }
 
     private void fill(String userId) {
+        // 마지막 쪽까지 다 읽은 뒤에만 완료를 기록한다 — 중간에 멈추고 완료로 적으면 남은(오래된) 예매는
+        // 이벤트로도 돌아오지 않는다(이벤트는 새로 바뀐 예매만 온다). 쪽 상한은 두지 않는다(시연 사용자는 수십 건)
         List<BookingHistoryStore.Row> rows = new ArrayList<>();
         int pages = 0;
         for (int page = 0; ; page++) {
@@ -74,14 +77,10 @@ public class BookingHistoryCopy {
             if (page + 1 >= chunk.totalPages() || chunk.content().isEmpty()) {
                 break;
             }
-            if (pages >= properties.fillMaxPages()) {
-                log.warn("예매 내역 첫 채우기가 {}쪽에서 멈췄다 — 나머지는 이벤트로만 들어온다 userId={}", pages, userId);
-                break;
-            }
         }
         Instant now = clock.instant();
         tx.executeWithoutResult(status -> {
-            rows.forEach(row -> store.upsert(row, now));
+            rows.forEach(row -> store.upsert(row, BookingHistoryStore.Source.FILL, now));
             store.markSynced(userId, now);
         });
         log.info("예매 내역 복제본 첫 채우기 userId={} rows={} pages={}", userId, rows.size(), pages);

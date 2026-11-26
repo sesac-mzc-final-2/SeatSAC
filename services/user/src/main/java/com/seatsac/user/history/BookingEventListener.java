@@ -3,8 +3,6 @@ package com.seatsac.user.history;
 import io.awspring.cloud.sqs.annotation.SqsListener;
 import io.awspring.cloud.sqs.annotation.SqsListenerAcknowledgementMode;
 import io.awspring.cloud.sqs.listener.acknowledgement.Acknowledgement;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -17,8 +15,6 @@ import org.springframework.stereotype.Component;
 @Component
 @ConditionalOnProperty(prefix = "app.messaging", name = "consumer-enabled", havingValue = "true")
 public class BookingEventListener {
-
-    private static final Logger log = LoggerFactory.getLogger(BookingEventListener.class);
 
     private final BookingEventHandler handler;
 
@@ -35,7 +31,7 @@ public class BookingEventListener {
         try {
             handler.handle(body);
         } catch (MalformedEventException e) {
-            log.error("이벤트 형식 오류 — 지운다: {}", e.getMessage());
+            // 로그(traceId 포함)는 handler가 남겼다 — 재배달해도 같으니 지운다
         }
         acknowledgement.acknowledge();
     }

@@ -24,6 +24,8 @@ import org.springframework.stereotype.Repository;
  *   <li><b>CANCELED가 이긴다</b> — 이미 CANCELED면 CONFIRMED로 되돌리지 않는다(순서가 바뀌어 늦게 온 confirmed)</li>
  *   <li>상세(좌석·금액·시각)는 새 값이 있을 때만 덮는다 — canceled 이벤트는 상세가 없어 confirmed가 채운 값을 지우지 않는다</li>
  *   <li>{@code canceled_at}은 처음 값을 지킨다</li>
+ *   <li>금액은 출처마다 다르다 — 이벤트({@code booking.confirmed})는 쿠폰 뒤 최종 금액이라 덮고, 첫 조회 채우기(booking 내부 API,
+ *       원가)는 비어 있을 때만 채운다</li>
  * </ul>
  * 시각은 UTC로 저장한다(데이터 모델 1장).
  */
@@ -40,7 +42,8 @@ public class BookingHistoryStore {
             screening_id = incoming.screening_id,
             seat_labels = COALESCE(incoming.seat_labels, booking_history.seat_labels),
             seat_count = COALESCE(incoming.seat_count, booking_history.seat_count),
-            amount = COALESCE(incoming.amount, booking_history.amount),
+            amount = IF(:fill, COALESCE(booking_history.amount, incoming.amount),
+                COALESCE(incoming.amount, booking_history.amount)),
             discount_amount = COALESCE(incoming.discount_amount, booking_history.discount_amount),
             created_at = COALESCE(booking_history.created_at, incoming.created_at),
             confirmed_at = COALESCE(incoming.confirmed_at, booking_history.confirmed_at),
@@ -78,8 +81,12 @@ public class BookingHistoryStore {
     ) {
     }
 
-    public void upsert(Row row, Instant now) {
+    /** 값의 출처 — 금액을 덮을지가 다르다 */
+    public enum Source { EVENT, FILL }
+
+    public void upsert(Row row, Source source, Instant now) {
         jdbc.update(UPSERT, new MapSqlParameterSource()
+            .addValue("fill", source == Source.FILL)
             .addValue("bookingId", row.bookingId())
             .addValue("userId", row.userId())
             .addValue("status", row.status().name())

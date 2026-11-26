@@ -47,6 +47,8 @@ class BookingHistoryCopyIntegrationTest {
     static final String TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
 
     static volatile boolean bookingDown = false;
+    /** true면 booking이 두 쪽으로 답한다(2쪽에 오래된 예매 105) */
+    static volatile boolean twoPages = false;
     static StubHttpServer stub;
 
     @TestConfiguration(proxyBeanMethods = false)
@@ -84,12 +86,17 @@ class BookingHistoryCopyIntegrationTest {
                 stub.status = 503;
                 return "{\"code\":\"SERVICE_UNAVAILABLE\",\"message\":\"\",\"traceId\":\"" + "0".repeat(32) + "\",\"details\":[]}";
             }
+            if (twoPages && request.query().contains("page=1")) {
+                return "{\"content\":[" + item(105, "CONFIRMED", "\"2026-11-01T10:00:30+09:00\"", "null")
+                    + "],\"page\":1,\"size\":50,\"totalElements\":5,\"totalPages\":2}";
+            }
             return "{\"content\":["
                 + item(101, "CONFIRMED", "\"2026-11-20T10:00:30+09:00\"", "null")
                 + "," + item(102, "CANCELED", "\"2026-11-19T10:00:30+09:00\"", "\"2026-11-19T12:00:00+09:00\"")
                 + "," + item(103, "CANCELED", "null", "\"2026-11-18T10:03:00+09:00\"")
                 + "," + item(104, "EXPIRED", "null", "null")
-                + "],\"page\":0,\"size\":50,\"totalElements\":4,\"totalPages\":1}";
+                + "],\"page\":0,\"size\":50,\"totalElements\":" + (twoPages ? 5 : 4) + ",\"totalPages\":"
+                + (twoPages ? 2 : 1) + "}";
         }
         if (request.path().equals("/internal/screenings/summaries")) {
             return "{\"items\":[]}";
@@ -116,6 +123,7 @@ class BookingHistoryCopyIntegrationTest {
     @BeforeEach
     void reset() {
         bookingDown = false;
+        twoPages = false;
         stub.received.clear();
         jdbc.update("DELETE FROM booking_history");
         jdbc.update("DELETE FROM booking_history_sync");
@@ -167,6 +175,32 @@ class BookingHistoryCopyIntegrationTest {
         mvc.perform(get("/users/me/bookings").with(WithCurrentUser.user()))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.content", hasSize(2)));
+    }
+
+    @Test
+    void fillReadsEveryPageBeforeMarkingSynced() throws Exception {
+        twoPages = true;
+        mvc.perform(get("/users/me/bookings").with(WithCurrentUser.user()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content", hasSize(3)))
+            .andExpect(jsonPath("$.content[2].bookingId").value(105));
+        assertThat(bookingCalls()).isEqualTo(2);
+        assertThat(stub.received.get(1).query()).isEqualTo("userId=" + USER + "&page=1&size=50");
+    }
+
+    @Test
+    void fillDoesNotOverwriteTheFinalAmountFromTheEvent() throws Exception {
+        // 이벤트(쿠폰 뒤 최종 15,000)가 먼저 → 첫 채우기(booking 내부 API는 원가 30,000)가 덮지 않는다
+        handler.handle(confirmed("a1000000-0000-4000-8000-000000000001", 101, "2026-11-20T10:00:30+09:00",
+            ",\"amount\":15000,\"discountAmount\":15000"));
+
+        mvc.perform(get("/users/me/bookings").with(WithCurrentUser.user()).param("status", "CONFIRMED"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content[0].bookingId").value(101))
+            .andExpect(jsonPath("$.content[0].amount").value(15000))
+            .andExpect(jsonPath("$.content[0].createdAt").value("2026-11-16T11:00:00+09:00")); // 생성 시각은 채우기가 채운다
+        assertThat(jdbc.queryForObject("SELECT discount_amount FROM booking_history WHERE booking_id = 101", Long.class))
+            .isEqualTo(15000L);
     }
 
     @Test

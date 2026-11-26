@@ -8,13 +8,11 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * <ul>
  *   <li>{@code APP_BOOKING_HISTORY_MODE} → {@code app.booking-history.mode}: {@code sync}(기본, booking 내부 호출 — 지금과 같다)
  *       · {@code local}(복제본 {@code booking_history}. 사용자별 첫 조회 때 한 번 sync로 채운 뒤 복제본만 — API 명세서 v1.5 23-1)</li>
- *   <li>{@code app.booking-history.fill-max-pages}: 첫 조회 채우기가 booking에서 읽는 최대 쪽 수(쪽당 50건)</li>
  * </ul>
  */
 @ConfigurationProperties(prefix = "app.booking-history")
 public record BookingHistoryProperties(
-    @DefaultValue("sync") Mode mode,
-    @DefaultValue("20") int fillMaxPages
+    @DefaultValue("sync") Mode mode
 ) {
 
     public enum Mode { SYNC, LOCAL }

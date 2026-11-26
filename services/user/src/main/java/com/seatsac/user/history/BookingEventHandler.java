@@ -61,8 +61,24 @@ public class BookingEventHandler {
 
     public enum Result { APPLIED, IGNORED, DUPLICATE }
 
-    /** @throws MalformedEventException 형식이 틀린 이벤트(재배달해도 같다 → 리스너가 지운다) */
+    /**
+     * traceId는 이 메서드가 끝날 때까지 MDC에 둔다 — 형식 오류 로그에도 남게(envelope을 읽기 전에는 새로 만든 값).
+     *
+     * @throws MalformedEventException 형식이 틀린 이벤트(재배달해도 같다 → 리스너가 지운다). 로그는 여기서 남긴다
+     */
     public Result handle(String body) {
+        MDC.put(TraceKeys.MDC_TRACE_ID, TraceIds.newId());
+        try {
+            return process(body);
+        } catch (MalformedEventException e) {
+            log.error("이벤트 형식 오류 — 지운다: {}", e.getMessage());
+            throw e;
+        } finally {
+            MDC.remove(TraceKeys.MDC_TRACE_ID);
+        }
+    }
+
+    private Result process(String body) {
         JsonNode root = parse(body);
         String eventId = text(root, "eventId");
         String type = text(root, "type");
@@ -91,7 +107,7 @@ public class BookingEventHandler {
                     return false;
                 }
                 if (row != null) {
-                    store.upsert(row, now);
+                    store.upsert(row, BookingHistoryStore.Source.EVENT, now);
                 }
                 return true;
             });
@@ -110,7 +126,6 @@ public class BookingEventHandler {
             return Result.APPLIED;
         } finally {
             count(label, result);
-            MDC.remove(TraceKeys.MDC_TRACE_ID);
         }
     }
 

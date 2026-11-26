@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from seatsac_ai import __version__
-from seatsac_ai.api import actuator, chat, presets
+from seatsac_ai.api import actuator, chat, presets, unmet_demand
 from seatsac_ai.bookings import MyBookingsClient
 from seatsac_ai.cache.embedder import FastEmbedder
 from seatsac_ai.cache.learned import LearnedBook
@@ -21,6 +21,7 @@ from seatsac_ai.common.metrics import init_label_series
 from seatsac_ai.common.middleware import RequestContextMiddleware
 from seatsac_ai.common.readiness import ReadinessRegistry
 from seatsac_ai.config import Settings, get_settings
+from seatsac_ai.demand.service import build_demand_service
 from seatsac_ai.llm.client import AnthropicClient, LlmClient
 from seatsac_ai.llm.orchestrator import ChatService
 from seatsac_ai.quota.limiter import QuotaLimiter, connect_valkey
@@ -70,6 +71,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await app.state.bookings.aclose()
         if app.state.seat_hold is not None:
             await app.state.seat_hold.aclose()
+        if app.state.demand is not None:
+            app.state.demand.close()
 
 
 def create_app(
@@ -99,6 +102,8 @@ def create_app(
     )
     app.state.settings = settings
     app.state.readiness = ReadinessRegistry()
+    # 수요 DB 장애로 영화 검색 readiness를 내리지 않는다. 통계 API만 503으로 응답한다.
+    app.state.demand = build_demand_service(settings)
 
     # 스냅샷(3.4.9). 공개 API 주소가 없으면 켜지 않는다(local). staging이면 readiness DOWN.
     # 켜면 첫 적재가 끝나야 readiness가 UP이 된다.
@@ -181,6 +186,7 @@ def create_app(
             refresher=app.state.snapshot.refresher,
             seat_hold=app.state.seat_hold,
             learned=app.state.learned,
+            demand=app.state.demand,
         )
 
     app.add_middleware(RequestContextMiddleware)
@@ -189,6 +195,7 @@ def create_app(
     app.include_router(actuator.router)
     app.include_router(presets.router)
     app.include_router(chat.router)
+    app.include_router(unmet_demand.router)
     return app
 
 

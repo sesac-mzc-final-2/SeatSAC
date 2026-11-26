@@ -320,10 +320,12 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 🆕 `APP_AI_RAG_ENABLED` | `false` | 이용 안내 검색(RAG, 6.4.7). 꺼져 있으면 Claude 도구 목록·system·처리 경로가 지금과 같다. 켜기는 평가(6.4.6) 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작) |
 | 🆕 `APP_AI_RAG_TOP_K` / `APP_AI_RAG_MIN_SCORE` | `3` / ⏳ | Claude에 주는 조각 수 / 코사인 유사도 하한. 하한은 6.4.6 평가 문항으로 재서 정한다 — 의미 캐시의 0.92를 그대로 쓰지 않는다(질문끼리가 아니라 질문과 문서를 비교해 값이 낮게 나온다) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |
-| 🆕 `APP_AI_DATA_SOURCE` | `snapshot` | `snapshot`(지금처럼 메모리 SQLite) · `db`(자기 인스턴스 `ai_db`, ADR-120). `db`로 바꾸기는 아래 세 줄이 준비된 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작). 되돌리기는 `snapshot` |
-| 🆕 `DB_HOST_AI` · `SQS_AI_CATALOG_EVENTS_URL` | `cinema-infra-endpoints`(Terraform, 6.1.1·6.1.3) | 이름 그대로 읽음. `APP_AI_DATA_SOURCE=db`일 때만 쓴다 |
+| 🆕 `APP_AI_DATA_SOURCE` | `snapshot` | `snapshot`(지금처럼 메모리 SQLite) · `db`(자기 인스턴스 `ai_db`, ADR-120). `db`로 바꾸기는 DB·이벤트·마이그레이션이 준비된 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작). 되돌리기는 `snapshot` |
+| 🆕 `APP_AI_UNMET_DEMAND_ENABLED` | `false` | 6.4.3·6.4.4 수요 저장·통계만 별도로 켠다(11/26 승인). 영화 검색은 기존 스냅샷을 유지하므로 `APP_AI_DATA_SOURCE=db` 전환·복제본(6.4.2)을 기다리지 않는다. 꺼짐·DB 미설정·장애면 통계는 503, 기존 채팅은 유지 |
+| 🆕 `APP_AI_DB_PORT` / `APP_AI_DB_SSL_CA` | `3306` / CA PEM 경로 | 수요 저장·통계 연결용. `DB_HOST_AI`와 `APP_AI_DB_PASSWORD`(`ai_app`)를 사용한다. TLS 인증서·호스트 검증은 항상 켜고 staging은 RDS CA 경로가 필수다. 비밀번호는 기존 Secret 키 그대로 |
+| 🆕 `DB_HOST_AI` · `SQS_AI_CATALOG_EVENTS_URL` | `cinema-infra-endpoints`(Terraform, 6.1.1·6.1.3) | 이름 그대로 읽음. DB 호스트는 수요 저장·통계 스위치 또는 `APP_AI_DATA_SOURCE=db`일 때 사용하고, SQS는 복제본에서만 사용한다 |
 | 🆕 ai DB 비밀번호 | Secret `ai-secrets`에 키 2개 — `APP_AI_DB_PASSWORD`(`ai_app`)·`APP_AI_QUERY_DB_PASSWORD`(`ai_query`) | 키 이름 확정(11/24, 김서현 — #170 코멘트). 계정은 6.1.1 db-bootstrap이 만들고, Secret 전달은 6.1.4(External Secrets — `ai-secrets`는 지금 Terraform이 값을 다시 쓰지 않아 여기에 키를 더하지 않는다). 그 전에는 `db`로 켤 수 없다 |
-| 🆕 ⏳ `ai_db` 마이그레이션 | 제안: 다른 서비스와 같은 Flyway 훅 Job `ai-flyway`(`ai-migrator-secrets`, SQL은 이미지 `/app/db/migration`) | **방식 미확정**(6.4.1). `ai-migrator-secrets`는 6.1.1에서 만든다. 지금 gitops `base/ai`에는 Flyway Job이 없다 |
+| 🆕 `ai_db` 마이그레이션 | 6.4.1 로컬 구현: `services/ai/db/migration/` → 이미지 `/app/db/migration`. 별도 Flyway 훅 Job `ai-flyway`가 `ai_migrator`로 실행(앱 자동 실행 없음) | `ai-migrator-secrets`는 6.1.1에서 만든다. **staging 훅 연결은 별도**: gitops Job·SQL 복사 initContainer·RDS CA/호스트 검증이 필요하며 이 로컬 작업에서는 배포하지 않는다 |
 | `ANTHROPIC_API_KEY` (Secret `ai-secrets`) | Terraform sensitive 변수 → K8s Secret | staging 키. 로컬은 개발 전용 키를 `.env`에 |
 
 **시간 예산** (`/api/ai/chat` 한 번, 바깥이 항상 안쪽보다 길다)

@@ -36,6 +36,8 @@ RUN groupadd --gid 10001 app && useradd --uid 10001 --gid 10001 --no-create-home
 
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/models /app/models
+# ai-flyway 훅 Job이 initContainer에서 꺼내 쓸 SQL. 앱 기동 때 실행하지 않는다.
+COPY db/migration /app/db/migration
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     APP_ENV=staging \

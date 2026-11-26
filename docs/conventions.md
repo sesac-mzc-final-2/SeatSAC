@@ -66,6 +66,7 @@
 - 상태 컬럼은 `VARCHAR` + 앱 enum (MySQL ENUM 금지 — 블루/그린 중 값 추가가 어려움)
 - 문자셋 `utf8mb4` / `utf8mb4_0900_ai_ci`
 - Flyway: `services/{svc}/src/main/resources/db/migration/V{yyyyMMddHHmm}__{설명}.sql`. 확장 → 전환 → 정리 순서로, 컬럼 삭제·이름 변경은 다음 배포에
+- ai(Python)는 `services/ai/db/migration/` → 이미지 `/app/db/migration/`에 SQL을 담는다(6.4.1). 앱 기동이 아니라 별도 Flyway Job이 `ai_migrator`로 실행한다
 - 시드(롯데시네마 배치·편성)는 앱 레포 Flyway에 넣지 않는다 → 비공개 `lotte-seed`
 - ⚠️AI `ai`는 다른 서비스의 DB에 접근하지 않는다. ~~RDS에 접근하지 않는다~~ → 🆕 11/23 **자기 인스턴스 `ai_db`만** 쓴다(ADR-120 — 레포 ADR-84의 「SQLite 스냅샷만」 대체, `APP_AI_DATA_SOURCE=snapshot`이면 예전처럼 스냅샷). 데이터는 catalog 이벤트 복제본 + 최초 공개 API 백필(`docs/data-model.md` 6장)
 - 🆕 서비스가 남의 데이터를 쓸 때는 **이벤트 복제본**(자기 DB 안의 사본, 필요한 컬럼만, `version`이 클 때만 덮어씀)으로 둔다. 테이블 이름은 원본과 같게 두거나 `{원본}_copy`·`{도메인}_history`. 원본은 계속 원본 서비스다

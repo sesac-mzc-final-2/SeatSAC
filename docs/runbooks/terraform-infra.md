@@ -2614,6 +2614,21 @@ bash run.sh
 | ExternalSecret | 서비스마다 2개(app·migrator), sync wave **-3**(ConfigMap -2 · Flyway Job -1 · 앱 0보다 먼저), 1시간마다 다시 읽음 |
 | 대상 밖 | `ai-secrets`(ANTHROPIC_API_KEY) — Terraform K8s Secret 그대로. ai DB 비밀번호 키 이름이 정해질 때 함께 옮긴다 · `cinema-ops`의 `db-bootstrap-accounts*`(Job 입력) |
 
+**ai DB 비밀번호 (6.4.1)** — `ai-secrets`는 ai.tf가 값을 다시 쓰지 않아(ANTHROPIC_API_KEY) 다른 서비스처럼 K8s Secret을 출처로 삼지 않는다. db-bootstrap의 `random_password`를 Secrets Manager `cinema/staging/ai`(키 `APP_AI_DB_PASSWORD`·`APP_AI_QUERY_DB_PASSWORD`)에 넣고, gitops ExternalSecret `ai-secrets`(Merge)가 그 두 키만 더한다. Flyway 계정은 이미 있는 `cinema/staging/ai-migrator` → `ai-migrator-secrets`
+
+```bash
+cd infra/terraform/envs/staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out   # 기대: aws_secretsmanager_secret.ai_db[0] · secret_version.ai_db[0] add 2. secret_string은 (sensitive)
+terraform apply plan.out
+# gitops(base/ai/externalsecret.yaml) 머지 뒤 — 키 이름·길이만 본다
+kubectl -n cinema-staging get externalsecret ai-secrets ai-migrator-secrets     # SecretSynced · Ready True
+kubectl -n cinema-staging get secret ai-secrets -o json | jq -r '.data | to_entries[] | "\(.key) \(.value | @base64d | length)"'
+#   ANTHROPIC_API_KEY(그대로) · APP_AI_DB_PASSWORD 32 · APP_AI_QUERY_DB_PASSWORD 32
+```
+
+- ai Flyway Job(`ai-flyway`, gitops `base/ai/flyway-job.yaml`)은 **ai 이미지에 `/app/db/migration`이 들어간 뒤**(#211 머지 → build-push)에만 머지한다. 그 전 이미지면 initContainer 복사가 실패해 `cinema-ai` sync가 멈춘다
+- 수요 저장·통계는 `APP_AI_UNMET_DEMAND_ENABLED`(기본 `false`)를 gitops `overlays/staging/ai`에서 켤 때 동작한다. 위 Secret·Flyway·RDS CA가 먼저다
+
 **순서: 확장 → 전환 → 정리.** 단계마다 서비스가 읽는 값은 같다(같은 `random_password`). 한 단계씩 확인하고 넘어간다.
 
 **1) 확장 — Terraform** (서비스 영향 없음. K8s Secret은 그대로)

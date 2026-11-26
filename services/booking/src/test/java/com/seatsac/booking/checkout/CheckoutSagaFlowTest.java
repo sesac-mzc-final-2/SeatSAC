@@ -447,6 +447,49 @@ class CheckoutSagaFlowTest {
         assertThat(secondPayment).isNotEqualTo(firstPayment);
     }
 
+    /** D25(06 4장) — 재결제 대기에서 선점을 포기할 수 있다. 붙은 결제는 포트원 FAILED로 확인된 것이라 결제 중이 아니다 */
+    @Test
+    void retryableCheckoutAllowsHoldReleaseAndLateApprovalIsRefunded() {
+        Long bookingId = hold();
+        CheckoutAcceptedResponse first = start(bookingId, tossPay(), null);
+        String failedPayment = bookings.findById(bookingId).orElseThrow().getCurrentPaymentId();
+        replies.handle(reply(first.checkoutId(), "payment.prepared", failedPayment, bookingId,
+            "\"checkout\":{\"provider\":\"PORTONE\",\"storeId\":\"s\",\"channelKey\":\"c\",\"payMethod\":\"EASY_PAY\",\"currency\":\"KRW\"}"));
+        replies.handle(reply(first.checkoutId(), "payment.declined", failedPayment, bookingId,
+            "\"failureCode\":\"USER_CANCELED\",\"retryable\":true"));
+        assertThat(saga(first).getState()).isEqualTo(CheckoutState.PAYMENT_RETRYABLE);
+
+        seatReleaseService.release(USER, bookingId);
+
+        Booking released = bookings.findById(bookingId).orElseThrow();
+        assertThat(released.getStatus()).isEqualTo(BookingStatus.CANCELED);
+        assertThat(bookingSeats.count()).isZero();
+        verifyNoInteractions(paymentClient);   // saga 경로는 payment를 묻지 않는다(D26)
+
+        // 실패로 확인됐던 결제가 나중에 승인으로 오면 확정하지 않고 해제 명령 → payment가 환불(06 5장)
+        replies.handle(reply(first.checkoutId(), "payment.approved", failedPayment, bookingId,
+            "\"amount\":30000,\"approvedAt\":\"2026-11-24T14:00:13+09:00\",\"pgTransactionId\":\"tx-1\""));
+        assertThat(bookings.findById(bookingId)).get().extracting(Booking::getStatus).isEqualTo(BookingStatus.CANCELED);
+        assertThat(commands("payment.release-requested")).hasSize(1);
+    }
+
+    /** 결제 중(동기 경로가 붙인 결제 — saga 없음)은 그대로 409(PAYMENT_IN_PROGRESS — 응답 code는 BOOKING_STATE_CONFLICT) */
+    @Test
+    void holdReleaseWithALivePaymentIsStillRejected() {
+        Long bookingId = hold();
+        given(paymentClient.request(any())).willThrow(new IllegalStateException("결과를 모른다"));
+        try {
+            bookingPaymentService.pay(USER, MOCK_KEY, bookingId, new BookingPayRequest(PaymentMethod.CARD, null, card()));
+        } catch (RuntimeException ignored) {
+            // 결제 ID는 이미 붙었다
+        }
+
+        assertThatThrownBy(() -> seatReleaseService.release(USER, bookingId))
+            .isInstanceOf(BusinessException.class)
+            .extracting(e -> ((BusinessException) e).code().responseCode()).isEqualTo("BOOKING_STATE_CONFLICT");
+        assertThat(bookings.findById(bookingId)).get().extracting(Booking::getStatus).isEqualTo(BookingStatus.PENDING);
+    }
+
     // --- 동기 경로와의 경계 (D26) ---
 
     @Test

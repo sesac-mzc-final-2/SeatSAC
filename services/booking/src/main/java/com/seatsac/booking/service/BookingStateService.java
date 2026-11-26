@@ -71,6 +71,16 @@ public class BookingStateService {
         return true;
     }
 
+    /** BKG-03 재결제 대기 예매의 해제(D25) — {@link #releaseHold}와 같고 조건만 「붙은 결제 = 실패로 확인된 결제」 */
+    @Transactional
+    public boolean releaseRetryableHold(Long bookingId, String failedPaymentId, Instant now) {
+        if (bookingRepository.cancelRetryableHold(bookingId, failedPaymentId, now) == 0) {
+            return false;
+        }
+        bookingSeatRepository.deleteByBookingId(bookingId);
+        return true;
+    }
+
     /**
      * 선점 저장 입력. 좌석 수·금액은 {@code seatIds}에서 계산하고 이후 다시 세지 않는다.
      *

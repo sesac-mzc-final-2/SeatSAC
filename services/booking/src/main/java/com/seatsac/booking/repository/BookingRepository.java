@@ -39,6 +39,23 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     int cancelPendingHold(@Param("bookingId") Long bookingId, @Param("now") Instant now);
 
     /**
+     * BKG-03 선점 해제 — 재결제 대기(D25 {@code PAYMENT_RETRYABLE}) 예매. 붙어 있는 결제가 포트원 FAILED로 확인된 그
+     * 결제일 때만(비교 후 해제). 그 사이 새 체크아웃이 결제를 바꿨으면 0행이다
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        update Booking b
+           set b.status = com.seatsac.booking.enums.BookingStatus.CANCELED,
+               b.canceledAt = :now,
+               b.updatedAt = :now
+         where b.bookingId = :bookingId
+           and b.status = com.seatsac.booking.enums.BookingStatus.PENDING
+           and b.currentPaymentId = :failedPaymentId
+        """)
+    int cancelRetryableHold(@Param("bookingId") Long bookingId, @Param("failedPaymentId") String failedPaymentId,
+                            @Param("now") Instant now);
+
+    /**
      * BKG-10 1단계 — 결제 ID를 붙인다. 예매당 결제 1회(ADR-24)를 여기서 막는다:
      * {@code current_payment_id}가 비어 있을 때만 1행이고, 두 번째 요청은 0행이라 409다.
      */

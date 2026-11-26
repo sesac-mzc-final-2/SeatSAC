@@ -1,5 +1,5 @@
 import { createBrowserRouter, type RouteObject } from "react-router";
-import { AdminOverviewPage, AdminSectionPage } from "@/pages/admin";
+import { AdminAiDemandPage, AdminOverviewPage, AdminReportsPage, AdminSectionPage } from "@/pages/admin";
 import { AuthCallbackPage } from "@/pages/auth-callback";
 import { BookingPayPage } from "@/pages/booking-pay";
 import { CreditsPage } from "@/pages/credits";
@@ -50,26 +50,8 @@ export const router = createBrowserRouter([
               />
             ),
           },
-          {
-            path: routePatterns.adminReports,
-            element: (
-              <AdminSectionPage
-                icon="alert-circle"
-                title="오류 리포트"
-                description="날짜를 골라 일자별 오류·보안 리포트(CSV)를 내려받는 자리예요. 준비 중이에요."
-              />
-            ),
-          },
-          {
-            path: routePatterns.adminAiDemand,
-            element: (
-              <AdminSectionPage
-                icon="message-square"
-                title="AI 범위 밖 질문"
-                description="챗봇이 답하지 못한 질문의 분류별 그래프가 들어올 자리예요. 준비 중이에요."
-              />
-            ),
-          },
+          { path: routePatterns.adminReports, element: <AdminReportsPage /> },
+          { path: routePatterns.adminAiDemand, element: <AdminAiDemandPage /> },
           {
             path: routePatterns.adminCoupons,
             element: (

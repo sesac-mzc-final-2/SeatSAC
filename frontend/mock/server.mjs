@@ -10,7 +10,9 @@
 // 재현용: MOCK_FAIL_PATH=/api/screenings (화면에서 503 오류 상태) · 직접 호출은 ?fail=503 · /api/movies/999 → 404
 //        예매 ID 9001 은 회차 정보 없음(screening null)
 // 관리자(ops.openapi.yaml): DEV_SESSION=1 DEV_SESSION_GROUPS=ADMIN npm run dev:mock → 헤더 「관리자」 → /admin
-//        MOCK_OPS=forbidden → /ops/** 403(ADMIN 아님) · MOCK_OPS=down → GET /ops/services 503
+//        MOCK_OPS=forbidden → /ops/** 403(ADMIN 아님) · MOCK_OPS=down → /ops/** 503(서비스·AI 통계 SERVICE_UNAVAILABLE, 리포트 REPORT_UNAVAILABLE)
+//        MOCK_OPS=empty → 리포트 날짜 없음·AI 통계 0건 · MOCK_OPS=report-fail → 리포트 쿼리 FAILED
+//        오류 리포트(6.3.7): 날짜마다 첫 요청은 202 → 상태 2번 RUNNING 뒤 SUCCEEDED, 1시간 안 같은 날짜는 200(캐시)
 // AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
 //        질문에 #409 · #429 · #429day · #503 · #timeout · #snapshot 을 넣으면 그 오류로 응답
 //        문맥 이어받기(3.4.22): 답마다 context, 영화 버튼의 continueFrom 이면 그 답의 날짜·극장·시각(○시 이후)으로 좁혀 답한다
@@ -475,11 +477,118 @@ function opsServices() {
   };
 }
 
-function handleOps(req, res, path) {
+/** `YYYY-MM-DD` + n일 */
+const addDaysIso = (iso, n) => {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + n);
+  return date.toISOString().slice(0, 10);
+};
+
+// OPS-22 오류 리포트: queryId → { date, polls }, 날짜 → 끝난 시각(1시간 캐시)
+const reportQueries = new Map();
+const reportDoneAt = new Map();
+const REPORT_ROWS = { 0: 128, 1: 0, 2: 37 };
+
+function reportDates() {
+  if (MOCK_OPS === "empty") return [];
+  const today = todayIso();
+  return [0, 1, 2].map((n) => addDaysIso(today, -n));
+}
+
+/** 날짜별 목 행 수 — 리포트 응답 `rowCount`와 CSV 행 수가 같다 */
+const reportRowCount = (date) => REPORT_ROWS[reportDates().indexOf(date)] ?? 5;
+
+function reportReady(date, doneAt = reportDoneAt.get(date) ?? Date.now()) {
+  return {
+    downloadUrl: `http://localhost:${PORT}/mock-download/errors-${date}.csv?signature=mock`,
+    rowCount: reportRowCount(date),
+    generatedAt: toKstIso(new Date(doneAt)),
+  };
+}
+
+function reportCsv(res, date) {
+  const header = "timestamp,service,level,errorCategory,status,path,traceId,message\n";
+  const rows = Array.from({ length: reportRowCount(date) }, (_, i) => {
+    const time = `${pad(9 + Math.floor(i / 60) % 15)}:${pad(i % 60)}:11`;
+    const traceId = createHash("sha256").update(`${date}:${i}`).digest("hex").slice(0, 32);
+    return `${date}T${time}+09:00,booking,ERROR,HTTP_UPSTREAM,503,/bookings/1/pay,${traceId},payment timeout\n`;
+  });
+  res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="errors-${date}.csv"` });
+  res.end(header + rows.join(""));
+}
+
+// OPS-23 AI 범위 밖 질문 통계 (ai 내부 API 결과 그대로)
+function unmetDemand(q) {
+  const to = q.get("to") ?? todayIso();
+  const from = q.get("from") ?? addDaysIso(to, -6);
+  const limit = Number(q.get("limit") ?? 20);
+  const days = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || days < 1 || days > 31) {
+    return { error: { field: days > 31 ? "from" : "to", reason: "INVALID_RANGE" } };
+  }
+  if (MOCK_OPS === "empty") return { from, to, total: 0, byCategory: [], top: [] };
+  const scale = Math.max(1, Math.round(days / 7));
+  const byCategory = [
+    { category: "recommendation", count: 19 * scale },
+    { category: "action_request", count: 14 * scale },
+    { category: "site_feature", count: 9 * scale },
+    { category: "unrelated", count: 3 * scale },
+    { category: "unknown", count: 1 },
+  ];
+  const top = [
+    { category: "recommendation", reason: "조건 없이 볼 만한 영화를 추천해 달라는 요청", count: 11 * scale },
+    { category: "action_request", reason: "예매 취소를 채팅으로 해 달라는 요청", count: 8 * scale },
+    { category: "site_feature", reason: "주차 가능 여부를 묻는 질문", count: 5 * scale },
+    { category: "action_request", reason: "결제를 채팅에서 끝내 달라는 요청", count: 4 * scale },
+    { category: "unrelated", reason: "날씨를 묻는 질문", count: 2 * scale },
+  ].slice(0, limit);
+  return { from, to, total: byCategory.reduce((sum, item) => sum + item.count, 0), byCategory, top };
+}
+
+function handleOps(req, res, path, q) {
   if (MOCK_OPS === "forbidden") return fail(res, 403, "FORBIDDEN", "ADMIN group required");
-  if (path === "/ops/services" && req.method === "GET") {
-    if (MOCK_OPS === "down") return fail(res, 503, "SERVICE_UNAVAILABLE", "kubernetes api unavailable");
+  if (req.method !== "GET") return fail(res, 404, "NOT_FOUND", path);
+  const down = MOCK_OPS === "down";
+  if (path === "/ops/services") {
+    if (down) return fail(res, 503, "SERVICE_UNAVAILABLE", "kubernetes api unavailable");
     return json(res, 200, opsServices());
+  }
+  if (path === "/ops/reports/errors/dates") {
+    if (down) return fail(res, 503, "REPORT_UNAVAILABLE", "athena unavailable");
+    return json(res, 200, { items: reportDates() });
+  }
+  if (path === "/ops/reports/errors") {
+    if (down) return fail(res, 503, "REPORT_UNAVAILABLE", "athena unavailable");
+    const date = q.get("date") ?? "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return fail(res, 400, "VALIDATION_FAILED", "date", [{ field: "date", value: date, reason: "INVALID_FORMAT" }]);
+    }
+    const doneAt = reportDoneAt.get(date);
+    if (doneAt && Date.now() - doneAt < 60 * 60 * 1000) return json(res, 200, reportReady(date));
+    const queryId = randomUUID();
+    reportQueries.set(queryId, { date, polls: 0 });
+    return json(res, 202, { queryId, state: "RUNNING" });
+  }
+  const queryMatch = /^\/ops\/reports\/errors\/([^/]+)$/.exec(path);
+  if (queryMatch) {
+    const query = reportQueries.get(decodeURIComponent(queryMatch[1]));
+    if (!query) return fail(res, 404, "NOT_FOUND", "unknown queryId");
+    query.polls += 1;
+    if (query.polls <= 2) return json(res, 200, { state: "RUNNING" });
+    if (MOCK_OPS === "report-fail") return json(res, 200, { state: "FAILED" });
+    // 쿼리마다 처음 끝난 시각을 두고, 그 시각으로 날짜 캐시(1시간)를 새로 연다. 같은 queryId 를 다시 봐도 시각은 그대로
+    if (query.doneAt === undefined) {
+      query.doneAt = Date.now();
+      reportDoneAt.set(query.date, query.doneAt);
+    }
+    const { downloadUrl, rowCount, generatedAt } = reportReady(query.date, query.doneAt);
+    return json(res, 200, { state: "SUCCEEDED", downloadUrl, rowCount, generatedAt });
+  }
+  if (path === "/ops/ai/unmet-demand") {
+    if (down) return fail(res, 503, "SERVICE_UNAVAILABLE", "ai unavailable", [{ field: "upstream", value: "ai", reason: "UPSTREAM_UNAVAILABLE" }]);
+    const stats = unmetDemand(q);
+    if (stats.error) return fail(res, 400, "VALIDATION_FAILED", "invalid range", [stats.error]);
+    return json(res, 200, stats);
   }
   return fail(res, 404, "NOT_FOUND", path);
 }
@@ -1092,6 +1201,8 @@ createServer(async (req, res) => {
   console.log(new Date().toISOString(), req.method, req.url);
 
   let m;
+  // OPS-22 리포트 CSV (S3 presigned URL 흉내 — 토큰 없이 받는다)
+  if ((m = /^\/mock-download\/errors-(\d{4}-\d{2}-\d{2})\.csv$/.exec(path))) return reportCsv(res, m[1]);
   if ((m = /^\/mock-poster\/(\d+)\.svg$/.exec(path))) {
     const movie = movies.find((x) => x.movieId === Number(m[1]));
     const hue = (Number(m[1]) * 53) % 360;
@@ -1119,7 +1230,7 @@ createServer(async (req, res) => {
 
   if (path.startsWith("/api/ai/")) return handleAi(req, res, path);
   if (path.startsWith("/api/coupons/")) return handleCoupons(req, res, path);
-  if (path.startsWith("/ops/")) return handleOps(req, res, path);
+  if (path.startsWith("/ops/")) return handleOps(req, res, path, q);
 
   if (path.startsWith("/api/mock-portone/") || /^\/api\/bookings\/7\d{3}(\/|$)/.test(path)) {
     if ((await handlePayBooking(req, res, path)) !== false) return;

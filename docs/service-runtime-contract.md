@@ -244,7 +244,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 🆕 20 | RDS 6개·`DB_HOST_{SVC}`·Secrets Manager·ESO | 김종식 (6.1.1·6.1.4) | 전원 (자기 인스턴스로 전환) | 11/23 오후 | 각 서비스 readiness 200 + Flyway Job 성공 |
 | 🆕 21 | SNS·SQS·DLQ·Pod Identity·`cinema-infra-endpoints` 메시징 키 | 김종식 (6.1.3) | 남궁일 6.2.x · 🆕 김종식 6.3.2(coupon, 11/24) · 한채연 6.3.4 · 김서현 6.4.2 | 11/23 저녁 | 로컬 ElasticMQ 테스트 통과 → staging에서 명령 1건 왕복 |
 | 🆕 22 | 계약 PR 6.0.1 (API 명세서 v1.5 21~26장 → `contracts/`) | 전원 | 구현 전원 | 11/23 오전 | `contract-check` 통과 |
-| 🆕 23 | coupon ECR·gitops `base/coupon`·Application·NetworkPolicy | 김종식 (6.1.5) | ~~한채연~~ 🆕 김종식 coupon 배포(11/24) | 11/24 오전 | `kubectl -n argocd get application cinema-coupon` Healthy |
+| 🆕 23 | coupon ECR·gitops `base/coupon`·Application(`coupon_enabled`)·NetworkPolicy · 데이터 이전 도구 `infra/scripts/db-migrate.sh`(서비스 하나씩 덤프 → 복원 파이프·행 수 대조) | 김종식 (6.1.5) | ~~한채연~~ 🆕 김종식 coupon 배포(11/24) · 전원 자기 인스턴스 전환(8-E 3) | 11/24 오전 | `kubectl -n argocd get application cinema-coupon` Healthy · `REQUIRE_COUPON=1 np-check.sh` · 전환마다 `db-migrate.sh copy` PASS(런북 8-E 3·8-G) |
 | 🆕 24 | ops-api(`/ops`)·Role·`ignoreDifferences` | 김종식 (6.1.7) | 남궁일 6.2.6 · 한채연 6.3.5·6.3.7 | 11/24 | `GET /ops/services` 200(ADMIN 토큰), 403(일반 토큰) |
 | 🆕 25 | ai 통계 내부 API | 김서현 (6.4.4) | 김종식 ops-api 7번 | 11/24 | ops-api → ai 200 |
 | 🆕 26 | catalog `screening.changed`·`movie.changed` 발행 | 한채연 (6.3.4) | 김서현 6.4.2 | 11/24 | `ai-catalog-events` 큐에 메시지 |
@@ -279,6 +279,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] 🆕 NAT AZ별·Valkey 2개 복제본·자동 장애 조치 (6.1.2, ADR-122)
 - [ ] 🆕 SNS 2·SQS(구독 2~3·명령 2·결과 1)·DLQ·경보·Pod Identity (6.1.3, ADR-117)
 - [ ] 🆕 External Secrets·Secrets Manager `cinema/staging/*`·ExternalSecret (6.1.4, ADR-123)
+- [ ] 🆕 coupon ECR `cinema/coupon`·Application `cinema-coupon`(`coupon_enabled`)·gitops `base/coupon`·NetworkPolicy·`np-check.sh` · 서비스별 인스턴스 전환 도구 `db-migrate.sh`·catalog 시드 재적재 절차 (6.1.5 — 코드 11/25 · **런북 8-G·8-E 3 확인 후 체크**)
 - [ ] 🆕 Karpenter(NodePool·EC2NodeClass·중단 알림 SQS)·`cluster-scale.sh` 연동 (6.1.6, ADR-122 — `envs/staging/karpenter.tf`·`envs/staging-k8s/karpenter.tf`·gitops `platform/karpenter`·밤 정리 Lambda `cinema-staging-karpenter-sweep` — 코드 11/25 · **런북 6-K 확인 후 체크**). t3.large·xlarge On-Demand, Karpenter 노드 합계 `limits.cpu` 16, 빈 노드만 정리(`WhenEmpty`, 압축·만료·Drifted 교체 없음 — 시연·블루/그린 중 파드를 옮기지 않는다, 시연 중에는 budget 0 PR). 컨트롤러는 관리형 노드에만 → 밤에 관리형 노드그룹이 0대면 정리 Lambda가 15분마다 Karpenter 노드를 지운다
 - [ ] 🆕 ops-api·`/ops` CloudFront 동작·ALB 규칙·Role·서비스 Application `ignoreDifferences` (6.1.7, ADR-119)
 - [ ] 🆕 WAF·리포트 버킷·Glue·Athena·내보내기 CronJob (6.1.8·6.1.9, ADR-121·124)

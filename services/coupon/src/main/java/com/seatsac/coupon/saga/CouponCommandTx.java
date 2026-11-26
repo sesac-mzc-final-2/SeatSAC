@@ -43,6 +43,9 @@ public class CouponCommandTx {
     /**
      * 예약 — 같은 checkoutId에 이미 결과가 있으면 그 결과를 다시 보낸다(쿠폰을 두 번 잡지 않음). 없으면 본인·ISSUED·만료 전
      * 조건부 UPDATE → RESERVED, 아니면 거절. 거절도 행으로 남긴다.
+     * <p>같은 예매의 이전 체크아웃이 이 쿠폰을 아직 RESERVED로 잡고 있으면 넘겨받는다 — 재결제(PAYMENT_RETRYABLE) 뒤 이전 체크아웃의
+     * 반환 명령보다 새 예약이 먼저 처리돼도 NOT_ISSUED로 거절하지 않게(#206 리뷰). booking은 예매당 진행 중 체크아웃이 1건이라
+     * (UK active_booking_id) 새 체크아웃이 왔다면 이전 것은 끝났다. 늦게 온 이전 체크아웃의 반환은 그 행이 RELEASED라 무시된다.
      */
     @Transactional
     public Outcome reserve(CouponMessages.Command command, Instant now) {
@@ -54,6 +57,9 @@ public class CouponCommandTx {
         CouponIssue issue = issues.findById(command.couponIssueId()).orElse(null);
         if (issue == null || !issue.getUserId().equals(command.userId())) {
             return reject(command, NOT_OWNER, now);
+        }
+        if (takeOverFromSameBooking(command, issue, now)) {
+            return Outcome.OK;
         }
         if (issues.reserve(issue.getCouponIssueId(), command.userId(), now) == 0) {
             // 조건에 안 맞았다 — 이미 사용·예약 중(다른 체크아웃과 동시 예약이면 하나만 성공)이거나 종료
@@ -124,6 +130,37 @@ public class CouponCommandTx {
             default -> log.info("이미 반환·거절된 체크아웃 — 무시 checkoutId={} state={}", row.getCheckoutId(),
                 row.getState());
         }
+    }
+
+    /**
+     * 같은 예매의 이전 체크아웃 예약을 넘겨받는다 — 이전 행 RESERVED → RELEASED, 새 행 RESERVED, 쿠폰은 RESERVED 그대로(한 트랜잭션).
+     * 잠금 순서는 반환과 같다(예약 행 → 쿠폰). 반환이 먼저 이전 행을 옮겼으면(0행) 넘겨받지 않고 보통 예약으로 간다(쿠폰이 ISSUED면 잡힌다).
+     * 종료가 지난 쿠폰은 넘겨받지 않는다(보통 경로가 EXPIRED로 거절). 다른 예매·다른 사용자의 예약은 건드리지 않는다
+     */
+    private boolean takeOverFromSameBooking(CouponMessages.Command command, CouponIssue issue, Instant now) {
+        if (command.bookingId() == null || issue.getState() != CouponIssueState.RESERVED
+            || !now.isBefore(issue.getExpiresAt())) {
+            return false;
+        }
+        CouponReservation prior = reservations.findFirstByCouponIssueIdAndBookingIdAndState(issue.getCouponIssueId(),
+            command.bookingId(), ReservationState.RESERVED).orElse(null);
+        if (prior == null || prior.getCheckoutId().equals(command.checkoutId())) {
+            return false;
+        }
+        if (reservations.moveFromReserved(prior.getCheckoutId(), ReservationState.RELEASED, now) == 0) {
+            log.info("넘겨받기 — 이전 예약이 이미 옮겨졌다, 보통 예약으로 checkoutId={} prior={}", command.checkoutId(),
+                prior.getCheckoutId());
+            return false;
+        }
+        CouponEvent event = events.findById(issue.getEventId()).orElseThrow(
+            () -> new IllegalStateException("쿠폰의 이벤트가 없다 eventId=" + issue.getEventId()));
+        reservations.saveAndFlush(CouponReservation.reserved(command.checkoutId(), issue, event.getDiscountRate(),
+            command.bookingId(), now));
+        publish(command, messages.reserved(command, issue.getCouponIssueId(), event.getDiscountRate(),
+            event.getEventId(), now), now);
+        log.info("쿠폰 예약 넘겨받음 checkoutId={} prior={} couponIssueId={} bookingId={}", command.checkoutId(),
+            prior.getCheckoutId(), issue.getCouponIssueId(), command.bookingId());
+        return true;
     }
 
     private Outcome replyFor(CouponMessages.Command command, CouponReservation row, Instant now) {

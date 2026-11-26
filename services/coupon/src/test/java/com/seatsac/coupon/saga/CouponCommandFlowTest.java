@@ -144,13 +144,60 @@ class CouponCommandFlowTest {
     }
 
     @Test
-    void secondCheckoutOnTheSameCouponIsNotIssued() {
-        handler.handle(reserve(UUID.randomUUID().toString(), UUID.randomUUID().toString(), coupon.getCouponIssueId(), owner));
-        outbox.deleteAllInBatch();
+    void checkoutOfAnotherBookingOnTheSameCouponIsNotIssued() {
+        String first = UUID.randomUUID().toString();
+        handler.handle(reserve(UUID.randomUUID().toString(), first, coupon.getCouponIssueId(), owner));
+        booking++;   // 다른 예매 — 넘겨받지 않는다
 
         handler.handle(reserve(UUID.randomUUID().toString(), UUID.randomUUID().toString(), coupon.getCouponIssueId(), owner));
 
         assertThat(onlyReply().at("/payload/reason").asText()).isEqualTo("NOT_ISSUED");
+        assertThat(reservations.findById(first)).get().extracting(CouponReservation::getState)
+            .isEqualTo(ReservationState.RESERVED);   // 다른 예매의 예약은 그대로
+    }
+
+    @Test
+    void retryCheckoutOfTheSameBookingTakesOverBeforeTheLateRelease() throws IOException {
+        // 체크아웃 1 예약 → 결제창 취소(PAYMENT_RETRYABLE) → 체크아웃 2 예약이 체크아웃 1 반환보다 먼저 처리됨
+        String first = UUID.randomUUID().toString();
+        String second = UUID.randomUUID().toString();
+        handler.handle(reserve(UUID.randomUUID().toString(), first, coupon.getCouponIssueId(), owner));
+        outbox.deleteAllInBatch();
+
+        assertThat(handler.handle(reserve(UUID.randomUUID().toString(), second, coupon.getCouponIssueId(), owner)))
+            .isEqualTo(CouponCommandHandler.Result.OK);
+
+        JsonNode reply = onlyReply();
+        assertThat(reply.get("type").asText()).isEqualTo("coupon.reserved");
+        assertThat(reply.get("correlationId").asText()).isEqualTo(second);
+        assertMatchesContract(reply);
+        assertThat(reservations.findById(first)).get().extracting(CouponReservation::getState)
+            .isEqualTo(ReservationState.RELEASED);
+        assertThat(reservations.findById(second)).get().extracting(CouponReservation::getState)
+            .isEqualTo(ReservationState.RESERVED);
+        assertThat(state(coupon)).isEqualTo(CouponIssueState.RESERVED);
+
+        // 늦게 온 체크아웃 1 반환은 무시 — 쿠폰은 체크아웃 2가 계속 잡고, 사용까지 간다
+        handler.handle(command("coupon.release-requested", UUID.randomUUID().toString(), first,
+            coupon.getCouponIssueId(), ",\"reason\":\"PAYMENT_DECLINED\""));
+        assertThat(state(coupon)).isEqualTo(CouponIssueState.RESERVED);
+        handler.handle(command("coupon.use-requested", UUID.randomUUID().toString(), second, coupon.getCouponIssueId(), ""));
+        assertThat(state(coupon)).isEqualTo(CouponIssueState.USED);
+    }
+
+    @Test
+    void retryCheckoutAfterTheReleaseReservesNormally() {
+        String first = UUID.randomUUID().toString();
+        handler.handle(reserve(UUID.randomUUID().toString(), first, coupon.getCouponIssueId(), owner));
+        handler.handle(command("coupon.release-requested", UUID.randomUUID().toString(), first,
+            coupon.getCouponIssueId(), ",\"reason\":\"PAYMENT_DECLINED\""));
+        outbox.deleteAllInBatch();
+
+        String second = UUID.randomUUID().toString();
+        handler.handle(reserve(UUID.randomUUID().toString(), second, coupon.getCouponIssueId(), owner));
+
+        assertThat(onlyReply().get("type").asText()).isEqualTo("coupon.reserved");
+        assertThat(state(coupon)).isEqualTo(CouponIssueState.RESERVED);
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.seatsac.booking.service;
 
+import com.seatsac.booking.checkout.CheckoutSaga;
 import com.seatsac.booking.checkout.CheckoutSagaRepository;
 import com.seatsac.booking.checkout.CheckoutState;
 
@@ -25,7 +26,7 @@ import org.springframework.stereotype.Service;
  *
  * <pre>
  * 1. 본인 예매 확인 (user_id = X-User-Id)
- * 2. 결제를 요청했으면 409 PAYMENT_IN_PROGRESS
+ * 2. 결제를 요청했으면 409 PAYMENT_IN_PROGRESS — 단 재결제 대기(D25 PAYMENT_RETRYABLE)면 해제한다(붙은 결제는 실패로 확인됨)
  * 3. tx  조건부 UPDATE CANCELED + booking_seat 삭제 → 커밋. 0행이면 현재 상태로 409
  * 4. 커밋 후  release.lua → 다음 seq(seq-next.lua) → PUBLISH RELEASED
  * </pre>
@@ -57,13 +58,26 @@ public class SeatReleaseService {
             throw BookingErrorCode.CHECKOUT_IN_PROGRESS.exception(ErrorDetail.of("bookingId", bookingId,
                 BookingErrorCode.CHECKOUT_IN_PROGRESS.name()));
         }
+        String failedPaymentId = null;
         if (booking.getCurrentPaymentId() != null) {
-            throw BookingErrorCode.PAYMENT_IN_PROGRESS.exception(ErrorDetail.of("status",
-                booking.getStatus().name(), BookingErrorCode.PAYMENT_IN_PROGRESS.name()));
+            // 재결제 대기(D25, 06 4장): 마지막 saga가 PAYMENT_RETRYABLE이고 그 결제가 지금 붙은 결제면, 그 결제는 포트원 FAILED로
+            // 확인됐다 — 선점 포기를 허용한다(D26: saga 경로는 payment를 보지 않고 saga 상태로). 그 밖은 결제 중이라 409
+            CheckoutSaga last = checkoutSagas.findFirstByBookingIdOrderByCreatedAtDescCheckoutIdDesc(bookingId)
+                .orElse(null);
+            boolean retryable = last != null && last.getState() == CheckoutState.PAYMENT_RETRYABLE
+                && booking.getCurrentPaymentId().equals(last.getPaymentId());
+            if (!retryable) {
+                throw BookingErrorCode.PAYMENT_IN_PROGRESS.exception(ErrorDetail.of("status",
+                    booking.getStatus().name(), BookingErrorCode.PAYMENT_IN_PROGRESS.name()));
+            }
+            failedPaymentId = booking.getCurrentPaymentId();
         }
 
         List<Long> seatIds = bookingReader.findOccupiedSeatIds(bookingId);
-        if (!bookingState.releaseHold(bookingId, now)) {
+        boolean released = failedPaymentId == null
+            ? bookingState.releaseHold(bookingId, now)
+            : bookingState.releaseRetryableHold(bookingId, failedPaymentId, now);
+        if (!released) {
             // 그 사이 확정·만료·취소가 먼저 끝났다. 현재 상태를 읽어 알려 준다
             BookingStatus current = bookingReader.findById(bookingId)
                 .map(Booking::getStatus).orElse(booking.getStatus());

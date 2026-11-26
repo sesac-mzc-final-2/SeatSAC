@@ -30,6 +30,11 @@ cloudfront_distribution_id = "E1HUYMSCO5ZSAF" # global.tfvars frontend_distribut
 #   → 인스턴스별 db-bootstrap Job · DB_HOST_{SVC} · coupon Secret 2개 · ai-migrator-secrets
 service_db_services = ["booking", "payment", "user", "catalog", "coupon", "ai"]
 
+# ⬇ 6.1.5 coupon(ADR-118): gitops base/coupon 머지 → envs/staging apply(ECR cinema/coupon) → 저장소 변수 COUPON_BUILD_PUSH_ENABLED=true
+#   → build-push 수동(services=coupon)으로 이미지·태그 커밋 → 이 값을 true로 바꾸는 한 줄 PR → 이 폴더 apply (런북 8-G)
+#   → Application cinema-coupon. 그 전에 true면 이미지가 없어 ImagePullBackOff(Degraded)
+coupon_enabled = true
+
 # ⬇ 6.1.6 Karpenter(ADR-122): envs/staging apply(karpenter_enabled — 권한·노드 역할·큐) 뒤 이 폴더 apply → 컨트롤러 Helm (런북 6-K 2))
 #   그다음 gitops platform/karpenter(NodePool·EC2NodeClass) PR 머지. 차트 버전은 apply 전 helm show chart로 확인
 karpenter_enabled       = true

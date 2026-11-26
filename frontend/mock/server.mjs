@@ -1125,6 +1125,108 @@ const payResult = (b) => ({
   payment: b.payment,
 });
 
+// ---------- 체크아웃 saga (6.2.5, ADR-116) — 결제 화면은 이 경로를 쓴다 ----------
+// MOCK_CHECKOUT=off 면 404(플래그 off) → 화면은 「결제 서비스에 문제」 안내(동기 /payments·/pay 는 부르지 않는다 — k6·테스트 전용).
+// 시간으로 단계가 넘어간다: 시작 → (쿠폰 있으면 예약 0.8초) → 결제 준비 1초 → READY_TO_PAY → 확인 요청 → 1초 뒤 결과.
+// 결과는 가짜 결제창에서 고른 값(paid · canceled · failed · abandoned=결과 모름). 쿠폰 ID가 "reject"로 시작하면 쿠폰 거절
+const MOCK_CHECKOUT = process.env.MOCK_CHECKOUT ?? "on";
+const checkouts = new Map();
+const CHECKOUT_LIVE = new Set(["STARTED", "COUPON_RESERVING", "PAYMENT_PREPARING", "READY_TO_PAY", "VERIFYING"]);
+
+function advanceCheckout(b) {
+  const c = checkouts.get(b.bookingId);
+  if (!c) return null;
+  const now = Date.now();
+  if (CHECKOUT_LIVE.has(c.state) && payExpired(b) && b.status === "PENDING") {
+    c.refundNotice = c.state === "VERIFYING" ? "WILL_REFUND_IF_PAID" : null;
+    c.failure = { code: "HOLD_EXPIRED", reason: c.state === "VERIFYING" ? "PAYMENT_RESULT_UNKNOWN" : null };
+    c.state = "EXPIRED";
+    settlePay(b, "EXPIRED", b.payment);
+  }
+  if (c.state === "STARTED" && now >= c.at + 300) {
+    c.state = c.couponIssueId ? "COUPON_RESERVING" : "PAYMENT_PREPARING";
+    c.at = now;
+  }
+  if (c.state === "COUPON_RESERVING" && now >= c.at + 800) {
+    if (c.couponIssueId.startsWith("reject")) {
+      c.state = "COUPON_REJECTED";
+      c.failure = { code: "COUPON_NOT_USABLE", reason: "EXPIRED" };
+      c.coupon = { couponIssueId: c.couponIssueId, discount: null, state: "REJECTED" };
+    } else {
+      const rate = myCoupons.find((x) => x.couponIssueId === c.couponIssueId)?.discountRate ?? 50;
+      const discount = Math.floor((c.amount.original * rate) / 100);
+      c.amount = { original: c.amount.original, discount, final: c.amount.original - discount };
+      c.coupon = { couponIssueId: c.couponIssueId, discount: { kind: "RATE", value: rate }, state: "RESERVED" };
+      c.state = "PAYMENT_PREPARING";
+      c.at = now;
+    }
+  }
+  if (c.state === "PAYMENT_PREPARING" && now >= c.at + 1000) {
+    const paymentId = randomUUID();
+    b.payment = { paymentId, status: "PROCESSING", method: "TOSSPAY", cardLast4: null, failureCode: null, approvedAt: null, canceledAt: null };
+    c.payment = {
+      paymentId,
+      portone: { storeId: MOCK_STORE_ID, channelKey: "channel-key-mock", paymentId, orderName: `SeatSAC 영화 예매 ${b.seatCount}석`, totalAmount: c.amount.final, currency: "KRW", payMethod: "EASY_PAY" },
+    };
+    c.state = "READY_TO_PAY";
+    c.at = now;
+  }
+  if (c.state === "VERIFYING" && now >= c.at + 1000) {
+    const result = portoneResults.get(c.payment.paymentId) ?? "abandoned";
+    const at = toKstIso(new Date());
+    if (result === "paid") {
+      c.state = "CONFIRMED";
+      if (c.coupon) c.coupon.state = "USED";
+      settlePay(b, "CONFIRMED", { ...b.payment, status: "APPROVED", approvedAt: at });
+    } else if (result === "canceled" || result === "failed") {
+      c.state = "PAYMENT_RETRYABLE";
+      c.failure = { code: "PAYMENT_DECLINED", reason: result === "canceled" ? "USER_CANCELED" : "PG_DECLINED" };
+      if (c.coupon) c.coupon.state = "RELEASED";
+      b.payment = null; // 좌석은 그대로 — 같은 예매로 다시 결제한다
+    }
+    // abandoned: 결과를 모른다 — VERIFYING 그대로(화면은 30초 뒤 「결과 확인 중」)
+  }
+  c.retryable = (c.state === "COUPON_REJECTED" || c.state === "PAYMENT_RETRYABLE") && c.attempt < 3 && !payExpired(b);
+  c.pollAfterMs = CHECKOUT_LIVE.has(c.state) ? 1000 : null;
+  if (c.state !== "READY_TO_PAY" && c.payment) c.payment = { paymentId: c.payment.paymentId, portone: null };
+  c.updatedAt = toKstIso(new Date());
+  return c;
+}
+
+const checkoutView = ({ at, couponIssueId, ...c }) => c;
+
+async function handleCheckout(req, res, b, action) {
+  const current = advanceCheckout(b);
+  if (action === "/checkout" && req.method === "GET") {
+    return current ? json(res, 200, checkoutView(current)) : fail(res, 404, "NOT_FOUND", "no checkout");
+  }
+  if (action === "/checkout" && req.method === "POST") {
+    const body = await readJson(req);
+    if (body?.method !== "TOSSPAY") return fail(res, 400, "VALIDATION_FAILED", "TOSSPAY only", [{ field: "method", value: body?.method ?? null, reason: "MOCK_NOT_ALLOWED" }]);
+    if (current && CHECKOUT_LIVE.has(current.state)) return fail(res, 409, "CHECKOUT_IN_PROGRESS", "in progress", [{ field: "bookingId", value: b.bookingId }]);
+    if (b.status !== "PENDING" || payExpired(b)) return fail(res, 409, "BOOKING_STATE_CONFLICT", "hold expired", [{ field: "status", value: b.status, reason: "HOLD_EXPIRED" }]);
+    const attempt = (current?.attempt ?? 0) + 1;
+    if (attempt > 3) return fail(res, 409, "BOOKING_STATE_CONFLICT", "retry limit", [{ field: "attempt", value: attempt, reason: "RETRY_LIMIT" }]);
+    const c = {
+      checkoutId: randomUUID(), bookingId: b.bookingId, state: "STARTED", step: "STARTED", method: "TOSSPAY", attempt, retryable: false,
+      amount: { original: b.amount, discount: 0, final: b.amount }, coupon: null, payment: null, failure: null, refundNotice: null,
+      expiresAt: b.expiresAt, updatedAt: toKstIso(new Date()), pollAfterMs: 1000, at: Date.now(), couponIssueId: body.couponIssueId ?? null,
+    };
+    checkouts.set(b.bookingId, c);
+    return json(res, 202, { checkoutId: c.checkoutId, bookingId: b.bookingId, state: c.state, pollAfterMs: 1000 });
+  }
+  if (action === "/checkout/confirm" && req.method === "POST") {
+    const body = await readJson(req);
+    if (!current) return fail(res, 404, "NOT_FOUND", "no checkout");
+    if (current.state !== "READY_TO_PAY") return fail(res, 409, "CHECKOUT_NOT_READY", "not ready", [{ field: "state", value: current.state }]);
+    if (body?.paymentId !== current.payment?.paymentId) return fail(res, 400, "VALIDATION_FAILED", "payment id mismatch", [{ field: "paymentId", value: body?.paymentId ?? null, reason: "PAYMENT_ID_MISMATCH" }]);
+    current.state = "VERIFYING";
+    current.at = Date.now();
+    return json(res, 202, { checkoutId: current.checkoutId, bookingId: b.bookingId, state: "VERIFYING", pollAfterMs: 1000 });
+  }
+  return false;
+}
+
 async function handlePayBooking(req, res, path) {
   let m;
   if ((m = /^\/api\/mock-portone\/([0-9a-f-]{36})$/.exec(path)) && req.method === "POST") {
@@ -1132,12 +1234,19 @@ async function handlePayBooking(req, res, path) {
     portoneResults.set(m[1], body?.result ?? "abandoned");
     return json(res, 200, { ok: true });
   }
-  if (!(m = /^\/api\/bookings\/(\d+)(\/hold|\/payments|\/pay)?$/.exec(path))) return false;
+  if (!(m = /^\/api\/bookings\/(\d+)(\/hold|\/payments|\/pay|\/checkout|\/checkout\/confirm)?$/.exec(path))) return false;
   const b = payBookingOf(Number(m[1]));
   if (!b) return false;
   const action = m[2] ?? "";
 
-  if (action === "" && req.method === "GET") return json(res, 200, b);
+  if (action === "" && req.method === "GET") {
+    const c = advanceCheckout(b);
+    return json(res, 200, { ...b, checkout: c ? { checkoutId: c.checkoutId, state: c.state } : null });
+  }
+  if (action.startsWith("/checkout")) {
+    if (MOCK_CHECKOUT === "off") return fail(res, 404, "NOT_FOUND", "checkout saga disabled (MOCK_CHECKOUT=off)");
+    return handleCheckout(req, res, b, action);
+  }
 
   if (action === "/hold" && req.method === "DELETE") {
     if (b.status === "CANCELED") return json(res, 200, { bookingId: b.bookingId, status: "CANCELED", canceledAt: b.canceledAt, payment: null });

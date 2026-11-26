@@ -11,6 +11,29 @@
   align-items: start;
 }
 
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  background: var(--color-primary-soft);
+  color: var(--color-text);
+}
+
+.notice p {
+  margin: 0;
+  line-height: 1.55;
+}
+
 .summary {
   position: sticky;
   top: calc(var(--header-h) + 24px);

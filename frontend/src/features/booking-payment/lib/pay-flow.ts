@@ -1,4 +1,4 @@
-import type { Booking, PayRequest, PayResult } from "@/entities/booking";
+import type { Booking, PayRequest, PayResult, RefundNotice } from "@/entities/booking";
 import { ApiError, NetworkError, messageForError } from "@/shared/api";
 
 /** 503 PAYMENT_RESULT_UNKNOWN 뒤 결과 확인: 2초 간격 최대 5회 (계약 BKG-10 503) */
@@ -12,9 +12,17 @@ export const POLL_ATTEMPTS = 5;
 export type PayOutcome =
   | { kind: "confirmed"; bookingId: number; seatLabels: string[]; confirmedAt?: string }
   /** 카드 거절·잔액 부족. 좌석은 풀렸으니 다시 고르는 흐름으로 보낸다 */
-  | { kind: "declined"; failureCode: PayResult["payment"]["failureCode"] }
-  /** 선점이 먼저 만료됐다. 승인됐더라도 서버가 환불한다 */
-  | { kind: "expired"; refunded: boolean }
+  | {
+      kind: "declined";
+      failureCode: PayResult["payment"]["failureCode"];
+      /** 결제 거절이 아닌 실패(체크아웃 단계 시간 초과 등)의 문구 — 있으면 사유 코드 대신 쓴다 */
+      message?: string;
+    }
+  /**
+   * 선점이 먼저 만료됐다. 승인됐더라도 서버가 환불한다.
+   * `refundNotice`는 체크아웃 경로만(6.2.5) — WILL_REFUND_IF_PAID·REFUND_IN_PROGRESS면 환불 안내를 보여 준다
+   */
+  | { kind: "expired"; refunded: boolean; refundNotice?: RefundNotice }
   /** 2초 × 5회 확인에도 결과가 안 나왔다 — 예매 내역에서 다시 확인하게 안내 */
   | { kind: "unknown" }
   /**

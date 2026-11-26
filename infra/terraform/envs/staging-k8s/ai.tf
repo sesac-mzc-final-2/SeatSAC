@@ -5,6 +5,8 @@
 #     → 백업 관리자도 키 없이 긴급 변경 가능, 다른 변경 때문에 apply하다가 Secret을 덮어쓰는 일도 없다
 #   - 처음 만들 때 키가 없으면 plan이 멈춘다(아래 data + precondition: Secret이 아직 없을 때만 키를 요구)
 #   - 교체: 새 키를 팀 Anthropic 계정에서 발급 → apply -replace='kubernetes_secret_v1.ai[0]' → ArgoCD cinema-ai Restart (런북 6-G-1)
+#     🆕 6.4.1 뒤: -replace는 ANTHROPIC_API_KEY만으로 Secret을 다시 만든다 → ExternalSecret ai-secrets force-sync로 DB 두 키가
+#       돌아온 것을 확인한 뒤에 Restart한다(먼저 재시작하면 파드 env에 DB 비밀번호가 없다 — 런북 6-G-1)
 #     ⚠ 교체 때는 Secret이 이미 있어 아래 precondition이 빈 키를 막지 못한다(HCL로는 생성·교체와 평소 plan을 구분할 수 없다).
 #       런북 6-G-1의 키 확인 + apply 한 줄 명령으로만 교체하고, 끝나면 값 길이(wc -c)가 0보다 큰지 확인한다
 #     키는 어디에도 보관하지 않는다(사람 사이에 전달하지 않는다). 잃어버리면 새로 발급해 교체한다
@@ -40,7 +42,16 @@ resource "kubernetes_secret_v1" "ai" {
 
   lifecycle {
     # 만든 뒤에는 Terraform이 값을 다시 쓰지 않는다. 바꿀 때는 -replace로 명시 (런북 6-G-1 「키 교체」)
-    ignore_changes = [data]
+    # 🆕 6.4.1 gitops ExternalSecret ai-secrets(Merge)가 DB 비밀번호 두 키(data — 위에서 이미 무시)와 메타데이터를 더한다
+    #   annotations: reconcile.external-secrets.io/data-hash · argocd.argoproj.io/{tracking-id,sync-wave,sync-options}
+    #   labels:      reconcile.external-secrets.io/managed
+    # db_bootstrap.tf의 kubernetes_secret_v1.app·.migrator와 같은 예외 — 없으면 plan마다 지우려 하고 ESO가 다시 붙인다
+    # (Terraform이 쓰는 annotation은 없고, label 3개는 그대로 관리한다)
+    ignore_changes = [
+      data,
+      metadata[0].annotations,
+      metadata[0].labels["reconcile.external-secrets.io/managed"],
+    ]
 
     precondition {
       condition = (

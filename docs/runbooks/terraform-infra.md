@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 | --- | --- |
 | 목적 | 빈 상태에서 SeatSAC AWS 인프라를 같은 순서로 다시 만들고, 평소 변경·복구를 같은 절차로 한다 |
-| 언제 | 최초 구축, 재생성 리허설(OPS-14, 11/11~12), 계정 초기화 후, 평소 인프라 변경 |
+| 언제 | 최초 구축, 재생성 리허설(OPS-14, 11/11~12), 계정 초기화 후, 평소 인프라 변경. **다른 AWS 계정으로 옮길 때는 `docs/runbooks/rebuild-new-account.md`**(순서·바꿀 값·막힌 곳 모음, ADR-125) |
 | 담당 / 권한 | 김종식 (백업: 백업 관리자) / 최초 1회는 IAM 사용자, 이후 `cinema-admin` 역할 (MFA) |
 | 코드 | `infra/terraform/{bootstrap,global,envs/staging,envs/staging-k8s}` |
 | 예상 소요 | bootstrap 2분 · global 3분 · staging 네트워크 5분 · EKS 15~20분 + staging-k8s 3분 · RDS·Valkey 15~20분(동시 생성) (이후 단계는 실측 후 기록) |
@@ -3058,3 +3058,21 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 6-D 블루/그린 — 6-D-0 분석 회차 ID · 6-D-2 정상 배포 · 6-D-3 실패 버전 시연 | | | |
 | ⬜ | 김종식 | 6-B SQS·Lambda (3.1.8·3.1.9) · 7 Cognito · 7-4 CloudFront `/api` | | | |
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
+---
+
+## 15. 다른 AWS 계정으로 옮길 때 — Route 53 도메인·DNS 이전 (ADR-125)
+
+계정 전체를 옮기는 순서·바꿀 값·지금까지 막힌 것은 **`docs/runbooks/rebuild-new-account.md`** 하나에 모았다. 도메인 부분의 요약(자세한 명령은 그 문서 7장):
+
+| 순서 | 어디서 | 할 일 | 확인 |
+| --- | --- | --- | --- |
+| 0 | 새 계정 | 기본 도메인(`*.cloudfront.net`)만으로 전부 동작하게 만든다(`custom_domain = ""`·`api_origin_https = "off"`) | 그 문서 5장 |
+| 1 | 새 계정 | 빈 퍼블릭 호스팅 영역 `aws route53 create-hosted-zone --name <도메인>` → 네임서버 4개 메모(레포 밖) | 같은 이름 영역이 하나뿐 |
+| 2 | 옛 계정 | `api_origin_https` `on` → `prepare` → (gitops 443·`tls` 빼기) → `off` → `custom_domain = ""` apply — **여기서 사용자 도메인이 끊긴다**(기본 도메인은 계속) | 옛 CloudFront `Deployed`(별칭이 풀려야 새 배포에 붙는다 — 아니면 `CNAMEAlreadyExists`) |
+| 3 | 옛 → 새 | **등록 이전** `route53domains transfer-domain-to-another-aws-account`(옛) → `accept-domain-transfer-from-another-aws-account`(새, 3일 안). 비밀번호는 레포·채팅에 쓰지 않는다 | `get-operation-detail` SUCCESSFUL. 등록 이전은 DNS를 바꾸지 않는다 |
+| 4 | 새 계정 | `route53domains update-domain-nameservers`로 1번 네임서버 | `dig +short NS <도메인> @8.8.8.8`이 새 영역(최대 2일) |
+| 5 | 새 계정 | `custom_domain = "<도메인>"` apply(7-7) → `prepare` → gitops 443·`tls` 되돌리기 → `on`(7-8) · 포트원 웹훅 URL | `https://<도메인>/api/movies` 200 · 로그인·SSE·결제 |
+| 6 | 옛 계정 | 2일 이상 지나 옛 호스팅 영역 삭제 → 11장 삭제 | 옛 영역에 NS·SOA만 남은 뒤 |
+
+- 등록(소유)과 DNS(호스팅 영역)는 별개다. 옛 계정을 닫으면 등록도 사라지므로 **3번을 빼먹지 않는다**. 만료가 며칠 안 남았으면 이전 전에 갱신을 정한다
+- 도메인 등록·이전·호스팅 영역 생성은 Terraform 밖(콘솔·CLI) 예외다 — 7-7 「도메인 등록」과 같은 이유, 스크럼 공유

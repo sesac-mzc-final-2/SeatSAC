@@ -119,7 +119,7 @@ resource "aws_glue_catalog_table" "errors" {
     "projection.enabled"          = "true"
     "projection.dt.type"          = "date"
     "projection.dt.format"        = "yyyy-MM-dd"
-    "projection.dt.range"         = "2026-11-01,NOW"
+    "projection.dt.range"         = "2026-11-01,NOW+1DAYS" # dt는 KST 날짜인데 NOW는 UTC — KST 0~9시의 「오늘」 파티션이 범위 밖이 되지 않게 하루 더
     "projection.dt.interval"      = "1"
     "projection.dt.interval.unit" = "DAYS"
     "storage.location.template"   = "s3://${aws_s3_bucket.reports.bucket}/errors/dt=$${dt}/"

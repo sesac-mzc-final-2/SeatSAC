@@ -9,7 +9,7 @@
 #   - 컨트롤러 설치(Helm)는 envs/staging-k8s/karpenter.tf, NodePool·EC2NodeClass는 gitops platform/karpenter
 #   - 밤 끄기: 컨트롤러는 관리형 노드(ng-a·ng-c)에만 뜬다(차트 기본 affinity karpenter.sh/nodepool DoesNotExist).
 #     EventBridge가 관리형 노드그룹을 0대로 내리면 컨트롤러도 멈춰 Karpenter가 만든 노드는 그대로 남는다(비용) →
-#     아래 정리 Lambda가 15분마다 "관리형 노드그룹이 모두 0대일 때만" Karpenter 노드를 지운다(런북 6-K-4)
+#     아래 정리 Lambda가 15분마다 "관리형 노드그룹이 모두 0대일 때만" Karpenter 노드를 지운다(런북 6-K 4))
 #   - var.karpenter_enabled = false면 아무것도 만들지 않는다(태그만 남는다 — 태그는 해가 없다)
 # ------------------------------------------------------------------
 
@@ -138,7 +138,7 @@ resource "aws_lambda_function" "karpenter_sweep" {
   environment {
     variables = {
       CLUSTER_NAME = module.eks.cluster_name
-      DRY_RUN      = "false" # 처음 확인할 때는 콘솔이 아니라 런북 6-K-4처럼 test 이벤트 {"dryRun": true}로 부른다
+      DRY_RUN      = "false" # 처음 확인할 때는 콘솔이 아니라 런북 6-K 4)처럼 test 이벤트 {"dryRun": true}로 부른다
     }
   }
 

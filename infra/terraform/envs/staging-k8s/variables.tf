@@ -68,7 +68,7 @@ variable "lbc_replicas" {
 
 # ---- 6.1.6 Karpenter (karpenter.tf) ---------------------------------------
 variable "karpenter_enabled" {
-  description = "envs/staging karpenter_enabled apply(권한·노드 역할·큐) 뒤 true → Karpenter 컨트롤러 Helm 설치 (런북 6-K-2)"
+  description = "envs/staging karpenter_enabled apply(권한·노드 역할·큐) 뒤 true → Karpenter 컨트롤러 Helm 설치 (런북 6-K 2))"
   type        = bool
   default     = false
 }

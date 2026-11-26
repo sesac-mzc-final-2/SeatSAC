@@ -269,7 +269,7 @@ variable "cognito_group_members" {
 
 # 6.1.6 Karpenter (karpenter.tf, ADR-122)
 variable "karpenter_enabled" {
-  description = "true면 Karpenter 컨트롤러 권한(Pod Identity)·노드 역할·중단 알림 큐·밤 정리 Lambda를 만든다. 끄면 전부 지운다(먼저 런북 6-K-6 되돌리기)"
+  description = "true면 Karpenter 컨트롤러 권한(Pod Identity)·노드 역할·중단 알림 큐·밤 정리 Lambda를 만든다. 끄면 전부 지운다(먼저 런북 6-K 6) 되돌리기)"
   type        = bool
   default     = false
 }

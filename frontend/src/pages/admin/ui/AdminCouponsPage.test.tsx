@@ -135,6 +135,67 @@ describe("관리자 쿠폰 이벤트 (6.3.9, OPS-24)", () => {
     expect(await within(form()).findByRole("alert")).toHaveTextContent("만들어졌는지 확실하지 않아요");
   });
 
+  it.each([
+    ["CloudFront 502", () => jsonResponse(502, errorBody("INTERNAL_ERROR"))],
+    ["CloudFront 504(본문 없음)", () => new Response("<html>504</html>", { status: 504 })],
+    [
+      "응답 전에 끊긴 네트워크 오류",
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+    ],
+  ])("%s도 만들어졌는지 불확실 — 목록으로 확인하라고 안내", async (_, postResponse) => {
+    mockOps({
+      "GET /ops/coupons/events": () => jsonResponse(200, { items: [] }),
+      "POST /ops/coupons/events": postResponse,
+    });
+    render();
+    await screen.findByRole("heading", { name: "아직 이벤트가 없어요" });
+    await userEvent.click(within(form()).getByRole("button", { name: /이벤트 만들기/ }));
+    expect(await within(form()).findByRole("alert")).toHaveTextContent("만들어졌는지 확실하지 않아요");
+  });
+
+  it("「지금 시작」이면 보낼 때 다음 정분으로 다시 계산 — 폼을 오래 열어 둬도 지난 시각을 보내지 않는다", async () => {
+    let now = Date.parse("2026-11-27T04:59:30Z"); // KST 13:59:30 — 폼을 연 때
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetchMock = mockOps({
+      "GET /ops/coupons/events": () => jsonResponse(200, { items: [] }),
+      "POST /ops/coupons/events": () => jsonResponse(201, { ...EVENT, state: "UPCOMING" }),
+    });
+    render();
+    await screen.findByRole("heading", { name: "아직 이벤트가 없어요" });
+    expect(within(form()).getByLabelText("시작 (KST)")).toHaveValue("2026-11-27T14:00");
+
+    const f = form();
+    // 시각을 직접 골랐다가 「지금 시작」으로 되돌린다
+    fireEvent.change(within(f).getByLabelText("시작 (KST)"), { target: { value: "2026-11-28T09:00" } });
+    await userEvent.click(within(f).getByRole("button", { name: /지금 시작/ }));
+
+    now = Date.parse("2026-11-27T05:12:10Z"); // 12분 뒤 KST 14:12:10에 보낸다
+    await userEvent.click(within(f).getByRole("button", { name: /이벤트 만들기/ }));
+
+    await screen.findByText(/이벤트를 만들었어요/);
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+    expect(JSON.parse(String(post[1]!.body)).startsAt).toBe("2026-11-27T14:13:00+09:00");
+  });
+
+  it("목록을 다시 받다 실패해도 마지막 목록은 그대로 두고 안내", async () => {
+    let calls = 0;
+    mockOps({
+      "GET /ops/coupons/events": () =>
+        ++calls === 1 ? jsonResponse(200, { items: [EVENT] }) : jsonResponse(503, errorBody("SERVICE_UNAVAILABLE")),
+      "POST /ops/coupons/events": () =>
+        jsonResponse(400, { ...errorBody("VALIDATION_FAILED"), details: [{ field: "startsAt", reason: "EVENT_OVERLAP" }] }),
+    });
+    render();
+    await screen.findByRole("rowheader", { name: /VIP 선착순 50% 할인/ });
+
+    // 만들기가 끝나면(실패여도) 목록을 다시 받는다 → 그 재조회가 503
+    await userEvent.click(within(form()).getByRole("button", { name: /이벤트 만들기/ }));
+    expect(await screen.findByText(/목록을 새로 받지 못했어요/)).toBeInTheDocument();
+    expect(screen.getByRole("rowheader", { name: /VIP 선착순 50% 할인/ })).toBeInTheDocument();
+  });
+
   it("ADMIN 그룹이 아니면(403) 권한 안내", async () => {
     mockOps({ "GET /ops/coupons/events": () => jsonResponse(403, errorBody("FORBIDDEN")) });
     render();

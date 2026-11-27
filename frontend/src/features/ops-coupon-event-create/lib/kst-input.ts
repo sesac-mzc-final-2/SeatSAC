@@ -7,7 +7,12 @@ export function nextMinuteKstInput(now: number = Date.now()): string {
   return new Date(next + KST_OFFSET_MS).toISOString().slice(0, 16);
 }
 
-/** `2026-11-27T14:00` → `2026-11-27T14:00:00+09:00` */
+/** 입력 값이 `YYYY-MM-DDTHH:mm`(초가 붙어도 됨) 모양인지 */
+export function isKstInput(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value);
+}
+
+/** `2026-11-27T14:00` → `2026-11-27T14:00:00+09:00`. 브라우저·자동완성이 초(`HH:mm:ss`)를 붙여도 분까지만 쓴다 */
 export function kstInputToIso(value: string): string {
-  return `${value}:00+09:00`;
+  return `${value.slice(0, 16)}:00+09:00`;
 }

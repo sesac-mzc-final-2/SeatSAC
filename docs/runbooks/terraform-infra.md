@@ -2154,6 +2154,7 @@ terraform apply plan.out        # CloudFront 배포가 Deployed가 될 때까지
 | rows가 계속 0 | 그 시간에 `errorCategory` 줄이 없음(정상) · 앱 로그 형식 | Grafana Explore `{namespace="cinema-staging"} \|= "errorCategory"` |
 | Athena `HIVE_BAD_DATA`·빈 결과 | 파일 경로가 `errors/dt=YYYY-MM-DD/`가 아님 · `dt`를 문자열 `'…'`로 주지 않음 | `aws s3 ls …/errors/` 경로 확인 |
 | ops-api 날짜 목록이 비어 있음 | 아직 내보낸 파일이 없다(첫 정시 전) | 2)의 수동 실행 |
+| CSV 내려받기가 XML `AuthorizationQueryParametersError … the region 'ap-northeast-2' is wrong; expecting 'us-east-1'` | presigned URL이 전역 주소(`버킷.s3.amazonaws.com`)로 만들어졌고, 새 버킷은 DNS가 퍼지는 동안(최대 약 24시간) 그 주소가 us-east-1로 간다 | ops-api가 리전 주소로 서명한다(`reports.py` `s3_client`, 11/27). 옛 이미지면 ops-api 배포 확인 |
 | WAF block 뒤 화면·API 403 | 관리형 규칙 오탐 · IP 요청 제한 | 바로 `waf_mode = "count"` apply → Sampled requests에서 규칙 이름 확인 → `count_rules`에 추가 |
 
 ---

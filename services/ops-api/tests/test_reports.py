@@ -138,3 +138,20 @@ def test_failed_unknown_and_other_workgroup(client, aws):
     athena_stub.add_response("get_query_execution", _succeeded("q-3", workgroup="primary"))
     assert client.get("/ops/reports/errors/q-3", headers=admin_headers()).status_code == 404
     assert client.get("/ops/reports/errors/bad$id", headers=admin_headers()).status_code == 404
+
+
+def test_presigned_url_uses_the_regional_endpoint(monkeypatch):
+    # 전역 주소(…s3.amazonaws.com)면 새 버킷에서 us-east-1로 가 서명 리전 오류
+    # — 리전 주소여야 한다 (6.1.9)
+    from seatsac_ops.reports import s3_client
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    url = s3_client("ap-northeast-2").generate_presigned_url(
+        "get_object",
+        Params={"Bucket": "cinema-staging-reports-x", "Key": "athena-results/q.csv"},
+        ExpiresIn=300,
+    )
+    host = "https://cinema-staging-reports-x.s3.ap-northeast-2.amazonaws.com"
+    assert url.startswith(f"{host}/athena-results/q.csv?")
+    assert "ap-northeast-2%2Fs3%2Faws4_request" in url

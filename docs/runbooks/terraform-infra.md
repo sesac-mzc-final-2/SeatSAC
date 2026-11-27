@@ -3181,7 +3181,7 @@ terraform destroy -var-file=staging.tfvars
 - **global·bootstrap은 지우지 않는다.** 팀 접근·CI 역할·state 버킷은 계속 쓴다
 - 삭제 후 확인: EIP·ENI·ALB·EBS 볼륨이 남지 않았는지 (`aws ec2 describe-addresses`, `describe-volumes`)
 - 🆕 6.1.10 MSA 고도화 뒤 추가로 볼 것:
-  - **Karpenter 노드 먼저**: 1) 전에 `cluster-scale.sh down`(정리 Lambda가 Karpenter 인스턴스를 지운다) → `aws ec2 describe-instances --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running --query 'length(Reservations)'`가 0. 남은 인스턴스는 ENI를 잡아 VPC 삭제를 막는다
+  - **Karpenter 노드는 1) 뒤, 2) 전에**: 1)은 노드가 켜진 채로 한다 — 노드가 0이면 LB Controller·ArgoCD 파드가 없어 Ingress finalizer가 풀리지 않고 ALB가 지워지지 않는다(4-5와 같은 이유). ALB가 사라진 뒤 `cluster-scale.sh down`(정리 Lambda가 Karpenter 인스턴스를 지운다) → `aws ec2 describe-instances --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running --query 'length(Reservations)'`가 0. 남은 인스턴스는 ENI를 잡아 VPC 삭제를 막는다
   - RDS 6개는 `deletion_protection = false`·`skip_final_snapshot = true`(재생성 리허설·계정 이전용)라 **데이터가 남지 않는다** — 남겨야 하면 destroy 전에 `db-migrate.sh`로 덤프(8-E)
   - Secrets Manager `cinema/staging/*`는 `recovery_window_in_days = 0`이라 바로 지워진다(같은 이름으로 다시 만들 수 있다)
   - ECR(`force_delete`)·Loki 버킷(`force_destroy`)은 비우지 않아도 지워진다. 리포트 버킷(6.1.9)은 그 PR의 설정을 확인

@@ -30,9 +30,19 @@
 1. 스크럼 공유: 「X시부터 옛 계정 동결 — 머지는 문서만」
 2. 시연용 상태를 되돌린다: ops-api로 멈춘 서비스 「가동」(`infra/scripts/msa-check.sh stopped`), cordon한 노드 uncordon
 3. **HTTPS 원본을 `on` → `prepare`로 되돌린다**(terraform-infra 7-8 「되돌리기」). gitops `base/gateway/ingress.yaml`의 443 리스너·`tls`가 새 계정 첫 sync를 막기 때문이다(새 계정에는 `origin.<도메인>` 인증서가 아직 없다 → `no certificate found for host` → **ALB가 아예 안 생긴다**). 순서: 옛 계정 `api_origin_https = "prepare"` apply → gitops에서 443·`tls` 빼는 PR 머지 → (옛 계정 `off`는 선택 — 옛 계정을 곧 지우면 생략)
-4. 남길 것만 적어 둔다(비밀 값 제외, 레포 밖): 현재 gitops 이미지 태그(`overlays/staging/*/image-tag` — 이미 Git에 있다), 포트원 콘솔 설정(웹훅 URL·허용 도메인), Anthropic 지출 한도, 도메인 상태(7장)
-5. 필요하면 데이터 덤프(0장 첫 행 — 기본은 하지 않는다)
-6. 옛 계정 삭제는 **새 계정 확인(5장)과 도메인 이전(7장)이 끝난 뒤**(6장)
+4. **옛 계정 서비스 Application의 auto-sync를 끈다** — 3번의 gitops PR이 옛 계정 gateway에 sync된 것을 본 뒤, 3-7 `build-push`(새 계정) 전에. 새 계정 `build-push`가 공유 gitops의 `newTag`를 새 SHA로 바꾸면, `automated`(prune·selfHeal)인 옛 Application이 그 태그를 따라가는데 **옛 ECR에는 그 이미지가 없다** → 새 ReplicaSet `ImagePullBackOff`(Rollout은 preview 실패로 active가 남지만, Deployment는 롤아웃이 멈추고 파드가 다시 만들어질 때 실패). 서비스 Application은 Terraform Helm(`argocd_apps.tf`)이 만들어 root 앱의 selfHeal 대상이 아니라 아래 patch가 유지된다(6-C-2 「급할 때만 auto-sync를 끄고」와 같은 예외, 스크럼 공유)
+
+   ```bash
+   kubectl -n argocd get applications -o name | grep '/cinema-' | while read -r a; do
+     kubectl -n argocd patch "$a" --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
+   done
+   kubectl -n argocd get applications -o custom-columns=NAME:.metadata.name,AUTO:.spec.syncPolicy.automated | grep cinema-   # AUTO <none>
+   ```
+
+   - 옛 계정 **staging-k8s apply는 이 뒤로 하지 않는다**(Helm이 `automated`를 다시 켠다 — 0장 「동결」). 7-4의 옛 계정 apply는 `envs/staging`이라 이 설정을 건드리지 않는다
+5. 남길 것만 적어 둔다(비밀 값 제외, 레포 밖): 현재 gitops 이미지 태그(`overlays/staging/*/image-tag` — 이미 Git에 있다), 포트원 콘솔 설정(웹훅 URL·허용 도메인), Anthropic 지출 한도, 도메인 상태(7장)
+6. 필요하면 데이터 덤프(0장 첫 행 — 기본은 하지 않는다)
+7. 옛 계정 삭제는 **새 계정 확인(5장)과 도메인 이전(7장)이 끝난 뒤**(6장)
 
 ---
 
@@ -282,8 +292,8 @@ infra/scripts/np-check.sh                          # REQUIRE_GATEWAY=1 REQUIRE_C
 
 terraform-infra **11장 순서 그대로**(옛 계정 자격 증명으로, 옛 `backend.hcl`로):
 
-1. `cluster-scale.sh down` → Karpenter 인스턴스 0 확인(남으면 ENI가 VPC 삭제를 막는다)
-2. staging-k8s `terraform destroy -target=helm_release.argocd_apps` → ALB가 사라질 때까지(`aws elbv2 describe-load-balancers --names cinema-staging-gateway` → `LoadBalancerNotFound`)
+1. **노드를 켠 채로** staging-k8s `terraform destroy -target=helm_release.argocd_apps` → ALB가 사라질 때까지(`aws elbv2 describe-load-balancers --names cinema-staging-gateway` → `LoadBalancerNotFound`). 노드가 0이면 LB Controller가 돌지 않아 ALB가 지워지지 않고 이 단계가 끝나지 않는다
+2. `cluster-scale.sh down` → Karpenter 인스턴스 0 확인(남으면 ENI가 VPC 삭제를 막는다)
 3. staging-k8s 나머지 → staging (`plan -destroy`로 목록 확인)
 4. 남은 것 확인: EIP·ENI·ALB·EBS·Route 53 호스팅 영역(7장에서 옮긴 뒤 지운다)
 5. **global·bootstrap은 destroy하지 않는다**(CLAUDE.md 절대 규칙 — 예외 없음). 계정을 닫으면 그 리소스(역할·OIDC·state 버킷)도 계정과 함께 정리된다. 계정을 남겨 두면 그대로 둔다
@@ -310,7 +320,9 @@ terraform-infra **11장 순서 그대로**(옛 계정 자격 증명으로, 옛 `
 D=<도메인>
 # (옛 계정) 등록 상태 — 이전 잠금·만료일·자동 갱신
 aws route53domains get-domain-detail --region us-east-1 --domain-name $D \
-  --query '{expiry:ExpirationDate, autoRenew:AutoRenew, status:StatusList, ns:Nameservers[].Name}'
+  --query '{created:CreationDate, updated:UpdatedDate, expiry:ExpirationDate, autoRenew:AutoRenew, status:StatusList, ns:Nameservers[].Name}'
+# 등록(created) 뒤 14일이 지나지 않았으면 다른 AWS 계정으로 이전할 수 없다 → 14일이 지날 때까지 7-4를 시작하지 않는다
+#   (7-4가 별칭을 먼저 떼므로, 이전이 거부되면 사용자 도메인이 끊긴 채로 남는다. 기본 도메인으로는 계속 쓸 수 있다)
 # 만료가 가까우면(며칠 안) 먼저 갱신 여부를 정한다 — 이전 중 만료되면 도메인을 잃는다
 # (옛 계정) 지금 영역의 레코드 목록(값은 레포 밖에 메모 — 계정 ID·영역 ID는 PR에 쓰지 않는다)
 ZID=$(aws route53 list-hosted-zones-by-name --dns-name $D --query "HostedZones[?Name=='$D.'].Id" --output text)
@@ -333,6 +345,8 @@ terraform -chdir=infra/terraform/envs/staging output -json custom_domain_name_se
 - `force_destroy = false`라 Terraform 밖 레코드(메일 등)가 남아 있으면 destroy가 멈춘다. 비용 월 $0.50
 
 ### 7-4. 옛 계정에서 도메인 떼기 (옛 계정 — 이 순간부터 사용자 도메인이 끊긴다)
+
+> **시작 조건**: 7-2에서 이전이 가능한 것을 확인했다 — 등록 뒤 14일 지남 · 이전 잠금 없음 · 만료가 이전 기간(수락 3일)보다 멀다. 하나라도 아니면 여기서 멈춘다
 
 1. 1장 3번에서 `api_origin_https`를 `prepare`로 이미 내렸다면 이어서 **`off`** apply(인증서가 리스너에 물려 있지 않은지 — gitops 443은 1장 3번에서 이미 뺐다)
 2. `custom_domain = ""` apply — plan 기대: **삭제** 인증서 1·검증 레코드 1·검증 1·별칭 2, **변경** CloudFront 1(`aliases → []`)·Cognito 앱 클라이언트 1(콜백). 추가 없음

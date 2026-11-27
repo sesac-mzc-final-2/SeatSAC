@@ -2086,6 +2086,221 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/reports/errors/dates" | 
 | `nodes[].cpuPercent` 모두 null | cAdvisor 지표에 `node` 라벨이 없음 | Prometheus에서 `container_cpu_usage_seconds_total{id="/"}` 라벨 확인 → `prom.py` 쿼리 조정 |
 | `/ops/*` 가 화면(index.html)으로 옴 | CloudFront `/ops/*` 동작이 없음(1번 전) 또는 무효화 전 | 1번 apply 확인 |
 
+### 6-M. WAF·오류·보안 리포트 (6.1.8·6.1.9, ADR-121·124) — ⬜
+
+코드: SeatSAC `envs/staging/waf.tf`(웹 ACL, `var.waf_mode`)·`cloudfront.tf`(`web_acl_id`)·`reports.tf`(버킷·Glue·Athena·내보내기 Pod Identity) · `envs/staging-k8s/reports.tf`(ConfigMap `monitoring/report-export`) · gitops `observability/report-export`(CronJob·스크립트)·`platform/loki/values.yaml`(NetworkPolicy `loki-ingress`에 report-export)
+
+| 항목 | 값 |
+| --- | --- |
+| WAF | CloudFront 웹 ACL `cinema-staging-waf`(us-east-1). AWS 관리형 Common·KnownBadInputs·SQLi + IP당 5분 2,000(`waf_rate_limit_per_5min`). `waf_mode` `off`(기본) → `count`(세기만) → `block`. Common의 `SizeRestrictions_BODY`(8KB)는 늘 count — 본문은 gateway가 64KB에서 413으로 막는다 |
+| 리포트 버킷 | `cinema-staging-reports-{계정ID}` — `errors/dt=YYYY-MM-DD/HH.json.gz`(KST, 30일) · `athena-results/`(7일). SSE-S3, 공개 차단, TLS만 |
+| Glue·Athena | DB `cinema_staging_reports` · 테이블 `errors`(partition projection `dt` — 크롤러·MSCK 없음) · 작업 그룹 `cinema-staging-reports`(결과 위치 고정, 쿼리당 1GB 상한) |
+| 내보내기 | CronJob `monitoring/report-export` 매시 7분: Loki `{namespace="cinema-staging"} \|= "errorCategory"` → 지난 3개 KST 정시 구간 파일을 다시 만든다(멱등) → S3. 열은 timestamp·service·level·errorCategory·status·path·traceId·message만(userId·IP·토큰 없음). Pod Identity `cinema-staging-report-export-pod`(errors/ 쓰기만) |
+| 조회 | ops-api `GET /ops/reports/errors/dates` · `POST …` → Athena(6-L) — 이름이 이 절과 같다(`ops_api.tf` locals) |
+
+**1) Terraform — staging** (리포트만, WAF는 off 그대로)
+
+```bash
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: add = S3 버킷 1(+ 공개 차단·소유권·암호화·수명 주기·정책 5) · Glue DB 1·테이블 1 · Athena 작업 그룹 1 · Pod Identity 역할·정책·연결
+#       CloudFront 변경 없음(waf_mode off). destroy 0
+terraform apply plan.out
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out   # 기대: ConfigMap monitoring/report-export add 1
+terraform apply plan.out
+```
+
+**2) gitops 머지** — `observability/report-export` + Loki NetworkPolicy. `cinema-observability`·`platform-loki` sync(Loki는 정책만 바뀌어 재시작 없음)
+
+```bash
+kubectl -n monitoring create job --from=cronjob/report-export report-export-manual     # 바로 한 번
+kubectl -n monitoring logs job/report-export-manual -c export     # {"window":"…","rows":N,…} 3줄 + {"done":true}
+kubectl -n monitoring logs job/report-export-manual -c upload     # {"upload":파일 수} (rows가 모두 0이면 {"upload":0} — 정상)
+aws s3 ls "s3://cinema-staging-reports-$(aws sts get-caller-identity --query Account --output text)/errors/" --recursive | tail -3
+kubectl -n monitoring delete job report-export-manual
+```
+
+- 오류 줄을 일부러 만들려면: 토큰 없이 `curl -s -o /dev/null https://<도메인>/api/seats/hold -X POST`(gateway `SECURITY` 401) 몇 번 → 다음 정시가 지난 뒤 위 수동 실행
+- Athena 확인(콘솔 쿼리 편집기 또는 ops-api): `SELECT errorcategory, count(*) FROM cinema_staging_reports.errors WHERE dt = '<오늘 KST>' GROUP BY 1` — 작업 그룹 `cinema-staging-reports`
+
+**3) ops-api로 확인** (6-L 뒤)
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/reports/errors/dates" | jq    # 오늘 날짜가 보인다(503 REPORT_UNAVAILABLE이 아니다)
+```
+
+**4) WAF 켜기 — count** (시연·측정이 없는 시간, 스크럼 공유)
+
+```bash
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -var waf_mode=count -out=plan.out   # tfvars에도 waf_mode = "count"
+# 기대: add = aws_wafv2_web_acl.cloudfront[0](us-east-1) · change = CloudFront 배포 web_acl_id. destroy 0
+terraform apply plan.out        # CloudFront 배포가 Deployed가 될 때까지 몇 분
+```
+
+- count는 아무것도 막지 않는다. 하루 이상 두고 CloudWatch `AWS/WAFV2`(리전 Global, `WebACL=cinema-staging-waf`)의 `CountedRequests`를 규칙별로 본다. 콘솔 WAF → 웹 ACL → Sampled requests에서 걸린 요청의 경로를 확인
+- 걸린 것이 정상 요청(화면·포트원 웹훅 `/api/webhooks/portone`·SSE·ai의 공개 API)이면 `waf.tf`의 `count_rules`에 그 규칙 이름을 넣는 PR → apply 뒤 다시 본다
+
+**5) block** — 4)에서 정상 요청이 걸리지 않을 때만 `waf_mode = "block"` PR → apply. 되돌리기는 `count` 또는 `off`(웹 ACL 연결 해제 → 몇 분 뒤 반영)
+
+- 쿠폰 오픈처럼 한 IP(회사·학원 공유기)에서 많이 들어오는 시연이면 그 전에 요청 수를 확인한다 — 5분 2,000을 넘는 IP는 block이면 403. 필요하면 `waf_rate_limit_per_5min`을 올린다
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| export 로그 `URLError … timed out`·`Connection refused` | Loki NetworkPolicy가 report-export를 허용하지 않음(gitops platform/loki 미sync) 또는 Loki 파드 없음 | `kubectl -n monitoring get networkpolicy loki-ingress -o yaml \| grep report-export`, `kubectl -n monitoring get pods -l app.kubernetes.io/name=loki` |
+| upload `AccessDenied` | Pod Identity 연결 전에 뜬 파드 · 역할 정책 · 버킷 이름 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace monitoring` 에 `report-export`, ConfigMap `report-export`의 `REPORTS_BUCKET` |
+| Job `CreateContainerConfigError` | ConfigMap `monitoring/report-export` 없음(staging-k8s apply 전) | 1)의 staging-k8s apply |
+| rows가 계속 0 | 그 시간에 `errorCategory` 줄이 없음(정상) · 앱 로그 형식 | Grafana Explore `{namespace="cinema-staging"} \|= "errorCategory"` |
+| Athena `HIVE_BAD_DATA`·빈 결과 | 파일 경로가 `errors/dt=YYYY-MM-DD/`가 아님 · `dt`를 문자열 `'…'`로 주지 않음 | `aws s3 ls …/errors/` 경로 확인 |
+| ops-api 날짜 목록이 비어 있음 | 아직 내보낸 파일이 없다(첫 정시 전) | 2)의 수동 실행 |
+| CSV 내려받기가 XML `AuthorizationQueryParametersError … the region 'ap-northeast-2' is wrong; expecting 'us-east-1'` | presigned URL이 전역 주소(`버킷.s3.amazonaws.com`)로 만들어졌고, 새 버킷은 DNS가 퍼지는 동안(최대 약 24시간) 그 주소가 us-east-1로 간다 | ops-api가 리전 주소로 서명한다(`reports.py` `s3_client`, 11/27). 옛 이미지면 ops-api 배포 확인 |
+| WAF block 뒤 화면·API 403 | 관리형 규칙 오탐 · IP 요청 제한 | 바로 `waf_mode = "count"` apply → Sampled requests에서 규칙 이름 확인 → `count_rules`에 추가 |
+
+---
+
+### 6-N. MSA 통합 테스트 — user 복제본 · coupon 명령 · DLQ 0 (6.5.1b, ADR-116·117) — ⬜
+
+목표: 플래그를 **하나씩** 켜면서 메시지 경로가 끝까지 가고, 순서가 뒤집히거나 단계가 시간 초과돼도 데이터가 맞으며, 끝났을 때 **DLQ가 0**인지 본다. 결과는 14장 실행 기록과 노션 6.5.1b에 붙인다(`msa-check.sh` 출력은 계정 ID·주소가 없어 그대로 붙여도 된다).
+
+| 원칙 | 내용 |
+| --- | --- |
+| 한 번에 하나 | gitops 플래그 PR은 하나씩 머지하고 Synced·Healthy를 본 뒤 다음. booking·gateway 블루/그린과 겹치지 않는다 |
+| 받는 쪽 먼저 | user 소비자(gitops #61) → `APP_BOOKING_HISTORY_MODE=local`. booking의 SNS 발행(`APP_MESSAGING_EVENTS_TOPIC_ARN`)은 이미 켜져 있어 `user-booking-events`에 이벤트가 쌓여 있다 — 소비자를 켜면 그동안 쌓인 것(보존 4일)이 흘러간다 |
+| 고치지 않는다 | 큐 purge·RDS DML·Valkey 키 삭제 금지. 확인은 공개 API·`msa-check.sh`·로그·지표로만 |
+| 시간 | 결제 비교 측정(6.2.7)·부하 테스트와 겹치지 않는 시간 |
+
+**0) 기준선**
+
+```bash
+infra/scripts/msa-check.sh all      # DLQ 모두 0이어야 시작한다. 0이 아니면 6-B-6 문제 해결 표부터
+```
+
+**1) user 예매 내역 복제본** (SeatSAC #220 → gitops #61 → gitops #63 local 모드)
+
+```bash
+export API="https://<도메인>/api"; read -rs TOKEN      # 시연 계정 토큰(화면 개발자 도구). 셸 기록에 남기지 않는다
+# a) local로 바꾸기 전 — sync 결과를 레포 밖에 저장(예매 ID·상태만)
+curl -s -H "Authorization: Bearer $TOKEN" "$API/users/me/bookings?size=50" \
+  | jq '[.content[] | select(.confirmedAt != null) | {bookingId, status}]' > /tmp/history-sync.json
+# b) #61 머지 뒤: 소비자가 쌓인 이벤트를 다 읽었는지
+infra/scripts/msa-check.sh queues   # user-booking-events 대기 0 근처 · DLQ 0
+kubectl -n cinema-staging logs deploy/user --since=10m | grep -c '예매 내역 복제본 반영'
+# c) gitops #63(local 모드) 머지 뒤 첫 조회 — 한 번 채우고(로그 「첫 채우기」) 결과가 sync와 같아야 한다
+curl -s -H "Authorization: Bearer $TOKEN" "$API/users/me/bookings?size=50" \
+  | jq '[.content[] | {bookingId, status}]' > /tmp/history-local.json
+diff <(jq -S . /tmp/history-sync.json) <(jq -S . /tmp/history-local.json) && echo SAME
+kubectl -n cinema-staging logs deploy/user --since=5m | grep '첫 채우기'
+```
+
+- [ ] `SAME` — local은 확정된 예매만 담는다(결제 실패·만료·확정 전 취소는 없음 — #220 리뷰어에게). 다르면 다른 줄의 bookingId로 user 로그 `bookingId=` 검색
+- [ ] 화면에서 새 예매 1건 결제 → 수 초 안에 마이페이지에 보인다(이벤트 경로) · 그 예매 취소 → CANCELED
+- [ ] 두 번째 조회부터 user 로그에 booking 호출이 없다(`첫 채우기`가 사용자당 한 번)
+- [ ] 지표 `user_message_consumed_total{result="error"}` 증가 0 (Grafana Explore)
+
+되돌리기: gitops #63 revert(바로 sync로 돌아감, 복제본은 남는다). 소비자 문제면 #61의 `APP_MESSAGING_CONSUMER_ENABLED=false` PR — 메시지는 큐에 남아 다시 켜면 이어진다.
+
+**2) coupon 명령 — 쿠폰 단계 시간 초과** (booking `APP_CHECKOUT_STEP_TIMEOUT=10s`, coupon 정지는 ops-api)
+
+1. 시연 VIP 계정으로 쿠폰 발급(화면 쿠폰 페이지) → 좌석 선점
+2. 관리자 `/ops`에서 **coupon 정지** → 결제 화면에서 쿠폰을 고르고 결제 시작
+3. 10초 뒤 체크아웃이 `FAILED`(`failure.code` `STEP_TIMEOUT`) — 보상으로 `coupon.release-requested`가 `coupon-commands`에 쌓인다(예약 명령과 함께)
+4. **coupon 가동** → coupon이 예약·반환 두 명령을 처리한다(순서는 보장되지 않는다 — 다음 단계가 그 확인)
+5. 확인: `GET /api/coupons/me`의 그 쿠폰 `state`가 **ISSUED**(다시 쓸 수 있음). `RESERVED`로 남으면 실패
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/coupons/me" | jq '.items[] | {couponIssueId, state}'
+infra/scripts/msa-check.sh queues   # coupon-commands·booking-replies 대기 0 · DLQ 0
+kubectl -n cinema-staging logs deploy/coupon --since=10m | grep -E '쿠폰 예약|쿠폰 반환|반환이 예약보다 먼저|이미 반환' | tail
+```
+
+- [ ] 시간 초과 체크아웃이 FAILED로 닫히고 좌석이 풀린다(좌석 화면)
+- [ ] 반환이 예약보다 먼저 처리된 경우: 로그 「반환이 예약보다 먼저 왔다」 → 늦은 예약은 `ALREADY_RELEASED`로 거절, 쿠폰 ISSUED
+- [ ] 예약이 먼저 처리된 경우: 로그 「쿠폰 예약」 뒤 「쿠폰 반환」, 쿠폰 ISSUED
+- [ ] 같은 예매로 쿠폰 없이 다시 결제 → CONFIRMED (선점 5분 안)
+- [ ] `msa-check.sh stopped` — 정지 기록 없음(coupon 가동 확인)
+
+**3) 반환 → 예약 순서 역전을 확실히 보고 싶을 때** — 2)는 순서를 고를 수 없다. 통합 테스트 `CouponCommandFlowTest.releaseArrivingBeforeReservationRejectsTheLateReservation`이 근거이고, staging에서는 2)의 두 경우 중 나온 쪽을 기록한다
+
+**4) 끝 확인**
+
+```bash
+infra/scripts/msa-check.sh all; echo "exit=$?"    # exit=0 (DLQ 0)
+```
+
+- [ ] DLQ 5개 0 · ArgoCD 모두 Synced·Healthy · ops-api 정지 기록 없음
+- [ ] 노션 6.5.1b에 결과(위 체크·`msa-check.sh` 출력) · 14장 실행 기록 한 줄
+
+### 6-O. AZ 장애 시연 · 비용 정리 (6.1.10, ADR-122) — ⬜
+
+목표: **AZ a 하나가 없어진 것처럼** 만들고(노드 비우기 + RDS·Valkey 장애 조치) 사이트가 계속 동작하는 것을 보인다. 시연 대본(말·화면 순서)은 `docs/runbooks/demo-msa.md` 3장. 실행은 김종식(`cinema-admin`), 녹화가 필요하면 리허설 1회 뒤 본 시연.
+
+| 방법 | 쓰는가 | 이유 |
+| --- | --- | --- |
+| 노드 cordon·drain (AZ a 노드 전부) | ✅ | 파드가 AZ c로 옮겨 가는 것을 보인다. 노드 상태만 바꾸고 Git·매니페스트는 그대로 — uncordon으로 되돌린다. GitOps 규칙(`kubectl apply/edit/delete` 금지)의 대상이 아닌 노드 조작이지만 **시연 시간에만, 스크럼 공유 뒤** |
+| RDS 강제 장애 조치 `reboot-db-instance --force-failover` | ✅ | Multi-AZ 5개(ai 제외)가 대기 AZ로 넘어간다(약 1~2분, 그동안 그 서비스 DB 오류) |
+| Valkey `test-failover` | ✅ (선택) | `valkey_replicas = 1`일 때 복제본이 primary가 된다. **좌석 선점 키가 있는 클러스터**라 진행 중 선점이 몇 초 실패할 수 있다 — 선점 데모와 겹치지 않게 |
+| AWS FIS | ❌ | Terraform 리소스가 없다(콘솔 생성 금지). 필요하면 다음에 `fis.tf`로 |
+| 서브넷·NAT 끊기 | ❌ | 되돌리기가 Terraform apply라 시연 안에 끝나지 않는다. NAT AZ별 2개(6.1.2)는 설명으로 |
+
+**전제**: 핵심 서비스 파드 2개(gitops #62 — 11/27 기준 coupon만 2개, 나머지 1개였다. gateway·payment는 머지 뒤 6-L 4-1 수동 sync). `msa-check.sh az`에서 핵심 서비스(gateway·catalog·booking·user·payment·coupon)가 **두 AZ에 나뉘어** 있어야 한다(`ScheduleAnyway`라 보장이 아니다 — 한 AZ에만 있으면 시연 전에 그 서비스 롤링 재시작이 필요한데, 그것도 배포라 스크럼 공유 뒤 ArgoCD 화면의 Restart로). Karpenter disruption budget 0 PR이 머지돼 있다(시연 중 노드 정리 없음). booking·gateway 블루/그린 진행 중이 아니다.
+
+```bash
+export AWS_PROFILE=cinema-admin
+infra/scripts/msa-check.sh all > /tmp/az-before.txt
+ZONE=ap-northeast-2a
+NODES=$(kubectl get nodes -l topology.kubernetes.io/zone=$ZONE -o name)
+echo "$NODES"                                   # ng-a 노드 + AZ a의 Karpenter 노드
+
+# (화면) 신호등 대시보드 · 관리자 /ops · 사이트 메인을 띄우고 k6 browse(6-H)를 돌린다
+# 1) AZ a 노드 비우기 — 새 파드가 AZ a에 오지 않게 먼저 cordon, 그다음 drain
+for n in $NODES; do kubectl cordon "$n"; done
+for n in $NODES; do kubectl drain "$n" --ignore-daemonsets --delete-emptydir-data --timeout=300s; done
+infra/scripts/msa-check.sh az                   # 서비스가 AZ c에만 — 0개인 서비스가 없어야 한다
+
+# 2) RDS 장애 조치 — booking부터 하나씩(동시에 하면 원인 구분이 어렵다)
+aws rds reboot-db-instance --db-instance-identifier cinema-staging-booking-db --force-failover --query 'DBInstance.DBInstanceStatus'
+aws rds wait db-instance-available --db-instance-identifier cinema-staging-booking-db
+infra/scripts/msa-check.sh data                 # booking-db 현재 AZ가 바뀌었다
+
+# 3) (선택) Valkey 장애 조치
+aws elasticache test-failover --replication-group-id cinema-staging-valkey --node-group-id 0001 --query 'ReplicationGroup.Status'
+```
+
+**되돌리기** (시연 직후, 같은 사람이)
+
+```bash
+for n in $NODES; do kubectl uncordon "$n"; done
+infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp/az-after.txt
+```
+
+- 파드는 uncordon만으로 AZ a로 돌아가지 않는다(Karpenter가 파드를 옮기지 않게 설정 — 6-K). 다음 배포 때 자연히 나뉜다. 시연을 한 번 더 해야 하면 그 전에 위 「전제」대로 다시 나눈다
+- drain 중 Karpenter가 AZ a에 새 노드를 띄울 수 있다(cordon은 기존 노드만 막는다) — 그러면 파드 일부가 AZ a 새 노드로 간다. 시연 화면에서는 「모자란 자리를 자동으로 채운다」로 설명하고, 순수 AZ 장애를 보이려면 AZ c 관리형 노드에 자리가 충분한 시간(부하 전)에 한다
+- RDS·Valkey는 장애 조치 뒤 primary가 AZ c에 남는다. 되돌릴 필요 없다(Multi-AZ는 어느 쪽이든 같다) — `ai-db`는 Single-AZ라 대상이 아니다
+
+| 확인 | 기준 |
+| --- | --- |
+| drain 동안 | 메인·상영시간표·좌석 화면 200. k6 browse 오류율 < 1%(drain 순간 몇 건은 연결 재시도) |
+| RDS 장애 조치 동안 | booking 선점·결제는 1~2분 503(`SERVICE_UNAVAILABLE`) 가능 — 다른 서비스(catalog 조회·user·coupon 조회)는 계속 200. 끝나면 Hikari가 다시 연결해 자동 복구(파드 재시작 없음) |
+| 끝난 뒤 | `msa-check.sh all` exit 0(DLQ 0) · 노드 cordon 없음 · ArgoCD 모두 Healthy |
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| drain이 `Cannot evict pod as it would violate the pod's disruption budget`에서 멈춤 | PDB가 있는 플랫폼 파드(ArgoCD·Karpenter 등)가 한 AZ에만 남음 | `--timeout` 뒤 멈추면 그 노드만 uncordon하고 진행(시연 범위는 앱 서비스) |
+| 서비스 하나가 0개 | 그 서비스 파드가 모두 AZ a에 있었고 AZ c에 자리가 없음 → Pending | Karpenter가 노드를 더할 때까지(1~2분) 기다린다. 시연 전 「전제」 확인을 빼먹은 것 |
+| RDS 장애 조치 뒤 몇 분째 503 | 앱이 옛 IP로 연결을 붙잡음 | Hikari `maxLifetime` 안에 풀린다. 5분 넘으면 그 서비스만 ArgoCD 화면 Restart |
+
+#### 6-O-1. 비용 정리 (시연·발표 뒤, ADR-114 하루 $50)
+
+| 순서 | 할 일 | 명령·확인 |
+| --- | --- | --- |
+| 1 | ops-api로 멈춘 서비스 되살리기 | `msa-check.sh stopped` → 남아 있으면 `/ops` 「가동」 |
+| 2 | ng-ai 끄기·k6 리소스 정리 | `infra/scripts/cluster-scale.sh down ng-ai` · 6-H-4 |
+| 3 | 밤에는 노드 0대 | `cluster-scale.sh down` (Karpenter 노드는 정리 Lambda가 함께 지운다 — 6-K) · `cluster-scale.sh status`에 Karpenter 0 |
+| 4 | 하루 비용 확인 | `aws ce get-cost-and-usage --time-period Start=$(date -v-1d +%F),End=$(date +%F) --granularity DAILY --metrics UnblendedCost` (macOS `date -v-1d` · Linux `date -d yesterday +%F`, Budgets 일 경보 $50) |
+| 5 | 발표가 끝나고 계속 둘 때 — 이중화 끄기 | `staging.tfvars`: `nat_gateway_per_az = false` · `valkey_replicas = 0` · `ai_valkey_replicas = 0` · `service_databases`의 `multi_az = false` → PR → plan(NAT 1개·Valkey 복제본·RDS 대기 인스턴스 **destroy만**, 서비스 인스턴스 replace가 보이면 멈춘다) → apply. 대략 NAT 1개(하루 약 $1.5)·RDS Multi-AZ 5개 대기분·Valkey 복제본 2개가 빠진다 |
+| 6 | 완전히 내릴 때 | 11장 삭제(아래 6.1.10 추가 항목 포함) |
+
 ---
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
@@ -2636,10 +2851,10 @@ kubectl -n cinema-staging get cm cinema-infra-endpoints -o jsonpath='{.data}' | 
 | 단계 | 할 일 | 확인 |
 | --- | --- | --- |
 | ① 행 수 미리 보기 | `infra/scripts/db-migrate.sh counts {svc}` (읽기만) | 원본 행 수가 보이고 대상은 `-`(테이블 없음) |
-| ② 쓰기 멈춤 | 그 서비스 파드를 0개로: **ops-api 「정지」**(6.1.7 — replicas 0, ArgoCD `ignoreDifferences`라 Git과 달라도 되돌리지 않는다). ops-api가 아직 없으면 사용자·시연이 없는 시간에 cinema-admin으로 ArgoCD Application `cinema-{svc}`의 자동 sync를 끄고(UI 「Disable Auto-Sync」) `kubectl -n cinema-staging scale deploy/{svc} --replicas=0`(booking은 `rollout`) — 시드 적재(8-C)와 같은 GitOps 예외로 이 절차만. catalog는 API가 조회뿐이라 멈추지 않아도 된다(`ALLOW_RUNNING=1`) | `kubectl -n cinema-staging get pods -l app.kubernetes.io/name={svc}` 없음 |
+| ② 쓰기 멈춤 | 그 서비스 파드를 0개로: **ops-api 「정지」**(6.1.7 — replicas 0, ArgoCD `ignoreDifferences`라 Git과 달라도 되돌리지 않는다). ops-api가 아직 없으면 사용자·시연이 없는 시간에 cinema-admin으로 ArgoCD Application `cinema-{svc}`의 자동 sync를 끄고(UI 「Disable Auto-Sync」) `kubectl -n cinema-staging scale deploy/{svc} --replicas=0`(booking은 `rollout`) — 시드 적재(8-C)와 같은 GitOps 예외로 이 절차만. catalog는 멈추지 않아도 된다(`ALLOW_RUNNING=1`) — 쓰기 API는 없지만 앱이 스스로 쓰는 것이 둘 있다: 일정 이어 붙이기(1시간)·변경 찾기(1분, 6.3.4a). copy 뒤 ④ 머지·옛 파드 종료까지 옛 인스턴스에 쓰인 행은 새 인스턴스에 없지만 **다시 만들어진다** — 회차는 고정 ID(영업일 epochDay × 100000 + 순번)와 `INSERT IGNORE`, `change_ledger`·`outbox_message`는 다음 변경 찾기가 새 인스턴스의 장부와 원본 해시를 비교해 다시 쓴다(릴레이가 꺼져 있어 옛 행은 보내지지 않고, 받는 쪽은 `version`이 클 때만 반영). 그래도 copy PASS 뒤 ④를 바로 머지한다. copy 중에 쓰기가 끼어 `행 수가 다르다`로 FAIL이면 대상을 비우고 다시 | `kubectl -n cinema-staging get pods -l app.kubernetes.io/name={svc}` 없음 |
 | ③ 덤프 → 복원 | `infra/scripts/db-migrate.sh copy {svc}` | 마지막 줄 `PASS: {svc}_db 테이블 N개 · 행 수 일치` · `✅ copy {svc} 완료` |
 | ④ gitops 전환 PR | `overlays/staging/{svc}/kustomization.yaml`의 `SPRING_DATASOURCE_URL` `${DB_HOST}` → `${DB_HOST_{SVC}}`, `base/{svc}/flyway-job.yaml`의 `configMapKeyRef` `key: DB_HOST` → `DB_HOST_{SVC}` — **한 PR에서 같이**(따로 바꾸면 마이그레이션과 앱이 다른 인스턴스를 본다) | 머지 → Flyway Job 성공(옮긴 `flyway_schema_history`를 보고 새 V만 적용) |
-| ⑤ 가동 | ops-api 「가동」, 또는 ②에서 끈 자동 sync를 다시 켠다(ArgoCD가 Git의 replicas·HPA로 되돌린다) | readiness 200 · `db-migrate.sh counts {svc}`로 대상 행 수가 ③과 같거나 늘었는지(새 쓰기) |
+| ⑤ 가동 | **ops-api 「가동」을 먼저 쓴다**(②에서 적어 둔 정지 전 값으로 되돌린다). ②를 kubectl로 했다면 자동 sync를 다시 켠 뒤 **모든 서비스를 `kubectl scale`로 직접 되돌린다** — 6.1.7(`ops_api_enabled = true`, #217) 뒤로는 서비스 Application 전부가 `/spec/replicas`를 무시해(`RespectIgnoreDifferences`) 자동 sync·selfHeal이 replicas를 되돌리지 않는다: HPA 서비스(user·booking·catalog·coupon)는 `--replicas=1`(HPA가 최소값까지 올린다 — 0이면 HPA도 멈춘다), Git에 `replicas`가 있는 서비스(payment·gateway·ai)는 그 값. booking은 `rollout/booking`. booking은 자동 sync를 끈 채 ④를 머지하면 배포되지 않는다 → 정지 상태에서 `cinema-booking` 수동 Sync 1회 → preview 분석·promote로 새 RS가 stable이 된 뒤에 위 가동(먼저 가동하면 옛 RS가 기존 인스턴스에 쓴다). ⚠ 정지(`replicas: 0`) 상태에서 preview가 `previewReplicaCount: 1`로 뜨는지는 확인하지 못했다 — 수동 Sync 뒤 2분 안에 preview 파드가 없으면(분석 트래픽 0 → abort) Sync를 멈추고 「가동 1 → 수동 Sync」 순서로 바꾼다(그 사이 옛 RS의 쓰기는 copy를 다시 해서 맞춘다) | readiness 200 · `db-migrate.sh counts {svc}`로 대상 행 수가 ③과 같거나 늘었는지(새 쓰기) · `msa-check.sh stopped` 정지 기록 없음(#222) |
 
 - 도구(`db-migrate.sh`): `cinema-staging`에 일회성 ConfigMap(`infra/scripts/db-migrate/copy.sh`)·Job을 만들고, 끝나면 지운다(실패하면 Job을 남겨 둔다 — 로그 확인 뒤 안내된 `kubectl delete`). Job은 `{svc}-migrator-secrets`·`cinema-infra-endpoints`(`DB_HOST`·`DB_HOST_{SVC}`)·`rds-ca-bundle`을 그대로 쓴다 → 비밀번호가 관리자 PC를 지나지 않는다. 계정은 `{svc}_migrator`(두 인스턴스에 같은 비밀번호·해당 스키마 ALL), TLS는 `VERIFY_IDENTITY`
 - **덤프는 파일로 남기지 않는다**: `mysqldump | mysql` 파이프(`--single-transaction --no-tablespaces --set-gtid-purged=OFF`). 계정 cnf도 메모리 emptyDir. `user_db.user`에 이메일·이름이 있다 — PVC·ConfigMap·노트북에 덤프를 두지 않는다
@@ -2965,6 +3180,12 @@ terraform destroy -var-file=staging.tfvars
 - 순서: ArgoCD Application(-target) → staging-k8s 나머지 → staging. 1)을 건너뛰면 ArgoCD가 먼저 지워져 Application의 finalizer가 풀리지 않고(`argocd` namespace가 Terminating에 멈춤) ALB가 남아 staging VPC 삭제가 막힌다
 - **global·bootstrap은 지우지 않는다.** 팀 접근·CI 역할·state 버킷은 계속 쓴다
 - 삭제 후 확인: EIP·ENI·ALB·EBS 볼륨이 남지 않았는지 (`aws ec2 describe-addresses`, `describe-volumes`)
+- 🆕 6.1.10 MSA 고도화 뒤 추가로 볼 것:
+  - **Karpenter 노드 먼저**: 1) 전에 `cluster-scale.sh down`(정리 Lambda가 Karpenter 인스턴스를 지운다) → `aws ec2 describe-instances --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running --query 'length(Reservations)'`가 0. 남은 인스턴스는 ENI를 잡아 VPC 삭제를 막는다
+  - RDS 6개는 `deletion_protection = false`·`skip_final_snapshot = true`(재생성 리허설·계정 이전용)라 **데이터가 남지 않는다** — 남겨야 하면 destroy 전에 `db-migrate.sh`로 덤프(8-E)
+  - Secrets Manager `cinema/staging/*`는 `recovery_window_in_days = 0`이라 바로 지워진다(같은 이름으로 다시 만들 수 있다)
+  - ECR(`force_delete`)·Loki 버킷(`force_destroy`)은 비우지 않아도 지워진다. 리포트 버킷(6.1.9)은 그 PR의 설정을 확인
+  - SNS 2·SQS 10은 비어 있지 않아도 지워진다 — DLQ에 남은 메시지가 필요하면 먼저 확인
 
 ---
 
@@ -3058,3 +3279,5 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 6-D 블루/그린 — 6-D-0 분석 회차 ID · 6-D-2 정상 배포 · 6-D-3 실패 버전 시연 | | | |
 | ⬜ | 김종식 | 6-B SQS·Lambda (3.1.8·3.1.9) · 7 Cognito · 7-4 CloudFront `/api` | | | |
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
+| ⬜ | 김종식 | 6-N MSA 통합 테스트 (6.5.1b) — user 복제본(#220·gitops #61·#63) · coupon 시간 초과 · DLQ 0 | | | |
+| ⬜ | 김종식 | 6-O AZ 장애 시연 (6.1.10 · 6.5.2b, gitops #62 뒤) · 6-O-1 비용 정리 | | | |

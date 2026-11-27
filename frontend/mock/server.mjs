@@ -11,6 +11,7 @@
 //        예매 ID 9001 은 회차 정보 없음(screening null)
 // 관리자(ops.openapi.yaml): DEV_SESSION=1 DEV_SESSION_GROUPS=ADMIN npm run dev:mock → 헤더 「관리자」 → /admin
 //        MOCK_OPS=forbidden → /ops/** 403(ADMIN 아님) · MOCK_OPS=down → /ops/** 503(서비스·AI 통계 SERVICE_UNAVAILABLE, 리포트 REPORT_UNAVAILABLE)
+//        MOCK_OPS=rollout → booking·gateway 정지/가동 409 ROLLOUT_IN_PROGRESS(블루/그린 중)
 //        MOCK_OPS=empty → 리포트 날짜 없음·AI 통계 0건 · MOCK_OPS=report-fail → 리포트 쿼리 FAILED
 //        오류 리포트(6.3.7): 날짜마다 첫 요청은 202 → 상태 2번 RUNNING 뒤 SUCCEEDED, 1시간 안 같은 날짜는 200(캐시)
 // AI 챗봇(ai.openapi.yaml): MOCK_AI=off → /api/ai/** 404(gateway 플래그 off, 버튼 숨김) · MOCK_AI=down → 503(ai 파드 없음)
@@ -456,8 +457,14 @@ async function handleCoupons(req, res, path) {
 /** forbidden: 토큰은 있지만 ADMIN 그룹 아님(403) · down: Kubernetes API 를 못 읽음(503) · 그 밖: 정상 */
 const MOCK_OPS = process.env.MOCK_OPS ?? "on";
 
+// OPS-21 정지/가동 — 서비스 → 정지 전 desired (프로세스 메모리, ops-api의 ops-api-state ConfigMap 대신)
+const opsStopped = new Map([["ai", 1]]);
+const OPS_NOT_STOPPABLE = new Set(["ops-api"]);
+
 function opsServices() {
   const svc = (service, kind, desired, state, hpa) => ({ service, kind, desired, ready: desired, state, hpa, stopped: false });
+  const applyStopped = (item) =>
+    opsStopped.has(item.service) ? { ...item, desired: 0, ready: 0, state: null, stopped: true } : { ...item, stopped: false };
   return {
     items: [
       svc("gateway", "ROLLOUT", 2, 0, null),
@@ -466,9 +473,9 @@ function opsServices() {
       svc("user", "DEPLOYMENT", 2, 0, null),
       svc("payment", "DEPLOYMENT", 2, null, null),
       svc("coupon", "DEPLOYMENT", 2, 0, { min: 2, max: 4, current: 2, cpuPercent: 12 }),
-      { service: "ai", kind: "DEPLOYMENT", desired: 0, ready: 0, state: null, hpa: null, stopped: true },
+      svc("ai", "DEPLOYMENT", 1, null, null),
       svc("ops-api", "DEPLOYMENT", 1, 0, null),
-    ],
+    ].map(applyStopped),
     nodes: [
       { name: "ip-10-0-11-23.ap-northeast-2.compute.internal", zone: "ap-northeast-2a", cpuPercent: 37, memoryPercent: 62, capacityType: "ON_DEMAND" },
       { name: "ip-10-0-12-41.ap-northeast-2.compute.internal", zone: "ap-northeast-2c", cpuPercent: 29, memoryPercent: 55, capacityType: "ON_DEMAND" },
@@ -547,8 +554,24 @@ function unmetDemand(q) {
 
 function handleOps(req, res, path, q) {
   if (MOCK_OPS === "forbidden") return fail(res, 403, "FORBIDDEN", "ADMIN group required");
-  if (req.method !== "GET") return fail(res, 404, "NOT_FOUND", path);
   const down = MOCK_OPS === "down";
+  const scale = /^\/ops\/services\/([^/]+)\/(stop|start)$/.exec(path);
+  if (scale && req.method === "POST") {
+    const [, service, action] = scale;
+    const known = opsServices().items.find((item) => item.service === service);
+    if (!known || OPS_NOT_STOPPABLE.has(service)) return fail(res, 400, "SERVICE_NOT_STOPPABLE", service);
+    if (down) return fail(res, 503, "SERVICE_UNAVAILABLE", "kubernetes api unavailable");
+    // MOCK_OPS=rollout → booking·gateway 블루/그린 중(409)
+    if (MOCK_OPS === "rollout" && known.kind === "ROLLOUT") return fail(res, 409, "ROLLOUT_IN_PROGRESS", service);
+    if (action === "stop") {
+      if (!opsStopped.has(service)) opsStopped.set(service, known.desired);
+      return json(res, 202, { service, desired: 0 });
+    }
+    const desired = opsStopped.get(service) ?? known.desired;
+    opsStopped.delete(service);
+    return json(res, 202, { service, desired });
+  }
+  if (req.method !== "GET") return fail(res, 404, "NOT_FOUND", path);
   if (path === "/ops/services") {
     if (down) return fail(res, 503, "SERVICE_UNAVAILABLE", "kubernetes api unavailable");
     return json(res, 200, opsServices());

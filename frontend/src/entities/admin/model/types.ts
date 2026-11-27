@@ -32,6 +32,12 @@ export interface NodeStatus {
   capacityType: "ON_DEMAND" | "SPOT";
 }
 
+/** `POST /ops/services/{service}/stop|start` 202 — patch한 뒤의 `spec.replicas`(정지는 0) */
+export interface ScaleResult {
+  service: string;
+  desired: number;
+}
+
 export interface ServiceStatusList {
   items: ServiceStatus[];
   nodes: NodeStatus[];

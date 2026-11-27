@@ -4,17 +4,29 @@ import type {
   ReportQueryStarted,
   ReportQueryStatus,
   ReportReady,
+  ScaleResult,
   ServiceStatusList,
   UnmetDemandStats,
 } from "../model/types";
 
 /**
  * 관리자 API (`/ops/**`, ops-api — gateway 아님). 401은 공통 갱신 흐름, ADMIN 그룹이 아니면 403 `FORBIDDEN`.
- * 정지·가동(OPS-21)·쿠폰 이벤트(OPS-24)는 각 패널 작업에서 여기에 더한다
+ * 쿠폰 이벤트(OPS-24)는 그 패널 작업에서 여기에 더한다
  */
 
 /** OPS-20 서비스·노드 상태. Prometheus를 못 읽으면 지표 칸만 null, Kubernetes API까지 못 읽으면 503 */
 export const listOpsServices = (signal?: AbortSignal) => opsHttp<ServiceStatusList>("/ops/services", { signal });
+
+/**
+ * OPS-21 정지(replicas 0) · 가동(정지 전 값으로). 둘 다 202 + 멱등(이미 그 상태면 같은 응답).
+ * 400 `SERVICE_NOT_STOPPABLE`(ops-api 자신·모르는 이름) · 409 `ROLLOUT_IN_PROGRESS`(booking·gateway 블루/그린 중) ·
+ * 503 `SERVICE_UNAVAILABLE`(Kubernetes API). 파드가 실제로 내려가고 올라오는 것은 `GET /ops/services`의 `ready`로 본다
+ */
+export const stopOpsService = (service: string) =>
+  opsHttp<ScaleResult>(`/ops/services/${encodeURIComponent(service)}/stop`, { method: "POST" });
+
+export const startOpsService = (service: string) =>
+  opsHttp<ScaleResult>(`/ops/services/${encodeURIComponent(service)}/start`, { method: "POST" });
 
 /** OPS-22 리포트가 있는 날짜(드롭다운). Athena·S3 오류는 503 `REPORT_UNAVAILABLE` */
 export const listErrorReportDates = (signal?: AbortSignal) =>

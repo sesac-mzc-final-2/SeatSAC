@@ -39,3 +39,8 @@ coupon_enabled = true
 #   그다음 gitops platform/karpenter(NodePool·EC2NodeClass) PR 머지. 차트 버전은 apply 전 helm show chart로 확인
 karpenter_enabled       = true
 karpenter_chart_version = "1.15.3"
+
+# ⬇ 6.1.7 ops-api(ADR-119): 11/26 `-var ops_api_enabled=true`로 apply한 값을 tfvars에 고정 (런북 6-L 3))
+#   → Application cinema-ops-api + 서비스 Application에 ignoreDifferences /spec/replicas·RespectIgnoreDifferences
+#   ⚠ 빠지면 다음 apply가 ignoreDifferences를 지워 ops-api로 정지한 서비스를 selfHeal이 바로 되살린다(정지/가동 시연이 깨진다)
+ops_api_enabled = true

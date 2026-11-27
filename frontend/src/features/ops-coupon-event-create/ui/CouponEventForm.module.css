@@ -1,0 +1,40 @@
+.form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 14px;
+  margin: 18px 0 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #15171d;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field input {
+  padding: 10px 12px;
+  font-size: 14px;
+}
+[data-wide] {
+  grid-column: 1 / -1;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.actions > :first-child {
+  margin-right: auto;
+}
+.error {
+  color: var(--color-danger);
+  font-size: 13px;
+}
+@media (max-width: 720px) {
+  .form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

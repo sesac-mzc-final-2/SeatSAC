@@ -1,9 +1,9 @@
 import { createBrowserRouter, type RouteObject } from "react-router";
 import {
   AdminAiDemandPage,
+  AdminCouponsPage,
   AdminOverviewPage,
   AdminReportsPage,
-  AdminSectionPage,
   AdminServicesPage,
 } from "@/pages/admin";
 import { AuthCallbackPage } from "@/pages/auth-callback";
@@ -49,16 +49,7 @@ export const router = createBrowserRouter([
           { path: routePatterns.adminServices, element: <AdminServicesPage /> },
           { path: routePatterns.adminReports, element: <AdminReportsPage /> },
           { path: routePatterns.adminAiDemand, element: <AdminAiDemandPage /> },
-          {
-            path: routePatterns.adminCoupons,
-            element: (
-              <AdminSectionPage
-                icon="ticket"
-                title="쿠폰 이벤트"
-                description="VIP 선착순 쿠폰 이벤트를 만들고 목록을 보는 자리예요. 준비 중이에요."
-              />
-            ),
-          },
+          { path: routePatterns.adminCoupons, element: <AdminCouponsPage /> },
         ],
       }),
       page({ path: "*", element: <NotFoundPage /> }),

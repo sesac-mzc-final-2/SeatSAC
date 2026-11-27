@@ -2159,6 +2159,150 @@ terraform apply plan.out        # CloudFront 배포가 Deployed가 될 때까지
 
 ---
 
+### 6-N. MSA 통합 테스트 — user 복제본 · coupon 명령 · DLQ 0 (6.5.1b, ADR-116·117) — ⬜
+
+목표: 플래그를 **하나씩** 켜면서 메시지 경로가 끝까지 가고, 순서가 뒤집히거나 단계가 시간 초과돼도 데이터가 맞으며, 끝났을 때 **DLQ가 0**인지 본다. 결과는 14장 실행 기록과 노션 6.5.1b에 붙인다(`msa-check.sh` 출력은 계정 ID·주소가 없어 그대로 붙여도 된다).
+
+| 원칙 | 내용 |
+| --- | --- |
+| 한 번에 하나 | gitops 플래그 PR은 하나씩 머지하고 Synced·Healthy를 본 뒤 다음. booking·gateway 블루/그린과 겹치지 않는다 |
+| 받는 쪽 먼저 | user 소비자(gitops #61) → `APP_BOOKING_HISTORY_MODE=local`. booking의 SNS 발행(`APP_MESSAGING_EVENTS_TOPIC_ARN`)은 이미 켜져 있어 `user-booking-events`에 이벤트가 쌓여 있다 — 소비자를 켜면 그동안 쌓인 것(보존 4일)이 흘러간다 |
+| 고치지 않는다 | 큐 purge·RDS DML·Valkey 키 삭제 금지. 확인은 공개 API·`msa-check.sh`·로그·지표로만 |
+| 시간 | 결제 비교 측정(6.2.7)·부하 테스트와 겹치지 않는 시간 |
+
+**0) 기준선**
+
+```bash
+infra/scripts/msa-check.sh all      # DLQ 모두 0이어야 시작한다. 0이 아니면 6-B-6 문제 해결 표부터
+```
+
+**1) user 예매 내역 복제본** (SeatSAC #220 → gitops #61 → gitops #63 local 모드)
+
+```bash
+export API="https://<도메인>/api"; read -rs TOKEN      # 시연 계정 토큰(화면 개발자 도구). 셸 기록에 남기지 않는다
+# a) local로 바꾸기 전 — sync 결과를 레포 밖에 저장(예매 ID·상태만)
+curl -s -H "Authorization: Bearer $TOKEN" "$API/users/me/bookings?size=50" \
+  | jq '[.content[] | select(.confirmedAt != null) | {bookingId, status}]' > /tmp/history-sync.json
+# b) #61 머지 뒤: 소비자가 쌓인 이벤트를 다 읽었는지
+infra/scripts/msa-check.sh queues   # user-booking-events 대기 0 근처 · DLQ 0
+kubectl -n cinema-staging logs deploy/user --since=10m | grep -c '예매 내역 복제본 반영'
+# c) gitops #63(local 모드) 머지 뒤 첫 조회 — 한 번 채우고(로그 「첫 채우기」) 결과가 sync와 같아야 한다
+curl -s -H "Authorization: Bearer $TOKEN" "$API/users/me/bookings?size=50" \
+  | jq '[.content[] | {bookingId, status}]' > /tmp/history-local.json
+diff <(jq -S . /tmp/history-sync.json) <(jq -S . /tmp/history-local.json) && echo SAME
+kubectl -n cinema-staging logs deploy/user --since=5m | grep '첫 채우기'
+```
+
+- [ ] `SAME` — local은 확정된 예매만 담는다(결제 실패·만료·확정 전 취소는 없음 — #220 리뷰어에게). 다르면 다른 줄의 bookingId로 user 로그 `bookingId=` 검색
+- [ ] 화면에서 새 예매 1건 결제 → 수 초 안에 마이페이지에 보인다(이벤트 경로) · 그 예매 취소 → CANCELED
+- [ ] 두 번째 조회부터 user 로그에 booking 호출이 없다(`첫 채우기`가 사용자당 한 번)
+- [ ] 지표 `user_message_consumed_total{result="error"}` 증가 0 (Grafana Explore)
+
+되돌리기: gitops #63 revert(바로 sync로 돌아감, 복제본은 남는다). 소비자 문제면 #61의 `APP_MESSAGING_CONSUMER_ENABLED=false` PR — 메시지는 큐에 남아 다시 켜면 이어진다.
+
+**2) coupon 명령 — 쿠폰 단계 시간 초과** (booking `APP_CHECKOUT_STEP_TIMEOUT=10s`, coupon 정지는 ops-api)
+
+1. 시연 VIP 계정으로 쿠폰 발급(화면 쿠폰 페이지) → 좌석 선점
+2. 관리자 `/ops`에서 **coupon 정지** → 결제 화면에서 쿠폰을 고르고 결제 시작
+3. 10초 뒤 체크아웃이 `FAILED`(`failure.code` `STEP_TIMEOUT`) — 보상으로 `coupon.release-requested`가 `coupon-commands`에 쌓인다(예약 명령과 함께)
+4. **coupon 가동** → coupon이 예약·반환 두 명령을 처리한다(순서는 보장되지 않는다 — 다음 단계가 그 확인)
+5. 확인: `GET /api/coupons/me`의 그 쿠폰 `state`가 **ISSUED**(다시 쓸 수 있음). `RESERVED`로 남으면 실패
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$API/coupons/me" | jq '.items[] | {couponIssueId, state}'
+infra/scripts/msa-check.sh queues   # coupon-commands·booking-replies 대기 0 · DLQ 0
+kubectl -n cinema-staging logs deploy/coupon --since=10m | grep -E '쿠폰 예약|쿠폰 반환|반환이 예약보다 먼저|이미 반환' | tail
+```
+
+- [ ] 시간 초과 체크아웃이 FAILED로 닫히고 좌석이 풀린다(좌석 화면)
+- [ ] 반환이 예약보다 먼저 처리된 경우: 로그 「반환이 예약보다 먼저 왔다」 → 늦은 예약은 `ALREADY_RELEASED`로 거절, 쿠폰 ISSUED
+- [ ] 예약이 먼저 처리된 경우: 로그 「쿠폰 예약」 뒤 「쿠폰 반환」, 쿠폰 ISSUED
+- [ ] 같은 예매로 쿠폰 없이 다시 결제 → CONFIRMED (선점 5분 안)
+- [ ] `msa-check.sh stopped` — 정지 기록 없음(coupon 가동 확인)
+
+**3) 반환 → 예약 순서 역전을 확실히 보고 싶을 때** — 2)는 순서를 고를 수 없다. 통합 테스트 `CouponCommandFlowTest.releaseArrivingBeforeReservationRejectsTheLateReservation`이 근거이고, staging에서는 2)의 두 경우 중 나온 쪽을 기록한다
+
+**4) 끝 확인**
+
+```bash
+infra/scripts/msa-check.sh all; echo "exit=$?"    # exit=0 (DLQ 0)
+```
+
+- [ ] DLQ 5개 0 · ArgoCD 모두 Synced·Healthy · ops-api 정지 기록 없음
+- [ ] 노션 6.5.1b에 결과(위 체크·`msa-check.sh` 출력) · 14장 실행 기록 한 줄
+
+### 6-O. AZ 장애 시연 · 비용 정리 (6.1.10, ADR-122) — ⬜
+
+목표: **AZ a 하나가 없어진 것처럼** 만들고(노드 비우기 + RDS·Valkey 장애 조치) 사이트가 계속 동작하는 것을 보인다. 시연 대본(말·화면 순서)은 `docs/runbooks/demo-msa.md` 3장. 실행은 김종식(`cinema-admin`), 녹화가 필요하면 리허설 1회 뒤 본 시연.
+
+| 방법 | 쓰는가 | 이유 |
+| --- | --- | --- |
+| 노드 cordon·drain (AZ a 노드 전부) | ✅ | 파드가 AZ c로 옮겨 가는 것을 보인다. 노드 상태만 바꾸고 Git·매니페스트는 그대로 — uncordon으로 되돌린다. GitOps 규칙(`kubectl apply/edit/delete` 금지)의 대상이 아닌 노드 조작이지만 **시연 시간에만, 스크럼 공유 뒤** |
+| RDS 강제 장애 조치 `reboot-db-instance --force-failover` | ✅ | Multi-AZ 5개(ai 제외)가 대기 AZ로 넘어간다(약 1~2분, 그동안 그 서비스 DB 오류) |
+| Valkey `test-failover` | ✅ (선택) | `valkey_replicas = 1`일 때 복제본이 primary가 된다. **좌석 선점 키가 있는 클러스터**라 진행 중 선점이 몇 초 실패할 수 있다 — 선점 데모와 겹치지 않게 |
+| AWS FIS | ❌ | Terraform 리소스가 없다(콘솔 생성 금지). 필요하면 다음에 `fis.tf`로 |
+| 서브넷·NAT 끊기 | ❌ | 되돌리기가 Terraform apply라 시연 안에 끝나지 않는다. NAT AZ별 2개(6.1.2)는 설명으로 |
+
+**전제**: 핵심 서비스 파드 2개(gitops #62 — 11/27 기준 coupon만 2개, 나머지 1개였다. gateway·payment는 머지 뒤 6-L 4-1 수동 sync). `msa-check.sh az`에서 핵심 서비스(gateway·catalog·booking·user·payment·coupon)가 **두 AZ에 나뉘어** 있어야 한다(`ScheduleAnyway`라 보장이 아니다 — 한 AZ에만 있으면 시연 전에 그 서비스 롤링 재시작이 필요한데, 그것도 배포라 스크럼 공유 뒤 ArgoCD 화면의 Restart로). Karpenter disruption budget 0 PR이 머지돼 있다(시연 중 노드 정리 없음). booking·gateway 블루/그린 진행 중이 아니다.
+
+```bash
+export AWS_PROFILE=cinema-admin
+infra/scripts/msa-check.sh all > /tmp/az-before.txt
+ZONE=ap-northeast-2a
+NODES=$(kubectl get nodes -l topology.kubernetes.io/zone=$ZONE -o name)
+echo "$NODES"                                   # ng-a 노드 + AZ a의 Karpenter 노드
+
+# (화면) 신호등 대시보드 · 관리자 /ops · 사이트 메인을 띄우고 k6 browse(6-H)를 돌린다
+# 1) AZ a 노드 비우기 — 새 파드가 AZ a에 오지 않게 먼저 cordon, 그다음 drain
+for n in $NODES; do kubectl cordon "$n"; done
+for n in $NODES; do kubectl drain "$n" --ignore-daemonsets --delete-emptydir-data --timeout=300s; done
+infra/scripts/msa-check.sh az                   # 서비스가 AZ c에만 — 0개인 서비스가 없어야 한다
+
+# 2) RDS 장애 조치 — booking부터 하나씩(동시에 하면 원인 구분이 어렵다)
+aws rds reboot-db-instance --db-instance-identifier cinema-staging-booking-db --force-failover --query 'DBInstance.DBInstanceStatus'
+aws rds wait db-instance-available --db-instance-identifier cinema-staging-booking-db
+infra/scripts/msa-check.sh data                 # booking-db 현재 AZ가 바뀌었다
+
+# 3) (선택) Valkey 장애 조치
+aws elasticache test-failover --replication-group-id cinema-staging-valkey --node-group-id 0001 --query 'ReplicationGroup.Status'
+```
+
+**되돌리기** (시연 직후, 같은 사람이)
+
+```bash
+for n in $NODES; do kubectl uncordon "$n"; done
+infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp/az-after.txt
+```
+
+- 파드는 uncordon만으로 AZ a로 돌아가지 않는다(Karpenter가 파드를 옮기지 않게 설정 — 6-K). 다음 배포 때 자연히 나뉜다. 시연을 한 번 더 해야 하면 그 전에 위 「전제」대로 다시 나눈다
+- drain 중 Karpenter가 AZ a에 새 노드를 띄울 수 있다(cordon은 기존 노드만 막는다) — 그러면 파드 일부가 AZ a 새 노드로 간다. 시연 화면에서는 「모자란 자리를 자동으로 채운다」로 설명하고, 순수 AZ 장애를 보이려면 AZ c 관리형 노드에 자리가 충분한 시간(부하 전)에 한다
+- RDS·Valkey는 장애 조치 뒤 primary가 AZ c에 남는다. 되돌릴 필요 없다(Multi-AZ는 어느 쪽이든 같다) — `ai-db`는 Single-AZ라 대상이 아니다
+
+| 확인 | 기준 |
+| --- | --- |
+| drain 동안 | 메인·상영시간표·좌석 화면 200. k6 browse 오류율 < 1%(drain 순간 몇 건은 연결 재시도) |
+| RDS 장애 조치 동안 | booking 선점·결제는 1~2분 503(`SERVICE_UNAVAILABLE`) 가능 — 다른 서비스(catalog 조회·user·coupon 조회)는 계속 200. 끝나면 Hikari가 다시 연결해 자동 복구(파드 재시작 없음) |
+| 끝난 뒤 | `msa-check.sh all` exit 0(DLQ 0) · 노드 cordon 없음 · ArgoCD 모두 Healthy |
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| drain이 `Cannot evict pod as it would violate the pod's disruption budget`에서 멈춤 | PDB가 있는 플랫폼 파드(ArgoCD·Karpenter 등)가 한 AZ에만 남음 | `--timeout` 뒤 멈추면 그 노드만 uncordon하고 진행(시연 범위는 앱 서비스) |
+| 서비스 하나가 0개 | 그 서비스 파드가 모두 AZ a에 있었고 AZ c에 자리가 없음 → Pending | Karpenter가 노드를 더할 때까지(1~2분) 기다린다. 시연 전 「전제」 확인을 빼먹은 것 |
+| RDS 장애 조치 뒤 몇 분째 503 | 앱이 옛 IP로 연결을 붙잡음 | Hikari `maxLifetime` 안에 풀린다. 5분 넘으면 그 서비스만 ArgoCD 화면 Restart |
+
+#### 6-O-1. 비용 정리 (시연·발표 뒤, ADR-114 하루 $50)
+
+| 순서 | 할 일 | 명령·확인 |
+| --- | --- | --- |
+| 1 | ops-api로 멈춘 서비스 되살리기 | `msa-check.sh stopped` → 남아 있으면 `/ops` 「가동」 |
+| 2 | ng-ai 끄기·k6 리소스 정리 | `infra/scripts/cluster-scale.sh down ng-ai` · 6-H-4 |
+| 3 | 밤에는 노드 0대 | `cluster-scale.sh down` (Karpenter 노드는 정리 Lambda가 함께 지운다 — 6-K) · `cluster-scale.sh status`에 Karpenter 0 |
+| 4 | 하루 비용 확인 | `aws ce get-cost-and-usage --time-period Start=$(date -v-1d +%F),End=$(date +%F) --granularity DAILY --metrics UnblendedCost` (macOS `date -v-1d` · Linux `date -d yesterday +%F`, Budgets 일 경보 $50) |
+| 5 | 발표가 끝나고 계속 둘 때 — 이중화 끄기 | `staging.tfvars`: `nat_gateway_per_az = false` · `valkey_replicas = 0` · `ai_valkey_replicas = 0` · `service_databases`의 `multi_az = false` → PR → plan(NAT 1개·Valkey 복제본·RDS 대기 인스턴스 **destroy만**, 서비스 인스턴스 replace가 보이면 멈춘다) → apply. 대략 NAT 1개(하루 약 $1.5)·RDS Multi-AZ 5개 대기분·Valkey 복제본 2개가 빠진다 |
+| 6 | 완전히 내릴 때 | 11장 삭제(아래 6.1.10 추가 항목 포함) |
+
+---
+
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
 
 코드: `envs/staging/cloudfront.tf` + `envs/staging/cloudfront/spa-rewrite.js`(CloudFront Function) · `global/github_oidc.tf`(무효화 권한) · `.github/workflows/frontend-deploy.yml`. Cognito는 `cognito.tf`(3.1.16, 7-6).
@@ -3036,6 +3180,12 @@ terraform destroy -var-file=staging.tfvars
 - 순서: ArgoCD Application(-target) → staging-k8s 나머지 → staging. 1)을 건너뛰면 ArgoCD가 먼저 지워져 Application의 finalizer가 풀리지 않고(`argocd` namespace가 Terminating에 멈춤) ALB가 남아 staging VPC 삭제가 막힌다
 - **global·bootstrap은 지우지 않는다.** 팀 접근·CI 역할·state 버킷은 계속 쓴다
 - 삭제 후 확인: EIP·ENI·ALB·EBS 볼륨이 남지 않았는지 (`aws ec2 describe-addresses`, `describe-volumes`)
+- 🆕 6.1.10 MSA 고도화 뒤 추가로 볼 것:
+  - **Karpenter 노드 먼저**: 1) 전에 `cluster-scale.sh down`(정리 Lambda가 Karpenter 인스턴스를 지운다) → `aws ec2 describe-instances --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running --query 'length(Reservations)'`가 0. 남은 인스턴스는 ENI를 잡아 VPC 삭제를 막는다
+  - RDS 6개는 `deletion_protection = false`·`skip_final_snapshot = true`(재생성 리허설·계정 이전용)라 **데이터가 남지 않는다** — 남겨야 하면 destroy 전에 `db-migrate.sh`로 덤프(8-E)
+  - Secrets Manager `cinema/staging/*`는 `recovery_window_in_days = 0`이라 바로 지워진다(같은 이름으로 다시 만들 수 있다)
+  - ECR(`force_delete`)·Loki 버킷(`force_destroy`)은 비우지 않아도 지워진다. 리포트 버킷(6.1.9)은 그 PR의 설정을 확인
+  - SNS 2·SQS 10은 비어 있지 않아도 지워진다 — DLQ에 남은 메시지가 필요하면 먼저 확인
 
 ---
 
@@ -3129,3 +3279,5 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 6-D 블루/그린 — 6-D-0 분석 회차 ID · 6-D-2 정상 배포 · 6-D-3 실패 버전 시연 | | | |
 | ⬜ | 김종식 | 6-B SQS·Lambda (3.1.8·3.1.9) · 7 Cognito · 7-4 CloudFront `/api` | | | |
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
+| ⬜ | 김종식 | 6-N MSA 통합 테스트 (6.5.1b) — user 복제본(#220·gitops #61·#63) · coupon 시간 초과 · DLQ 0 | | | |
+| ⬜ | 김종식 | 6-O AZ 장애 시연 (6.1.10 · 6.5.2b, gitops #62 뒤) · 6-O-1 비용 정리 | | | |

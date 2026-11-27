@@ -19,13 +19,18 @@ export function ServiceControlButton({ service, stopped }: Props) {
 
   return (
     <>
-      <Button variant={stopped ? "primary" : "secondary"} size="sm" onClick={() => setOpen(true)}>
+      <Button
+        variant={stopped ? "primary" : "secondary"}
+        size="sm"
+        aria-label={`${service} ${stopped ? "가동" : "정지"}`}
+        onClick={() => setOpen(true)}
+      >
         <Icon name={stopped ? "rotate-cw" : "x"} size={14} />
         {stopped ? "가동" : "정지"}
       </Button>
       <ConfirmDialog
         open={open}
-        title={stopped ? `${service}를 가동할까요?` : `${service}를 정지할까요?`}
+        title={stopped ? `${service} 서비스를 가동할까요?` : `${service} 서비스를 정지할까요?`}
         description={
           stopped
             ? "정지 전 파드 수로 되돌려요. 준비되는 데 1~2분 걸려요."

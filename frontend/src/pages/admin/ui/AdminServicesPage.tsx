@@ -52,7 +52,9 @@ export function AdminServicesPage() {
   const services = useQuery({ ...opsServicesQuery(), refetchInterval: POLL_INTERVAL_MS });
 
   if (services.isPending) return <LoadingBlock label="서비스 상태를 불러오는 중이에요" />;
-  if (services.isError) {
+  // 다시 받다 실패해도(React Query는 이전 data를 남긴다) 마지막 표를 그대로 두고 한 줄로만 알린다 —
+  // ops-api 파드(1개)가 옮겨 가는 동안(AZ 장애 시연 등) 표가 사라지지 않게. 처음부터 못 받았을 때만 오류 화면
+  if (services.isError && !services.data) {
     if (isApiError(services.error, 403)) return <AdminForbidden />;
     return (
       <ErrorState
@@ -66,6 +68,7 @@ export function AdminServicesPage() {
 
   const { items, nodes, asOf } = services.data;
   const stopped = items.filter((item) => item.stopped);
+  const stale = services.isError;
 
   return (
     <div className="panel">
@@ -73,6 +76,12 @@ export function AdminServicesPage() {
         <h2 className={styles.title}>서비스 상태</h2>
         <p className="micro">{timeOfIso(asOf)} 기준 · 5초마다 갱신</p>
       </div>
+
+      {stale && (
+        <p className={styles.notice} role="alert">
+          서비스 상태를 새로 받지 못했어요 — {timeOfIso(asOf)} 기준 마지막 상태예요. 5초 뒤 다시 시도해요.
+        </p>
+      )}
 
       {stopped.length > 0 && (
         <p className={styles.notice} role="status">

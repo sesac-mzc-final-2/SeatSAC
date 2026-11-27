@@ -92,13 +92,13 @@ describe("관리자 서비스 상태 (6.2.6, OPS-20·21)", () => {
     expect(within(rowOf("ops-api")).queryByRole("button")).not.toBeInTheDocument();
     expect(within(rowOf("ops-api")).getByText("대상 아님")).toBeInTheDocument();
 
-    await userEvent.click(within(rowOf("user")).getByRole("button", { name: "정지" }));
+    await userEvent.click(within(rowOf("user")).getByRole("button", { name: "user 정지" }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent("user를 정지할까요?");
+    expect(dialog).toHaveTextContent("user 서비스를 정지할까요?");
     await userEvent.click(within(dialog).getByRole("button", { name: "정지하기" }));
 
-    await waitFor(() => expect(within(rowOf("user")).getByRole("button", { name: "가동" })).toBeInTheDocument());
-    expect(await screen.findByText(/user를 정지했어요/)).toBeInTheDocument();
+    await waitFor(() => expect(within(rowOf("user")).getByRole("button", { name: "user 가동" })).toBeInTheDocument());
+    expect(await screen.findByText(/user 서비스를 정지했어요/)).toBeInTheDocument();
     const stopCall = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
     expect(String(stopCall[0])).toBe("/ops/services/user/stop");
   });
@@ -110,9 +110,9 @@ describe("관리자 서비스 상태 (6.2.6, OPS-20·21)", () => {
     });
     render();
 
-    await userEvent.click(within(await waitFor(() => rowOf("coupon"))).getByRole("button", { name: "가동" }));
+    await userEvent.click(within(await waitFor(() => rowOf("coupon"))).getByRole("button", { name: "coupon 가동" }));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "가동하기" }));
-    expect(await screen.findByText(/coupon를 가동했어요\(파드 2개\)/)).toBeInTheDocument();
+    expect(await screen.findByText(/coupon 서비스를 가동했어요\(파드 2개\)/)).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url, init]) => url === "/ops/services/coupon/start" && init?.method === "POST")).toBe(true);
   });
 
@@ -123,9 +123,32 @@ describe("관리자 서비스 상태 (6.2.6, OPS-20·21)", () => {
     });
     render();
 
-    await userEvent.click(within(await waitFor(() => rowOf("gateway"))).getByRole("button", { name: "정지" }));
+    await userEvent.click(within(await waitFor(() => rowOf("gateway"))).getByRole("button", { name: "gateway 정지" }));
     await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "정지하기" }));
     expect(await screen.findByText(/블루\/그린 배포가 진행 중이에요/)).toBeInTheDocument();
+  });
+
+  it("다시 받다 실패하면 마지막 표를 그대로 두고 알린다 (ops-api 파드가 옮겨 가는 동안)", async () => {
+    let calls = 0;
+    const fetchMock = mockOps({
+      "GET /ops/services": () => (++calls === 1 ? jsonResponse(200, status()) : jsonResponse(503, errorBody("SERVICE_UNAVAILABLE"))),
+      "POST /ops/services/user/stop": () => jsonResponse(202, { service: "user", desired: 0 }),
+    });
+    render();
+
+    await userEvent.click(within(await waitFor(() => rowOf("user"))).getByRole("button", { name: "user 정지" }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "정지하기" }));
+
+    expect(await screen.findByText(/서비스 상태를 새로 받지 못했어요 — 14:00 기준 마지막 상태예요/)).toBeInTheDocument();
+    expect(rowOf("gateway")).toBeInTheDocument();
+    expect(screen.queryByText("서비스 상태를 불러오지 못했어요")).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/ops/services").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("처음부터 못 받으면(503) 오류 화면", async () => {
+    mockOps({ "GET /ops/services": () => jsonResponse(503, errorBody("SERVICE_UNAVAILABLE")) });
+    render();
+    expect(await screen.findByText("서비스 상태를 불러오지 못했어요")).toBeInTheDocument();
   });
 
   it("ADMIN 그룹이 아니면(403) 권한 안내", async () => {

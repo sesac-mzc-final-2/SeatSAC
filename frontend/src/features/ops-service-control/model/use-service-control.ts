@@ -27,8 +27,8 @@ export function useServiceControl(options: { onSettled?: () => void } = {}) {
     onSuccess: (result, { action }) => {
       toast.show(
         action === "stop"
-          ? `${result.service}를 정지했어요. 파드가 내려가는 데 몇 초 걸려요.`
-          : `${result.service}를 가동했어요(파드 ${result.desired}개). 준비되는 데 1~2분 걸려요.`,
+          ? `${result.service} 서비스를 정지했어요. 파드가 내려가는 데 몇 초 걸려요.`
+          : `${result.service} 서비스를 가동했어요(파드 ${result.desired}개). 준비되는 데 1~2분 걸려요.`,
       );
     },
     onError: (error) => {

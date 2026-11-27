@@ -99,3 +99,43 @@ export interface UnmetDemandStats {
   /** 요약이 있는 것만, (분류, 요약) 글자가 같은 것끼리 — `count` 합은 `total`보다 작을 수 있다 */
   top: UnmetDemandTopReason[];
 }
+
+/* ---------- OPS-24 쿠폰 이벤트 (`/ops/coupons/events`) ---------- */
+
+export type CouponEventState = "UPCOMING" | "OPEN" | "CLOSED";
+
+/** coupon 내부 API 응답 그대로 (`coupon.internal.openapi.yaml` `CouponEvent`) */
+export interface CouponEvent {
+  eventId: number;
+  title: string;
+  /** 할인율(%) 1~99 */
+  discountRate: number;
+  startsAt: string;
+  endsAt: string;
+  totalQuantity: number;
+  /** DB 발급 수(정확) */
+  issuedQuantity: number;
+  /** Valkey 재고 키 값(표시용) */
+  remainingQuantity: number;
+  /** 지금은 `VIP`만 — 늘 수 있어 string */
+  eligibleGrade: string;
+  state: CouponEventState;
+  createdAt: string;
+}
+
+/** `GET /ops/coupons/events` — `startsAt` 내림차순, 최근 50개 */
+export interface CouponEventList {
+  items: CouponEvent[];
+}
+
+/** `POST /ops/coupons/events` 본문 */
+export interface CouponEventCreateRequest {
+  title: string;
+  discountRate: number;
+  /** 시작 시각(`+09:00`) */
+  startsAt: string;
+  /** 진행 시간(분) 1~1440, 기본 60 */
+  durationMinutes?: number;
+  totalQuantity: number;
+  eligibleGrade?: "VIP";
+}

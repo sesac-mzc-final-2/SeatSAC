@@ -1,4 +1,8 @@
 export type {
+  CouponEvent,
+  CouponEventCreateRequest,
+  CouponEventList,
+  CouponEventState,
   HpaStatus,
   NodeStatus,
   ReportDateList,
@@ -14,13 +18,21 @@ export type {
   UnmetDemandTopReason,
 } from "./model/types";
 export {
+  createCouponEvent,
   getErrorReport,
   getUnmetDemandStats,
   isReportReady,
+  listCouponEvents,
   listErrorReportDates,
   listOpsServices,
   requestErrorReport,
   startOpsService,
   stopOpsService,
 } from "./api/ops-api";
-export { opsKeys, opsReportDatesQuery, opsServicesQuery, opsUnmetDemandQuery } from "./api/ops-queries";
+export {
+  opsCouponEventsQuery,
+  opsKeys,
+  opsReportDatesQuery,
+  opsServicesQuery,
+  opsUnmetDemandQuery,
+} from "./api/ops-queries";

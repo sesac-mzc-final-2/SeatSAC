@@ -552,6 +552,45 @@ function unmetDemand(q) {
   return { from, to, total: byCategory.reduce((sum, item) => sum + item.count, 0), byCategory, top };
 }
 
+// OPS-24 쿠폰 이벤트 — 프로세스 메모리(coupon 내부 API 대신). 검증은 coupon과 같은 두 가지만: 시작이 1분 넘게 과거·기간 겹침
+const couponEvents = [];
+let couponEventSeq = 1;
+
+function couponEventState(event, now = Date.now()) {
+  if (now < Date.parse(event.startsAt)) return "UPCOMING";
+  return now < Date.parse(event.endsAt) ? "OPEN" : "CLOSED";
+}
+
+const couponEventView = (event) => ({ ...event, state: couponEventState(event) });
+
+async function createCouponEventMock(req, res) {
+  const body = await readJson(req);
+  const invalid = (field, reason) => fail(res, 400, "VALIDATION_FAILED", "invalid", [{ field, reason }]);
+  if (!body || typeof body.title !== "string" || !body.title.trim()) return invalid("title", "REQUIRED");
+  const startsAtMs = Date.parse(body.startsAt);
+  if (Number.isNaN(startsAtMs)) return invalid("startsAt", "INVALID");
+  if (startsAtMs < Date.now() - 60_000) return invalid("startsAt", "STARTS_IN_PAST");
+  const endsAtMs = startsAtMs + (body.durationMinutes ?? 60) * 60_000;
+  const overlap = couponEvents.some(
+    (e) => Date.parse(e.endsAt) > Date.now() && startsAtMs < Date.parse(e.endsAt) && endsAtMs > Date.parse(e.startsAt),
+  );
+  if (overlap) return invalid("startsAt", "EVENT_OVERLAP");
+  const event = {
+    eventId: couponEventSeq++,
+    title: body.title.trim(),
+    discountRate: body.discountRate,
+    startsAt: toKstIso(new Date(startsAtMs)),
+    endsAt: toKstIso(new Date(endsAtMs)),
+    totalQuantity: body.totalQuantity,
+    issuedQuantity: 0,
+    remainingQuantity: body.totalQuantity,
+    eligibleGrade: body.eligibleGrade ?? "VIP",
+    createdAt: nowKstIso(),
+  };
+  couponEvents.unshift(event);
+  return json(res, 201, couponEventView(event));
+}
+
 function handleOps(req, res, path, q) {
   if (MOCK_OPS === "forbidden") return fail(res, 403, "FORBIDDEN", "ADMIN group required");
   const down = MOCK_OPS === "down";
@@ -570,6 +609,15 @@ function handleOps(req, res, path, q) {
     const desired = opsStopped.get(service) ?? known.desired;
     opsStopped.delete(service);
     return json(res, 202, { service, desired });
+  }
+  if (path === "/ops/coupons/events") {
+    if (down) return fail(res, 503, "SERVICE_UNAVAILABLE", "coupon unavailable");
+    if (req.method === "POST") return createCouponEventMock(req, res);
+    if (req.method === "GET") {
+      const state = q.get("state");
+      const items = couponEvents.map(couponEventView).filter((e) => !state || e.state === state);
+      return json(res, 200, { items });
+    }
   }
   if (req.method !== "GET") return fail(res, 404, "NOT_FOUND", path);
   if (path === "/ops/services") {

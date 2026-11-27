@@ -1,5 +1,8 @@
 import { opsHttp } from "@/shared/api";
 import type {
+  CouponEvent,
+  CouponEventCreateRequest,
+  CouponEventList,
   ReportDateList,
   ReportQueryStarted,
   ReportQueryStatus,
@@ -11,7 +14,6 @@ import type {
 
 /**
  * 관리자 API (`/ops/**`, ops-api — gateway 아님). 401은 공통 갱신 흐름, ADMIN 그룹이 아니면 403 `FORBIDDEN`.
- * 쿠폰 이벤트(OPS-24)는 그 패널 작업에서 여기에 더한다
  */
 
 /** OPS-20 서비스·노드 상태. Prometheus를 못 읽으면 지표 칸만 null, Kubernetes API까지 못 읽으면 503 */
@@ -51,3 +53,16 @@ export const getUnmetDemandStats = (
 
 export const isReportReady = (value: ReportReady | ReportQueryStarted): value is ReportReady =>
   !("queryId" in value);
+
+/**
+ * OPS-24 쿠폰 이벤트 목록 (coupon 내부 API 그대로 — `startsAt` 내림차순, 최근 50개). coupon을 못 부르면 503
+ */
+export const listCouponEvents = (signal?: AbortSignal) => opsHttp<CouponEventList>("/ops/coupons/events", { signal });
+
+/**
+ * OPS-24 쿠폰 이벤트 만들기 → 201. 검증은 coupon이 한다 — 400 `VALIDATION_FAILED`의 `details[].reason`
+ * `STARTS_IN_PAST`(시작이 1분 넘게 과거)·`EVENT_OVERLAP`(끝나지 않은 다른 이벤트와 기간이 겹침).
+ * 503은 **만들어졌는지 불확실**(커밋 뒤 응답만 잃었을 수 있음) — 목록으로 확인한 뒤 다시 보낸다. `Idempotency-Key` 없음(계약)
+ */
+export const createCouponEvent = (body: CouponEventCreateRequest) =>
+  opsHttp<CouponEvent>("/ops/coupons/events", { method: "POST", body });

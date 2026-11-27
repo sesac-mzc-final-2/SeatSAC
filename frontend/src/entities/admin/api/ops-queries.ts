@@ -1,10 +1,11 @@
 import { queryOptions } from "@tanstack/react-query";
-import { getUnmetDemandStats, listErrorReportDates, listOpsServices } from "./ops-api";
+import { getUnmetDemandStats, listCouponEvents, listErrorReportDates, listOpsServices } from "./ops-api";
 
 /** 로그아웃·다른 계정 로그인 때 `opsKeys.all` 로 전부 지운다 */
 export const opsKeys = {
   all: ["ops"] as const,
   services: () => [...opsKeys.all, "services"] as const,
+  couponEvents: () => [...opsKeys.all, "coupons", "events"] as const,
   reportDates: () => [...opsKeys.all, "reports", "dates"] as const,
   unmetDemand: (from: string, to: string, limit: number) =>
     [...opsKeys.all, "ai", "unmet-demand", from, to, limit] as const,
@@ -36,5 +37,13 @@ export const opsUnmetDemandQuery = (from: string, to: string, limit = 20) =>
     queryKey: opsKeys.unmetDemand(from, to, limit),
     queryFn: ({ signal }) => getUnmetDemandStats({ from, to, limit }, signal),
     staleTime: 60_000,
+    retry: false,
+  });
+
+/** OPS-24 쿠폰 이벤트 목록. 발급 진행(남은 수량)은 쿠폰 이벤트 패널이 `refetchInterval`로 다시 본다 */
+export const opsCouponEventsQuery = () =>
+  queryOptions({
+    queryKey: opsKeys.couponEvents(),
+    queryFn: ({ signal }) => listCouponEvents(signal),
     retry: false,
   });

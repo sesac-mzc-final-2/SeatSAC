@@ -2355,7 +2355,7 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 | — | 만료 뒤 쿠폰 | ✅ 「사용 가능」으로 돌아옴(보상·반환 동작) |
 | 4·5 | 결제창 취소 → 재결제 · 쓴 쿠폰 숨김 | ⬜ 3이 실패해 하지 않았다 |
 
-**3 원인 — 가장 유력(남궁일, PR #232 리뷰)**: 오늘 오후 apply 뒤 staging payment의 포트원 V2 API Secret이 잘못된 값으로 바뀌어 verify의 포트원 단건 조회가 실패, 체크아웃이 VERIFYING에 머묾. 김종식이 콘솔 값으로 다시 넣은 뒤 3)~5)를 다시 본다. 19814 결제가 포트원에서 PAID였으면 환불 여부는 남궁일이 `payment_refund_unresolved_total`·payment 로그로 확인. 그 밖의 후보(확인 전): `payment.verification-requested`를 payment가 받지 못함(`payment-commands` 소비자 `APP_MESSAGING_CONSUMER_ENABLED`), payment의 포트원 단건 조회 실패(`payment_pg_call_total{result!="ok"}`, `APP_PORTONE_*` Secret), 결과(`payment.approved`)가 `booking-replies`로 가지 못함(payment 릴레이 `APP_OUTBOX_RELAY_ENABLED`), booking 결과 소비자. 볼 곳: `msa-check.sh queues`(`payment-commands`·`booking-replies` 대기·DLQ), `kubectl logs deploy/payment|booking --since=1h | grep 19814`, 포트원 콘솔에서 그 결제가 PAID인지 → PAID면 만료 처리가 환불해야 한다(`payment_refund_unresolved_total` 0인지). 테스트 결제라 실제 청구는 없다
+**3 원인 — 가장 유력(남궁일, PR #232 리뷰)**: 오늘 오후 apply 뒤 staging payment의 포트원 V2 API Secret이 잘못된 값으로 바뀌어 verify의 포트원 단건 조회가 실패, 체크아웃이 VERIFYING에 머묾. 김종식이 콘솔 값으로 다시 넣은 뒤 3)~5)를 다시 본다. 19814 결제가 포트원에서 PAID였으면 환불 여부는 남궁일이 확인 — **포트원 콘솔에서 그 결제의 실제 상태(취소·환불됨)**를 보고, `payment_refund_unresolved_total`·payment 로그는 함께 본다(지표 0은 환불 완료의 증거가 아니다: 결제 생성 15분 전이거나 해당 행이 없어도 0). 그 밖의 후보(확인 전): `payment.verification-requested`를 payment가 받지 못함(`payment-commands` 소비자 `APP_MESSAGING_CONSUMER_ENABLED`), payment의 포트원 단건 조회 실패(`payment_pg_call_total{result!="ok"}`, `APP_PORTONE_*` Secret), 결과(`payment.approved`)가 `booking-replies`로 가지 못함(payment 릴레이 `APP_OUTBOX_RELAY_ENABLED`), booking 결과 소비자. 볼 곳: `msa-check.sh queues`(`payment-commands`·`booking-replies` 대기·DLQ), `kubectl -n cinema-staging logs deploy/payment --since=1h | grep 19814`와 `kubectl -n cinema-staging logs deploy/booking --since=1h | grep 19814`(따로 — `deploy/payment|booking`은 셸 파이프가 된다), 포트원 콘솔에서 그 결제가 PAID인지 → PAID면 만료 처리가 환불해야 한다(콘솔에서 취소·환불 상태 확인, 지표 `payment_refund_unresolved_total`도 함께). 테스트 결제라 실제 청구는 없다
 
 
 
@@ -2375,7 +2375,8 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 
 ```bash
 infra/scripts/msa-check.sh queues          # 1) 직전(Q₀)·4) 1분 뒤(Q₁) — ai-catalog-events 대기 차이 = N · 처리 중 0 · DLQ 0
-kubectl -n cinema-staging logs deploy/catalog --since=2h | grep -E 'schedule extended|catalog 변경 찾기|아웃박스 릴레이' | tail -20
+# catalog 파드 전부(잠금을 얻은 파드 하나만 일정·변경 찾기 로그를 남긴다) — --prefix로 파드 이름이 줄 앞에 붙는다
+kubectl -n cinema-staging logs -l app.kubernetes.io/name=catalog --prefix --since=2h --max-log-requests=8 | grep -E 'schedule extended|catalog 변경 찾기|아웃박스 릴레이' | tail -30
 # Grafana Explore: increase(catalog_outbox_publish_total{result="sent"}[10m]) = N · increase(catalog_outbox_publish_total{result="failed"}[10m]) == 0 · catalog_outbox_pending 0
 ```
 

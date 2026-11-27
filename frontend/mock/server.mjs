@@ -1234,9 +1234,12 @@ function advanceCheckout(b) {
     c.at = now;
   }
   if (c.state === "COUPON_RESERVING" && now >= c.at + 800) {
-    if (c.couponIssueId.startsWith("reject")) {
+    const mine = myCoupons.find((x) => x.couponIssueId === c.couponIssueId);
+    // 다른 체크아웃이 이미 예약했거나 쓴 쿠폰은 거절한다 — coupon이 ISSUED가 아닌 쿠폰을 NOT_ISSUED로 거절하는 것과 같게(#232 리뷰)
+    const notIssued = mine !== undefined && mine.state !== "ISSUED";
+    if (c.couponIssueId.startsWith("reject") || notIssued) {
       c.state = "COUPON_REJECTED";
-      c.failure = { code: "COUPON_NOT_USABLE", reason: "EXPIRED" };
+      c.failure = { code: "COUPON_NOT_USABLE", reason: notIssued ? "NOT_ISSUED" : "EXPIRED" };
       c.coupon = { couponIssueId: c.couponIssueId, discount: null, state: "REJECTED" };
     } else {
       const rate = myCoupons.find((x) => x.couponIssueId === c.couponIssueId)?.discountRate ?? 50;
@@ -1342,6 +1345,11 @@ async function handlePayBooking(req, res, path) {
   }
 
   if (action === "/hold" && req.method === "DELETE") {
+    // 진행 중 체크아웃이 있으면 선점 해제를 막는다(계약 409 CHECKOUT_IN_PROGRESS) — 취소된 예매가 뒤늦게 확정되지 않게(#232 리뷰)
+    const live = advanceCheckout(b);
+    if (live && CHECKOUT_LIVE.has(live.state)) {
+      return fail(res, 409, "CHECKOUT_IN_PROGRESS", "checkout in progress", [{ field: "checkoutId", value: live.checkoutId }]);
+    }
     if (b.status === "CANCELED") return json(res, 200, { bookingId: b.bookingId, status: "CANCELED", canceledAt: b.canceledAt, payment: null });
     if (b.status !== "PENDING") return fail(res, 409, "BOOKING_STATE_CONFLICT", `status ${b.status}`, [{ field: "status", value: b.status, reason: "BOOKING_NOT_PENDING" }]);
     if (b.payment) return fail(res, 409, "BOOKING_STATE_CONFLICT", "payment in progress", [{ field: "bookingId", value: b.bookingId, reason: "PAYMENT_IN_PROGRESS" }]);

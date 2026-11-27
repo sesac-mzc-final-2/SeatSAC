@@ -155,3 +155,16 @@ def test_presigned_url_uses_the_regional_endpoint(monkeypatch):
     host = "https://cinema-staging-reports-x.s3.ap-northeast-2.amazonaws.com"
     assert url.startswith(f"{host}/athena-results/q.csv?")
     assert "ap-northeast-2%2Fs3%2Faws4_request" in url
+
+
+def test_report_service_builds_its_s3_client_with_s3_client(monkeypatch, settings):
+    # _clients()가 boto3 기본 클라이언트(전역 주소)로 되돌아가지 않게 — s3_client를 쓰는지 확인
+    from seatsac_ops import reports
+
+    made = []
+    monkeypatch.setattr(reports, "s3_client", lambda region: made.append(region) or object())
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    s3, _ = reports.ReportService(settings)._clients()
+    assert made == [settings.aws_region]
+    assert s3 is not None

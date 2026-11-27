@@ -28,6 +28,10 @@ MAX_WORKERS = 5
 class DemandUnavailable(Exception):
     """DB 미설정·장애·과부하·시간 초과. 비밀값이 없는 서비스 경계 오류."""
 
+    def __init__(self, category: str = "INTERNAL") -> None:
+        super().__init__()
+        self.category = category
+
 
 class DemandService:
     def __init__(self, repository: MySqlDemandRepository) -> None:
@@ -37,7 +41,9 @@ class DemandService:
 
     async def _run(self, fn, *args, timeout: float, **kwargs):
         # 대기열을 만들지 않는다. 시간 초과된 작업도 실제 종료 전까지 슬롯을 차지한다.
-        if timeout <= 0 or not self._slots.acquire(blocking=False):
+        if timeout <= 0:
+            raise DemandUnavailable("TIMEOUT")
+        if not self._slots.acquire(blocking=False):
             raise DemandUnavailable
         try:
             future = self._executor.submit(fn, *args, **kwargs)
@@ -48,8 +54,12 @@ class DemandService:
         try:
             return await asyncio.wait_for(asyncio.wrap_future(future), timeout=timeout)
         except Exception as exc:
-            log.warning("수요 DB 작업 실패(%s)", type(exc).__name__)
-            raise DemandUnavailable from None
+            category = "TIMEOUT" if isinstance(exc, TimeoutError) else "INTERNAL"
+            log.warning(
+                "수요 DB 작업 실패(%s)", type(exc).__name__,
+                extra={"fields": {"errorCategory": category}},
+            )
+            raise DemandUnavailable(category) from None
 
     async def record(self, fields: dict[str, Any], *, timeout: float = RECORD_TIMEOUT) -> None:
         """이미 정제한 요약만 저장한다. slots는 초기에는 빈 object(원문 유입 방지)."""
@@ -64,9 +74,12 @@ class DemandService:
                 created_at=created_at,
                 timeout=min(RECORD_TIMEOUT, timeout),
             )
-        except DemandUnavailable:
+        except DemandUnavailable as exc:
             # 부가 기록 실패 때문에 정상 OUT_OF_SCOPE 답을 503으로 바꾸지 않는다.
-            log.warning("수요 DB 기록을 확인하지 못함(재시도 없음)")
+            log.warning(
+                "수요 DB 기록을 확인하지 못함(재시도 없음)",
+                extra={"fields": {"errorCategory": exc.category}},
+            )
 
     async def stats(self, start: datetime, end: datetime, limit: int) -> dict[str, Any]:
         return await self._run(self._repository.stats, start, end, limit, timeout=STATS_TIMEOUT)

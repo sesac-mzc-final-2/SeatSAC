@@ -192,6 +192,7 @@ class _Ask:
     now: datetime | None = None
     user_id: str | None = None
     session_id: str | None = None
+    original_question: str | None = None
 
     def days(self) -> list[str]:
         """질문이 말한 날짜(YYYY-MM-DD). 없으면 빈 목록."""
@@ -276,6 +277,7 @@ class ChatService:
     ) -> dict[str, Any]:
         """계약 ChatResponse. 캐시가 있으면 sessionId 도 채운다(없으면 api/chat.py 가 새로 발급)."""
         started = time.monotonic()
+        original_question = question
         deadline = started + self._s.request_deadline_seconds
         if not self._store.is_ready():
             raise snapshot_not_ready()
@@ -355,7 +357,8 @@ class ChatService:
             # ⑥⑦ Claude
             if body is None:
                 ask = _Ask(
-                    question, ext or self._extract(question, now), now.date(), now, user_id, sid
+                    question, ext or self._extract(question, now), now.date(), now, user_id, sid,
+                    original_question=original_question,
                 )
                 body, made, calls = await self._ask_claude(
                     ask, now, system_params, deadline, usage, previous if follow_up else None
@@ -452,13 +455,20 @@ class ChatService:
                         # reason 이 베꼈는지도 Claude가 본 글자 전체와 견줘야 한다
                         fields = _record_unmet(ask.question, call.input)
                         if fields is not None and self._demand is not None:
-                            db_fields = _database_unmet_fields(ask.question, fields)
+                            db_fields = _database_unmet_fields(
+                                ask.question, fields, original_question=ask.original_question
+                            )
                             try:
                                 await self._demand.record(
                                     db_fields, timeout=max(0, deadline - time.monotonic())
                                 )
                             except Exception as exc:
-                                log.warning("수요 저장 실패(%s)", type(exc).__name__)
+                                log.warning(
+                                    "수요 저장 실패(%s)", type(exc).__name__,
+                                    extra={"fields": {"errorCategory": (
+                                        "TIMEOUT" if isinstance(exc, TimeoutError) else "INTERNAL"
+                                    )}},
+                                )
                     return body, made, calls
                 except _Clarify as clarify:
                     return clarify.body, None, calls
@@ -1258,12 +1268,16 @@ def _write_unmet(question: str, raw: dict[str, Any]) -> dict[str, Any] | None:
     return fields
 
 
-def _database_unmet_fields(question: str, fields: dict[str, Any]) -> dict[str, Any]:
+def _database_unmet_fields(
+    question: str, fields: dict[str, Any], *, original_question: str | None = None
+) -> dict[str, Any]:
     """로그의 8자 하한과 달리 영속 DB에는 짧은 원문·기호도 그대로 남기지 않는다."""
     stored = dict(fields)  # 기존 로그의 사본을 정제해 로그 동작은 바꾸지 않는다.
     reason = stored["reason"]
-    if reason is not None:
-        stripped, normalized = question.strip(), _letters(question)
+    for candidate in (question, original_question):
+        if reason is None or candidate is None:
+            continue
+        stripped, normalized = candidate.strip(), _letters(candidate)
         copied = (stripped and stripped in reason) or (
             normalized and normalized in _letters(reason)
         )

@@ -13,10 +13,35 @@ from seatsac_ai.snapshot.mapper import KST
 
 from .llm_fakes import ScriptedLlm, tool
 from .sql_fixtures import loaded_store
+from .test_cache_flow import ask, make
 
 NOW = datetime(2026, 11, 17, 19, 40, tzinfo=KST)
 QUESTION = "가상 극장에는 주차장 주변에 무슨 편의 시설이 있나요?"
 AUTHORIZATION = "Bearer test-synthetic-token"
+
+
+def test_joined_clarification_drops_copied_short_input_only_from_db(caplog):
+    original = "잔여석 많은 회차 근처 주차장 요금"
+    reason = "문의 요약: 홍. 길동"
+    llm = ScriptedLlm(
+        tool("ask_user", missing="date"),
+        tool("out_of_scope", category="site_feature", reason=reason),
+    )
+    chat, _ = make(llm)
+    demand = AsyncMock()
+    chat._demand = demand
+    first = ask(chat, original)
+    assert first["path"] == "CLARIFY"
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="seatsac_ai.llm.orchestrator"):
+        second = ask(chat, "홍길동", session_id=first["sessionId"])
+    assert second["path"] == "OUT_OF_SCOPE"
+    assert f"질문: 홍길동 {original}" in llm.requests[1]["messages"][0]["content"]
+    stored = demand.record.await_args.args[0]
+    (logged,) = [r.fields for r in caplog.records if r.getMessage() == "unmet demand"]
+    assert logged["reason"] == reason
+    assert stored["reason"] is None and stored["reasonDropped"] is True
+    assert stored["questionHash"] == logged["questionHash"]
 
 
 def _chat(app, user_headers, client, replies, *, question=QUESTION, demand=None):

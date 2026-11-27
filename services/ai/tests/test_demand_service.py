@@ -15,6 +15,35 @@ from seatsac_ai.demand.service import DemandService, DemandUnavailable, build_de
 FIELDS = {"category": "site_feature", "reason": "이용 안내 요청", "questionHash": "a" * 16}
 
 
+@pytest.mark.parametrize(
+    ("error", "category"), [(TimeoutError("private"), "TIMEOUT"),
+                            (RuntimeError("private"), "INTERNAL")],
+)
+def test_db_failure_logs_category_without_exception_details(caplog, error, category):
+    demand = DemandService(Mock(stats=Mock(side_effect=error)))
+    try:
+        with caplog.at_level(logging.WARNING), pytest.raises(DemandUnavailable):
+            asyncio.run(demand.stats(datetime(2026, 11, 23), datetime(2026, 11, 24), 20))
+        (record,) = caplog.records
+        assert record.fields["errorCategory"] == category
+        assert "private" not in caplog.text
+    finally:
+        demand.close()
+
+
+@pytest.mark.parametrize("timeout", [0, 1])
+def test_record_timeout_keeps_timeout_category_in_all_warnings(caplog, timeout):
+    demand = DemandService(Mock(insert=Mock(side_effect=TimeoutError("private"))))
+    try:
+        with caplog.at_level(logging.WARNING):
+            asyncio.run(demand.record(FIELDS, timeout=timeout))
+        assert caplog.records
+        assert all(r.fields["errorCategory"] == "TIMEOUT" for r in caplog.records)
+        assert "private" not in caplog.text
+    finally:
+        demand.close()
+
+
 def test_disabled_or_incomplete_settings_never_open_a_connection(monkeypatch):
     connect = Mock()
     monkeypatch.setattr(service.pymysql, "connect", connect)

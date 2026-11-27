@@ -37,7 +37,7 @@ resource "aws_route53_record" "origin_validation" {
     for o in aws_acm_certificate.origin[0].domain_validation_options : o.domain_name => o
   } : {}
 
-  zone_id         = data.aws_route53_zone.custom[0].zone_id
+  zone_id         = local.custom_zone_id
   name            = each.value.resource_record_name
   type            = each.value.resource_record_type
   records         = [each.value.resource_record_value]
@@ -57,7 +57,7 @@ resource "aws_acm_certificate_validation" "origin" {
 resource "aws_route53_record" "origin_alias" {
   count = local.api_origin_https_prepare ? 1 : 0
 
-  zone_id = data.aws_route53_zone.custom[0].zone_id
+  zone_id = local.custom_zone_id
   name    = local.api_origin_https_name
   type    = "A"
 

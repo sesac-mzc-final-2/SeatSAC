@@ -314,6 +314,22 @@ variable "custom_domain" {
   }
 }
 
+variable "custom_domain_hosted_zone" {
+  description = <<-EOT
+    ADR-125 다른 AWS 계정으로 옮길 때만 — 이 계정에 Terraform이 만들 퍼블릭 호스팅 영역 이름(등록 도메인 apex, 예: seatsac.example).
+    도메인 등록 이전은 영역을 옮기지 않아 새 계정에는 영역이 없다. 비우면(기본) 만들지 않는다 — 등록 때 자동으로 생긴 영역을 data로 쓴다.
+    custom_domain은 이 영역의 이름이거나 그 아래 이름이어야 이 영역을 쓴다. 순서: 이 값만 apply → 출력 custom_domain_name_servers로
+    등록 도메인 네임서버 교체 → 퍼진 뒤 custom_domain (런북 rebuild-new-account 7장)
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.custom_domain_hosted_zone == "" || can(regex("^([a-z0-9-]+\\.)+[a-z0-9-]+$", var.custom_domain_hosted_zone))
+    error_message = "custom_domain_hosted_zone은 스킴·경로·끝 점이 없는 소문자 도메인 이름만(예: seatsac.example)."
+  }
+}
+
 variable "custom_domain_zone_id" {
   description = "3.1.23 같은 이름의 퍼블릭 호스팅 영역이 둘 이상일 때만 — 등록 도메인의 네임서버와 맞는 영역 ID. 비우면 이름으로 찾는다"
   type        = string

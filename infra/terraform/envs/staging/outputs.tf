@@ -192,3 +192,8 @@ output "messaging_pod_role_arns" {
   description = "메시징 Pod Identity 역할 (ServiceAccount cinema-staging/{svc}). booking은 booking_pod_role_arn"
   value       = { for k, m in module.messaging_pod_identity : k => m.iam_role_arn }
 }
+
+output "custom_domain_name_servers" {
+  description = "ADR-125 Terraform이 만든 호스팅 영역(custom_domain_hosted_zone)의 네임서버 4개 — 등록 도메인 네임서버를 이 값으로 바꾼다(비밀 아님)"
+  value       = one(aws_route53_zone.managed[*].name_servers)
+}

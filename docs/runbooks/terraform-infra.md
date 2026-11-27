@@ -2347,16 +2347,18 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 - [ ] 결제 뒤 마이페이지 예매 내역에 그 예매(쿠폰 할인 금액)가 수 초 안에 보인다 — user 복제본(6-N 1)이 local이면 이벤트 경로
 - [ ] `/ops` 정지/가동은 **coupon만**, 끝나면 `msa-check.sh stopped`가 비어 있다
 - [ ] catalog 이벤트 — 릴레이가 켜져 있을 때(`catalog-config`의 `APP_OUTBOX_RELAY_ENABLED=true`). 「밀림 0·실패 0」만으로는 **보냈다는 증거가 아니다**(그동안 바뀐 것이 없어도 0이다). 그래서 **이름을 댈 수 있는 변경 하나**를 끝까지 따라간다. DML 없이 생기는 변경은 상영 일정 이어 붙이기(`APP_SCHEDULE_*`, 1시간마다 — 새 영업일 회차를 넣는다)다:
-  1. 이어 붙이기 로그에서 날짜·회차 수를 고른다 — `schedule extended date=YYYY-MM-DD … screenings=N`
-  2. 그 뒤 첫 변경 찾기(1분)가 같은 수를 잡는다 — `catalog 변경 찾기 생김·바뀜=N`(영화 변경이 겹치면 N보다 크다)
-  3. 릴레이가 그만큼 보낸다 — `아웃박스 릴레이 … 보냄=` 합이 N 이상, `catalog_outbox_publish_total{result="sent"}` 증가 ≥ N
-  4. **큐에 도착** — `ng-ai`가 0대면 받는 쪽이 없어 `ai-catalog-events`의 대기 수가 1)의 직전 값보다 N 이상 늘어 있다. 공개 API로 그 회차가 실제로 생겼는지도 본다: `curl -s "$API/screenings?date=YYYY-MM-DD&theaterId=<극장>" | jq '.items | length'`
+  0. **전제 — 다른 것이 섞이지 않을 때만 센다**: `catalog_outbox_pending`이 0(밀린 아웃박스 없음)이고 `ai-catalog-events` 처리 중(in-flight)이 0. 아니면 다음 시간으로 미룬다
+  1. 이어 붙이기 로그에서 날짜·회차 수를 고른다 — `schedule extended date=YYYY-MM-DD … screenings=N`. 이 직전에 `msa-check.sh queues`로 대기 수 Q₀
+  2. 그 뒤 첫 변경 찾기(1분)가 **정확히** 같은 수를 잡는다 — `catalog 변경 찾기 생김·바뀜=N 없어짐=0`. N보다 크면(영화 변경 등이 겹침) 다음 시간으로 미룬다
+  3. 릴레이가 **정확히** 그만큼 보낸다 — 그 사이 `아웃박스 릴레이 … 보냄=` 합 = N, 오류 0, `increase(catalog_outbox_publish_total{result="sent"})` = N, 그 뒤 `catalog_outbox_pending` 0
+  4. **큐에 도착** — `ng-ai` 0대(받는 쪽 없음)에서 1분 넘게 기다린 뒤(SQS 대기 수는 근사값이라 바로 안 맞을 수 있다) 대기 수 Q₁ − Q₀ = N. 이 큐에 넣는 것은 `catalog-events` 주제 하나뿐이라(발행자 catalog 하나) 0~3이 맞으면 그 N개가 도착한 것이다. 공개 API로 그 날짜 회차가 실제로 생겼는지도 본다: `curl -s "$API/screenings?date=YYYY-MM-DD&theaterId=<극장>" | jq '.items | length'`
+  - **한계** — 이것은 **건수로 본 증거**다(회차 하나하나의 `eventId` 대조가 아니다). `eventId` 대조는 ai 소비자(6.4.2)가 생긴 뒤 ai 로그·`ai_db.processed_message`의 `message_id`와 catalog 아웃박스 `message_key`로 한다. 그 전에 확인하려고 이 큐에서 메시지를 직접 받지 않는다 — 받으면 수신 횟수가 올라가 `maxReceiveCount` 3에서 DLQ로 넘어갈 수 있다
   - 이어 붙이기가 그날 넣을 것이 없으면(이미 7일이 차 있음) 로그 1이 안 나온다 — 그때는 다음 시간까지 기다리거나, 시드·TMDB 보충을 관리자가 다시 넣는 시간에 맞춰 같은 순서로 본다(사람이 DML을 직접 하지 않는다)
 
 ```bash
-infra/scripts/msa-check.sh queues          # 1) 전에 한 번·4) 뒤에 한 번 — ai-catalog-events 대기 차이 ≥ N · DLQ 0
+infra/scripts/msa-check.sh queues          # 1) 직전(Q₀)·4) 1분 뒤(Q₁) — ai-catalog-events 대기 차이 = N · 처리 중 0 · DLQ 0
 kubectl -n cinema-staging logs deploy/catalog --since=2h | grep -E 'schedule extended|catalog 변경 찾기|아웃박스 릴레이' | tail -20
-# Grafana Explore: increase(catalog_outbox_publish_total{result="sent"}[1h]) ≥ N · increase(catalog_outbox_publish_total{result="failed"}[1h]) == 0 · catalog_outbox_pending 0 근처
+# Grafana Explore: increase(catalog_outbox_publish_total{result="sent"}[10m]) = N · increase(catalog_outbox_publish_total{result="failed"}[10m]) == 0 · catalog_outbox_pending 0
 ```
 
 릴레이가 꺼져 있으면(기본) `catalog_outbox_pending`이 회차·영화 수(약 8,400)까지 쌓여 있는 것이 정상이다 — 켜는 순서는 13장 위 「받는 쪽 먼저」(ai 소비자 → catalog 릴레이).

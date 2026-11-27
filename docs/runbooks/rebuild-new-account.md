@@ -47,7 +47,7 @@
 | `global/global.tfvars` `frontend_distribution_ids` | 옛 배포 ID | 새 staging 출력 `cloudfront_distribution_id`(3-6) |
 | `global/budget.auto.tfvars` (로컬) | `budget_emails` | 같은 내용으로 다시 만들고, SNS 구독 메일의 **Confirm**을 누른다 |
 | `envs/staging/eks_access.auto.tfvars` (로컬) · GitHub Secret `EKS_PUBLIC_ACCESS_CIDRS` | 관리자 공인 IP | 다시 만든다(IP가 같으면 값도 같다, 4-6) |
-| `envs/staging/staging.tfvars` `custom_domain` | `"seatsac.com"` | 처음에는 **`""`** — 새 계정에 호스팅 영역이 생기기 전에는 `no matching Route 53 Hosted Zone`. 도메인은 7장에서 |
+| `envs/staging/staging.tfvars` `custom_domain` · `custom_domain_hosted_zone`(#226) | `"seatsac.com"` · 없음 | 처음에는 `custom_domain = ""` — 새 계정에 호스팅 영역이 생기기 전에는 `no matching Route 53 Hosted Zone`. 영역은 `custom_domain_hosted_zone`으로 Terraform이 만든다(7-3) |
 | `envs/staging/staging.tfvars` `api_origin_https` | `"on"` | 처음에는 **`"off"`** — `prepare`·`on`은 사용자 도메인·ALB가 있어야 한다(7장 끝에서 다시) |
 | `envs/staging/staging.tfvars` `cognito_group_members` | 옛 풀의 `sub` | 처음에는 **`{}`** — 새 풀에 없는 sub는 `UserNotFoundException`. 가입 뒤 새 sub로 PR(3-13) |
 | `envs/staging/staging.tfvars` `cluster_schedule_demo_start` (기본 `2026-11-16`) | 지난 날짜 | 지난 날짜면 #126 규칙으로 EventBridge **끄기 일정이 만들어지지 않는다**(밤에 노드가 안 꺼짐 — GitHub 백업·수동 `down`만). 새 데모 기간이 있으면 그 날짜를, 없으면 `cluster_keep_on`·일정 의미를 확인하고 정한다 |
@@ -285,7 +285,7 @@ terraform-infra **11장 순서 그대로**(옛 계정 자격 증명으로, 옛 `
 2. staging-k8s `terraform destroy -target=helm_release.argocd_apps` → ALB가 사라질 때까지(`aws elbv2 describe-load-balancers --names cinema-staging-gateway` → `LoadBalancerNotFound`)
 3. staging-k8s 나머지 → staging (`plan -destroy`로 목록 확인)
 4. 남은 것 확인: EIP·ENI·ALB·EBS·Route 53 호스팅 영역(7장에서 옮긴 뒤 지운다)
-5. **global·bootstrap**: 계정을 통째로 닫는다면 그 전에 지운다(평소에는 지우지 않는 규칙 — 계정 폐기 때만 예외. state 버킷은 버전까지 비워야 지워진다). 계정을 남겨 두면 그대로
+5. **global·bootstrap은 destroy하지 않는다**(CLAUDE.md 절대 규칙 — 예외 없음). 계정을 닫으면 그 리소스(역할·OIDC·state 버킷)도 계정과 함께 정리된다. 계정을 남겨 두면 그대로 둔다
 6. 비밀: 옛 Anthropic 키·포트원 키를 폐기하고 새 계정에서 새로 발급했는지 확인
 - RDS는 `skip_final_snapshot = true`라 스냅샷이 남지 않는다(0장 — 데이터를 옮기지 않는 전제). Secrets Manager는 `recovery_window_in_days = 0`이라 바로 지워진다
 
@@ -295,13 +295,13 @@ terraform-infra **11장 순서 그대로**(옛 계정 자격 증명으로, 옛 `
 
 > 지금 도메인(`custom_domain`, apex 하나)은 **옛 계정의 Route 53에 등록**돼 있고, 등록할 때 자동으로 생긴 **퍼블릭 호스팅 영역**이 DNS를 맡는다. Terraform(`custom_domain.tf`)은 그 영역을 **찾아 쓰기만** 한다(영역을 만들거나 지우지 않는다) — 영역에 들어 있는 레코드(인증서 검증 CNAME·apex 별칭 A/AAAA·`origin.` 별칭 A)는 Terraform이 만든 것이다.
 > 옮길 것은 두 가지이고 **서로 별개**다: ① **등록**(누가 도메인을 소유·갱신하나 — 계정 간 이전) ② **DNS 서비스**(어느 호스팅 영역이 답하나 — 네임서버 교체). 옛 계정을 닫으면 ① 등록도 같이 사라지므로 **반드시 ①을 옮긴다**.
-> 콘솔 예외: 도메인 등록·이전은 Terraform 밖(구매·소유권)이라 사람이 한다(7-7과 같은 예외, 스크럼 공유). 아래는 CLI로 적었고 콘솔로 해도 된다. 등록자 연락처는 개인정보라 PR·문서에 쓰지 않는다.
+> 콘솔 예외: 도메인 등록·이전은 Terraform 밖(구매·소유권)이라 사람이 한다(7-7과 같은 예외, 스크럼 공유). **새 계정의 호스팅 영역은 Terraform이 만든다**(`custom_domain_hosted_zone`, #226) — 예외가 아니다. 아래는 CLI로 적었고 콘솔로 해도 된다. 등록자 연락처는 개인정보라 PR·문서에 쓰지 않는다.
 
 ### 7-1. 다운타임과 순서의 원칙
 
 - **같은 별칭(도메인)을 두 CloudFront 배포에 동시에 붙일 수 없다** — 옛 배포가 쥐고 있으면 새 배포 apply가 `CNAMEAlreadyExists`로 실패한다. 그래서 「옛 배포에서 떼기 → 새 배포에 붙이기」 사이에 **사용자 도메인이 잠깐 끊긴다**(기본 도메인 `*.cloudfront.net`은 두 계정 모두 계속 동작). 시연·측정이 없는 시간에, 스크럼 공유 뒤
 - 새 계정의 인증서 DNS 검증은 **새 호스팅 영역이 실제로 답해야** 끝난다 → 네임서버 교체가 퍼진 뒤에 새 계정 `custom_domain`을 켠다
-- 순서 요약: 새 계정 기본 도메인으로 완성(3장) → 새 계정에 빈 호스팅 영역 → 옛 계정 HTTPS 원본·도메인 떼기 → **등록 이전** → 네임서버를 새 영역으로 → 퍼짐 확인 → 새 계정 `custom_domain` → `api_origin_https` prepare → gitops 443 → on → 옛 영역 삭제
+- 순서 요약: 새 계정 기본 도메인으로 완성(3장) → 새 계정에 빈 호스팅 영역(Terraform `custom_domain_hosted_zone`) → 옛 계정 HTTPS 원본·도메인 떼기 → **등록 이전** → 네임서버를 새 영역으로 → 퍼짐 확인 → 새 계정 `custom_domain` → `api_origin_https` prepare → gitops 443 → on → 옛 영역 삭제
 
 ### 7-2. 준비 (이전 하루 전)
 
@@ -316,19 +316,20 @@ ZID=$(aws route53 list-hosted-zones-by-name --dns-name $D --query "HostedZones[?
 aws route53 list-resource-record-sets --hosted-zone-id $ZID --query 'ResourceRecordSets[].[Name,Type]' --output text
 ```
 
-- 레코드는 Terraform이 만든 것(검증 CNAME·apex A/AAAA·`origin.` A)과 영역 기본(NS·SOA)뿐이어야 한다. 손으로 넣은 레코드(메일 MX·TXT 등)가 있으면 7-4에서 새 영역에 같이 옮긴다
+- 레코드는 Terraform이 만든 것(검증 CNAME·apex A/AAAA·`origin.` A)과 영역 기본(NS·SOA)뿐이어야 한다. 손으로 넣은 레코드(메일 MX·TXT 등)가 있으면 새 영역에는 손으로 만들지 않고 `custom_domain.tf`에 `aws_route53_record`로 더하는 PR을 7-4 전에 만든다(지금은 없다)
 - 미리 TTL을 낮춘다(선택): 옛 영역 NS 레코드 TTL은 기본 2일이다. 이전 하루 전에 `aws route53 change-resource-record-sets`로 NS TTL을 300으로 낮추면 7-6의 전파가 빨라진다(TLD 쪽 위임 TTL은 바꿀 수 없어 효과는 일부)
 
-### 7-3. 새 계정에 빈 호스팅 영역 만들기 (새 계정)
+### 7-3. 새 계정에 빈 호스팅 영역 만들기 (새 계정 — Terraform, #226)
+
+`staging.tfvars`에 **`custom_domain_hosted_zone = "<도메인>"`만** 넣는 PR(`custom_domain`은 `""` 그대로) → `infra-plan` 기대: **추가** `aws_route53_zone.managed[0]` 1건뿐 → apply
 
 ```bash
-aws route53 create-hosted-zone --name $D --caller-reference "seatsac-$(date +%s)" \
-  --hosted-zone-config Comment="SeatSAC custom domain (ADR-125)" \
-  --query 'DelegationSet.NameServers' --output text        # 새 네임서버 4개 — 7-5에서 쓴다(값은 레포 밖에 메모)
+terraform -chdir=infra/terraform/envs/staging output -json custom_domain_name_servers   # 새 네임서버 4개 — 7-6에서 쓴다(레포 밖에 메모)
 ```
 
-- 같은 이름의 영역이 새 계정에 이미 있으면(재시도) 하나만 남기고 지운다 — 둘이면 `multiple Route 53 Hosted Zone matched`(그때는 `custom_domain_zone_id`에 네임서버가 맞는 쪽 ID)
-- 영역 생성은 도메인과 같은 콘솔 예외로 둔다(Terraform `custom_domain.tf`가 영역을 data로 찾는 구조라서). 비용 월 $0.50
+- 영역은 콘솔·CLI로 만들지 않는다(「Terraform만」 규칙 — 등록·이전과 달리 Terraform으로 만들 수 있다). `custom_domain`을 켜면 그 영역 안의 이름이라 data 조회 대신 이 영역을 쓴다
+- 같은 이름의 영역이 새 계정에 이미 있으면(예전 시도·콘솔) plan 전에 지운다 — 둘이면 `custom_domain_zone_id`가 필요해지고 어느 쪽이 답하는지 헷갈린다
+- `force_destroy = false`라 Terraform 밖 레코드(메일 등)가 남아 있으면 destroy가 멈춘다. 비용 월 $0.50
 
 ### 7-4. 옛 계정에서 도메인 떼기 (옛 계정 — 이 순간부터 사용자 도메인이 끊긴다)
 
@@ -336,21 +337,23 @@ aws route53 create-hosted-zone --name $D --caller-reference "seatsac-$(date +%s)
 2. `custom_domain = ""` apply — plan 기대: **삭제** 인증서 1·검증 레코드 1·검증 1·별칭 2, **변경** CloudFront 1(`aliases → []`)·Cognito 앱 클라이언트 1(콜백). 추가 없음
    - 옛 계정은 1장 이후 동결이므로 **옛 커밋(동결 직전 main)에서** `-var custom_domain= -var api_origin_https=off`로 plan·apply한다(레포 tfvars는 이미 새 계정 값일 수 있다)
 3. `aws cloudfront get-distribution --id <옛 배포> --query Distribution.Status` → `Deployed`(별칭이 실제로 풀린 뒤에야 새 배포에 붙는다)
-4. 손으로 넣은 레코드가 있으면 새 영역(7-3)에 같은 값으로 만든다
+4. 손으로 넣은 레코드가 있었다면 7-2의 Terraform PR을 새 계정에 apply해 새 영역에 넣는다
 
 ### 7-5. 등록 이전 (옛 계정 → 새 계정)
 
 ```bash
-# (옛 계정) 이전 시작 — 새 계정 ID로. 결과의 Password는 화면에서만 보고 레포·채팅·PR에 쓰지 않는다
+# (옛 계정) 이전 시작 — 새 계정 ID로. 응답에 OperationId와 수락용 Password가 같이 온다
+#   Password는 **화면에서만** 보고(셸 기록·파일·레포·채팅·PR에 남기지 않는다) 안전한 경로(관리자 둘이 직접)로만 넘긴다
 aws route53domains transfer-domain-to-another-aws-account --region us-east-1 \
-  --domain-name $D --account-id <새 계정 ID> --query '{op:OperationId}' --output text
-#   Password는 같은 응답에 있다 — 안전한 경로(관리자 둘이 직접)로만 넘긴다
+  --domain-name $D --account-id <새 계정 ID> --query '{op:OperationId,pw:Password}'
 # (새 계정) 3일 안에 수락
 read -rs XFER_PASSWORD
 aws route53domains accept-domain-transfer-from-another-aws-account --region us-east-1 \
   --domain-name $D --password "$XFER_PASSWORD"; unset XFER_PASSWORD
+# (옛 계정) OperationId는 옛 계정의 작업이라 옛 계정 자격 증명으로 본다
 aws route53domains get-operation-detail --region us-east-1 --operation-id <OperationId>   # SUCCESSFUL
-aws route53domains list-domains --region us-east-1 --query 'Domains[].DomainName'         # (새 계정) 보인다
+# (새 계정)
+aws route53domains list-domains --region us-east-1 --query 'Domains[].DomainName'         # 보인다
 ```
 
 - 등록 이전은 **DNS를 바꾸지 않는다** — 이전이 끝나도 네임서버는 옛 계정 영역을 가리킨다(옛 영역이 살아 있는 동안 계속 답한다). 그래서 다음 7-6 전에 옛 영역을 지우지 않는다
@@ -361,7 +364,7 @@ aws route53domains list-domains --region us-east-1 --query 'Domains[].DomainName
 
 ```bash
 aws route53domains update-domain-nameservers --region us-east-1 --domain-name $D \
-  --nameservers Name=<NS1> Name=<NS2> Name=<NS3> Name=<NS4>          # 7-3의 네임서버 4개
+  --nameservers Name=<NS1> Name=<NS2> Name=<NS3> Name=<NS4>          # 7-3 출력 custom_domain_name_servers의 4개
 aws route53domains get-domain-detail --region us-east-1 --domain-name $D --query 'Nameservers[].Name'
 # 전파 확인 — 공개 리졸버가 새 영역의 SOA를 돌려줄 때까지(수 분~최대 2일)
 dig +short NS $D @8.8.8.8
@@ -388,9 +391,20 @@ dig +short SOA $D @1.1.1.1
 ### 7-8. 옛 영역 정리 (옛 계정, 7-6 뒤 이틀 이상 지나서)
 
 ```bash
-# 위임이 완전히 새 영역으로 옮겨진 뒤(옛 NS TTL 2일). 영역 안의 레코드를 NS·SOA만 남기고 지운 뒤 영역 삭제
-aws route53 list-resource-record-sets --hosted-zone-id $ZID --query 'ResourceRecordSets[?Type!=`NS` && Type!=`SOA`].[Name,Type]'
+# 위임이 완전히 새 영역으로 옮겨진 뒤(옛 NS TTL 2일). 옛 계정 자격 증명으로 — ZID는 이틀 전 셸 값이 아니라 다시 구한다
+D=<도메인>
+ZID=$(aws route53 list-hosted-zones-by-name --dns-name $D --query "HostedZones[?Name=='$D.'].Id" --output text)
+# apex의 NS·SOA를 뺀 나머지(7-4 뒤라면 손으로 넣은 레코드만)를 레포 밖 임시 파일로
+aws route53 list-resource-record-sets --hosted-zone-id $ZID \
+  --query "ResourceRecordSets[?!(Name=='$D.' && (Type=='NS' || Type=='SOA'))]" > /tmp/leftover.json
+jq -r '.[] | "\(.Name) \(.Type)"' /tmp/leftover.json          # 지울 목록 — 새 영역(7-3)에 옮겼는지 확인
+# 남은 것이 있으면 한 번에 DELETE — 레코드가 남아 있으면 delete-hosted-zone이 HostedZoneNotEmpty로 실패한다
+if [ "$(jq length /tmp/leftover.json)" -gt 0 ]; then
+  jq '{Changes: [.[] | {Action: "DELETE", ResourceRecordSet: .}]}' /tmp/leftover.json > /tmp/delete-batch.json
+  aws route53 change-resource-record-sets --hosted-zone-id $ZID --change-batch file:///tmp/delete-batch.json
+fi
 aws route53 delete-hosted-zone --id $ZID
+rm -f /tmp/leftover.json /tmp/delete-batch.json
 ```
 
 | 증상 | 원인 | 해결 |
@@ -398,7 +412,7 @@ aws route53 delete-hosted-zone --id $ZID
 | 새 계정 apply `CNAMEAlreadyExists` | 옛 CloudFront가 아직 별칭을 쥐고 있다 | 7-4 2·3번(옛 배포 `Deployed`까지) |
 | `transfer-domain-to-another-aws-account` 거부 | 이전 잠금·만료 임박·최근 등록·이전(TLD 규칙) | `get-domain-detail`의 상태 확인, 만료 전 갱신 |
 | 수락 `InvalidInput` | 비밀번호 오타·3일 초과 | 옛 계정에서 이전 다시 시작 |
-| 새 계정 plan `no matching Route 53 Hosted Zone` | 7-3을 안 했다·이름 철자 | 7-3 |
+| 새 계정 plan `no matching Route 53 Hosted Zone` | 7-3(`custom_domain_hosted_zone`)을 안 했다·`custom_domain`이 그 영역 밖 이름·철자 | 7-3 |
 | `multiple Route 53 Hosted Zone matched` | 같은 이름 영역이 둘 | 하나 삭제 또는 `custom_domain_zone_id` |
 | 인증서 검증 대기가 길다 | 네임서버가 아직 덜 퍼졌다 | 7-6의 `dig` 확인 — 기다린다 |
 | 사용자 도메인이 일부 사용자에게만 열린다 | 리졸버 캐시(옛 NS) | TTL만큼 기다린다(최대 2일) — 옛 영역을 그 전에 지우지 않는다 |

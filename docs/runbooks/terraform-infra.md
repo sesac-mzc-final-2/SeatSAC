@@ -3058,6 +3058,7 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 6-D 블루/그린 — 6-D-0 분석 회차 ID · 6-D-2 정상 배포 · 6-D-3 실패 버전 시연 | | | |
 | ⬜ | 김종식 | 6-B SQS·Lambda (3.1.8·3.1.9) · 7 Cognito · 7-4 CloudFront `/api` | | | |
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
+
 ---
 
 ## 15. 다른 AWS 계정으로 옮길 때 — Route 53 도메인·DNS 이전 (ADR-125)
@@ -3067,7 +3068,7 @@ terraform destroy -var-file=staging.tfvars
 | 순서 | 어디서 | 할 일 | 확인 |
 | --- | --- | --- | --- |
 | 0 | 새 계정 | 기본 도메인(`*.cloudfront.net`)만으로 전부 동작하게 만든다(`custom_domain = ""`·`api_origin_https = "off"`) | 그 문서 5장 |
-| 1 | 새 계정 | 빈 퍼블릭 호스팅 영역 `aws route53 create-hosted-zone --name <도메인>` → 네임서버 4개 메모(레포 밖) | 같은 이름 영역이 하나뿐 |
+| 1 | 새 계정 | 빈 퍼블릭 호스팅 영역 — Terraform `custom_domain_hosted_zone = "<도메인>"`만 apply(#226) → 출력 `custom_domain_name_servers` 4개 메모(레포 밖) | plan 추가 1건(`aws_route53_zone.managed`) · 같은 이름 영역이 하나뿐 |
 | 2 | 옛 계정 | `api_origin_https` `on` → `prepare` → (gitops 443·`tls` 빼기) → `off` → `custom_domain = ""` apply — **여기서 사용자 도메인이 끊긴다**(기본 도메인은 계속) | 옛 CloudFront `Deployed`(별칭이 풀려야 새 배포에 붙는다 — 아니면 `CNAMEAlreadyExists`) |
 | 3 | 옛 → 새 | **등록 이전** `route53domains transfer-domain-to-another-aws-account`(옛) → `accept-domain-transfer-from-another-aws-account`(새, 3일 안). 비밀번호는 레포·채팅에 쓰지 않는다 | `get-operation-detail` SUCCESSFUL. 등록 이전은 DNS를 바꾸지 않는다 |
 | 4 | 새 계정 | `route53domains update-domain-nameservers`로 1번 네임서버 | `dig +short NS <도메인> @8.8.8.8`이 새 영역(최대 2일) |
@@ -3075,4 +3076,4 @@ terraform destroy -var-file=staging.tfvars
 | 6 | 옛 계정 | 2일 이상 지나 옛 호스팅 영역 삭제 → 11장 삭제 | 옛 영역에 NS·SOA만 남은 뒤 |
 
 - 등록(소유)과 DNS(호스팅 영역)는 별개다. 옛 계정을 닫으면 등록도 사라지므로 **3번을 빼먹지 않는다**. 만료가 며칠 안 남았으면 이전 전에 갱신을 정한다
-- 도메인 등록·이전·호스팅 영역 생성은 Terraform 밖(콘솔·CLI) 예외다 — 7-7 「도메인 등록」과 같은 이유, 스크럼 공유
+- 도메인 등록·이전은 Terraform 밖(콘솔·CLI) 예외다 — 7-7 「도메인 등록」과 같은 이유, 스크럼 공유. 새 계정의 호스팅 영역은 예외가 아니라 Terraform(`custom_domain_hosted_zone`)이 만든다. 옛 계정 영역(등록 때 자동 생성 — Terraform 밖)은 6번에서 CLI로 지운다

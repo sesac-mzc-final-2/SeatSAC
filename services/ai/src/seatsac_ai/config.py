@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     ai_valkey_tls: bool = Field(True, alias="APP_AI_VALKEY_TLS")
     public_api_base_url: str | None = Field(None, alias="PUBLIC_API_BASE_URL")
 
+    # 수요 저장·통계는 영화 검색 데이터 소스와 분리(6.4.3·6.4.4).
+    unmet_demand_enabled: bool = Field(False, alias="APP_AI_UNMET_DEMAND_ENABLED")
+    db_host: str | None = Field(None, alias="DB_HOST_AI")
+    db_port: int = Field(3306, ge=1, le=65535, alias="APP_AI_DB_PORT")
+    db_password: SecretStr | None = Field(None, alias="APP_AI_DB_PASSWORD")
+    db_ssl_ca: str | None = Field(None, alias="APP_AI_DB_SSL_CA")
+
     # LLM (ADR-83)
     ai_model: str = Field("claude-sonnet-5-5", alias="APP_AI_MODEL")
     # 요청 하나의 전체 기한(Claude 호출·SQL 실행·재요청 전부).

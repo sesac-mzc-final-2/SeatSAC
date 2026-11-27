@@ -128,9 +128,12 @@
 | --- | --- | --- |
 | `movie` · `theater` · `screening` | 6-1과 같은 컬럼, PK 원본 ID | 최초 백필(공개 API) → SQS `ai-catalog-events`(`screening.changed`·`movie.changed`) upsert(`version`이 큰 것만) → 10분 전체 대조 |
 | `processed_message` | PK `message_id` | inbox(중복 무시) |
-| `unmet_demand` | PK `id`, INDEX (`created_at`), (`category`) | 범위 밖·거부 질문 1건 = 1행: `category`·`reason`·`question_hash`·`slots` JSON·`created_at`. **질문 원문·userId 없음** |
+| `unmet_demand` | PK `id`, INDEX (`created_at`), (`category`) | `out_of_scope` 도구로 끝난 수요 1건 = 1행: `category`·`reason`·`question_hash`·`slots` JSON·`created_at`. 잡담·도구 미선택 폴백·기술적 SQL 거부(`REJECTED`)는 제외(통계 API 계약). **질문 원문·userId 없음** |
 
 - 계정: `ai_app`(DML), `ai_migrator`(DDL), `ai_query`(NL2SQL 실행 전용, `movie`·`theater`·`screening` SELECT만, `MAX_EXECUTION_TIME` 5초)
+- 6.4.1 DDL 원본은 `services/ai/db/migration/`. `movie`·`screening`에는 `version`(백필 전 0)·`deleted`·`changed_at`을 더 두고, 삭제 이벤트의 ID·마지막 버전을 보존하기 위해 공개 값은 NULL을 허용한다. FK는 없다(이벤트 순서 역전 허용). `starts_at`·`ends_at`·`fetched_at`·`changed_at`은 UTC `DATETIME(3)`, `business_date`·`start_hour`는 KST 기준이다. SQLite의 KST 문자열과 변환하는 연결 계층·삭제 행 제외는 6.4.2에서 구현한다
+- `unmet_demand.reason`은 `VARCHAR(120) COLLATE utf8mb4_0900_bin`(완전 일치 집계), `question_hash`는 최대 64자(기존 로그의 HMAC 16자도 수용), `slots`는 JSON object 또는 NULL이다. `created_at`은 앱이 UTC로 넣고 질문 원문·userId 컬럼은 만들지 않는다
+- 6.4.3 초기 저장은 기존 로그와 같은 파드별 HMAC-SHA256 앞 16자·정제 요약만 사용하고 `slots`는 `{}`로 둔다(자유 입력 유입 방지). DB에서는 짧은 질문·기호까지 원문 전체를 포함한 요약을 NULL 처리한다(기존 로그의 짧은 질문 예외와 구분). `created_at`은 UTC 밀리초로 내림해 자정 경계 반올림을 막는다. 저장은 250ms 이내 최선 노력·재시도 없음이며, 실패/시간 초과가 정상 채팅 답을 막지 않는다. 시간 초과 뒤 이미 실행 중인 쓰기는 늦게 커밋될 수 있다
 - `ai_query`의 테이블 권한은 **ai 마이그레이션이 준다**(6.1.1): db-bootstrap은 계정만 만든다(권한 없음) — 그때는 테이블이 없고 MySQL은 없는 테이블에 SELECT만 줄 수 없다. 테이블을 만드는 마이그레이션 뒤에 `GRANT SELECT ON ai_db.movie TO 'ai_query'@'%'`(`theater`·`screening`도)를 넣는다. 그래서 `ai_migrator`만 `ai_db` 범위의 GRANT OPTION을 갖는다(다른 서비스의 migrator에는 없다). 세 테이블 밖의 권한을 주면 다음 db-bootstrap 실행이 실패한다. 5초 상한은 계정에 걸 수 없어 ai가 연결마다 세션에 건다
 
 ### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126)

@@ -42,6 +42,53 @@ uv run ruff check .
 uv run pytest
 ```
 
+## 수요 저장·통계 API (6.4.3·6.4.4)
+
+**검색은 기존 SQLite 스냅샷을 유지**하고, 범위 밖 수요만 자기 `ai_db`에 적는다.
+`APP_AI_UNMET_DEMAND_ENABLED`는 기본 `false`이고, 켜려면 `DB_HOST_AI`·
+`APP_AI_DB_PASSWORD`(ai_app)·TLS CA를 준비한다(`.env.example`, 런타임 계약 9-1).
+staging은 RDS CA 경로가 필수이며 인증서·호스트 검증을 끄지 않는다.
+DB 설정이 없거나 장애여도 기존 채팅/readiness를 내리지 않고 통계만 503으로 답한다.
+`APP_AI_DATA_SOURCE=db` 전환·복제본 소비·RAG는 이번 구현에 포함하지 않는다.
+
+### 입력 → 처리 → 결과
+
+1. 사용자가 질문 → 기존 Claude 도구가 `out_of_scope` 선택.
+2. 잡담을 제외하고 분류·마스킹한 요약·질문 HMAC만 저장한다. 원문·userId·토큰은 DB에
+   넣지 않는다. 짧은 원문·기호를 그대로 포함한 요약도 DB에서는 NULL, `slots`는 `{}`.
+3. 저장은 최대 250ms 기다리는 부가 작업이다. 실패하면 답은 그대로, 경고에 예외 종류만
+   남긴다. 재시도는 하지 않는다(시간 초과 후 늦게 커밋됐을 수 있다).
+4. ops-api가 `GET /internal/ai/unmet-demand/stats?from=2026-11-24&to=2026-11-24&limit=20`
+   요청 → 같은 읽기 전용 DB 트랜잭션에서 `total`·`byCategory`·`top` 집계 → 계약 JSON.
+
+내부 API는 사용자 인증 없이 NetworkPolicy로 ops-api만 허용하는 계약이다.
+Gateway에 외부 경로를 추가하지 않는다. 실제 NetworkPolicy 연결은 별도 배포 검증 대상이다.
+
+| 조건 | 동작 |
+| --- | --- |
+| 기간 생략 | KST 오늘까지 최근 7일 |
+| 날짜 | `YYYY-MM-DD`, 양끝 포함·최대 31일 → UTC 반개구간으로 조회 |
+| `limit` | 기본 20, 1~100, `top`에만 적용 |
+| 요약 없음 | `total`·분류 건수에는 포함, `top`에서는 제외 |
+| 정렬 | 건수 내림차순, 같은 건수는 분류·요약 글자순 |
+| 잘못된 입력 / DB 장애·미설정·2초 초과 | 400 `VALIDATION_FAILED` / 503 `SERVICE_UNAVAILABLE` |
+
+PyMySQL 작업은 이벤트 루프 밖에서 최대 5개만 실행한다. 2초 응답 기한을 넘긴 스레드도
+실제 종료 전까지 슬롯을 유지한다(무제한 대기열 없음). 개별 연결·읽기·쓰기 1초,
+통계 SELECT 1.5초 제한을 함께 둔다. NL2SQL용 `ai_query` 연결은 아직 사용하지 않는다.
+
+실제 MySQL·Flyway 검사와 배포 경계는 [`db/README.md`](db/README.md).
+단위/API/개인정보 검사는 일반 `pytest`에 포함하며, DB 실검사는 레포 루트에서:
+
+```bash
+AI_DB_MIGRATION_TEST=1 services/ai/.venv/bin/pytest \
+  services/ai/tests/test_demand_mysql.py services/ai/tests/test_db_migration.py -q
+```
+
+이 검사는 합성 데이터와 전용 임시 MySQL만 사용한다. 드라이버 검사의 포트는
+`127.0.0.1` 임의 포트이고 자체 서명 인증서 예외는 테스트 factory에만 있다.
+승인 없는 staging 실행·좌석 선점·외부 문서 반영은 하지 않는다.
+
 ### Windows 메모
 
 - `uv sync --locked`가 Python 3.12를 내려받다 `Missing expected target directory …`로 멈추면 `UV_PYTHON_INSTALL_DIR`를 짧은 경로(예 `C:\Users\<이름>\.local\uv-python`)로 두고 `uv python install 3.12`를 먼저 한다

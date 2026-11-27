@@ -103,6 +103,7 @@
 - 상태 컬럼은 `VARCHAR` + 앱 enum (MySQL ENUM 금지 — 블루/그린 중 값 추가가 어려움)
 - 문자셋 `utf8mb4` / `utf8mb4_0900_ai_ci`
 - Flyway: `services/{svc}/src/main/resources/db/migration/V{yyyyMMddHHmm}__{설명}.sql`. 확장 → 전환 → 정리 순서로, 컬럼 삭제·이름 변경은 다음 배포에
+- ai(Python)는 `services/ai/db/migration/` → 이미지 `/app/db/migration/`에 SQL을 담는다(6.4.1). 앱 기동이 아니라 별도 Flyway Job이 `ai_migrator`로 실행한다
 - 시드(롯데시네마 배치·편성)는 앱 레포 Flyway에 넣지 않는다 → 비공개 `lotte-seed`
 - ⚠️AI `ai`는 다른 서비스의 DB에 접근하지 않는다. ~~RDS에 접근하지 않는다~~ → 🆕 11/23 **자기 인스턴스 `ai_db`만** 쓴다(ADR-120 — 레포 ADR-84의 「SQLite 스냅샷만」 대체, `APP_AI_DATA_SOURCE=snapshot`이면 예전처럼 스냅샷). 데이터는 catalog 이벤트 복제본 + 최초 공개 API 백필(`docs/data-model.md` 6장)
 - 🆕 서비스가 남의 데이터를 쓸 때는 **이벤트 복제본**(자기 DB 안의 사본, 필요한 컬럼만, `version`이 클 때만 덮어씀)으로 둔다. 테이블 이름은 원본과 같게 두거나 `{원본}_copy`·`{도메인}_history`. 원본은 계속 원본 서비스다
@@ -737,10 +738,12 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 🆕 `APP_AI_RAG_ENABLED` | `false` | 이용 안내 검색(RAG, 6.4.7). 꺼져 있으면 Claude 도구 목록·system·처리 경로가 지금과 같다. 켜기는 평가(6.4.6) 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작) |
 | 🆕 `APP_AI_RAG_TOP_K` / `APP_AI_RAG_MIN_SCORE` | `3` / ⏳ | Claude에 주는 조각 수 / 코사인 유사도 하한. 하한은 6.4.6 평가 문항으로 재서 정한다 — 의미 캐시의 0.92를 그대로 쓰지 않는다(질문끼리가 아니라 질문과 문서를 비교해 값이 낮게 나온다) |
 | `APP_AI_LIMIT_PER_MINUTE` / `APP_AI_LIMIT_PER_DAY` | `600` / `300` | 사용자당. 동시 1건. 11/18 발표 전 테스트·시연 연습용으로 올린 값(gitops #29, 11/20 키 폐기까지). 앱 기본값과 계약(`ai.openapi.yaml`)의 설계 값은 `10` / `100` 그대로 |
-| 🆕 `APP_AI_DATA_SOURCE` | `snapshot` | `snapshot`(지금처럼 메모리 SQLite) · `db`(자기 인스턴스 `ai_db`, ADR-120). `db`로 바꾸기는 아래 세 줄이 준비된 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작). 되돌리기는 `snapshot` |
-| 🆕 `DB_HOST_AI` · `SQS_AI_CATALOG_EVENTS_URL` | `cinema-infra-endpoints`(Terraform, 6.1.1·6.1.3) | 이름 그대로 읽음. `APP_AI_DATA_SOURCE=db`일 때만 쓴다 |
+| 🆕 `APP_AI_DATA_SOURCE` | `snapshot` | `snapshot`(지금처럼 메모리 SQLite) · `db`(자기 인스턴스 `ai_db`, ADR-120). `db`로 바꾸기는 DB·이벤트·마이그레이션이 준비된 뒤 gitops `overlays/staging/ai` PR 1회(ai만 롤링 재시작). 되돌리기는 `snapshot` |
+| 🆕 `APP_AI_UNMET_DEMAND_ENABLED` | `false` | 6.4.3·6.4.4 수요 저장·통계만 별도로 켠다(11/26 승인). 영화 검색은 기존 스냅샷을 유지하므로 `APP_AI_DATA_SOURCE=db` 전환·복제본(6.4.2)을 기다리지 않는다. 꺼짐·DB 미설정·장애면 통계는 503, 기존 채팅은 유지 |
+| 🆕 `APP_AI_DB_PORT` / `APP_AI_DB_SSL_CA` | `3306` / CA PEM 경로 | 수요 저장·통계 연결용. `DB_HOST_AI`와 `APP_AI_DB_PASSWORD`(`ai_app`)를 사용한다. TLS 인증서·호스트 검증은 항상 켜고 staging은 RDS CA 경로가 필수다. 비밀번호는 기존 Secret 키 그대로 |
+| 🆕 `DB_HOST_AI` · `SQS_AI_CATALOG_EVENTS_URL` | `cinema-infra-endpoints`(Terraform, 6.1.1·6.1.3) | 이름 그대로 읽음. DB 호스트는 수요 저장·통계 스위치 또는 `APP_AI_DATA_SOURCE=db`일 때 사용하고, SQS는 복제본에서만 사용한다 |
 | 🆕 ai DB 비밀번호 | Secret `ai-secrets`에 키 2개 — `APP_AI_DB_PASSWORD`(`ai_app`)·`APP_AI_QUERY_DB_PASSWORD`(`ai_query`) | 키 이름 확정(11/24, 김서현 — #170 코멘트). 계정은 6.1.1 db-bootstrap이 만들고, Secret 전달은 6.1.4(External Secrets — `ai-secrets`는 지금 Terraform이 값을 다시 쓰지 않아 여기에 키를 더하지 않는다). 그 전에는 `db`로 켤 수 없다 |
-| 🆕 ⏳ `ai_db` 마이그레이션 | 제안: 다른 서비스와 같은 Flyway 훅 Job `ai-flyway`(`ai-migrator-secrets`, SQL은 이미지 `/app/db/migration`) | **방식 미확정**(6.4.1). `ai-migrator-secrets`는 6.1.1에서 만든다. 지금 gitops `base/ai`에는 Flyway Job이 없다 |
+| 🆕 `ai_db` 마이그레이션 | 6.4.1 로컬 구현: `services/ai/db/migration/` → 이미지 `/app/db/migration`. 별도 Flyway 훅 Job `ai-flyway`가 `ai_migrator`로 실행(앱 자동 실행 없음) | `ai-migrator-secrets`는 6.1.1에서 만든다. **staging 훅 연결은 별도**: gitops Job·SQL 복사 initContainer·RDS CA/호스트 검증이 필요하며 이 로컬 작업에서는 배포하지 않는다 |
 | `ANTHROPIC_API_KEY` (Secret `ai-secrets`) | Terraform sensitive 변수 → K8s Secret | staging 키. 로컬은 개발 전용 키를 `.env`에 |
 
 **시간 예산** (`/api/ai/chat` 한 번, 바깥이 항상 안쪽보다 길다)
@@ -918,9 +921,12 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | --- | --- | --- |
 | `movie` · `theater` · `screening` | 6-1과 같은 컬럼, PK 원본 ID | 최초 백필(공개 API) → SQS `ai-catalog-events`(`screening.changed`·`movie.changed`) upsert(`version`이 큰 것만) → 10분 전체 대조 |
 | `processed_message` | PK `message_id` | inbox(중복 무시) |
-| `unmet_demand` | PK `id`, INDEX (`created_at`), (`category`) | 범위 밖·거부 질문 1건 = 1행: `category`·`reason`·`question_hash`·`slots` JSON·`created_at`. **질문 원문·userId 없음** |
+| `unmet_demand` | PK `id`, INDEX (`created_at`), (`category`) | `out_of_scope` 도구로 끝난 수요 1건 = 1행: `category`·`reason`·`question_hash`·`slots` JSON·`created_at`. 잡담·도구 미선택 폴백·기술적 SQL 거부(`REJECTED`)는 제외(통계 API 계약). **질문 원문·userId 없음** |
 
 - 계정: `ai_app`(DML), `ai_migrator`(DDL), `ai_query`(NL2SQL 실행 전용, `movie`·`theater`·`screening` SELECT만, `MAX_EXECUTION_TIME` 5초)
+- 6.4.1 DDL 원본은 `services/ai/db/migration/`. `movie`·`screening`에는 `version`(백필 전 0)·`deleted`·`changed_at`을 더 두고, 삭제 이벤트의 ID·마지막 버전을 보존하기 위해 공개 값은 NULL을 허용한다. FK는 없다(이벤트 순서 역전 허용). `starts_at`·`ends_at`·`fetched_at`·`changed_at`은 UTC `DATETIME(3)`, `business_date`·`start_hour`는 KST 기준이다. SQLite의 KST 문자열과 변환하는 연결 계층·삭제 행 제외는 6.4.2에서 구현한다
+- `unmet_demand.reason`은 `VARCHAR(120) COLLATE utf8mb4_0900_bin`(완전 일치 집계), `question_hash`는 최대 64자(기존 로그의 HMAC 16자도 수용), `slots`는 JSON object 또는 NULL이다. `created_at`은 앱이 UTC로 넣고 질문 원문·userId 컬럼은 만들지 않는다
+- 6.4.3 초기 저장은 기존 로그와 같은 파드별 HMAC-SHA256 앞 16자·정제 요약만 사용하고 `slots`는 `{}`로 둔다(자유 입력 유입 방지). DB에서는 짧은 질문·기호까지 원문 전체를 포함한 요약을 NULL 처리한다(기존 로그의 짧은 질문 예외와 구분). `created_at`은 UTC 밀리초로 내림해 자정 경계 반올림을 막는다. 저장은 250ms 이내 최선 노력·재시도 없음이며, 실패/시간 초과가 정상 채팅 답을 막지 않는다. 시간 초과 뒤 이미 실행 중인 쓰기는 늦게 커밋될 수 있다
 - `ai_query`의 테이블 권한은 **ai 마이그레이션이 준다**(6.1.1): db-bootstrap은 계정만 만든다(권한 없음) — 그때는 테이블이 없고 MySQL은 없는 테이블에 SELECT만 줄 수 없다. 테이블을 만드는 마이그레이션 뒤에 `GRANT SELECT ON ai_db.movie TO 'ai_query'@'%'`(`theater`·`screening`도)를 넣는다. 그래서 `ai_migrator`만 `ai_db` 범위의 GRANT OPTION을 갖는다(다른 서비스의 migrator에는 없다). 세 테이블 밖의 권한을 주면 다음 db-bootstrap 실행이 실패한다. 5초 상한은 계정에 걸 수 없어 ai가 연결마다 세션에 건다
 
 #### 6-5. 🆕 이용 안내 문서 (RAG, 6.4.7 — ADR-126)

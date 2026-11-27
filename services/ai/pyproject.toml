@@ -16,6 +16,8 @@ dependencies = [
     "pyyaml>=6",
     "anthropic>=0.40",
     "redis>=5.2",
+    # 6.4.3·6.4.4 ai_db 수요 저장·통계(추가 승인: 11/26). TLS 사용, rsa extra 불필요.
+    "pymysql>=1.2.4,<2",
 ]
 
 [dependency-groups]

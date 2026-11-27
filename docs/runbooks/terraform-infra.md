@@ -2339,7 +2339,25 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 
 목 서버의 한계: 좌석 배치 API가 없어 좌석 선택 화면은 목으로 못 본다(결제 화면은 목 예매 `7001~7999`로 바로 연다). 쿠폰 거절은 쿠폰 ID가 `reject`로 시작할 때만이라 화면에서 만들 수 없다 — 1)의 자동 테스트가 본다.
 
-**3) staging (시연 계정 VIP·ADMIN, 6-N과 같은 시간에 이어서)** — ⬜
+**3) staging (시연 계정 VIP·ADMIN, 6-N과 같은 시간에 이어서)** — 화면 일부 ✅ · **결제 확정 ❌** · 큐 확인 ⬜
+
+11/27 19:09~19:20 한채연(시연 계정 VIP·ADMIN, 크롬) 결과:
+
+| # | 흐름 | 결과 |
+| --- | --- | --- |
+| 6 | 관리자 개요(서비스 8·정지 0·장애 0·노드 2) · 서비스 상태 · coupon 정지(0/0) → 가동(목표 2) | ✅ 확인 창 문장 잘림은 staging에서도 보임(이 PR의 CSS 수정이 배포되면 사라진다). 노드 CPU·메모리 칸이 「—」 |
+| 7 | 오류 리포트 오늘 — 38행 · CSV 버튼 | ✅ |
+| 8 | AI 범위 밖 질문 — 「통계 없음」 안내 | ✅ (ai 0/1, `ng-ai` 0대 — 정상 안내) |
+| 9 | 쿠폰 이벤트 만들기 「통합 테스트 6.5.1c 50%」(10장, 19:12~19:42) | ✅ 목록 0/10 |
+| 1 | 홈 배너 카운트다운 → 진행 중으로 자동 전환 → 받기 → 「받은 쿠폰이에요」 9/10 | ✅ |
+| 2 | 좌석 선택(22:10 회차 H10·H11, 실시간 반영 중) → 선점(예매 19814) → 결제 화면에 쿠폰 표시 → 「토스페이로 15,000원 결제하기」 | ✅ |
+| 3 | 체크아웃 → 토스페이 결제창(15,000원) → **사람이 결제 완료** → 「결제 결과를 확인하지 못했어요」(30초) → 「결과 다시 확인」 여러 번 → 선점 만료 → 「선점 시간이 지나 예매가 취소됐어요 · 결제가 확인되면 환불」 | ❌ **결제가 끝났는데 확정되지 않았다** — 체크아웃이 VERIFYING에서 5분 동안 결과를 받지 못함 |
+| — | 만료 뒤 쿠폰 | ✅ 「사용 가능」으로 돌아옴(보상·반환 동작) |
+| 4·5 | 결제창 취소 → 재결제 · 쓴 쿠폰 숨김 | ⬜ 3이 실패해 하지 않았다 |
+
+**3 원인 후보** (kubectl·AWS 접근이 없어 확인 못 함 — 남궁일·김종식): `payment.verification-requested`를 payment가 받지 못함(`payment-commands` 소비자 `APP_MESSAGING_CONSUMER_ENABLED`), payment의 포트원 단건 조회 실패(`payment_pg_call_total{result!="ok"}`, `APP_PORTONE_*` Secret), 결과(`payment.approved`)가 `booking-replies`로 가지 못함(payment 릴레이 `APP_OUTBOX_RELAY_ENABLED`), booking 결과 소비자. 볼 곳: `msa-check.sh queues`(`payment-commands`·`booking-replies` 대기·DLQ), `kubectl logs deploy/payment|booking --since=1h | grep 19814`, 포트원 콘솔에서 그 결제가 PAID인지 → PAID면 만료 처리가 환불해야 한다(`payment_refund_unresolved_total` 0인지). 테스트 결제라 실제 청구는 없다
+
+
 
 `APP_CHECKOUT_SAGA_ENABLED=true`·coupon 메시징이 켜진 뒤. 고치지 않는다(큐 purge·DML 금지), 결과는 노션 6.5.1c에.
 
@@ -3343,6 +3361,7 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
 | ⬜ | 김종식 | 6-N MSA 통합 테스트 (6.5.1b) — user 복제본(#220·gitops #61·#63) · coupon 시간 초과 · DLQ 0 | | | |
 | ⬜ | 김종식 | 6-O AZ 장애 시연 (6.1.10 · 6.5.2b, gitops #62 뒤) · 6-O-1 비용 정리 | | | |
+| 11/27 | 한채연 | 6-P 3) staging 화면 흐름(시연 계정) — 관리자 4·쿠폰 이벤트·발급·선점 ✅, **쿠폰 결제 확정 ❌**(VERIFYING에서 결과 없이 선점 만료 → 취소·환불 안내, 쿠폰 반환 ✅) | 약 15분 | 결제 결과가 booking에 돌아오지 않음 — 원인 미확인(접근 권한 없음) | 6-P 3) 결과표·원인 후보 |
 | 11/27 | 한채연 | 6-P 1)·2) 화면 흐름·catalog 이벤트 — 로컬(자동 테스트 + 목 서버) | 약 1시간 | ① 정지/가동 확인 창 문장 잘림(`td` nowrap 상속) ② 목 서버 「내 쿠폰」이 체크아웃 결과 미반영 | 6-P 신설, 두 가지 같은 PR에서 고침. staging(6-P 3)은 ⬜ |
 
 ---

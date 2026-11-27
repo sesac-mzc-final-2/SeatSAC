@@ -251,6 +251,7 @@ git switch main && git pull && git log -1 --oneline        # 오래된 main·다
 | ai 의미 캐시 미적중 | 인덱스를 기동 때 한 번만 | ng-ai down/up. **새 클러스터면 6-G-6 벡터 검색 확인을 다시** | 6-G-6·7 |
 | ESO `InvalidProviderConfig`·`SecretSyncedError … ResourceNotFoundException` | Pod Identity 전·이름 불일치·Terraform Secret 전 | 8-F | 8-F |
 | ops-api 503 `NOT_CONFIGURED`·`JWKS_UNAVAILABLE`·`STATE_CONFIGMAP_MISSING` | cognito 설정·NAT·sync 전 | 6-L 표 | 6-L |
+| 관리자 리포트 CSV 내려받기가 XML `AuthorizationQueryParametersError … the region 'ap-northeast-2' is wrong; expecting 'us-east-1'` | presigned URL이 전역 주소(`버킷.s3.amazonaws.com`) — 새 계정은 리포트 버킷이 늘 갓 만든 상태라 DNS가 퍼지는 동안(최대 약 24시간) us-east-1로 간다 | ops-api가 리전 주소로 서명(#227) — 그 전 이미지면 하루 기다리거나 ops-api를 최신으로 | 6-M, #227 |
 | `AccessDeniedException … eks:DescribeUpdate`(cluster-schedule) | 클러스터 ARN 필요 | 반영됨(#41) | 8-1-3 |
 | `ValidationException: The execution role you provide must allow AWS EventBridge Scheduler to assume the role` | SourceArn에 일정 ARN | 일정 **그룹** ARN(반영됨), 10~20초 뒤 다시 | 8-1-3, #49 |
 | 끄기 일정 `CreateSchedule` `ValidationException` | end_date 전에 한 번도 실행되지 않는 일정 | 49시간 전부터 끄기 일정을 뺀다(반영됨, #126) — 2장 `cluster_schedule_demo_start` | #126 |

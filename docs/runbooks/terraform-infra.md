@@ -2301,7 +2301,7 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 | 5 | 발표가 끝나고 계속 둘 때 — 이중화 끄기 | `staging.tfvars`: `nat_gateway_per_az = false` · `valkey_replicas = 0` · `ai_valkey_replicas = 0` · `service_databases`의 `multi_az = false` → PR → plan(NAT 1개·Valkey 복제본·RDS 대기 인스턴스 **destroy만**, 서비스 인스턴스 replace가 보이면 멈춘다) → apply. 대략 NAT 1개(하루 약 $1.5)·RDS Multi-AZ 5개 대기분·Valkey 복제본 2개가 빠진다 |
 | 6 | 완전히 내릴 때 | 11장 삭제(아래 6.1.10 추가 항목 포함) |
 
-### 6-P. 화면 흐름 통합 테스트 · catalog 이벤트 발행 확인 (6.5.1c, ADR-116·117·119) — 로컬 ✅ · staging ⬜
+### 6-P. 화면 흐름 통합 테스트 · catalog 이벤트 발행 확인 (6.5.1c, ADR-116·117·119) — 로컬 ✅ · staging 일부 ✅ · 결제 확정 ❌
 
 목표: 사용자가 누르는 순서대로 **쿠폰 → 결제 → 확정**과 **관리자 화면 4개**가 끝까지 가는지, catalog 변경 이벤트가 **큐에 실제로 도착**하는지 본다. 메시지 경로(DLQ·user 복제본·coupon 명령)는 6-N(6.5.1b)이 본다.
 
@@ -2355,7 +2355,7 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 | — | 만료 뒤 쿠폰 | ✅ 「사용 가능」으로 돌아옴(보상·반환 동작) |
 | 4·5 | 결제창 취소 → 재결제 · 쓴 쿠폰 숨김 | ⬜ 3이 실패해 하지 않았다 |
 
-**3 원인 후보** (kubectl·AWS 접근이 없어 확인 못 함 — 남궁일·김종식): `payment.verification-requested`를 payment가 받지 못함(`payment-commands` 소비자 `APP_MESSAGING_CONSUMER_ENABLED`), payment의 포트원 단건 조회 실패(`payment_pg_call_total{result!="ok"}`, `APP_PORTONE_*` Secret), 결과(`payment.approved`)가 `booking-replies`로 가지 못함(payment 릴레이 `APP_OUTBOX_RELAY_ENABLED`), booking 결과 소비자. 볼 곳: `msa-check.sh queues`(`payment-commands`·`booking-replies` 대기·DLQ), `kubectl logs deploy/payment|booking --since=1h | grep 19814`, 포트원 콘솔에서 그 결제가 PAID인지 → PAID면 만료 처리가 환불해야 한다(`payment_refund_unresolved_total` 0인지). 테스트 결제라 실제 청구는 없다
+**3 원인 — 가장 유력(남궁일, PR #232 리뷰)**: 오늘 오후 apply 뒤 staging payment의 포트원 V2 API Secret이 잘못된 값으로 바뀌어 verify의 포트원 단건 조회가 실패, 체크아웃이 VERIFYING에 머묾. 김종식이 콘솔 값으로 다시 넣은 뒤 3)~5)를 다시 본다. 19814 결제가 포트원에서 PAID였으면 환불 여부는 남궁일이 `payment_refund_unresolved_total`·payment 로그로 확인. 그 밖의 후보(확인 전): `payment.verification-requested`를 payment가 받지 못함(`payment-commands` 소비자 `APP_MESSAGING_CONSUMER_ENABLED`), payment의 포트원 단건 조회 실패(`payment_pg_call_total{result!="ok"}`, `APP_PORTONE_*` Secret), 결과(`payment.approved`)가 `booking-replies`로 가지 못함(payment 릴레이 `APP_OUTBOX_RELAY_ENABLED`), booking 결과 소비자. 볼 곳: `msa-check.sh queues`(`payment-commands`·`booking-replies` 대기·DLQ), `kubectl logs deploy/payment|booking --since=1h | grep 19814`, 포트원 콘솔에서 그 결제가 PAID인지 → PAID면 만료 처리가 환불해야 한다(`payment_refund_unresolved_total` 0인지). 테스트 결제라 실제 청구는 없다
 
 
 

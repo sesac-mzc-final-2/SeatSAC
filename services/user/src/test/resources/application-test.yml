@@ -5,6 +5,10 @@ spring:
     enabled: true
     user: test
     password: test
+  # SQS 자동 설정을 끈다 — 테스트는 핸들러를 직접 부른다(리스너 빈도 없다)
+  cloud.aws:
+    sqs.enabled: false
+    region.static: ap-northeast-2
   jpa:
     open-in-view: false
     hibernate.ddl-auto: validate

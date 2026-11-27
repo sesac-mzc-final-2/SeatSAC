@@ -211,7 +211,8 @@ resource "aws_cloudfront_distribution" "frontend" {
   price_class         = var.cloudfront_price_class
   http_version        = "http2and3"
   is_ipv6_enabled     = true
-  aliases             = local.custom_domain_enabled ? [var.custom_domain] : [] # 3.1.23 사용자 도메인(없으면 기본 도메인만)
+  aliases             = local.custom_domain_enabled ? [var.custom_domain] : []         # 3.1.23 사용자 도메인(없으면 기본 도메인만)
+  web_acl_id          = local.waf_enabled ? aws_wafv2_web_acl.cloudfront[0].arn : null # 6.1.8 WAF(waf.tf, var.waf_mode). off면 연결 없음
 
   origin {
     origin_id                = "s3-frontend"

@@ -2376,7 +2376,8 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 ```bash
 infra/scripts/msa-check.sh queues          # 1) 직전(Q₀)·4) 1분 뒤(Q₁) — ai-catalog-events 대기 차이 = N · 처리 중 0 · DLQ 0
 # catalog 파드 전부(잠금을 얻은 파드 하나만 일정·변경 찾기 로그를 남긴다) — --prefix로 파드 이름이 줄 앞에 붙는다
-kubectl -n cinema-staging logs -l app.kubernetes.io/name=catalog --prefix --since=2h --max-log-requests=8 | grep -E 'schedule extended|catalog 변경 찾기|아웃박스 릴레이' | tail -30
+# 라벨 선택자는 --tail 기본값이 파드마다 10줄이라 --tail=-1로 2시간 전부를 받는다(뒤에서 자르지 않는다)
+kubectl -n cinema-staging logs -l app.kubernetes.io/name=catalog --prefix --since=2h --tail=-1 --max-log-requests=8 | grep -E 'schedule extended|catalog 변경 찾기|아웃박스 릴레이'
 # Grafana Explore: increase(catalog_outbox_publish_total{result="sent"}[10m]) = N · increase(catalog_outbox_publish_total{result="failed"}[10m]) == 0 · catalog_outbox_pending 0
 ```
 

@@ -2086,6 +2086,76 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/reports/errors/dates" | 
 | `nodes[].cpuPercent` 모두 null | cAdvisor 지표에 `node` 라벨이 없음 | Prometheus에서 `container_cpu_usage_seconds_total{id="/"}` 라벨 확인 → `prom.py` 쿼리 조정 |
 | `/ops/*` 가 화면(index.html)으로 옴 | CloudFront `/ops/*` 동작이 없음(1번 전) 또는 무효화 전 | 1번 apply 확인 |
 
+### 6-M. WAF·오류·보안 리포트 (6.1.8·6.1.9, ADR-121·124) — ⬜
+
+코드: SeatSAC `envs/staging/waf.tf`(웹 ACL, `var.waf_mode`)·`cloudfront.tf`(`web_acl_id`)·`reports.tf`(버킷·Glue·Athena·내보내기 Pod Identity) · `envs/staging-k8s/reports.tf`(ConfigMap `monitoring/report-export`) · gitops `observability/report-export`(CronJob·스크립트)·`platform/loki/values.yaml`(NetworkPolicy `loki-ingress`에 report-export)
+
+| 항목 | 값 |
+| --- | --- |
+| WAF | CloudFront 웹 ACL `cinema-staging-waf`(us-east-1). AWS 관리형 Common·KnownBadInputs·SQLi + IP당 5분 2,000(`waf_rate_limit_per_5min`). `waf_mode` `off`(기본) → `count`(세기만) → `block`. Common의 `SizeRestrictions_BODY`(8KB)는 늘 count — 본문은 gateway가 64KB에서 413으로 막는다 |
+| 리포트 버킷 | `cinema-staging-reports-{계정ID}` — `errors/dt=YYYY-MM-DD/HH.json.gz`(KST, 30일) · `athena-results/`(7일). SSE-S3, 공개 차단, TLS만 |
+| Glue·Athena | DB `cinema_staging_reports` · 테이블 `errors`(partition projection `dt` — 크롤러·MSCK 없음) · 작업 그룹 `cinema-staging-reports`(결과 위치 고정, 쿼리당 1GB 상한) |
+| 내보내기 | CronJob `monitoring/report-export` 매시 7분: Loki `{namespace="cinema-staging"} \|= "errorCategory"` → 지난 3개 KST 정시 구간 파일을 다시 만든다(멱등) → S3. 열은 timestamp·service·level·errorCategory·status·path·traceId·message만(userId·IP·토큰 없음). Pod Identity `cinema-staging-report-export-pod`(errors/ 쓰기만) |
+| 조회 | ops-api `GET /ops/reports/errors/dates` · `POST …` → Athena(6-L) — 이름이 이 절과 같다(`ops_api.tf` locals) |
+
+**1) Terraform — staging** (리포트만, WAF는 off 그대로)
+
+```bash
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -out=plan.out
+# 기대: add = S3 버킷 1(+ 공개 차단·소유권·암호화·수명 주기·정책 5) · Glue DB 1·테이블 1 · Athena 작업 그룹 1 · Pod Identity 역할·정책·연결
+#       CloudFront 변경 없음(waf_mode off). destroy 0
+terraform apply plan.out
+cd ../staging-k8s
+terraform plan -var-file=staging-k8s.tfvars -out=plan.out   # 기대: ConfigMap monitoring/report-export add 1
+terraform apply plan.out
+```
+
+**2) gitops 머지** — `observability/report-export` + Loki NetworkPolicy. `cinema-observability`·`platform-loki` sync(Loki는 정책만 바뀌어 재시작 없음)
+
+```bash
+kubectl -n monitoring create job --from=cronjob/report-export report-export-manual     # 바로 한 번
+kubectl -n monitoring logs job/report-export-manual -c export     # {"window":"…","rows":N,…} 3줄 + {"done":true}
+kubectl -n monitoring logs job/report-export-manual -c upload     # {"upload":파일 수} (rows가 모두 0이면 {"upload":0} — 정상)
+aws s3 ls "s3://cinema-staging-reports-$(aws sts get-caller-identity --query Account --output text)/errors/" --recursive | tail -3
+kubectl -n monitoring delete job report-export-manual
+```
+
+- 오류 줄을 일부러 만들려면: 토큰 없이 `curl -s -o /dev/null https://<도메인>/api/seats/hold -X POST`(gateway `SECURITY` 401) 몇 번 → 다음 정시가 지난 뒤 위 수동 실행
+- Athena 확인(콘솔 쿼리 편집기 또는 ops-api): `SELECT errorcategory, count(*) FROM cinema_staging_reports.errors WHERE dt = '<오늘 KST>' GROUP BY 1` — 작업 그룹 `cinema-staging-reports`
+
+**3) ops-api로 확인** (6-L 뒤)
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/reports/errors/dates" | jq    # 오늘 날짜가 보인다(503 REPORT_UNAVAILABLE이 아니다)
+```
+
+**4) WAF 켜기 — count** (시연·측정이 없는 시간, 스크럼 공유)
+
+```bash
+cd infra/terraform/envs/staging
+terraform plan -var-file=staging.tfvars -var waf_mode=count -out=plan.out   # tfvars에도 waf_mode = "count"
+# 기대: add = aws_wafv2_web_acl.cloudfront[0](us-east-1) · change = CloudFront 배포 web_acl_id. destroy 0
+terraform apply plan.out        # CloudFront 배포가 Deployed가 될 때까지 몇 분
+```
+
+- count는 아무것도 막지 않는다. 하루 이상 두고 CloudWatch `AWS/WAFV2`(리전 Global, `WebACL=cinema-staging-waf`)의 `CountedRequests`를 규칙별로 본다. 콘솔 WAF → 웹 ACL → Sampled requests에서 걸린 요청의 경로를 확인
+- 걸린 것이 정상 요청(화면·포트원 웹훅 `/api/webhooks/portone`·SSE·ai의 공개 API)이면 `waf.tf`의 `count_rules`에 그 규칙 이름을 넣는 PR → apply 뒤 다시 본다
+
+**5) block** — 4)에서 정상 요청이 걸리지 않을 때만 `waf_mode = "block"` PR → apply. 되돌리기는 `count` 또는 `off`(웹 ACL 연결 해제 → 몇 분 뒤 반영)
+
+- 쿠폰 오픈처럼 한 IP(회사·학원 공유기)에서 많이 들어오는 시연이면 그 전에 요청 수를 확인한다 — 5분 2,000을 넘는 IP는 block이면 403. 필요하면 `waf_rate_limit_per_5min`을 올린다
+
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| export 로그 `URLError … timed out`·`Connection refused` | Loki NetworkPolicy가 report-export를 허용하지 않음(gitops platform/loki 미sync) 또는 Loki 파드 없음 | `kubectl -n monitoring get networkpolicy loki-ingress -o yaml \| grep report-export`, `kubectl -n monitoring get pods -l app.kubernetes.io/name=loki` |
+| upload `AccessDenied` | Pod Identity 연결 전에 뜬 파드 · 역할 정책 · 버킷 이름 | `aws eks list-pod-identity-associations --cluster-name cinema-staging-eks --namespace monitoring` 에 `report-export`, ConfigMap `report-export`의 `REPORTS_BUCKET` |
+| Job `CreateContainerConfigError` | ConfigMap `monitoring/report-export` 없음(staging-k8s apply 전) | 1)의 staging-k8s apply |
+| rows가 계속 0 | 그 시간에 `errorCategory` 줄이 없음(정상) · 앱 로그 형식 | Grafana Explore `{namespace="cinema-staging"} \|= "errorCategory"` |
+| Athena `HIVE_BAD_DATA`·빈 결과 | 파일 경로가 `errors/dt=YYYY-MM-DD/`가 아님 · `dt`를 문자열 `'…'`로 주지 않음 | `aws s3 ls …/errors/` 경로 확인 |
+| ops-api 날짜 목록이 비어 있음 | 아직 내보낸 파일이 없다(첫 정시 전) | 2)의 수동 실행 |
+| WAF block 뒤 화면·API 403 | 관리형 규칙 오탐 · IP 요청 제한 | 바로 `waf_mode = "count"` apply → Sampled requests에서 규칙 이름 확인 → `count_rules`에 추가 |
+
 ---
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜

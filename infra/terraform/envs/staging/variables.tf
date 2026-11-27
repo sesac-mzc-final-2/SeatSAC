@@ -193,6 +193,29 @@ variable "api_origin_https" {
   }
 }
 
+# ---- 6.1.8 WAF (ADR-124, waf.tf) ------------------------------------------
+variable "waf_mode" {
+  description = "CloudFront 웹 ACL cinema-staging-waf: off(없음) · count(세기만 — 오탐 확인) · block(차단). off → count → block 순서로 (런북 6-M)"
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "count", "block"], var.waf_mode)
+    error_message = "waf_mode는 off·count·block 중 하나"
+  }
+}
+
+variable "waf_rate_limit_per_5min" {
+  description = "IP당 5분 요청 상한(WAF rate-based, 100~). 넘은 IP는 count면 세기만, block이면 그 IP가 기준 아래로 내려올 때까지 403"
+  type        = number
+  default     = 2000
+
+  validation {
+    condition     = var.waf_rate_limit_per_5min >= 100
+    error_message = "WAF rate-based 규칙 최소값은 100"
+  }
+}
+
 variable "cloudfront_price_class" {
   description = "PriceClass_200 = 북미·유럽·아시아(한국 포함). PriceClass_100은 한국 엣지가 빠진다"
   type        = string

@@ -1,5 +1,11 @@
 import { createBrowserRouter, type RouteObject } from "react-router";
-import { AdminAiDemandPage, AdminOverviewPage, AdminReportsPage, AdminSectionPage } from "@/pages/admin";
+import {
+  AdminAiDemandPage,
+  AdminOverviewPage,
+  AdminReportsPage,
+  AdminSectionPage,
+  AdminServicesPage,
+} from "@/pages/admin";
 import { AuthCallbackPage } from "@/pages/auth-callback";
 import { BookingPayPage } from "@/pages/booking-pay";
 import { CreditsPage } from "@/pages/credits";
@@ -40,16 +46,7 @@ export const router = createBrowserRouter([
         element: <AdminLayout />,
         children: [
           { index: true, element: <AdminOverviewPage /> },
-          {
-            path: routePatterns.adminServices,
-            element: (
-              <AdminSectionPage
-                icon="shield-check"
-                title="서비스 상태"
-                description="서비스별 신호등·HPA·노드 CPU와 정지/가동 버튼이 들어올 자리예요. 준비 중이에요."
-              />
-            ),
-          },
+          { path: routePatterns.adminServices, element: <AdminServicesPage /> },
           { path: routePatterns.adminReports, element: <AdminReportsPage /> },
           { path: routePatterns.adminAiDemand, element: <AdminAiDemandPage /> },
           {

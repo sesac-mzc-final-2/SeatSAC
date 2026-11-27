@@ -46,6 +46,21 @@ app:
   cognito:
     # 프로필 첫 생성 때 GetUser. 기본값은 AWS_REGION(공통 ConfigMap)으로 만든다 — 사용자 풀 ID는 필요 없다(토큰이 풀을 안다)
     endpoint: ${APP_COGNITO_ENDPOINT:https://cognito-idp.${AWS_REGION:ap-northeast-2}.amazonaws.com}
+  # 6.3.4b 예매 내역 출처(API 명세서 v1.5 23-1). sync = booking 내부 호출(기본, 지금과 같다) · local = booking_history 복제본
+  booking-history:
+    mode: ${APP_BOOKING_HISTORY_MODE:sync}
+  messaging:
+    # 기본 false — Pod Identity(cinema-staging-user-pod)·gitops user ServiceAccount 전에 켜면 큐를 읽지 못한다.
+    # 꺼져 있으면 SQS 자동 설정도 끈다(아래 spring.cloud.aws.sqs.enabled)
+    consumer-enabled: ${APP_MESSAGING_CONSUMER_ENABLED:false}
+    booking-events-url: ${APP_MESSAGING_BOOKING_EVENTS_URL:}
+    max-concurrent: ${APP_MESSAGING_MAX_CONCURRENT:10}
+    max-messages-per-poll: ${APP_MESSAGING_MAX_MESSAGES_PER_POLL:10}
+
+# SQS: 자격 증명은 Pod Identity(액세스 키 없음, cinema-staging-user-pod). 로컬은 ElasticMQ
+spring.cloud.aws:
+  region.static: ${AWS_REGION:ap-northeast-2}
+  sqs.enabled: ${APP_MESSAGING_CONSUMER_ENABLED:false}
 
 # user → booking·catalog 서킷 (ADR-23: 실패율 50%, 10초 열림). booking 열림 → 503 BOOKING_UNAVAILABLE, catalog 열림 → screening null·극장 검증 생략
 resilience4j.circuitbreaker:

@@ -18,6 +18,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-mysql")
+    // 6.3.4b 예매 내역 복제본 — user-booking-events 소비 (booking·coupon·payment와 같은 버전)
+    implementation("io.awspring.cloud:spring-cloud-aws-starter-sqs:3.4.0")
     runtimeOnly("com.mysql:mysql-connector-j")
     testImplementation(project(":libs:common-test"))
 }

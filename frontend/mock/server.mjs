@@ -398,6 +398,11 @@ function couponView(c) {
 }
 
 async function handleCoupons(req, res, path) {
+  // 예매 화면을 떠난 뒤 선점이 끝난 체크아웃의 쿠폰이 RESERVED로 남지 않게 — 예매 조회와 같은 만료 규칙을 먼저 돌린다(#232 리뷰)
+  for (const id of checkouts.keys()) {
+    const booking = payBookings.get(id);
+    if (booking) advanceCheckout(booking);
+  }
   if (path === "/api/coupons/me" && req.method === "GET") return json(res, 200, { items: myCoupons.map(couponView) });
   if (MOCK_COUPON === "off") return fail(res, 404, "NOT_FOUND", "no coupon event");
 

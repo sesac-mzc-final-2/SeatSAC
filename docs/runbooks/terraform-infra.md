@@ -2314,7 +2314,7 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 | catalog 이벤트 → 큐 | `services/catalog/src/test/java/com/seatsac/catalog/event/CatalogEventQueueIntegrationTest.java` | 진짜 발송기 + ElasticMQ(compose와 같은 `1.7.1`) 큐에서 **받아서**: 본문 = 계약 envelope(`*.changed.v1.json` required), 메시지 속성 `type`·`traceId` = 본문 값, `correlationId` 속성 없음, `eventId` 겹침 없음, 바뀐 것이 없으면 다음 주기에 아무것도 안 감, 영화 제목 변경 → 그 영화만 `version` 2, 회차 삭제 → `deleted: true`·`version` 2 |
 
 ```bash
-cd frontend && npm run check                       # 11/27: 60 파일 · 405 테스트 통과
+(cd frontend && npm run check)                     # 11/27: 60 파일 · 405 테스트 통과 — 서브셸이라 다음 줄은 루트에서 돈다
 ./gradlew :services:catalog:test --tests '*CatalogEventQueueIntegrationTest' --tests '*CatalogChangeEventsIntegrationTest'   # 11/27: 2 + 5 통과 (Docker 필요)
 ```
 
@@ -2346,12 +2346,17 @@ cd frontend && npm run check                       # 11/27: 60 파일 · 405 테
 - [ ] 2)의 1~9를 staging 화면으로 한 번 — 결제는 토스페이 테스트 결제. 4는 결제창을 닫아 본다
 - [ ] 결제 뒤 마이페이지 예매 내역에 그 예매(쿠폰 할인 금액)가 수 초 안에 보인다 — user 복제본(6-N 1)이 local이면 이벤트 경로
 - [ ] `/ops` 정지/가동은 **coupon만**, 끝나면 `msa-check.sh stopped`가 비어 있다
-- [ ] catalog 이벤트 — 릴레이가 켜져 있으면(`catalog-config`의 `APP_OUTBOX_RELAY_ENABLED=true`) 밀림 0·큐 대기 0 근처:
+- [ ] catalog 이벤트 — 릴레이가 켜져 있을 때(`catalog-config`의 `APP_OUTBOX_RELAY_ENABLED=true`). 「밀림 0·실패 0」만으로는 **보냈다는 증거가 아니다**(그동안 바뀐 것이 없어도 0이다). 그래서 **이름을 댈 수 있는 변경 하나**를 끝까지 따라간다. DML 없이 생기는 변경은 상영 일정 이어 붙이기(`APP_SCHEDULE_*`, 1시간마다 — 새 영업일 회차를 넣는다)다:
+  1. 이어 붙이기 로그에서 날짜·회차 수를 고른다 — `schedule extended date=YYYY-MM-DD … screenings=N`
+  2. 그 뒤 첫 변경 찾기(1분)가 같은 수를 잡는다 — `catalog 변경 찾기 생김·바뀜=N`(영화 변경이 겹치면 N보다 크다)
+  3. 릴레이가 그만큼 보낸다 — `아웃박스 릴레이 … 보냄=` 합이 N 이상, `catalog_outbox_publish_total{result="sent"}` 증가 ≥ N
+  4. **큐에 도착** — `ng-ai`가 0대면 받는 쪽이 없어 `ai-catalog-events`의 대기 수가 1)의 직전 값보다 N 이상 늘어 있다. 공개 API로 그 회차가 실제로 생겼는지도 본다: `curl -s "$API/screenings?date=YYYY-MM-DD&theaterId=<극장>" | jq '.items | length'`
+  - 이어 붙이기가 그날 넣을 것이 없으면(이미 7일이 차 있음) 로그 1이 안 나온다 — 그때는 다음 시간까지 기다리거나, 시드·TMDB 보충을 관리자가 다시 넣는 시간에 맞춰 같은 순서로 본다(사람이 DML을 직접 하지 않는다)
 
 ```bash
-infra/scripts/msa-check.sh queues          # ai-catalog-events 대기 · DLQ 0 (ng-ai 0대면 받는 파드가 없어 대기가 쌓이는 게 정상 — 런타임 계약 9-2)
-kubectl -n cinema-staging logs deploy/catalog --since=30m | grep -E '변경 찾기|outbox' | tail
-# Grafana Explore: catalog_outbox_pending (0 근처) · increase(catalog_outbox_publish_total{result="failed"}[1h]) == 0
+infra/scripts/msa-check.sh queues          # 1) 전에 한 번·4) 뒤에 한 번 — ai-catalog-events 대기 차이 ≥ N · DLQ 0
+kubectl -n cinema-staging logs deploy/catalog --since=2h | grep -E 'schedule extended|catalog 변경 찾기|아웃박스 릴레이' | tail -20
+# Grafana Explore: increase(catalog_outbox_publish_total{result="sent"}[1h]) ≥ N · increase(catalog_outbox_publish_total{result="failed"}[1h]) == 0 · catalog_outbox_pending 0 근처
 ```
 
 릴레이가 꺼져 있으면(기본) `catalog_outbox_pending`이 회차·영화 수(약 8,400)까지 쌓여 있는 것이 정상이다 — 켜는 순서는 13장 위 「받는 쪽 먼저」(ai 소비자 → catalog 릴레이).

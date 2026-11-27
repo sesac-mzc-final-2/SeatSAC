@@ -9,7 +9,8 @@
 #   - 등록하면 Route 53이 퍼블릭 호스팅 영역을 자동으로 만든다 → 보통은 data로 찾기만 한다(영역은 관리하지 않음)
 #   - ADR-125 다른 계정으로 옮길 때: 등록 이전은 영역을 옮기지 않는다 → var.custom_domain_hosted_zone으로 새 계정의
 #     영역을 Terraform이 만든다(콘솔·CLI로 만들지 않는다). 그 영역의 네임서버(출력 custom_domain_name_servers)로
-#     등록 도메인의 네임서버를 바꾼 뒤 custom_domain을 켠다(런북 rebuild-new-account 7장)
+#     등록 도메인의 네임서버를 바꾼 뒤 custom_domain을 켠다(docs/runbooks/rebuild-new-account.md 7장, #225).
+#     옛 배포에서 별칭을 뗀 뒤부터 이 apply까지 사용자 도메인은 계획된 중단이다(변수 설명). 새 계정에서만 값을 넣는다
 #   - 인증서: ACM 공개 인증서(무료), CloudFront용이라 us-east-1, DNS 검증 레코드를 같은 영역에 넣는다
 #   - CNAME이 아니라 별칭 A·AAAA: 루트 도메인(apex)은 CNAME을 둘 수 없고, CloudFront 별칭 조회는 요금이 없다
 #   - CloudFront에 aliases로 등록해야 한다 — 등록 없이 DNS만 가리키면 CloudFront가 그 이름을 받지 않는다(403)

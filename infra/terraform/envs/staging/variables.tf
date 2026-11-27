@@ -318,8 +318,15 @@ variable "custom_domain_hosted_zone" {
   description = <<-EOT
     ADR-125 다른 AWS 계정으로 옮길 때만 — 이 계정에 Terraform이 만들 퍼블릭 호스팅 영역 이름(등록 도메인 apex, 예: seatsac.example).
     도메인 등록 이전은 영역을 옮기지 않아 새 계정에는 영역이 없다. 비우면(기본) 만들지 않는다 — 등록 때 자동으로 생긴 영역을 data로 쓴다.
+    ⚠ 등록 도메인의 네임서버를 이 영역으로 바꿀 **새 계정에서만** 넣는다. 지금 영역이 이미 위임받은 계정에 넣으면 같은 이름의 두 번째
+    영역이 생기고 검증·별칭 레코드가 위임받지 않은 새 영역으로 옮겨져 인증서 검증이 끝나지 않는다.
     custom_domain은 이 영역의 이름이거나 그 아래 이름이어야 이 영역을 쓴다. 순서: 이 값만 apply → 출력 custom_domain_name_servers로
-    등록 도메인 네임서버 교체 → 퍼진 뒤 custom_domain (런북 rebuild-new-account 7장)
+    등록 도메인 네임서버 교체 → 퍼진 뒤 custom_domain.
+    사용자 도메인 중단: 옛 계정 CloudFront에서 별칭을 뗀 순간부터(같은 별칭을 두 배포에 붙일 수 없다) 새 계정 custom_domain apply로
+    인증서·별칭이 생길 때까지 사용자 도메인은 답이 없다 — 새 영역의 인증서 검증이 네임서버 교체 뒤에야 끝나 순서로는 줄일 수 없는,
+    계획된 중단이다(기본 도메인 *.cloudfront.net은 계속 동작, 시연·측정이 없는 시간에). Terraform 밖 레코드(MX·TXT 등)는 네임서버를
+    바꾸기 전에 custom_domain.tf에 aws_route53_record로 더해 이 영역에 먼저 넣는다(지금은 없다).
+    절차: docs/runbooks/rebuild-new-account.md 7장(#225)
   EOT
   type        = string
   default     = ""

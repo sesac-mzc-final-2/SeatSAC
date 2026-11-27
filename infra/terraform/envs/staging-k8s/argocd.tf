@@ -73,7 +73,10 @@ resource "helm_release" "argocd" {
     dex           = { enabled = false }
     notifications = { enabled = false }
 
-    controller     = { replicas = 1, resources = { requests = { cpu = "100m", memory = "384Mi" }, limits = { memory = "768Mi" } } }
+    # controller는 관리하는 모든 Application의 리소스 상태를 메모리에 둔다. 768Mi는 서비스 5개 때 값 —
+    # MSA 고도화(coupon·ops-api·Karpenter·ESO·Loki·Alloy·report-export) 뒤 OOMKilled 반복(11/27, 39시간에 32회)이라 올린다.
+    # 상한에 걸려 죽는 것은 Pending이 아니라 Karpenter가 노드를 늘려도 풀리지 않는다
+    controller     = { replicas = 1, resources = { requests = { cpu = "100m", memory = "512Mi" }, limits = { memory = "1536Mi" } } }
     repoServer     = { replicas = 1, resources = { requests = { cpu = "50m", memory = "192Mi" }, limits = { memory = "512Mi" } } }
     server         = { replicas = 1, resources = local.argocd_small }
     applicationSet = { replicas = 1, resources = local.argocd_small }

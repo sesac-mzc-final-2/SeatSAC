@@ -54,6 +54,7 @@ def _succeeded(query_id: str, workgroup: str = WG) -> dict:
             "WorkGroup": workgroup,
             "Status": {
                 "State": "SUCCEEDED",
+                "SubmissionDateTime": datetime(2026, 11, 24, 5, 1, 50, tzinfo=UTC),
                 "CompletionDateTime": datetime(2026, 11, 24, 5, 2, 11, tzinfo=UTC),
             },
             "ResultConfiguration": {
@@ -180,7 +181,7 @@ def _cache_q(athena_stub, query_id: str) -> None:
 
 
 def test_cache_is_dropped_when_a_newer_export_landed(client, aws):
-    # 결과(완료 05:02:11Z) 뒤에 내보내기 파일이 새로 올라오면 1시간 안이라도 쿼리를 다시 돌린다
+    # 결과(제출 05:01:50Z) 뒤에 내보내기 파일이 새로 올라오면 1시간 안이라도 쿼리를 다시 돌린다
     # (11/27 「12:34에 만듦」만 뜸)
     _, _, s3_stub, athena_stub = aws
     _cache_q(athena_stub, "q-a")
@@ -213,4 +214,41 @@ def test_cache_is_dropped_when_a_newer_export_landed(client, aws):
     fresh = client.get("/ops/reports/errors", params=params, headers=admin_headers())
     assert fresh.status_code == 202 and fresh.json()["queryId"] == "q-b"
     s3_stub.assert_no_pending_responses()
+    athena_stub.assert_no_pending_responses()
+
+
+def _cached_report(client, athena_stub, query_id: str) -> dict:
+    _cache_q(athena_stub, query_id)
+    params = {"date": "2026-11-24"}
+    assert (
+        client.get("/ops/reports/errors", params=params, headers=admin_headers()).status_code == 202
+    )
+    return client.get(f"/ops/reports/errors/{query_id}", headers=admin_headers()).json()
+
+
+def test_file_uploaded_while_the_query_ran_drops_the_cache(client, aws):
+    # 제출(05:01:50Z) 뒤·완료(05:02:11Z) 전에 올라온 파일 — 완료 시각과 비교하면 놓친다(리뷰)
+    _, _, s3_stub, athena_stub = aws
+    assert _cached_report(client, athena_stub, "q-c")["state"] == "SUCCEEDED"
+    during = datetime(2026, 11, 24, 5, 2, 0, tzinfo=UTC)
+    s3_stub.add_response(
+        "list_objects_v2",
+        {"Contents": [{"Key": "errors/dt=2026-11-24/14.json.gz", "LastModified": during}]},
+    )
+    athena_stub.add_response("start_query_execution", {"QueryExecutionId": "q-d"})
+    again = client.get(
+        "/ops/reports/errors", params={"date": "2026-11-24"}, headers=admin_headers()
+    )
+    assert again.status_code == 202 and again.json()["queryId"] == "q-d"
+
+
+def test_freshness_check_failure_still_serves_the_cache(client, aws):
+    # 신선도 확인(S3 목록)이 실패해도 있는 결과까지 503으로 만들지 않는다(리뷰)
+    _, _, s3_stub, athena_stub = aws
+    assert _cached_report(client, athena_stub, "q-e")["state"] == "SUCCEEDED"
+    s3_stub.add_client_error("list_objects_v2", "AccessDenied")
+    cached = client.get(
+        "/ops/reports/errors", params={"date": "2026-11-24"}, headers=admin_headers()
+    )
+    assert cached.status_code == 200 and cached.json()["rowCount"] == 4
     athena_stub.assert_no_pending_responses()

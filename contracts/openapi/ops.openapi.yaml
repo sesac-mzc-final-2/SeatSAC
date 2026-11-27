@@ -166,6 +166,7 @@ paths:
       description: |
         Athena 쿼리를 시작하고 **202** `{queryId, state: RUNNING}`을 준다. 화면은 `GET /ops/reports/errors/{queryId}`를 다시 부른다.
         같은 날짜의 결과가 1시간 안에 있으면 쿼리를 다시 돌리지 않고 **200** `{downloadUrl, rowCount, generatedAt}`을 바로 준다.
+        단 그 결과를 만든 뒤 그 날짜의 내보내기 파일이 새로 올라왔으면(10분마다, 진행 중인 시간까지) 쿼리를 다시 돌린다(202).
         GET이지만 Athena 쿼리를 시작하므로 감사 로그(`action: report`)를 남긴다.
       security: [ { bearerAuth: [] } ]
       parameters:
@@ -176,7 +177,7 @@ paths:
           description: 리포트 날짜(KST, `YYYY-MM-DD`). `GET /ops/reports/errors/dates`에 있는 값
       responses:
         "200":
-          description: 캐시된 결과(1시간)
+          description: 캐시된 결과(1시간, 그 뒤 새로 내보낸 파일이 없을 때)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ReportReady" }

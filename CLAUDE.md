@@ -698,7 +698,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 - [ ] 🆕 coupon ECR `cinema/coupon`·Application `cinema-coupon`(`coupon_enabled`)·gitops `base/coupon`·NetworkPolicy·`np-check.sh` · 서비스별 인스턴스 전환 도구 `db-migrate.sh`·catalog 시드 재적재 절차 (6.1.5 — 코드 11/25 · **런북 8-G·8-E 3 확인 후 체크**)
 - [ ] 🆕 Karpenter(NodePool·EC2NodeClass·중단 알림 SQS)·`cluster-scale.sh` 연동 (6.1.6, ADR-122 — `envs/staging/karpenter.tf`·`envs/staging-k8s/karpenter.tf`·gitops `platform/karpenter`·밤 정리 Lambda `cinema-staging-karpenter-sweep` — 코드 11/25 · **런북 6-K 확인 후 체크**). t3.large·xlarge On-Demand, Karpenter 노드 합계 `limits.cpu` 16, 빈 노드만 정리(`WhenEmpty`, 압축·만료·Drifted 교체 없음 — 시연·블루/그린 중 파드를 옮기지 않는다, 시연 중에는 budget 0 PR). 컨트롤러는 관리형 노드에만 → 밤에 관리형 노드그룹이 0대면 정리 Lambda가 15분마다 Karpenter 노드를 지운다
 - [ ] 🆕 ops-api·`/ops` CloudFront 동작·ALB 규칙·Role·서비스 Application `ignoreDifferences` (6.1.7, ADR-119)
-- [ ] 🆕 WAF·리포트 버킷·Glue·Athena·내보내기 CronJob (6.1.8·6.1.9, ADR-121·124 — `envs/staging/waf.tf`(`waf_mode` 기본 `off` → `count` → `block`)·`reports.tf`·`envs/staging-k8s/reports.tf`(ConfigMap `monitoring/report-export`)·gitops `observability/report-export`(CronJob 매시, Loki → S3 `errors/dt=`) — 코드 11/27 · **런북 6-M 확인 후 체크**)
+- [ ] 🆕 WAF·리포트 버킷·Glue·Athena·내보내기 CronJob (6.1.8·6.1.9, ADR-121·124 — `envs/staging/waf.tf`(`waf_mode` 기본 `off` → `count` → `block`)·`reports.tf`·`envs/staging-k8s/reports.tf`(ConfigMap `monitoring/report-export`)·gitops `observability/report-export`(CronJob 10분마다 — 진행 중인 시간까지, Loki → S3 `errors/dt=`) — 코드 11/27 · **런북 6-M 확인 후 체크**)
 - [ ] 🆕 CloudWatch EKS audit 로그 끄기(하루 약 1.5GB) · Budgets 일 경보 $50
 
 ### 9. ⚠️AI ai 서비스 (Python, ADR-82~87)
@@ -778,7 +778,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 경로·인증 | `/ops/**`만. Cognito JWKS로 Access Token 검증(issuer·`client_id`·`token_use=access`) + `cognito:groups` ∋ `ADMIN`(아니면 403). JWKS를 받지 못하면 503(`upstream` `cognito`). 모든 쓰기 조작(정지·가동·쿠폰 이벤트 생성)과 리포트 쿼리 시작은 `ops audit` 로그 한 줄(userId·action·target·result) | CloudFront 동작 `/ops/*` → 같은 ALB의 `/ops` 규칙(gateway Ingress `base/gateway/ingress.yaml`에 경로 추가 — 6장 CloudFront `/ops/*` 행) → `ops-api:8080`. gateway를 거치지 않는다 |
 | 상태 조회 | 정해 둔 PromQL만(`cinema:service_state`, 노드 CPU·메모리 = cAdvisor `container_*{id="/"}` ÷ `kube_node_status_allocatable`) + Kubernetes API 읽기(Deployment·Rollout·HPA·노드). 사용자 입력을 쿼리에 넣지 않는다. Prometheus 실패면 지표 칸만 null | `PROMETHEUS_URL`(`cinema-infra-endpoints`). `monitoring`에는 Prometheus NetworkPolicy가 없어 추가할 것이 없다(Loki 정책은 Grafana·Alloy·🆕 리포트 내보내기 CronJob `report-export`(6.1.9)만 — ops-api는 Loki를 읽지 않는다) |
 | 정지/가동 | `deployments/scale`·`rollouts/scale` patch(0 ↔ 정지 전 값). 정지 전 값은 ConfigMap `ops-api-state`에 **먼저** 적고 scale한다(적지 못하면 바꾸지 않고 503). 가동은 적어 둔 값 → 없으면 Git 값(`last-applied-configuration`) → HPA 최소 → 1. 대상 gateway·catalog·booking·user·payment·coupon·ai(ops-api 제외 → 400 `SERVICE_NOT_STOPPABLE`). Rollout이 블루/그린 진행 중(`currentPodHash` ≠ `stableRS` 또는 일시 정지)이면 409 `ROLLOUT_IN_PROGRESS`. 배포되지 않은 서비스는 503(`reason` `NOT_DEPLOYED`) | Role(`cinema-staging`): deployments·rollouts·hpa·pods get/list, `deployments/scale`·`rollouts/scale` get/patch, ConfigMap `ops-api-state` get/patch(이름 지정) · ClusterRole: nodes get/list(gitops `base/ops-api/rbac.yaml`). 서비스 Application `ignoreDifferences: /spec/replicas`(Deployment·Rollout) + `RespectIgnoreDifferences=true`, ops-api Application은 `ops-api-state` `/data`도(`argocd_apps.tf`) |
-| 리포트 | Athena 쿼리 → CSV → presigned URL 5분. 열에 IP·토큰·질문 원문 없음 | Pod Identity `cinema-staging-ops-api-pod`(Athena·Glue·S3 reports), 내보내기 CronJob(1시간, Loki → S3 `errors/dt=`) |
+| 리포트 | Athena 쿼리 → CSV → presigned URL 5분. 열에 IP·토큰·질문 원문 없음 | Pod Identity `cinema-staging-ops-api-pod`(Athena·Glue·S3 reports), 내보내기 CronJob(10분마다 — 진행 중인 시간까지, Loki → S3 `errors/dt=`. 결과 캐시 1시간은 그 날짜에 새 파일이 올라오면 버린다) |
 | 자원 | requests 100m / 256Mi, limits mem 384Mi, replicas 1 | 롤링, HPA 없음, Flyway Job 없음 |
 
 - 정지 버튼이 바꾼 replicas는 Git과 다르다(의도된 GitOps 예외, ADR-119). 시연 뒤 「가동」으로 되돌리고, ArgoCD Diff에 replicas가 안 보이는 것이 정상이다
@@ -1092,7 +1092,7 @@ preview·active 구분은 파드 라벨 `rollouts-pod-template-hash`로 한다(�
 | 118 | **coupon 서비스**(Java, `coupon_db`): VIP 선착순 쿠폰, 재고 Valkey DECR + DB 유일 제약, VIP는 Cognito 그룹 → gateway `X-User-Grade` | 37 보완 |
 | 119 | **ops-api**(Python, `/ops/*` CloudFront → ALB, gateway 우회): Cognito `ADMIN` 그룹만, 상태·정지/가동(replicas 0 ↔ 원래 값, ArgoCD `ignoreDifferences`)·리포트. 감사 로그 | 37 보완. GitOps 예외(replicas만) |
 | 120 | ai는 자기 **`ai_db`** 복제본(catalog 이벤트 + 백필 + 10분 대조)과 `unmet_demand`, `APP_AI_DATA_SOURCE=snapshot\|db`, ops-api용 내부 통계 API | 84 보완 |
-| 121 | 리포트: 로그 `errorCategory` → Loki → S3 `cinema-staging-reports-*`(1시간 CronJob) → Glue → Athena → CSV(presigned 5분) | 113 확장 |
+| 121 | 리포트: 로그 `errorCategory` → Loki → S3 `cinema-staging-reports-*`(~~1시간~~ 🆕 10분 CronJob — 진행 중인 시간까지, 11/27) → Glue → Athena → CSV(presigned 5분) | 113 확장 |
 | 122 | 가용성: NAT AZ별 2개, Multi-AZ RDS·Valkey 복제본, 핵심 서비스 replicas 2 + topologySpread, **Karpenter**(t3 계열 On-Demand) | 7·34 보완 |
 | 123 | **External Secrets**: Secrets Manager `cinema/staging/{svc}` → ExternalSecret(sync wave -3), Pod Identity `cinema-staging-external-secrets-pod`(conventions 9장 이름 규칙 `cinema-staging-{대상}-pod`) | 10 대체 |
 | 124 | ⏳ 보안: WAF(관리형 규칙 + IP 요청 제한), gateway 본문 64KB(413 `PAYLOAD_TOO_LARGE`), `SECURITY` 로그, 원본 HTTPS `on` | 검토 중. 62 재검토 |

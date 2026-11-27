@@ -2095,7 +2095,7 @@ curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$D/ops/reports/errors/dates" | 
 | WAF | CloudFront 웹 ACL `cinema-staging-waf`(us-east-1). AWS 관리형 Common·KnownBadInputs·SQLi + IP당 5분 2,000(`waf_rate_limit_per_5min`). `waf_mode` `off`(기본) → `count`(세기만) → `block`. Common의 `SizeRestrictions_BODY`(8KB)는 늘 count — 본문은 gateway가 64KB에서 413으로 막는다 |
 | 리포트 버킷 | `cinema-staging-reports-{계정ID}` — `errors/dt=YYYY-MM-DD/HH.json.gz`(KST, 30일) · `athena-results/`(7일). SSE-S3, 공개 차단, TLS만 |
 | Glue·Athena | DB `cinema_staging_reports` · 테이블 `errors`(partition projection `dt` — 크롤러·MSCK 없음) · 작업 그룹 `cinema-staging-reports`(결과 위치 고정, 쿼리당 1GB 상한) |
-| 내보내기 | CronJob `monitoring/report-export` 매시 7분: Loki `{namespace="cinema-staging"} \|= "errorCategory"` → 지난 3개 KST 정시 구간 파일을 다시 만든다(멱등) → S3. 열은 timestamp·service·level·errorCategory·status·path·traceId·message만(userId·IP·토큰 없음). Pod Identity `cinema-staging-report-export-pod`(errors/ 쓰기만) |
+| 내보내기 | CronJob `monitoring/report-export` **10분마다**(11/27 — 매시 7분에서): Loki `{namespace="cinema-staging"} \|= "errorCategory"` → 지난 3개 KST 정시 구간 + **진행 중인 시간**(지금까지) 파일을 다시 만든다(멱등) → S3. 리포트는 최대 약 10분 늦다. ops-api 결과 캐시(1시간)는 그 날짜에 새 파일이 올라오면 버린다. 열은 timestamp·service·level·errorCategory·status·path·traceId·message만(userId·IP·토큰 없음). Pod Identity `cinema-staging-report-export-pod`(errors/ 쓰기만) |
 | 조회 | ops-api `GET /ops/reports/errors/dates` · `POST …` → Athena(6-L) — 이름이 이 절과 같다(`ops_api.tf` locals) |
 
 **1) Terraform — staging** (리포트만, WAF는 off 그대로)

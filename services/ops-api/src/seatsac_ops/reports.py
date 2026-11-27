@@ -6,7 +6,10 @@ ops.openapi.yaml).
 - 쿼리는 정해 둔 SQL 하나. 날짜는 형식을 검사한 뒤 실행 매개변수(ExecutionParameters)로만 넣는다
 - 결과 CSV 열: timestamp, service, level, errorCategory, status, path, traceId, message
   (IP·토큰·질문 원문 없음)
-- 같은 날짜 결과가 1시간 안이면 쿼리를 다시 돌리지 않는다(프로세스 메모리 — 워커 1)
+- 같은 날짜 결과가 1시간 안이면 쿼리를 다시 돌리지 않는다(프로세스 메모리 — 워커 1).
+  단 그 결과를 만든 뒤 그 날짜의 내보내기 파일(S3 `errors/dt=…/`)이 새로 올라왔으면 다시 돌린다
+  — 내보내기는 10분마다 진행 중인 시간까지 다시 쓰므로, 누를 때마다 최대 약 10분 전까지의
+  로그로 만든다
 - presigned URL은 로그·감사 로그에 남기지 않는다
 - 버킷·작업 그룹 설정이 없거나(6.1.8·6.1.9 전) AWS 오류면 503 REPORT_UNAVAILABLE
 """
@@ -120,6 +123,7 @@ class ReportService:
         if (
             cached
             and time.monotonic() - cached.finished_monotonic < self._settings.report_cache_seconds
+            and not await self._exported_after(s3, day, cached.generated_at)
         ):
             return 200, {
                 "downloadUrl": await self._presign(s3, cached.output),
@@ -136,6 +140,19 @@ class ReportService:
         query_id = started["QueryExecutionId"]
         self._date_of_query[query_id] = day
         return 202, {"queryId": query_id, "state": "RUNNING"}
+
+    async def _exported_after(self, s3: Any, day: str, since: datetime) -> bool:
+        """그 날짜 파티션에 `since`(캐시된 결과를 만든 시각)보다 늦게 올라온 파일이 있는가.
+        있으면 캐시를 버린다. 한 날짜는 시간 파일 24개뿐이라 목록 한 쪽(최대 1,000개)이면 된다"""
+        page = await self._call(
+            s3.list_objects_v2, Bucket=self._settings.reports_bucket, Prefix=f"{PREFIX}dt={day}/"
+        )
+        modified = [
+            item["LastModified"]
+            for item in page.get("Contents") or []
+            if isinstance(item.get("LastModified"), datetime)
+        ]
+        return bool(modified) and max(modified) > since
 
     # --- GET /ops/reports/errors/{queryId} ---------------------------------
     async def status(self, query_id: str) -> dict[str, Any]:

@@ -64,7 +64,7 @@ def _succeeded(query_id: str, workgroup: str = WG) -> dict:
 
 
 def test_request_status_and_cache(client, aws, caplog):
-    _, _, _, athena_stub = aws
+    _, _, s3_stub, athena_stub = aws
     caplog.set_level("INFO", logger="seatsac_ops.audit")
     athena_stub.add_response(
         "start_query_execution",
@@ -106,6 +106,7 @@ def test_request_status_and_cache(client, aws, caplog):
     assert "X-Amz-Expires=300" in done["downloadUrl"] or "Expires=" in done["downloadUrl"]
     assert done["generatedAt"] == "2026-11-24T14:02:11+09:00"
 
+    s3_stub.add_response("list_objects_v2", {"Contents": []})  # 그 뒤 새로 내보낸 파일 없음
     cached = client.get(
         "/ops/reports/errors", params={"date": "2026-11-24"}, headers=admin_headers()
     )
@@ -168,3 +169,48 @@ def test_report_service_builds_its_s3_client_with_s3_client(monkeypatch, setting
     s3, _ = reports.ReportService(settings)._clients()
     assert made == [settings.aws_region]
     assert s3 is not None
+
+
+def _cache_q(athena_stub, query_id: str) -> None:
+    athena_stub.add_response("start_query_execution", {"QueryExecutionId": query_id})
+    athena_stub.add_response("get_query_execution", _succeeded(query_id))
+    athena_stub.add_response(
+        "get_query_runtime_statistics", {"QueryRuntimeStatistics": {"Rows": {"OutputRows": 4}}}
+    )
+
+
+def test_cache_is_dropped_when_a_newer_export_landed(client, aws):
+    # 결과(완료 05:02:11Z) 뒤에 내보내기 파일이 새로 올라오면 1시간 안이라도 쿼리를 다시 돌린다
+    # (11/27 「12:34에 만듦」만 뜸)
+    _, _, s3_stub, athena_stub = aws
+    _cache_q(athena_stub, "q-a")
+    params = {"date": "2026-11-24"}
+    assert (
+        client.get("/ops/reports/errors", params=params, headers=admin_headers()).status_code == 202
+    )
+    assert (
+        client.get("/ops/reports/errors/q-a", headers=admin_headers()).json()["state"]
+        == "SUCCEEDED"
+    )
+
+    listing = {"Bucket": "cinema-staging-reports-test", "Prefix": "errors/dt=2026-11-24/"}
+    older = datetime(2026, 11, 24, 5, 0, 0, tzinfo=UTC)
+    s3_stub.add_response(
+        "list_objects_v2",
+        {"Contents": [{"Key": "errors/dt=2026-11-24/13.json.gz", "LastModified": older}]},
+        listing,
+    )
+    cached = client.get("/ops/reports/errors", params=params, headers=admin_headers())
+    assert cached.status_code == 200  # 그 뒤 새 파일 없음 → 캐시
+
+    newer = datetime(2026, 11, 24, 5, 10, 0, tzinfo=UTC)
+    s3_stub.add_response(
+        "list_objects_v2",
+        {"Contents": [{"Key": "errors/dt=2026-11-24/14.json.gz", "LastModified": newer}]},
+        listing,
+    )
+    athena_stub.add_response("start_query_execution", {"QueryExecutionId": "q-b"})
+    fresh = client.get("/ops/reports/errors", params=params, headers=admin_headers())
+    assert fresh.status_code == 202 and fresh.json()["queryId"] == "q-b"
+    s3_stub.assert_no_pending_responses()
+    athena_stub.assert_no_pending_responses()

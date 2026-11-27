@@ -130,7 +130,7 @@ export function AdminReportsPage() {
         <EmptyState
           icon="alert-circle"
           title="아직 리포트가 없어요"
-          description="오류 로그는 1시간마다 리포트 저장소로 옮겨져요. 잠시 뒤 다시 확인해 주세요."
+          description="오류 로그는 10분마다 리포트 저장소로 옮겨져요. 잠시 뒤 다시 확인해 주세요."
           action={
             <Button onClick={() => void dates.refetch()}>
               <Icon name="rotate-cw" /> 다시 확인
@@ -198,6 +198,7 @@ export function AdminReportsPage() {
           {report.generatedAt && <span className="micro"> · {timeOfIso(report.generatedAt)}에 만듦</span>}
         </p>
         {report.rowCount === 0 && <p className="micro">이 날짜에는 기록된 오류가 없어요(빈 CSV).</p>}
+        <p className="micro">로그는 10분마다 옮겨져 최근 약 10분은 아직 없을 수 있어요. 새로 옮겨진 로그가 있으면 「리포트 만들기」가 다시 만들어요.</p>
         {expired ? (
           <>
             <p className="micro">내려받기 주소가 만료됐어요(5분).</p>

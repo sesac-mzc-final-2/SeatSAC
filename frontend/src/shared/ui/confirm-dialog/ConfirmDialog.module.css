@@ -6,6 +6,9 @@
   background: var(--color-card);
   color: var(--color-text);
   box-shadow: 0 24px 60px #0008;
+  /* <dialog>는 화면 위층에 떠도 CSS는 놓인 자리(부모)에서 물려받는다 — 관리자 서비스 표 칸(td nowrap) 안에서 열면
+     안내 문장이 한 줄로 늘어 오른쪽이 잘렸다(6.5.1c). 어디서 열어도 줄바꿈되게 되돌린다 */
+  white-space: normal;
 }
 .dialog::backdrop {
   background: #0e0f13cc;

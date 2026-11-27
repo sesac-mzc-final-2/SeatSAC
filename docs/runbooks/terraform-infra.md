@@ -2301,6 +2301,61 @@ infra/scripts/msa-check.sh all > /tmp/az-after.txt; diff /tmp/az-before.txt /tmp
 | 5 | 발표가 끝나고 계속 둘 때 — 이중화 끄기 | `staging.tfvars`: `nat_gateway_per_az = false` · `valkey_replicas = 0` · `ai_valkey_replicas = 0` · `service_databases`의 `multi_az = false` → PR → plan(NAT 1개·Valkey 복제본·RDS 대기 인스턴스 **destroy만**, 서비스 인스턴스 replace가 보이면 멈춘다) → apply. 대략 NAT 1개(하루 약 $1.5)·RDS Multi-AZ 5개 대기분·Valkey 복제본 2개가 빠진다 |
 | 6 | 완전히 내릴 때 | 11장 삭제(아래 6.1.10 추가 항목 포함) |
 
+### 6-P. 화면 흐름 통합 테스트 · catalog 이벤트 발행 확인 (6.5.1c, ADR-116·117·119) — 로컬 ✅ · staging ⬜
+
+목표: 사용자가 누르는 순서대로 **쿠폰 → 결제 → 확정**과 **관리자 화면 4개**가 끝까지 가는지, catalog 변경 이벤트가 **큐에 실제로 도착**하는지 본다. 메시지 경로(DLQ·user 복제본·coupon 명령)는 6-N(6.5.1b)이 본다.
+
+**1) 자동 테스트 (PR·로컬에서 돈다)**
+
+| 무엇 | 테스트 | 보는 것 |
+| --- | --- | --- |
+| 결제 화면 흐름 | `frontend/src/pages/booking-pay/ui/BookingPayPage.flow.test.tsx` | 쿠폰 고르기 → 결제 버튼 금액(할인 뒤) → 체크아웃 시작(쿠폰 ID·멱등 키) → 포트원 결제창(서버가 정한 최종 금액·paymentId) → 확인 요청(다른 멱등 키) → 「예매가 완료됐어요」·요약 「−15,000원」. 쿠폰 거절(`COUPON_REJECTED`) → 같은 화면 안내·「쿠폰 사용 안 함」으로 돌아감·결제창 안 열림 → 쿠폰 없이 다시(새 키) → 확정. 결과 화면에 결제 폼이 다시 열리지 않음 |
+| 관리자 화면 | `frontend/src/pages/admin/ui/Admin*Page.test.tsx` (6.3.5·6.2.6·6.3.7·6.3.9) | 개요·서비스 정지/가동·리포트·AI 범위 밖 질문·쿠폰 이벤트 |
+| catalog 이벤트 → 큐 | `services/catalog/src/test/java/com/seatsac/catalog/event/CatalogEventQueueIntegrationTest.java` | 진짜 발송기 + ElasticMQ(compose와 같은 `1.7.1`) 큐에서 **받아서**: 본문 = 계약 envelope(`*.changed.v1.json` required), 메시지 속성 `type`·`traceId` = 본문 값, `correlationId` 속성 없음, `eventId` 겹침 없음, 바뀐 것이 없으면 다음 주기에 아무것도 안 감, 영화 제목 변경 → 그 영화만 `version` 2, 회차 삭제 → `deleted: true`·`version` 2 |
+
+```bash
+cd frontend && npm run check                       # 11/27: 60 파일 · 405 테스트 통과
+./gradlew :services:catalog:test --tests '*CatalogEventQueueIntegrationTest' --tests '*CatalogChangeEventsIntegrationTest'   # 11/27: 2 + 5 통과 (Docker 필요)
+```
+
+**2) 목 서버로 화면 직접 (`DEV_SESSION=1 DEV_SESSION_GROUPS=ADMIN,VIP npm run dev:mock`)** — 11/27 결과
+
+| # | 흐름 | 결과 |
+| --- | --- | --- |
+| 1 | 홈 배너 「쿠폰 받기」 → 「받은 쿠폰이에요」, 남은 수량 1 줄어듦 | ✅ |
+| 2 | 결제 화면(`/bookings/7001/pay`)에 받은 쿠폰이 보이고 고르면 「토스페이로 15,000원 결제하기」 | ✅ |
+| 3 | 결제창(가짜) 15,000원 → 결제 → 「예매가 완료됐어요」, 요약 상품 30,000 · 쿠폰 할인 −15,000 · 총 15,000 | ✅ |
+| 4 | 결제창에서 「결제 취소」 → 같은 화면 안내(「쿠폰은 돌려받는 데 잠시 걸려요」), 쿠폰 RESERVED → ISSUED, 다시 결제 → 확정, 쿠폰 USED | ✅ (목 서버 수정 뒤 — 아래) |
+| 5 | 다른 예매 결제 화면에 쓴 쿠폰이 안 보임(쿠폰 상자 없음, 30,000원) | ✅ |
+| 6 | 관리자 개요 → 서비스 상태 → coupon 정지 → 「정지 중: coupon」 → 가동 → 배너에서 빠짐 | ✅ (확인 창 문구 잘림 고침 — 아래) |
+| 7 | 오류 리포트 「리포트 만들기」 → 128행 · CSV 내려받기 버튼 · 5분 안내 | ✅ |
+| 8 | AI 범위 밖 질문 7일 — 분류 막대·상위 10 | ✅ |
+| 9 | 쿠폰 이벤트 만들기 → 토스트 · 최근 이벤트 표에 0/100 | ✅ |
+
+찾아서 고친 것:
+
+- **정지/가동 확인 창 안내 문장이 오른쪽에서 잘림** — `<dialog>`가 서비스 표 칸(`td`의 `white-space: nowrap`)을 물려받았다. `ConfirmDialog.module.css`에 `white-space: normal`
+- **목 서버의 「내 쿠폰」이 체크아웃 결과를 따라가지 않음**(결제 뒤에도 「사용 가능」) — 실제 coupon은 명령을 받아 RESERVED·USED·ISSUED로 바꾼다. `mock/server.mjs`가 같은 상태로 바꾸게 했다(개발 전용, 빌드에 안 들어감)
+
+목 서버의 한계: 좌석 배치 API가 없어 좌석 선택 화면은 목으로 못 본다(결제 화면은 목 예매 `7001~7999`로 바로 연다). 쿠폰 거절은 쿠폰 ID가 `reject`로 시작할 때만이라 화면에서 만들 수 없다 — 1)의 자동 테스트가 본다.
+
+**3) staging (시연 계정 VIP·ADMIN, 6-N과 같은 시간에 이어서)** — ⬜
+
+`APP_CHECKOUT_SAGA_ENABLED=true`·coupon 메시징이 켜진 뒤. 고치지 않는다(큐 purge·DML 금지), 결과는 노션 6.5.1c에.
+
+- [ ] 2)의 1~9를 staging 화면으로 한 번 — 결제는 토스페이 테스트 결제. 4는 결제창을 닫아 본다
+- [ ] 결제 뒤 마이페이지 예매 내역에 그 예매(쿠폰 할인 금액)가 수 초 안에 보인다 — user 복제본(6-N 1)이 local이면 이벤트 경로
+- [ ] `/ops` 정지/가동은 **coupon만**, 끝나면 `msa-check.sh stopped`가 비어 있다
+- [ ] catalog 이벤트 — 릴레이가 켜져 있으면(`catalog-config`의 `APP_OUTBOX_RELAY_ENABLED=true`) 밀림 0·큐 대기 0 근처:
+
+```bash
+infra/scripts/msa-check.sh queues          # ai-catalog-events 대기 · DLQ 0 (ng-ai 0대면 받는 파드가 없어 대기가 쌓이는 게 정상 — 런타임 계약 9-2)
+kubectl -n cinema-staging logs deploy/catalog --since=30m | grep -E '변경 찾기|outbox' | tail
+# Grafana Explore: catalog_outbox_pending (0 근처) · increase(catalog_outbox_publish_total{result="failed"}[1h]) == 0
+```
+
+릴레이가 꺼져 있으면(기본) `catalog_outbox_pending`이 회차·영화 수(약 8,400)까지 쌓여 있는 것이 정상이다 — 켜는 순서는 13장 위 「받는 쪽 먼저」(ai 소비자 → catalog 릴레이).
+
 ---
 
 ## 7. staging 5) CloudFront·S3 (3.1.11) · Cognito (3.1.16) — ⬜
@@ -3281,6 +3336,7 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
 | ⬜ | 김종식 | 6-N MSA 통합 테스트 (6.5.1b) — user 복제본(#220·gitops #61·#63) · coupon 시간 초과 · DLQ 0 | | | |
 | ⬜ | 김종식 | 6-O AZ 장애 시연 (6.1.10 · 6.5.2b, gitops #62 뒤) · 6-O-1 비용 정리 | | | |
+| 11/27 | 한채연 | 6-P 1)·2) 화면 흐름·catalog 이벤트 — 로컬(자동 테스트 + 목 서버) | 약 1시간 | ① 정지/가동 확인 창 문장 잘림(`td` nowrap 상속) ② 목 서버 「내 쿠폰」이 체크아웃 결과 미반영 | 6-P 신설, 두 가지 같은 PR에서 고침. staging(6-P 3)은 ⬜ |
 
 ---
 

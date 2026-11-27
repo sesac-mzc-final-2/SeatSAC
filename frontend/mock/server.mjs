@@ -1204,6 +1204,12 @@ const MOCK_CHECKOUT = process.env.MOCK_CHECKOUT ?? "on";
 const checkouts = new Map();
 const CHECKOUT_LIVE = new Set(["STARTED", "COUPON_RESERVING", "PAYMENT_PREPARING", "READY_TO_PAY", "VERIFYING"]);
 
+/** 체크아웃이 쿠폰을 예약·사용·반환하면 「내 쿠폰」(GET /api/coupons/me)도 같은 상태로 — coupon 서비스가 명령을 처리한 결과(6.5.1c) */
+function setMyCouponState(couponIssueId, state) {
+  const mine = myCoupons.find((x) => x.couponIssueId === couponIssueId);
+  if (mine) mine.state = state;
+}
+
 function advanceCheckout(b) {
   const c = checkouts.get(b.bookingId);
   if (!c) return null;
@@ -1212,6 +1218,10 @@ function advanceCheckout(b) {
     c.refundNotice = c.state === "VERIFYING" ? "WILL_REFUND_IF_PAID" : null;
     c.failure = { code: "HOLD_EXPIRED", reason: c.state === "VERIFYING" ? "PAYMENT_RESULT_UNKNOWN" : null };
     c.state = "EXPIRED";
+    if (c.coupon?.state === "RESERVED") {
+      c.coupon.state = "RELEASED";
+      setMyCouponState(c.couponIssueId, "ISSUED");
+    }
     settlePay(b, "EXPIRED", b.payment);
   }
   if (c.state === "STARTED" && now >= c.at + 300) {
@@ -1228,6 +1238,7 @@ function advanceCheckout(b) {
       const discount = Math.floor((c.amount.original * rate) / 100);
       c.amount = { original: c.amount.original, discount, final: c.amount.original - discount };
       c.coupon = { couponIssueId: c.couponIssueId, discount: { kind: "RATE", value: rate }, state: "RESERVED" };
+      setMyCouponState(c.couponIssueId, "RESERVED");
       c.state = "PAYMENT_PREPARING";
       c.at = now;
     }
@@ -1247,12 +1258,18 @@ function advanceCheckout(b) {
     const at = toKstIso(new Date());
     if (result === "paid") {
       c.state = "CONFIRMED";
-      if (c.coupon) c.coupon.state = "USED";
+      if (c.coupon) {
+        c.coupon.state = "USED";
+        setMyCouponState(c.couponIssueId, "USED");
+      }
       settlePay(b, "CONFIRMED", { ...b.payment, status: "APPROVED", approvedAt: at });
     } else if (result === "canceled" || result === "failed") {
       c.state = "PAYMENT_RETRYABLE";
       c.failure = { code: "PAYMENT_DECLINED", reason: result === "canceled" ? "USER_CANCELED" : "PG_DECLINED" };
-      if (c.coupon) c.coupon.state = "RELEASED";
+      if (c.coupon) {
+        c.coupon.state = "RELEASED";
+        setMyCouponState(c.couponIssueId, "ISSUED");
+      }
       b.payment = null; // 좌석은 그대로 — 같은 예매로 다시 결제한다
     }
     // abandoned: 결과를 모른다 — VERIFYING 그대로(화면은 30초 뒤 「결과 확인 중」)

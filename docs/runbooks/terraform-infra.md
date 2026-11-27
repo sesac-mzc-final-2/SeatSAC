@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 | --- | --- |
 | 목적 | 빈 상태에서 SeatSAC AWS 인프라를 같은 순서로 다시 만들고, 평소 변경·복구를 같은 절차로 한다 |
-| 언제 | 최초 구축, 재생성 리허설(OPS-14, 11/11~12), 계정 초기화 후, 평소 인프라 변경 |
+| 언제 | 최초 구축, 재생성 리허설(OPS-14, 11/11~12), 계정 초기화 후, 평소 인프라 변경. **다른 AWS 계정으로 옮길 때는 `docs/runbooks/rebuild-new-account.md`**(순서·바꿀 값·막힌 곳 모음, ADR-125) |
 | 담당 / 권한 | 김종식 (백업: 백업 관리자) / 최초 1회는 IAM 사용자, 이후 `cinema-admin` 역할 (MFA) |
 | 코드 | `infra/terraform/{bootstrap,global,envs/staging,envs/staging-k8s}` |
 | 예상 소요 | bootstrap 2분 · global 3분 · staging 네트워크 5분 · EKS 15~20분 + staging-k8s 3분 · RDS·Valkey 15~20분(동시 생성) (이후 단계는 실측 후 기록) |
@@ -3181,7 +3181,7 @@ terraform destroy -var-file=staging.tfvars
 - **global·bootstrap은 지우지 않는다.** 팀 접근·CI 역할·state 버킷은 계속 쓴다
 - 삭제 후 확인: EIP·ENI·ALB·EBS 볼륨이 남지 않았는지 (`aws ec2 describe-addresses`, `describe-volumes`)
 - 🆕 6.1.10 MSA 고도화 뒤 추가로 볼 것:
-  - **Karpenter 노드 먼저**: 1) 전에 `cluster-scale.sh down`(정리 Lambda가 Karpenter 인스턴스를 지운다) → `aws ec2 describe-instances --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running --query 'length(Reservations)'`가 0. 남은 인스턴스는 ENI를 잡아 VPC 삭제를 막는다
+  - **Karpenter 노드는 1) 뒤, 2) 전에**: 1)은 노드가 켜진 채로 한다 — 노드가 0이면 LB Controller·ArgoCD 파드가 없어 Ingress finalizer가 풀리지 않고 ALB가 지워지지 않는다(4-5와 같은 이유). ALB가 사라진 뒤 `cluster-scale.sh down`(정리 Lambda가 Karpenter 인스턴스를 지운다) → `aws ec2 describe-instances --filters Name=tag-key,Values=karpenter.sh/nodepool Name=instance-state-name,Values=running --query 'length(Reservations)'`가 0. 남은 인스턴스는 ENI를 잡아 VPC 삭제를 막는다
   - RDS 6개는 `deletion_protection = false`·`skip_final_snapshot = true`(재생성 리허설·계정 이전용)라 **데이터가 남지 않는다** — 남겨야 하면 destroy 전에 `db-migrate.sh`로 덤프(8-E)
   - Secrets Manager `cinema/staging/*`는 `recovery_window_in_days = 0`이라 바로 지워진다(같은 이름으로 다시 만들 수 있다)
   - ECR(`force_delete`)·Loki 버킷(`force_destroy`)은 비우지 않아도 지워진다. 리포트 버킷(6.1.9)은 그 PR의 설정을 확인
@@ -3281,3 +3281,22 @@ terraform destroy -var-file=staging.tfvars
 | ⬜ | 김종식 | 11·12 삭제·복구 리허설 (3.1.15, 11/11~12) — **전체 재생성 소요 측정** | | | |
 | ⬜ | 김종식 | 6-N MSA 통합 테스트 (6.5.1b) — user 복제본(#220·gitops #61·#63) · coupon 시간 초과 · DLQ 0 | | | |
 | ⬜ | 김종식 | 6-O AZ 장애 시연 (6.1.10 · 6.5.2b, gitops #62 뒤) · 6-O-1 비용 정리 | | | |
+
+---
+
+## 15. 다른 AWS 계정으로 옮길 때 — Route 53 도메인·DNS 이전 (ADR-125)
+
+계정 전체를 옮기는 순서·바꿀 값·지금까지 막힌 것은 **`docs/runbooks/rebuild-new-account.md`** 하나에 모았다. 도메인 부분의 요약(자세한 명령은 그 문서 7장):
+
+| 순서 | 어디서 | 할 일 | 확인 |
+| --- | --- | --- | --- |
+| 0 | 새 계정 | 기본 도메인(`*.cloudfront.net`)만으로 전부 동작하게 만든다(`custom_domain = ""`·`api_origin_https = "off"`) | 그 문서 5장 |
+| 1 | 새 계정 | 빈 퍼블릭 호스팅 영역 — Terraform `custom_domain_hosted_zone = "<도메인>"`만 apply(#226) → 출력 `custom_domain_name_servers` 4개 메모(레포 밖) | plan 추가 1건(`aws_route53_zone.managed`) · 같은 이름 영역이 하나뿐 |
+| 2 | 옛 계정 | `api_origin_https` `on` → `prepare` → (gitops 443·`tls` 빼기) → `off` → `custom_domain = ""` apply — **여기서 사용자 도메인이 끊긴다**(기본 도메인은 계속) | 옛 CloudFront `Deployed`(별칭이 풀려야 새 배포에 붙는다 — 아니면 `CNAMEAlreadyExists`) |
+| 3 | 옛 → 새 | **등록 이전** `route53domains transfer-domain-to-another-aws-account`(옛) → `accept-domain-transfer-from-another-aws-account`(새, 3일 안). 비밀번호는 레포·채팅에 쓰지 않는다 | `get-operation-detail` SUCCESSFUL. 등록 이전은 DNS를 바꾸지 않는다 |
+| 4 | 새 계정 | `route53domains update-domain-nameservers`로 1번 네임서버 | `dig +short NS <도메인> @8.8.8.8`이 새 영역(최대 2일) |
+| 5 | 새 계정 | `custom_domain = "<도메인>"` apply(7-7) → `prepare` → gitops 443·`tls` 되돌리기 → `on`(7-8) · 포트원 웹훅 URL | `https://<도메인>/api/movies` 200 · 로그인·SSE·결제 |
+| 6 | 옛 계정 | 2일 이상 지나 옛 호스팅 영역 삭제 → 11장 삭제 | 옛 영역에 NS·SOA만 남은 뒤 |
+
+- 등록(소유)과 DNS(호스팅 영역)는 별개다. 옛 계정을 닫으면 등록도 사라지므로 **3번을 빼먹지 않는다**. 만료가 며칠 안 남았으면 이전 전에 갱신을 정한다
+- 도메인 등록·이전은 Terraform 밖(콘솔·CLI) 예외다 — 7-7 「도메인 등록」과 같은 이유, 스크럼 공유. 새 계정의 호스팅 영역은 예외가 아니라 Terraform(`custom_domain_hosted_zone`)이 만든다. 옛 계정 영역(등록 때 자동 생성 — Terraform 밖)은 6번에서 CLI로 지운다

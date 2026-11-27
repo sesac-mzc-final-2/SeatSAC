@@ -72,7 +72,7 @@ class ReportService:
             import boto3  # 기동을 가볍게 — 리포트를 쓸 때만 불러온다
 
             region = self._settings.aws_region
-            self._s3 = self._s3 or boto3.client("s3", region_name=region)
+            self._s3 = self._s3 or s3_client(region)
             self._athena = self._athena or boto3.client("athena", region_name=region)
         return self._s3, self._athena
 
@@ -191,6 +191,25 @@ class ReportService:
             Params={"Bucket": match.group(1), "Key": match.group(2)},
             ExpiresIn=self._settings.report_url_seconds,
         )
+
+
+def s3_client(region: str) -> Any:
+    """리전 엔드포인트(`{버킷}.s3.{region}.amazonaws.com`)로 서명하는 S3 클라이언트.
+
+    기본 클라이언트는 presigned URL을 전역 주소 `{버킷}.s3.amazonaws.com`으로 만든다.
+    새로 만든 버킷은 전역 주소의 DNS가 퍼지는 동안(최대 약 24시간) us-east-1로 가서
+    `AuthorizationQueryParametersError … expecting 'us-east-1'`로 거절된다(6.1.9 첫 다운로드).
+    리전 주소는 처음부터 그 리전으로 가고 서명(SigV4)도 그 리전 것이라 어긋나지 않는다.
+    """
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        region_name=region,
+        endpoint_url=f"https://s3.{region}.amazonaws.com",
+        config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+    )
 
 
 def _aws_code(exc: Exception) -> str:
